@@ -1,0 +1,108 @@
+# stillhere's packaged policy: what a run counts, and how
+# (docs/spec/classification.md).
+#
+# Exactly one policy governs a run: --policy FILE, else ./stillhere.toml,
+# else this file. A policy file replaces this one as a whole. Every table and
+# every key below is required in it too, and nothing is filled in from here,
+# so the policy hash a run records describes the whole policy. To start a
+# file of your own, copy this one and replace [paths] package_file with
+# deny = [...], copying the patterns you want from generated_paths.txt:
+# package_file names a file inside stillhere, which only this policy may use.
+
+# The policy schema version this file is written for.
+version = 1
+
+[headline]
+# The number a still-here report leads with: non-blank lines whose role is
+# prod.
+metric = "prod_nonblank_lines"
+
+[week]
+days = 7             # the window, in days back from --now; --days overrides it
+sort = "lines_added" # or "commits"; --week-sort overrides it
+
+[blame]
+# A file larger than this many bytes, at the scanned commit, is skipped as
+# too_big and never blamed.
+max_bytes = 400000
+
+[bots]
+# An identity whose canonical name or email (after the mailmap) contains one
+# of these, ignoring case, is a bot: listed apart, never ranked. A GitHub
+# noreply address is not a bot marker, because people use them.
+fragments = [
+  "[bot]",          # GitHub Apps, such as dependabot[bot] and github-actions[bot]
+  "copilot",        # GitHub Copilot's coding agent, when no person co-authored the commit
+  "dependabot",
+  "renovate",
+  "github-actions",
+  "gpt-engineer",
+]
+
+[ai]
+# ai_assisted@1 (ADR 0007). A commit is AI-assisted when a co-author's
+# canonical email is one of coauthor_emails, or when its author matches
+# agent_authors and a person co-authored it; that person gets the credit.
+# Emails match whole, never a name and never a fragment such as "noreply":
+# people use GitHub noreply addresses, and a person can be called Claude.
+version = 1
+coauthor_emails = [
+  "noreply@anthropic.com", # Claude Code: Co-Authored-By: <model name> <noreply@anthropic.com>
+  "aider@aider.chat",      # Aider: Co-authored-by: aider (<model>) <aider@aider.chat>
+]
+# Fragments of an agent author's canonical name or email, ignoring case.
+# GitHub's Copilot coding agent commits as copilot-swe-agent[bot] or Copilot
+# <198982749+Copilot@users.noreply.github.com>, with the person who assigned
+# the task as a Co-authored-by trailer.
+agent_authors = ["copilot"]
+
+# How a path gets its role (docs/spec/classification.md#roles). Only prod
+# counts toward the still-here headline. A path rule overrides the role the
+# file's name or extension gives.
+[roles.extensions]
+# The file name's last dot suffix, ignoring case.
+prod = [
+  ".php", ".go", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".rb",
+  ".java", ".kt", ".swift", ".m", ".mm", ".c", ".h", ".cc", ".cpp", ".hpp",
+  ".rs", ".cs", ".vue", ".svelte", ".proto", ".graphql", ".gql", ".lua",
+]
+sql = [".sql"]
+markup = [".css", ".scss", ".sass", ".less", ".html", ".htm", ".storyboard", ".xib"]
+iac = [".yml", ".yaml", ".tf", ".hcl", ".toml", ".xml", ".json", ".sh"]
+doc = [".md", ".rst", ".adoc"]
+
+[roles.names]
+# Exact file names; a name wins over the extension.
+iac = ["Dockerfile", "Makefile", "Containerfile"]
+
+# Path rules: RE2 patterns over the repo-relative path, tried in order. The
+# first whose pattern matches, and whose `when` admits the role the name or
+# extension gives, wins; without `when`, a rule admits any path. Patterns
+# match whole segments: (^|/)tests(/|$) matches tests/test_service.py, which
+# a search for "/tests/" misses. Precedence is test, then migration, then
+# seed, so tests/fixtures/x.py is test.
+[[roles.path]]
+role = "test"
+pattern = '(^|/)(tests|test|__tests__|spec|testing)(/|$)'
+
+[[roles.path]]
+role = "test"
+# Test.php and Tests.swift are the PHPUnit and XCTest conventions, such as
+# UserTest.php; a lowercase test.php would also take latest.php.
+pattern = '(_test\.go|\.(test|spec)\.(ts|tsx|js)|Test\.php|Tests\.swift)$'
+
+[[roles.path]]
+role = "migration"
+pattern = '(^|/)migrations(/|$)'
+when = ["prod"]
+
+[[roles.path]]
+role = "seed"
+pattern = '(^|/)(seeders|factories|seeds|fixtures)(/|$)'
+when = ["prod", "sql"]
+
+[paths]
+# The deny list is the embedded generated_paths.txt, translated to RE2 from
+# GitHub Linguist (MIT). Only this packaged policy may name a package file; a
+# policy file sets deny = [...] instead, and the policy hash covers it.
+package_file = "generated_paths.txt"

@@ -88,6 +88,12 @@ type PathRule struct {
 // its embedded deny list with package_file; a user file sets deny instead,
 // and setting both or neither is a usage error.
 type Paths struct {
-	Deny   []*regexp.Regexp // RE2, matched against the repo-relative path
+	Deny   []*regexp.Regexp // RE2, matched against the repo-relative path; match with Denies
 	Source string           // "package:generated_paths.txt" or "policy"
+
+	// filter holds, for each Deny pattern, the literals one of which any
+	// match must contain, so Denies can skip a pattern without running it.
+	// Default, Parse and FromSource build it; a pattern without one is
+	// always tried.
+	filter []denyFilter
 }
