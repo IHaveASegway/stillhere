@@ -362,7 +362,7 @@ type Discovery struct {
 	Repos    []domain.Repo      // health-checked, duplicates removed, sorted by Key
 	Groups   []domain.Group     // sorted by Name
 	Warnings []domain.Warning   // duplicate-repo, shallow-clone, partial-clone; sorted by Repo, Code, Message
-	Failed   []domain.FileError // paths that gave no repository, sorted by Path: a PATH slot that was neither a repo nor a group, or a repo (named or a group's member) git cannot read or whose default branch has no commit
+	Failed   []domain.FileError // paths that gave no repository, each once, sorted by Path: a PATH slot that was neither a repo nor a group, or a repo (named or a group's member) git cannot read or whose default branch has no commit; app reports each as a run-level discover-failed warning and marks the run partial (see Errors and logging)
 }
 type PathAt struct{ Commit, Path string } // a path in the tree of a commit that touched it
 // ClassifyPaths: every path at Head, plus each touched path Head no longer has, sized at its Commit.
@@ -576,6 +576,7 @@ Exit codes are in [report-json.md](report-json.md#exit-codes): 0 when any repo p
 
 - Wrap with `%w` and the operation that failed. Exit codes come from typed errors (`*domain.UsageError`, `domain.ErrNoFacts`), never from string matching.
 - A repository is a bulkhead: its failure becomes `RepoFacts.Status = "error"` and the run continues.
+- A path that discovery could not turn into a repository has no `Repo.Key`, so it cannot be a `RepoFacts`. It is a `Discovery.Failed` entry: `week` and `scan` turn each one into a run-level `Warning{Code: "discover-failed", Message: Path + ": " + Message}`, which `PutRunFacts` stores and the report lists. Such an entry, like a repository with status `error`, makes a scan run `partial`. Exit codes do not change ([report-json.md](report-json.md#exit-codes)): a run is exit 1 only when no repository produced facts.
 - `log/slog` to stderr. Info level carries repo names, counts, durations and skip reasons, and never emails, tokens or remotes with userinfo. Debug may print emails.
 - No `panic` outside programmer errors, no global mutable state, and no `init()` beyond compiling constant patterns.
 
