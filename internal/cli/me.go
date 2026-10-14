@@ -12,7 +12,7 @@ func (e *env) meCommand() *cobra.Command {
 		email string
 	)
 	cmd := &cobra.Command{
-		Use:   "me",
+		Use:   "me --email EMAIL",
 		Short: "Show your own page: what your changes did",
 		Long: `me shows one person's own page from a stored run, by default the latest
 complete one: their values and ranks for every metric. Each person sees
@@ -23,6 +23,13 @@ exactly what their lead sees about them.`,
 				return err
 			}
 			req := app.MeRequest{RunID: run, Email: canonicalEmail(email)}
+			if req.Email == "" {
+				// A default would come from the user's git identity, which
+				// the hardened runner cannot see (it ignores global config)
+				// and which a facts.db reader does not run git for; until
+				// that is decided, the email is required.
+				return usagef("me needs --email EMAIL (see '%s --help')", cmd.CommandPath())
+			}
 			return e.with(cmd.Context(), need{store: true}, func(d app.Deps) error {
 				res, err := app.Me(cmd.Context(), d, req)
 				if err != nil {
@@ -32,7 +39,7 @@ exactly what their lead sees about them.`,
 			})
 		},
 	}
-	cmd.Flags().StringVar(&email, "email", "", "your canonical `EMAIL`")
+	cmd.Flags().StringVar(&email, "email", "", "your canonical `EMAIL` (required)")
 	addRunFlag(cmd, &run)
 	return cmd
 }

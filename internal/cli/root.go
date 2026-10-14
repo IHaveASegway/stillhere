@@ -18,6 +18,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -375,6 +376,23 @@ func addRunFlag(cmd *cobra.Command, id *int64) {
 func checkRun(id int64) error {
 	if id < 0 {
 		return usagef("invalid --run %d: want a run id of 1 or more", id)
+	}
+	return nil
+}
+
+// addExcludeFlag defines --exclude-repo; check it with checkGlobs.
+func addExcludeFlag(cmd *cobra.Command, globs *[]string) {
+	cmd.Flags().StringArrayVar(globs, "exclude-repo", nil,
+		"leave out repositories whose name matches `GLOB` (path.Match syntax, such as 'legacy-*'); repeatable; the report lists them")
+}
+
+// checkGlobs rejects a malformed --exclude-repo pattern before any git
+// process starts.
+func checkGlobs(globs []string) error {
+	for _, g := range globs {
+		if _, err := path.Match(g, ""); err != nil {
+			return usagef("invalid --exclude-repo %q: %v", g, err)
+		}
 	}
 	return nil
 }

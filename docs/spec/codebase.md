@@ -64,7 +64,7 @@ type Group struct {
 }
 
 type Warning struct {
-	Code    string // duplicate-repo, shallow-clone, shallow-window, partial-clone, numstat-rename, ...
+	Code    string // duplicate-repo, shallow-clone, shallow-window, partial-clone, numstat-rename, excluded-repo, ...
 	Message string // already scrubbed
 	Repo    string // Repo.Key; "" for run-level warnings
 }
@@ -440,6 +440,16 @@ type Model struct{ /* stillhere.report/v1; see spec/report-json.md */ }
 func Text(w io.Writer, m *Model) error
 func Markdown(w io.Writer, m *Model) error
 func JSON(w io.Writer, m *Model) error
+// The read commands' answers live here too, so the renderers and the MCP server share one shape:
+type Explain struct { RunID int64; Metric domain.MetricID; Subject domain.Subject; Values []domain.MetricValue }
+type WhoKnows struct { RunID int64; Repo, Path string; Values []domain.MetricValue }
+type Me struct { RunID int64; Email string; Values []domain.MetricValue; Ranks []domain.RankInterval }
+type Validation struct { RunID int64; Labels int; Metrics []MetricAUC }
+type MetricAUC struct { Metric domain.MetricID; AUC float64; N int }
+
+// sqlite
+func Open(ctx context.Context, path string) (*Store, error) // dir 0700, file 0600, migrated; deletes runs left running
+// *Store implements domain.FactStore (store.go, #8) and domain.ForgeStore (forge.go, #14)
 
 // app
 type Deps struct {
@@ -451,9 +461,38 @@ type Deps struct {
 	Log        *slog.Logger
 	Version    string
 }
+type WeekRequest struct {
+	Paths, Exclude []string // Exclude: --exclude-repo globs, as for ScanRequest
+	Now            time.Time
+	Days           int; DaysFromCLI bool    // policy [week] days unless DaysFromCLI
+	Sort           string; SortFromCLI bool // policy [week] sort unless SortFromCLI
+}
+type ScanRequest struct {
+	Paths          []string
+	Exclude        []string // path.Match globs against Repo.Name after discovery; each repo left out is a run-level Warning{Code: "excluded-repo"}
+	Now            time.Time
+	Jobs           int      // 0: min(12, NumCPU)
+	IgnoreRevsFile string   // absolute; single-repo runs only
+	Rank           []domain.MetricID
+	Scope          string   // domain.ScopeGroup or domain.ScopeAll
+}
+type ReportRequest struct { RunID int64; Rank []domain.MetricID }                 // RunID 0: the latest complete or partial scan run
+type ExplainRequest struct { RunID int64; Metric domain.MetricID; Subject domain.Subject } // the CLI sends a person; MCP any subject
+type WhoKnowsRequest struct { RunID int64; Path, Repo string }
+type MeRequest struct { RunID int64; Email string }                                // Email required: the CLI resolves any default
+type ValidateRequest struct { RunID int64; Labels []byte; LabelsName string }      // the CLI reads the file; app opens none
+type SyncRequest struct { Org, Mirrors string; IncludeArchived, IncludeForks bool }
 func Week(ctx context.Context, d Deps, r WeekRequest) (*report.Model, error)
 func Scan(ctx context.Context, d Deps, r ScanRequest) (*report.Model, error)
-// Report, Explain, Me, WhoKnows, Validate: read the latest complete run unless a run id is given
+// The read side reads the latest complete or partial run unless a run id is given, with the run's own policy:
+func Report(ctx context.Context, d Deps, r ReportRequest) (*report.Model, error)
+func Explain(ctx context.Context, d Deps, r ExplainRequest) (*report.Explain, error)
+func WhoKnows(ctx context.Context, d Deps, r WhoKnowsRequest) (*report.WhoKnows, error)
+func Me(ctx context.Context, d Deps, r MeRequest) (*report.Me, error)
+func Validate(ctx context.Context, d Deps, r ValidateRequest) (*report.Validation, error)
+func Sync(ctx context.Context, d Deps, r SyncRequest) error // #14
+// The MCP server's own use cases (overview, person, changes, highlights; ADR 0006) go in app/mcp.go, which #15
+// owns. They answer from #11's report model (the overview and repo cards), so #15 builds on #11's report types.
 
 // cli
 type Build struct{ Version, Commit, Date string } // from -ldflags -X main.version, main.commit, main.date
@@ -476,16 +515,16 @@ Global flags: `--db` (default `$STILLHERE_HOME/facts.db`, where `STILLHERE_HOME`
 
 | Command | Reads | Writes | Milestone |
 | --- | --- | --- | --- |
-| `week PATH...` `[--now] [--days N] [--week-sort lines_added\|commits]` | git | nothing | M0 |
-| `scan PATH...` `[--now] [--jobs N] [--ignore-revs-file F] [--rank METRIC]... [--scope group\|all]` | git | a run in facts.db | M1 |
+| `week PATH...` `[--now] [--days N] [--week-sort lines_added\|commits] [--exclude-repo GLOB]...` | git | nothing | M0 |
+| `scan PATH...` `[--now] [--jobs N] [--ignore-revs-file F] [--rank METRIC]... [--scope group\|all] [--exclude-repo GLOB]...` | git | a run in facts.db | M1 |
 | `report [--run ID] [--rank METRIC]...` | facts.db | nothing | M1 |
 | `explain METRIC --person EMAIL [--run ID]` | facts.db | nothing | M1 |
 | `who-knows PATH [--repo KEY]` | facts.db | nothing | M1 |
-| `me [--email E]` | facts.db | nothing | M2 |
+| `me --email E [--run ID]` | facts.db | nothing | M2 |
 | `metrics` | the registry | nothing | M1 |
-| `validate --labels FILE` | facts.db, a labels CSV | nothing | M2 |
+| `validate --labels FILE [--run ID]` | facts.db, a labels CSV | nothing | M2 |
 | `sync github --org ORG [--mirrors DIR]` | GitHub | mirrors, forge facts | M2 |
-| `mcp [--allow-source]` | facts.db | nothing | M4 |
+| `mcp [--allow-source] [--allow-emails]` | facts.db | nothing | M4 |
 | `version` | | | M0 |
 
 Exit codes are in [report-json.md](report-json.md#exit-codes): 0 when any repo produced facts, 1 when none did, 2 for a usage error, death by the signal (128 + n) when interrupted.

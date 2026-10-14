@@ -1,6 +1,8 @@
 package cli
 
 import (
+	"os"
+
 	"github.com/spf13/cobra"
 
 	"github.com/IHaveASegway/stillhere/internal/app"
@@ -26,11 +28,16 @@ work, so keep the file outside the repository.`,
 			if labels == "" {
 				return usagef("validate needs --labels FILE (see '%s --help')", cmd.CommandPath())
 			}
-			path, err := absFile("--labels", labels)
-			if err != nil {
+			// The command line reads the file, so the use case does no I/O
+			// outside its ports.
+			if err := readable("--labels", labels); err != nil {
 				return err
 			}
-			req := app.ValidateRequest{RunID: run, Labels: path}
+			data, err := os.ReadFile(labels)
+			if err != nil {
+				return usagef("--labels: %v", err)
+			}
+			req := app.ValidateRequest{RunID: run, Labels: data, LabelsName: labels}
 			return e.with(cmd.Context(), need{store: true}, func(d app.Deps) error {
 				res, err := app.Validate(cmd.Context(), d, req)
 				if err != nil {

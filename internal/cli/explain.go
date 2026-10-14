@@ -27,9 +27,14 @@ a bare name such as durable for its latest version.`,
 			if err := checkRun(run); err != nil {
 				return err
 			}
-			req := app.ExplainRequest{RunID: run, Metric: id, Person: canonicalEmail(person)}
-			if req.Person == "" {
+			email := canonicalEmail(person)
+			if email == "" {
 				return usagef("explain needs --person EMAIL (see '%s --help')", cmd.CommandPath())
+			}
+			req := app.ExplainRequest{
+				RunID:   run,
+				Metric:  id,
+				Subject: domain.Subject{Kind: domain.SubjectPerson, Key: email},
 			}
 			return e.with(cmd.Context(), need{store: true}, func(d app.Deps) error {
 				res, err := app.Explain(cmd.Context(), d, req)

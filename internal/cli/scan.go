@@ -16,6 +16,7 @@ func (e *env) scanCommand() *cobra.Command {
 		ignoreRevs string
 		ranks      []string
 		scope      string
+		exclude    []string
 	)
 	cmd := &cobra.Command{
 		Use:   "scan PATH...",
@@ -38,12 +39,16 @@ Each PATH is a repository or a group, as for week. scan never fetches.`,
 			if scope != domain.ScopeGroup && scope != domain.ScopeAll {
 				return usagef("invalid --scope %q: want group or all", scope)
 			}
+			if err := checkGlobs(exclude); err != nil {
+				return err
+			}
 			req := app.ScanRequest{
-				Paths: paths,
-				Now:   e.nowOr(cmd, now),
-				Jobs:  jobs,
-				Rank:  ids,
-				Scope: scope,
+				Paths:   paths,
+				Exclude: exclude,
+				Now:     e.nowOr(cmd, now),
+				Jobs:    jobs,
+				Rank:    ids,
+				Scope:   scope,
 			}
 			if ignoreRevs != "" {
 				if req.IgnoreRevsFile, err = absFile("--ignore-revs-file", ignoreRevs); err != nil {
@@ -62,5 +67,6 @@ Each PATH is a repository or a group, as for week. scan never fetches.`,
 		"blame ignore-revs `FILE` that replaces the repository's own; single-repository runs only")
 	addRankFlag(cmd, &ranks)
 	f.StringVar(&scope, "scope", domain.ScopeGroup, "rank within each group, or across everything: group or all")
+	addExcludeFlag(cmd, &exclude)
 	return cmd
 }

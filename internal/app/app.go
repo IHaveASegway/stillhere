@@ -1,12 +1,13 @@
 // Package app holds stillhere's use cases: week, scan, report, explain,
-// who-knows, me, validate and sync. Each one orchestrates the core and the
-// collectors and reaches the outside world only through the ports it is
-// handed in Deps, so it never imports an adapter, os/exec, database/sql or
-// cobra (docs/spec/codebase.md#the-dependency-rule).
+// who-knows, me, validate and sync, and the MCP server's from M4. Each one
+// orchestrates the core and the collectors and reaches the outside world
+// only through the ports it is handed in Deps, so it never imports an
+// adapter, os/exec, database/sql or cobra, and never opens a file
+// (docs/spec/codebase.md#the-dependency-rule).
 //
-// Requests arrive already parsed and validated by the command line: a use
-// case never sees a flag, and the command line, not the use case, picks the
-// output format.
+// Requests arrive already parsed and validated by an inbound adapter (the
+// command line, or the MCP server): a use case never sees a flag, and the
+// adapter, not the use case, picks the output format.
 package app
 
 import (
@@ -37,6 +38,7 @@ type Deps struct {
 // the window ending at Now (docs/spec/week-collector.md#window).
 type WeekRequest struct {
 	Paths       []string  // repositories or groups, as given on the command line
+	Exclude     []string  // --exclude-repo globs; see ScanRequest.Exclude
 	Now         time.Time // the window's end, UTC
 	Days        int       // window length when DaysFromCLI; else the policy's [week] days
 	DaysFromCLI bool      // recorded in the report as days_from: cli or policy
@@ -47,7 +49,12 @@ type WeekRequest struct {
 // ScanRequest asks for a full run: history, blame, metrics and ranks, stored
 // in facts.db.
 type ScanRequest struct {
-	Paths          []string
+	Paths []string
+	// Exclude holds the --exclude-repo globs (path.Match syntax, already
+	// checked), matched against Repo.Name after discovery. Each repository
+	// left out becomes a run-level warning with code "excluded-repo", so the
+	// report lists it and the store keeps it without a table of its own.
+	Exclude        []string
 	Now            time.Time
 	Jobs           int               // concurrent git blame processes; 0 means min(12, NumCPU)
 	IgnoreRevsFile string            // absolute path; "" uses each repo's own file; single-repo runs only
@@ -61,11 +68,13 @@ type ReportRequest struct {
 	Rank  []domain.MetricID // metrics to rank, in the order given
 }
 
-// ExplainRequest asks which facts produced one person's value for one metric.
+// ExplainRequest asks which facts produced one subject's value for one
+// metric: a person on the command line; a person, area, repository or
+// change for the MCP server's explain(metric, subject).
 type ExplainRequest struct {
-	RunID  int64           // 0: the latest complete or partial scan run
-	Metric domain.MetricID // Version 0 means the latest version
-	Person string          // canonical email, lowercased
+	RunID   int64           // 0: the latest complete or partial scan run
+	Metric  domain.MetricID // Version 0 means the latest version
+	Subject domain.Subject  // a person's Key is the canonical email, lowercased
 }
 
 // WhoKnowsRequest asks who knows the code under a path.
@@ -78,12 +87,13 @@ type WhoKnowsRequest struct {
 // MeRequest asks for one person's own page.
 type MeRequest struct {
 	RunID int64  // 0: the latest complete or partial scan run
-	Email string // canonical email, lowercased; "" lets the use case choose a default
+	Email string // canonical email, lowercased; required: the command line resolves any default
 }
 
 // ValidateRequest asks how well each ranked metric separates changes a person
 // labelled meaningful from those labelled routine (docs/metrics.md#validity-checks).
 type ValidateRequest struct {
-	RunID  int64  // 0: the latest complete or partial scan run
-	Labels string // absolute path of the labels CSV: change id, label, labeller
+	RunID      int64  // 0: the latest complete or partial scan run
+	Labels     []byte // the labels CSV (change id, label, labeller), read by the command line
+	LabelsName string // where Labels came from, for messages
 }

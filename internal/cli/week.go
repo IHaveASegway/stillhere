@@ -14,6 +14,7 @@ func (e *env) weekCommand() *cobra.Command {
 		days       int
 		sort       string
 		ignoreRevs string
+		exclude    []string
 	)
 	cmd := &cobra.Command{
 		Use:   "week PATH...",
@@ -30,6 +31,7 @@ stale clone gives a stale answer, and it stores nothing.`,
 			flags := cmd.Flags()
 			req := app.WeekRequest{
 				Paths:       paths,
+				Exclude:     exclude,
 				Now:         e.nowOr(cmd, now),
 				Days:        days,
 				DaysFromCLI: flags.Changed("days"),
@@ -41,6 +43,9 @@ stale clone gives a stale answer, and it stores nothing.`,
 			}
 			if req.SortFromCLI && sort != "lines_added" && sort != "commits" {
 				return usagef("invalid --week-sort %q: want lines_added or commits", sort)
+			}
+			if err := checkGlobs(exclude); err != nil {
+				return err
 			}
 			if flags.Changed("ignore-revs-file") {
 				e.log.Warn("--ignore-revs-file is ignored by week: git log has no such option")
@@ -54,6 +59,7 @@ stale clone gives a stale answer, and it stores nothing.`,
 	addNowFlag(cmd, &now)
 	f.IntVar(&days, "days", 0, "window length in days (default the policy's [week] days)")
 	f.StringVar(&sort, "week-sort", "", "row order: lines_added or commits (default the policy's [week] sort)")
+	addExcludeFlag(cmd, &exclude)
 	f.StringVar(&ignoreRevs, "ignore-revs-file", "", "accepted for symmetry with scan and ignored: git log has no such option")
 	return cmd
 }
