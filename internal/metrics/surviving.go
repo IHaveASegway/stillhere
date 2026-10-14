@@ -20,9 +20,9 @@ func (survivingV1) Definition() Definition {
 		ID:       survivingID,
 		Question: "Whose lines are still on the default branch?",
 		Unit: "Non-blank prod lines at HEAD per person, per repository, group and all, credited to the blamed commit's " +
-			"author or, for an agent's commit, its first human co-author. Detail per person: repos, majority_files, " +
-			"lines_<role> for each role with lines, landings_365d. Per repository and group (subject repo or group): " +
-			"prod_lines, prod_files, people, bot_share, ai_assisted_share.",
+			"author or, for an agent's commit, its first human co-author. A person has a value in a scope when they hold prod " +
+			"lines there. Detail per person: repos, majority_files, lines_<role> for each role with lines, landings_365d. Per " +
+			"repository and group (subject repo or group): prod_lines, prod_files, people, bot_share, ai_assisted_share.",
 		Ranked:      false,
 		Eligibility: "Not ranked: surviving lines reward tenure.",
 		BlindSpots: "Blame credits the last author of a line, so a reformat not listed in .git-blame-ignore-revs moves lines to its author. " +
@@ -108,6 +108,13 @@ func (survivingV1) compute(v *view) ([]domain.MetricValue, error) {
 
 	var out []domain.MetricValue
 	for k, a := range accs {
+		// The still-here table lists the people who hold prod lines in the
+		// scope; someone whose lines there are all tests or docs has no
+		// row, as in the fixture's oracle, and a row's Detail carries the
+		// lines of every role.
+		if a.roles[domain.RoleProd] == 0 {
+			continue
+		}
 		detail := map[string]float64{
 			"repos":          float64(a.repos),
 			"majority_files": float64(a.majority),
