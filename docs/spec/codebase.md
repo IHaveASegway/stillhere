@@ -457,7 +457,7 @@ type Options struct { // supplied by the ranked metric (metrics.RankInput)
 // Block outside [0, Blocks) in any subject's clusters, eligible or not. The options are checked even when data is empty.
 func Intervals(id domain.MetricID, scope domain.Scope, w domain.Window, kind Kind, data map[domain.Subject][]Cluster, opt Options) []domain.RankInterval
 func Seed(id domain.MetricID, scope domain.Scope, w domain.Window) uint64
-func AUC(pos, neg []float64) float64
+func AUC(pos, neg []float64) float64 // Mann-Whitney, a tie counting 1/2; 0.5 when pos or neg is empty: no pairs, not chance
 
 // report
 type Model struct{ /* stillhere.report/v1; see spec/report-json.md */ }
@@ -625,6 +625,7 @@ Tests sit at stable boundaries, so a refactor does not rewrite them (Kent Beck, 
 | `TestClassify` | `classify` | roles, role precedence, `too_big`, segment matching |
 | `TestPolicy` | `policy` | a missing table or key exits 2; `--days` overrides; the hash covers the deny list; `FromSource(p.Source)` has `p.Ref()` |
 | `TestRankIntervals` | `rank` | reproducible intervals; ineligible subjects unranked; a sum's week blocks checked against its window |
+| `TestAUC` | `rank` | the validity check's statistic: a hand-counted example with ties, 1 and 0 for perfect separation, 0.5 when either class is empty, and the value counting every pair gives |
 | `TestRedact` | `redact` | no credential survives `URL`, `Scrub` or `Message` (userinfo, scp-like and malformed remotes, query strings, quotes, the 180-rune cut); text that holds none is unchanged |
 | `TestRunner` | `gitcli` | per-user and system attributes change neither numstat nor `check-attr`; no askpass, signature or external diff program runs; an inherited `GIT_DIR` changes nothing; a timeout or cancellation kills git's process group and is reported as such even when the reader fails first on the truncated output; a helper that left the group cannot hold `Stream` |
 | `TestStoreRoundTrip` | `sqlite` | `LoadFacts(PutRepoFacts(x)) == x`; `Run(id)` returns the run as begun and finished, policy source included; readers never see a running or failed run (`ErrNotFound`) |
