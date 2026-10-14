@@ -405,7 +405,8 @@ func Scan(ctx context.Context, d Deps, r ScanRequest) (*report.Model, error)
 // Report, Explain, Me, WhoKnows, Validate: read the latest complete run unless a run id is given
 
 // cli
-func Execute(ctx context.Context, args []string, stdout, stderr io.Writer, version string) int // the exit code
+type Build struct{ Version, Commit, Date string } // from -ldflags -X main.version, main.commit, main.date
+func Execute(ctx context.Context, args []string, stdout, stderr io.Writer, build Build) int // the exit code
 ```
 
 ## Run model
