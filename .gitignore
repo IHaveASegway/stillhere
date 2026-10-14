@@ -1,0 +1,19 @@
+# Build output
+/dist/
+/stillhere
+/bin/
+*.test
+*.out
+coverage.*
+
+# Local state that must never be committed
+/plan.original.md
+*.db
+*.db-wal
+*.db-shm
+.stillhere/
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
