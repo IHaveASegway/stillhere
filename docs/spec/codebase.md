@@ -284,7 +284,7 @@ type FactStore interface {
 	FinishRun(ctx context.Context, runID int64, status RunStatus) error
 	// The read side sees complete and partial runs only: an unknown, running or failed run is ErrNotFound.
 	Run(ctx context.Context, id int64) (Run, error)           // status, tool version, times, options, policy source
-	LatestRun(ctx context.Context, kind RunKind) (Run, error) // the newest one
+	LatestRun(ctx context.Context, kind RunKind) (Run, error) // the newest one: the latest Now, then the last begun
 	LoadFacts(ctx context.Context, runID int64) (*FactSet, error)
 	LoadMetrics(ctx context.Context, runID int64) ([]MetricValue, []RankInterval, error)
 	Close() error
@@ -298,7 +298,7 @@ type ForgeSource interface{}   // the forge's API: GitHub, later GitLab (ADR 000
 type ForgeStore interface{}    // the forge replica in facts.db, upserted by node id with a watermark per repo
 ```
 
-The forge ports exist now, empty, so the sync can be built without editing another issue's files: #14 owns `domain/forge.go`, `sqlite/forge.go` (where `*sqlite.Store` implements `ForgeStore`), `cli/forge.go` (which builds the `ForgeSource` adapter) and `app/sync.go`. `ForgeStore` is a port of its own rather than more `FactStore` methods: `FactStore` holds per-run snapshots, while forge facts are a replica that outlives runs ([run model](#run-model)), and a separate port leaves `FactStore` and #8's implementation untouched (Interface Segregation Principle). Store migrations are numbered by `PRAGMA user_version`: 1 is #8's schema, 2 is #14's forge tables. M4 adds narrations the same way.
+The forge ports exist now, empty, so the sync can be built without editing another issue's files: #14 owns `domain/forge.go`, `sqlite/forge.go` (where `*sqlite.Store` implements `ForgeStore`), `cli/forge.go` (which builds the `ForgeSource` adapter) and `app/sync.go`. `ForgeStore` is a port of its own rather than more `FactStore` methods: `FactStore` holds per-run snapshots, while forge facts are a replica that outlives runs ([run model](#run-model)), and a separate port leaves `FactStore` and #8's implementation untouched (Interface Segregation Principle). Store migrations are embedded files, `internal/sqlite/migrations/NNNN_<name>.sql`, applied in order, one transaction each, and numbered by `PRAGMA user_version`: 1 (`0001_facts.sql`) is #8's schema, 2 is #14's forge tables. M4 adds narrations the same way.
 
 ## Package APIs
 
@@ -467,7 +467,7 @@ type Validation struct { RunID int64; Labels int; Metrics []MetricAUC }
 type MetricAUC struct { Metric domain.MetricID; AUC float64; N int }
 
 // sqlite
-func Open(ctx context.Context, path string) (*Store, error) // dir 0700, file 0600, migrated; deletes runs left running
+func Open(ctx context.Context, path string) (*Store, error) // creates a missing dir 0700 and file 0600; migrated (a newer or foreign file is a *domain.UsageError); deletes runs left running
 // *Store implements domain.FactStore (store.go, #8) and domain.ForgeStore (forge.go, #14)
 
 // app
@@ -536,7 +536,8 @@ func BuildSiblingContext(ctx context.Context, dir string) error // the sibling i
 Every `scan` is a **run**: a snapshot of facts at one set of HEADs, under one policy and one mailmap, with the metric values computed from them.
 
 - **Git-derived facts are stored per run**, not once per commit. The mailmap and the policy can change between runs, and every number in a run must come from one HEAD set, one policy and one mailmap. The cost is repeated rows across runs, bounded by retention. The store is disposable, so this is a two-way door.
-- **Publishing** is a status flip. A run is written as `running` and becomes `complete` (or `partial` when some repo failed) only after its last row. Readers select complete and partial runs only, so nobody sees half a run: every `FactStore` read method returns `ErrNotFound` for a running or failed run. A run left `running` by a crash is deleted on the next open.
+- **Publishing** is a status flip. A run is written as `running` and becomes `complete` (or `partial` when some repo failed) only after its last row. Readers select complete and partial runs only, so nobody sees half a run: every `FactStore` read method returns `ErrNotFound` for a running or failed run. A run left `running` by a crash is deleted by the next open once its lease has lapsed: every write renews it, and it lapses after a day without one, so an open never deletes a run that another process is still writing.
+- **Retention.** When a run finishes, the store keeps, among the runs of its kind, that run, the newest 8 published runs and the newest published run of each of the 12 most recent months that have one (by `Now`, as restic's `--keep-last` and `--keep-monthly` count), and deletes the others, failed runs included.
 - **The policy travels with the run.** `Run.PolicySource` holds exactly the bytes `PolicyRef.SHA256` hashes. Every reader of a stored run (`report`, `explain`, `who-knows`, `me`, `validate`, `mcp`, and a new metric version computed over old facts) rebuilds that policy with `policy.FromSource` and checks its `Ref` against `Run.Policy`. Today's `stillhere.toml`, or a newer packaged default, never changes a stored run's numbers; only `week` and `scan` load a policy file.
 - **Forge facts** (M2) are not per run. They are a replica of GitHub, upserted by node id with a watermark per repo, and each run records the watermark it read.
 - **Metric values** are stored with the run, keyed by `metric@version`. A new metric version can be computed over an old run's facts with `LoadFacts`, which is why `LoadFacts(PutRepoFacts(x)) == x` is tested.

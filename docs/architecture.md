@@ -109,7 +109,7 @@ The core (classification, metrics, ranking) imports no adapter package: no `os/e
 - **Git-derived facts are per run**: commits, landings, the landing map, file changes, reverts, path classes and line owners. The mailmap and the policy can change between runs, and every number in a run must come from one HEAD set, one policy and one mailmap. A force-push simply shows up in the next run's history. The cost is repeated rows across runs, bounded by retention.
 - **line_owners** are aggregated as (repo, path, commit, author, non-blank lines). That is roughly one row per file per contributing commit: about 250,000 rows for a 50,000-file organization.
 - **Forge facts** are not per run: they replicate GitHub, upserted by node id with a watermark per repo, and each run records the watermark it read.
-- **Retention**: the last 8 weekly runs plus one per month, configurable.
+- **Retention**: when a run finishes, the newest 8 runs plus the newest run of each of the 12 most recent months that have one, per kind (restic's `--keep-last 8 --keep-monthly 12`); configurable later.
 - **metric_values** and **rank_intervals** carry `metric@version`, scope, window and run id, so a new metric version can be computed over old facts and shown next to the old one.
 
 `report.json` is an export of one run, the published language for tools that do not want SQL. Its draft shape is in [spec/report-json.md](spec/report-json.md).
