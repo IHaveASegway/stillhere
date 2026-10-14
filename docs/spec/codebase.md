@@ -384,17 +384,17 @@ type HistoryFacts struct {
 	Warnings    []domain.Warning
 }
 type BlameOptions struct {
-	Paths          []string      // classified paths that received a role
-	IgnoreRevsFile string        // CLI override; single-repo runs only
-	Slots          chan struct{} // shared by every repo: one slot per running git blame
-	Timeout        time.Duration
-	Progress       func(done, total int)
+	Paths          []string              // classified paths at Head that received a role
+	IgnoreRevsFile string                // CLI override; single-repo runs only; an unreadable or malformed file is a *domain.UsageError
+	Slots          chan struct{}         // shared by every repo: make(chan struct{}, jobs), left empty; Blame sends to take a slot per running git blame and receives to free it
+	Timeout        time.Duration         // per file; 0 means 120 s
+	Progress       func(done, total int) // after every 1,000th file and after the last
 }
 func Blame(ctx context.Context, git domain.GitRunner, repo domain.Repo, opt BlameOptions) (*BlameFacts, error)
 type BlameFacts struct {
-	Owners     []domain.LineOwner
-	IgnoreRevs domain.IgnoreRevs
-	Errors     []domain.FileError
+	Owners     []domain.LineOwner // sorted by Path, then Commit; CoAuthors from coAuthors
+	IgnoreRevs domain.IgnoreRevs  // the list blame used
+	Errors     []domain.FileError // per file, sorted by Path; a root ignore-revs file not used whole is one too
 }
 
 // identity
