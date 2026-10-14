@@ -1,0 +1,430 @@
+# golangci-lint v2 configuration. Run it with `make lint`, which pins v2.14.0.
+#
+# depguard encodes the dependency rule of docs/spec/codebase.md: dependencies
+# point inward, toward the core (Alistair Cockburn, "Hexagonal
+# Architecture"). That makes the rule an architectural fitness function
+# (Ford, Parsons and Kua, Building Evolutionary Architectures, ch. 2): a
+# violation fails the build instead of waiting for a reviewer to notice. A
+# change that needs an exception edits codebase.md and this file together.
+#
+# How the rules are written:
+# - Every rule but the composition root's is an allow list (list-mode:
+#   strict): the standard library ($gostd), the internal packages that kind
+#   of package may import, and the third-party modules it owns. Anything
+#   else fails, including a module nobody thought to deny.
+# - Deny entries still win over $gostd, which allows each top-level standard
+#   library tree whole ("net", "os"), because in strict mode a deny loses
+#   only to a longer allow entry. They also give each failure its reason.
+# - Entries are string prefixes; "net$" means the net package exactly, so
+#   net/url stays allowed. depguard compares an import with the nearest
+#   entry that sorts before it, so no entry in a list may be a prefix of
+#   another entry in that list.
+# - A package that no rule names falls under "unlisted", which guards it as
+#   core until codebase.md's layout names it and this file gives it a rule.
+# - Test files are exempt. internal/fixture (test support) matches no rule.
+#
+# To check a rule, plant an import and run depguard alone:
+#   go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.14.0 run --enable-only depguard ./...
+# (With every linter on, golangci-lint keeps one issue per line, so revive's
+# complaint about an unexplained blank import hides depguard's.)
+version: "2"
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - bodyclose
+    - depguard
+    - errorlint
+    - gocritic
+    - misspell
+    - noctx
+    - nolintlint
+    - revive
+  settings:
+    depguard:
+      rules:
+        # Core: a functional core of plain functions over facts. The standard
+        # library and other core packages only, and from the standard library
+        # nothing that does I/O, starts a process or opens a connection.
+        core:
+          list-mode: strict
+          files:
+            - "**/internal/domain/**"
+            - "**/internal/policy/**"
+            - "**/internal/classify/**"
+            - "**/internal/identity/**"
+            - "**/internal/metrics/**"
+            - "**/internal/rank/**"
+            - "**/internal/redact/**"
+            - "**/internal/report/**"
+            - "!$test"
+          allow:
+            - $gostd
+            - github.com/IHaveASegway/stillhere/internal/domain
+            - github.com/IHaveASegway/stillhere/internal/policy
+            - github.com/IHaveASegway/stillhere/internal/classify
+            - github.com/IHaveASegway/stillhere/internal/identity
+            - github.com/IHaveASegway/stillhere/internal/metrics
+            - github.com/IHaveASegway/stillhere/internal/rank
+            - github.com/IHaveASegway/stillhere/internal/redact
+            - github.com/IHaveASegway/stillhere/internal/report
+            - github.com/BurntSushi/toml # policy only; see core-toml
+          deny:
+            - pkg: os
+              desc: "core does no I/O and starts no process: it computes over the facts it is handed (codebase.md#the-dependency-rule)"
+            - &no-syscall
+              pkg: syscall
+              desc: "raw system calls, such as fork and exec, belong to the adapters (codebase.md#the-dependency-rule)"
+            - &no-xsys
+              pkg: golang.org/x/sys
+              desc: "raw system calls, such as fork and exec, belong to the adapters (codebase.md#the-dependency-rule)"
+            - &no-net
+              pkg: net$
+              desc: "only the GitHub adapter uses the network; analysis never does (codebase.md#the-dependency-rule)"
+            - &no-http
+              pkg: net/http
+              desc: "only the GitHub adapter uses the network; analysis never does (codebase.md#the-dependency-rule)"
+            - &no-rpc
+              pkg: net/rpc
+              desc: "only the GitHub adapter uses the network; analysis never does (codebase.md#the-dependency-rule)"
+            - &no-smtp
+              pkg: net/smtp
+              desc: "only the GitHub adapter uses the network; analysis never does (codebase.md#the-dependency-rule)"
+            - &no-sql
+              pkg: database/sql
+              desc: "only internal/sqlite opens facts.db; reach it through domain.FactStore (codebase.md#the-dependency-rule)"
+            - &no-cobra
+              pkg: github.com/spf13
+              desc: "flags belong to internal/cli (codebase.md#the-dependency-rule)"
+            - &no-fixture
+              pkg: github.com/IHaveASegway/stillhere/internal/fixture
+              desc: "test support never reaches production code (codebase.md#layout)"
+            - &no-app
+              pkg: github.com/IHaveASegway/stillhere/internal/app
+              desc: "only the inbound adapters, internal/cli and internal/mcp, call the use cases (codebase.md#the-dependency-rule)"
+            - &no-cli
+              pkg: github.com/IHaveASegway/stillhere/internal/cli
+              desc: "nothing imports the composition root (codebase.md#the-dependency-rule)"
+            - &no-collect
+              pkg: github.com/IHaveASegway/stillhere/internal/collect
+              desc: "only the use cases call the git anti-corruption layer (codebase.md#the-dependency-rule)"
+            - &no-gitcli
+              pkg: github.com/IHaveASegway/stillhere/internal/gitcli
+              desc: "only internal/cli builds adapters: run git through domain.GitRunner (codebase.md#the-dependency-rule)"
+            - &no-github
+              pkg: github.com/IHaveASegway/stillhere/internal/github
+              desc: "only internal/cli builds adapters: reach GitHub through domain.ForgeSource (codebase.md#the-dependency-rule)"
+            - &no-mcp
+              pkg: github.com/IHaveASegway/stillhere/internal/mcp
+              desc: "only internal/cli builds the MCP server (codebase.md#the-dependency-rule)"
+            - &no-sqlite
+              pkg: github.com/IHaveASegway/stillhere/internal/sqlite
+              desc: "only internal/cli builds adapters: reach facts.db through domain.FactStore (codebase.md#the-dependency-rule)"
+        # Only internal/policy parses TOML.
+        core-toml:
+          list-mode: lax
+          files:
+            - "**/internal/domain/**"
+            - "**/internal/classify/**"
+            - "**/internal/identity/**"
+            - "**/internal/metrics/**"
+            - "**/internal/rank/**"
+            - "**/internal/redact/**"
+            - "**/internal/report/**"
+            - "!$test"
+          deny:
+            - pkg: github.com/BurntSushi/toml
+              desc: "only internal/policy parses TOML: hand the core a parsed *policy.Policy (codebase.md#the-dependency-rule)"
+        # The anti-corruption layer for git: core, and git only through
+        # domain.GitRunner.
+        collect:
+          list-mode: strict
+          files:
+            - "**/internal/collect/**"
+            - "!$test"
+          allow:
+            - $gostd
+            - github.com/IHaveASegway/stillhere/internal/domain
+            - github.com/IHaveASegway/stillhere/internal/policy
+            - github.com/IHaveASegway/stillhere/internal/classify
+            - github.com/IHaveASegway/stillhere/internal/identity
+            - github.com/IHaveASegway/stillhere/internal/metrics
+            - github.com/IHaveASegway/stillhere/internal/rank
+            - github.com/IHaveASegway/stillhere/internal/redact
+            - github.com/IHaveASegway/stillhere/internal/report
+            - github.com/IHaveASegway/stillhere/internal/collect
+            - golang.org/x/sync
+          deny:
+            - &no-exec
+              pkg: os/exec
+              desc: "only internal/gitcli runs processes: run git through domain.GitRunner (codebase.md#the-dependency-rule)"
+            - *no-syscall
+            - *no-xsys
+            - *no-net
+            - *no-http
+            - *no-rpc
+            - *no-smtp
+            - *no-sql
+            - *no-cobra
+            - *no-fixture
+            - *no-app
+            - *no-cli
+            - *no-gitcli
+            - *no-github
+            - *no-mcp
+            - *no-sqlite
+        # The use cases: core and collect, and the outside world only through
+        # the ports in app.Deps.
+        app:
+          list-mode: strict
+          files:
+            - "**/internal/app/**"
+            - "!$test"
+          allow:
+            - $gostd
+            - github.com/IHaveASegway/stillhere/internal/domain
+            - github.com/IHaveASegway/stillhere/internal/policy
+            - github.com/IHaveASegway/stillhere/internal/classify
+            - github.com/IHaveASegway/stillhere/internal/identity
+            - github.com/IHaveASegway/stillhere/internal/metrics
+            - github.com/IHaveASegway/stillhere/internal/rank
+            - github.com/IHaveASegway/stillhere/internal/redact
+            - github.com/IHaveASegway/stillhere/internal/report
+            - github.com/IHaveASegway/stillhere/internal/collect
+            - github.com/IHaveASegway/stillhere/internal/app
+            - golang.org/x/sync
+          deny:
+            - *no-exec
+            - *no-syscall
+            - *no-xsys
+            - *no-net
+            - *no-http
+            - *no-rpc
+            - *no-smtp
+            - *no-sql
+            - *no-cobra
+            - *no-fixture
+            - *no-cli
+            - *no-gitcli
+            - *no-github
+            - *no-mcp
+            - *no-sqlite
+        # Outbound adapters import core and their own module, never the use
+        # cases, the command line, collect or one another.
+        gitcli:
+          list-mode: strict
+          files:
+            - "**/internal/gitcli/**"
+            - "!$test"
+          allow:
+            - $gostd
+            - github.com/IHaveASegway/stillhere/internal/domain
+            - github.com/IHaveASegway/stillhere/internal/redact
+            - github.com/IHaveASegway/stillhere/internal/gitcli
+          deny:
+            - *no-cobra
+            - *no-fixture
+            - *no-app
+            - *no-cli
+            - *no-collect
+            - *no-github
+            - *no-mcp
+            - *no-sqlite
+        sqlite:
+          list-mode: strict
+          files:
+            - "**/internal/sqlite/**"
+            - "!$test"
+          allow:
+            - $gostd
+            - github.com/IHaveASegway/stillhere/internal/domain
+            - github.com/IHaveASegway/stillhere/internal/sqlite
+            - modernc.org/sqlite
+          deny:
+            - *no-cobra
+            - *no-fixture
+            - *no-app
+            - *no-cli
+            - *no-collect
+            - *no-gitcli
+            - *no-github
+            - *no-mcp
+        github:
+          list-mode: strict
+          files:
+            - "**/internal/github/**"
+            - "!$test"
+          allow:
+            - $gostd
+            - github.com/IHaveASegway/stillhere/internal/domain
+            - github.com/IHaveASegway/stillhere/internal/redact
+            - github.com/IHaveASegway/stillhere/internal/github
+            - github.com/cli/go-gh/v2 # #14: gh's stored token
+            - golang.org/x/sync
+          deny:
+            - *no-cobra
+            - *no-fixture
+            - *no-app
+            - *no-cli
+            - *no-collect
+            - *no-gitcli
+            - *no-mcp
+            - *no-sqlite
+        # The MCP server is an inbound adapter, like the command line: it
+        # calls the use cases. Only internal/cli builds adapters, and MCP
+        # runs over stdio, so it needs neither the network nor a process.
+        mcp:
+          list-mode: strict
+          files:
+            - "**/internal/mcp/**"
+            - "!$test"
+          allow:
+            - $gostd
+            - github.com/IHaveASegway/stillhere/internal/domain
+            - github.com/IHaveASegway/stillhere/internal/policy
+            - github.com/IHaveASegway/stillhere/internal/classify
+            - github.com/IHaveASegway/stillhere/internal/identity
+            - github.com/IHaveASegway/stillhere/internal/metrics
+            - github.com/IHaveASegway/stillhere/internal/rank
+            - github.com/IHaveASegway/stillhere/internal/redact
+            - github.com/IHaveASegway/stillhere/internal/report
+            - github.com/IHaveASegway/stillhere/internal/app
+            - github.com/IHaveASegway/stillhere/internal/mcp
+            - github.com/modelcontextprotocol/go-sdk # #15: the official MCP SDK (ADR 0006)
+          deny:
+            - *no-exec
+            - *no-syscall
+            - *no-xsys
+            - *no-net
+            - *no-http
+            - *no-rpc
+            - *no-smtp
+            - *no-sql
+            - *no-cobra
+            - *no-fixture
+            - *no-cli
+            - *no-collect
+            - *no-gitcli
+            - *no-github
+            - *no-sqlite
+        # The composition root may import everything above, but never test
+        # support, and it runs git only through gitcli.
+        cli:
+          list-mode: lax
+          files:
+            - "**/internal/cli/**"
+            - "**/cmd/**"
+            - "!$test"
+          deny:
+            - *no-exec
+            - *no-fixture
+        # A package no rule above names is guarded as core until codebase.md's
+        # layout lists it and this file gives it a rule of its own.
+        unlisted:
+          list-mode: strict
+          files:
+            - "**/internal/**"
+            - "!**/internal/domain/**"
+            - "!**/internal/policy/**"
+            - "!**/internal/classify/**"
+            - "!**/internal/identity/**"
+            - "!**/internal/metrics/**"
+            - "!**/internal/rank/**"
+            - "!**/internal/redact/**"
+            - "!**/internal/report/**"
+            - "!**/internal/collect/**"
+            - "!**/internal/app/**"
+            - "!**/internal/gitcli/**"
+            - "!**/internal/sqlite/**"
+            - "!**/internal/github/**"
+            - "!**/internal/mcp/**"
+            - "!**/internal/cli/**"
+            - "!**/internal/fixture/**"
+            - "!$test"
+          allow:
+            - $gostd
+            - github.com/IHaveASegway/stillhere/internal/domain
+            - github.com/IHaveASegway/stillhere/internal/policy
+            - github.com/IHaveASegway/stillhere/internal/classify
+            - github.com/IHaveASegway/stillhere/internal/identity
+            - github.com/IHaveASegway/stillhere/internal/metrics
+            - github.com/IHaveASegway/stillhere/internal/rank
+            - github.com/IHaveASegway/stillhere/internal/redact
+            - github.com/IHaveASegway/stillhere/internal/report
+          deny:
+            - pkg: os
+              desc: "a package codebase.md's layout does not list is guarded as core: add it there and give it a rule in .golangci.yml (codebase.md#layout)"
+            - *no-syscall
+            - *no-xsys
+            - *no-net
+            - *no-http
+            - *no-rpc
+            - *no-smtp
+            - *no-sql
+            - *no-cobra
+            - *no-fixture
+            - *no-app
+            - *no-cli
+            - *no-collect
+            - *no-gitcli
+            - *no-github
+            - *no-mcp
+            - *no-sqlite
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    revive:
+      # Listing any rule replaces revive's defaults, so these are the defaults
+      # without unused-parameter: interface implementations and the stubs of
+      # the walking skeleton keep their documented parameter names.
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: empty-block
+        - name: error-naming
+        - name: error-return
+        - name: error-strings
+        - name: errorf
+        - name: exported
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: package-comments
+        - name: range
+        - name: receiver-naming
+        - name: redefines-builtin-id
+        - name: superfluous-else
+        - name: time-naming
+        - name: unexported-return
+        - name: unreachable-code
+        - name: var-declaration
+        - name: var-naming
+  exclusions:
+    # Log any exclusion rule below that no longer matches anything.
+    warn-unused: true
+    rules:
+      # The walking skeleton's stubs (#1) always return an error, so
+      # staticcheck proves "err != nil" always true in every caller (SA4023)
+      # and would fail lint for each issue that codes against a stub. Delete
+      # this rule once no stub is left (#13); warn-unused reports when it no
+      # longer suppresses anything.
+      - linters:
+          - staticcheck
+        text: "SA4023"
+      # Package collect's shared readers and test helper are written ahead of
+      # the four collectors that use them (#4-#7), so that those branches do
+      # not each write their own and collide. Delete this rule once they are
+      # used; warn-unused reports when it no longer suppresses anything.
+      - path: internal/collect/(scan|collect_test)\.go
+        linters:
+          - unused
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/IHaveASegway/stillhere

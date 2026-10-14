@@ -13,12 +13,13 @@ git <common> ls-tree -r -l <sha>
 The porcelain format is `<mode> <type> <blob> <size>\t<path>`; only type `blob` is used. Classify every path ([classification.md](classification.md)), then blame each path that survives:
 
 ```
-git <common> blame -w -M --line-porcelain [--ignore-revs-file <file>] <sha> -- <path>
+git <common> blame -w -M --line-porcelain --no-ignore-revs-file [--ignore-revs-file <file>] <sha> -- <path>
 ```
 
 - **Flags.** `-w -M` is the default, and matches git-fame's `--loc=surviving` benchmark. `-C`, which tracks copies across files, stays off: it is expensive, and the proof run did not use it.
 - **`-M` threshold.** `-M` credits a moved block to its original commit only when the block has at least 20 alphanumeric characters (`git-blame(1)` default). The fixture's blocks are 43 characters for that reason.
 - **Bare mirrors.** These work unchanged, because every command names `<sha>` explicitly (verified).
+- **`--no-ignore-revs-file`.** It clears a repo-local `blame.ignoreRevsFile`, which would otherwise add its list to the one stillhere records, and make blame fail when that file is missing ([git-invocation.md](git-invocation.md#analysis-commands-offline)).
 
 ## Ignore-revs, per repository
 

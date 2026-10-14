@@ -13,7 +13,7 @@ Status: draft carried over from the 2026-10-07 plan · M0's `week` output · sup
   - A person in two groups is a row in each. There is no cross-group total.
 - **Joining people.** People are joined on the published key (the canonical email after mailmap), not on a private person id.
 - **Hotspot units.** `window_main_dev_ownership` is a 0–1 ratio and coupling `degree` is an integer percent ([hotspots-code-maat.md](hotspots-code-maat.md)). These fields exist only if hotspots ship.
-- **Warning codes.** Warnings are `{code, message}`. Codes used by these specs: `duplicate-repo`, `shallow-clone`, `shallow-window`, `partial-clone`, `numstat-rename`.
+- **Warning codes.** Warnings are `{code, message}`. Codes used by these specs: `duplicate-repo`, `shallow-clone`, `shallow-window`, `partial-clone`, `numstat-rename`, `excluded-repo` (a run-level warning per repository `--exclude-repo` left out, which is how the report lists them).
 
 ## Shape
 
@@ -71,6 +71,7 @@ Changes from the 2026-10-07 shape:
 | 0 | At least one repo produced week or still-here facts. This includes partial failure, clone-health skips, and skipped hotspots. |
 | 1 | No repo produced facts: every path failed, or none was a repo. |
 | 2 | A usage error (see below). |
+| 128 + n | Interrupted by signal n (SIGINT, SIGTERM or SIGHUP). stillhere stops every git process, then ends itself with the same signal, so a shell sees it die by that signal (`$?` is 130 for Ctrl-C) and stops a loop. Where a process cannot signal itself (Windows), it exits 130. |
 
 Usage errors:
 
