@@ -454,17 +454,39 @@ func Intervals(id domain.MetricID, scope domain.Scope, w domain.Window, kind Kin
 func Seed(id domain.MetricID, scope domain.Scope, w domain.Window) uint64
 func AUC(pos, neg []float64) float64
 
-// report
-type Model struct{ /* stillhere.report/v1; see spec/report-json.md */ }
-func Text(w io.Writer, m *Model) error
-func Markdown(w io.Writer, m *Model) error
-func JSON(w io.Writer, m *Model) error
-// The read commands' answers live here too, so the renderers and the MCP server share one shape:
-type Explain struct { RunID int64; Metric domain.MetricID; Subject domain.Subject; Values []domain.MetricValue }
-type WhoKnows struct { RunID int64; Repo, Path string; Values []domain.MetricValue }
-type Me struct { RunID int64; Email string; Values []domain.MetricValue; Ranks []domain.RankInterval }
-type Validation struct { RunID int64; Labels int; Metrics []MetricAUC }
-type MetricAUC struct { Metric domain.MetricID; AUC float64; N int }
+// report: a view that computes no metric. values.go is the one place that maps each printed
+// number to the metric@version, subject, scope and Detail key it reads (spec/report-json.md#where-the-numbers-come-from).
+type Model struct{ /* stillhere.report/v1: overviews per group, repo cards, ranks, caveats and provenance on every section */ }
+type Document interface{ /* sealed: *Model, *Explain, *WhoKnows, *Me, *Validation, *Catalog */ }
+func Text(w io.Writer, d Document) error     // a terminal: 100 columns, untrusted text escaped, no emails
+func Markdown(w io.Writer, d Document) error // GitHub-flavoured: untrusted text escaped, no emails or repository paths
+func JSON(w io.Writer, d Document) error     // stable order; empty lists [] and maps {}, absent sections null
+type People interface{ Name(email string) string; Bot(email string) bool } // *identity.Directory implements it
+type Input struct {
+	Kind, Tool string // KindWeek or KindScan; the binary's version
+	Run        *domain.Run // nil for week, and for a scan that stored nothing
+	Facts      *domain.FactSet
+	Policy     *policy.Policy
+	Who        People
+	Values     []domain.MetricValue
+	Ranks      []RankSet // one per metric named by --rank and scope
+	Landed     Landed    // landed@1's days and sort, and whether the command line set them
+	History    domain.Window
+	Timings    *Timings
+}
+type RankSet struct { Metric MetricInfo; Scope domain.Scope; Window domain.Window; Percent bool; MinN int; Intervals []domain.RankInterval } // bots left out
+func Build(in *Input) *Model
+// The read commands' answers live here too, so the renderers and the MCP server share one shape.
+// Each has Provenance (run id, as-of, policy, HEAD SHAs, metric@version) and Caveats:
+type Explain struct { Provenance Provenance; Metric MetricInfo; Subject Subject; Values []Value; Changes []Change; Caveats []Caveat }
+type WhoKnows struct { Provenance Provenance; Path, Repo string; Repos []WhoKnowsRepo; Caveats []Caveat } // owners, top authors, recent landers, bots
+type Me struct { Provenance Provenance; Person Subject; Values []Value; Ranks []MeRank; Caveats []Caveat }
+type Validation struct { Provenance Provenance; Labels, Labellers, Meaningful, Routine, Noise, Unmatched int; Metrics []MetricAUC; Caveats []Caveat }
+type MetricAUC struct { Metric string; AUC *float64; N, Meaningful, Routine int; Beta bool } // AUC nil without both labels
+type Catalog struct { Metrics []MetricInfo }
+func NewExplain(in *ExplainInput) *Explain    // values, and a ranked metric's clusters per repository as changes
+func NewWhoKnows(in *WhoKnowsInput) *WhoKnows // who_knows@1's values under the path, as lists
+func NewMe(in *MeInput) *Me                   // the person's values and their row in each RankSet
 
 // sqlite
 func Open(ctx context.Context, path string) (*Store, error) // dir 0700, file 0600, migrated; deletes runs left running

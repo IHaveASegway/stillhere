@@ -1,48 +1,156 @@
 package report
 
-import "github.com/IHaveASegway/stillhere/internal/domain"
+import "time"
 
 // The answers of the read commands. They live here, beside Model, so that
-// the text, Markdown and JSON renderers and the MCP server share one shape
-// for each answer; internal/app returns them.
+// the text, Markdown and JSON renderers and the MCP server (#15) share one
+// shape for each answer; internal/app builds them. Each carries its
+// provenance and its caveats, so an answer can be read, or handed to an
+// agent, on its own.
+
+// Value is one metric value as a report prints it: domain.MetricValue with
+// the published metric id and a display name for a person.
+type Value struct {
+	Metric  string             `json:"metric"` // metric@version
+	Scope   Scope              `json:"scope"`
+	Subject Subject            `json:"subject"`
+	Window  Interval           `json:"window"`
+	Value   float64            `json:"value"`
+	Num     float64            `json:"num"` // ratio metrics; otherwise equal to Value
+	Den     float64            `json:"den"` // ratio metrics; otherwise 1
+	N       int                `json:"n"`   // the sample size eligibility reads
+	Detail  map[string]float64 `json:"detail"`
+}
+
+// Subject is what a value is about.
+type Subject struct {
+	Kind string `json:"kind"` // person, area, repo or change
+	Key  string `json:"key"`  // a person's canonical email; JSON only
+	Name string `json:"name"` // a person's display name; "" for other kinds
+	Bot  bool   `json:"bot"`
+}
+
+// MetricInfo is a metric's published definition (docs/metrics.md).
+type MetricInfo struct {
+	ID          string `json:"id"` // metric@version
+	Question    string `json:"question"`
+	Unit        string `json:"unit"`
+	Ranked      bool   `json:"ranked"`
+	Eligibility string `json:"eligibility"`
+	BlindSpots  string `json:"blind_spots"`
+	Gaming      string `json:"gaming"`
+	Oracle      string `json:"oracle"`
+	Validity    string `json:"validity"`
+}
+
+// Catalog is the metric registry: every metric version with its question,
+// unit, eligibility, blind spots, how it can be gamed, its oracle and its
+// validity.
+type Catalog struct {
+	Metrics []MetricInfo `json:"metrics"` // in registry order
+}
 
 // Explain is the explain answer: one subject's values for one metric in one
-// run, the starting point for tracing them to the changes behind them.
+// run, and the changes behind them.
 type Explain struct {
-	RunID   int64
-	Metric  domain.MetricID
-	Subject domain.Subject
-	Values  []domain.MetricValue // one per scope and window, sorted
+	Provenance Provenance `json:"provenance"`
+	Metric     MetricInfo `json:"metric"`
+	Subject    Subject    `json:"subject"`
+	Values     []Value    `json:"values"`  // one per scope and window, sorted
+	Changes    []Change   `json:"changes"` // a ranked metric's counted changes for a person; empty otherwise
+	Caveats    []Caveat   `json:"caveats"`
 }
 
-// WhoKnows is the who_knows@1 answer for a path in one run.
+// Change is one change's contribution to a person's value: a cluster, the
+// unit the bootstrap resamples.
+type Change struct {
+	Repo    string    `json:"repo"` // name
+	RepoKey string    `json:"repo_key"`
+	Landing string    `json:"landing"` // the landing's full SHA, or a pull request id from M2
+	Time    time.Time `json:"time"`    // the landing's committer time
+	Merge   bool      `json:"merge"`
+	Title   string    `json:"title"` // the landing commit's subject: local output only, never sent to an AI
+	Num     float64   `json:"num"`
+	Den     float64   `json:"den"` // ratio metrics; 0 for a sum
+}
+
+// WhoKnows is the who_knows@1 answer for a path: a routing answer, not a
+// rank.
 type WhoKnows struct {
-	RunID  int64
-	Repo   string // Repo.Key, or "" for every repository
-	Path   string
-	Values []domain.MetricValue // sorted
+	Provenance Provenance     `json:"provenance"`
+	Path       string         `json:"path"` // repo-relative prefix; "" for the whole repository
+	Repo       string         `json:"repo"` // the --repo filter (Repo.Key), or "" for every repository
+	Repos      []WhoKnowsRepo `json:"repos"`
+	Caveats    []Caveat       `json:"caveats"`
 }
 
-// Me is one person's own page: their values and ranks in one run.
+// WhoKnowsRepo is who knows the path in one repository.
+type WhoKnowsRepo struct {
+	Repo           string   `json:"repo"` // name
+	Key            string   `json:"key"`
+	MajorityOwners []Knower `json:"majority_owners"` // hold at least half the lines of a file under the path
+	TopAuthors     []Knower `json:"top_authors"`     // up to five, by prod lines under the path, then email
+	RecentLanders  []Knower `json:"recent_landers"`  // credited with a change under the path in the last 90 days
+	Bots           []Knower `json:"bots"`            // listed apart, never mixed into the lists above
+}
+
+// Knower is one person's knowledge of a path.
+type Knower struct {
+	Email          string `json:"email"`
+	Name           string `json:"name"`
+	Lines          int    `json:"lines"`           // surviving prod non-blank lines under the path
+	MajorityFiles  int    `json:"majority_files"`  // files under the path where the person is a majority owner
+	RecentLandings int    `json:"recent_landings"` // landings in the last 90 days that changed the path
+}
+
+// Me is one person's own page: every value and rank interval the run holds
+// about them, which is exactly what a lead sees about them (ADR 0001).
 type Me struct {
-	RunID  int64
-	Email  string
-	Values []domain.MetricValue  // sorted
-	Ranks  []domain.RankInterval // sorted
+	Provenance Provenance `json:"provenance"`
+	Person     Subject    `json:"person"`
+	Values     []Value    `json:"values"` // sorted by metric, scope and window
+	Ranks      []MeRank   `json:"ranks"`  // sorted by metric and scope
+	Caveats    []Caveat   `json:"caveats"`
+}
+
+// MeRank is one person's place in one rank table.
+type MeRank struct {
+	Metric   string   `json:"metric"`
+	Scope    Scope    `json:"scope"`
+	Window   Interval `json:"window"`
+	Percent  bool     `json:"percent"`
+	MinN     int      `json:"min_n"`
+	Eligible bool     `json:"eligible"`
+	RankLo   int      `json:"rank_lo"` // 0 when not eligible
+	RankHi   int      `json:"rank_hi"`
+	Of       int      `json:"of"` // eligible people in the table
+	Estimate float64  `json:"estimate"`
+	Lo       float64  `json:"lo"`
+	Hi       float64  `json:"hi"`
+	N        int      `json:"n"`
 }
 
 // Validation is how well each ranked metric separates the changes a person
 // labelled meaningful from those labelled routine
 // (docs/metrics.md#validity-checks).
 type Validation struct {
-	RunID   int64
-	Labels  int         // labelled changes read
-	Metrics []MetricAUC // sorted by metric id
+	Provenance Provenance  `json:"provenance"`
+	Labels     int         `json:"labels"`     // labelled rows read
+	Labellers  int         `json:"labellers"`  // distinct labellers
+	Meaningful int         `json:"meaningful"` // rows labelled meaningful
+	Routine    int         `json:"routine"`
+	Noise      int         `json:"noise"`     // read and left out of every AUC
+	Unmatched  int         `json:"unmatched"` // rows whose change is not a landing of the run, or is ambiguous
+	Metrics    []MetricAUC `json:"metrics"`   // sorted by metric id
+	Caveats    []Caveat    `json:"caveats"`
 }
 
 // MetricAUC is one metric's separation of the labelled changes.
 type MetricAUC struct {
-	Metric domain.MetricID
-	AUC    float64 // 0.5 is chance; a ranked metric stays beta below 0.7
-	N      int     // labelled changes the metric scored
+	Metric     string   `json:"metric"`
+	AUC        *float64 `json:"auc"` // 0.5 is chance; nil when no meaningful or no routine change was scored
+	N          int      `json:"n"`   // labelled changes the metric scored
+	Meaningful int      `json:"meaningful"`
+	Routine    int      `json:"routine"`
+	Beta       bool     `json:"beta"` // below AUC 0.7 or 50 scored labels: the metric stays marked beta
 }
