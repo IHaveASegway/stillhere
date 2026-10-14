@@ -438,7 +438,7 @@ Global flags: `--db` (default `$STILLHERE_HOME/facts.db`, where `STILLHERE_HOME`
 | `mcp [--allow-source]` | facts.db | nothing | M4 |
 | `version` | | | M0 |
 
-Exit codes are in [report-json.md](report-json.md#exit-codes): 0 when any repo produced facts, 1 when none did, 2 for a usage error.
+Exit codes are in [report-json.md](report-json.md#exit-codes): 0 when any repo produced facts, 1 when none did, 2 for a usage error, death by the signal (128 + n) when interrupted.
 
 ## Conventions
 
@@ -452,7 +452,7 @@ Exit codes are in [report-json.md](report-json.md#exit-codes): 0 when any repo p
 ### Concurrency
 
 - `golang.org/x/sync/errgroup` with `SetLimit` for fan-out, and one blame slot channel shared across repos, so the number of git processes stays bounded on large machines.
-- Every goroutine is waited for; every I/O call takes the caller's `context.Context`; `cmd/stillhere` cancels it on SIGINT and SIGTERM.
+- Every goroutine is waited for; every I/O call takes the caller's `context.Context`; `cmd/stillhere` cancels it on SIGINT, SIGTERM and SIGHUP (unless SIGHUP is ignored, as under `nohup`), then ends with that signal.
 - Large git outputs are streamed (`GitRunner.Stream`), never buffered whole. Line readers allow long lines (generated files have megabyte lines).
 
 ### Determinism

@@ -19,8 +19,10 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -47,8 +49,11 @@ const defaultPolicyFile = "stillhere.toml"
 // Execute runs the command line with args, which exclude the program name,
 // and returns the exit code (docs/spec/report-json.md#exit-codes): 0 on
 // success; 1 when the command failed or no repository produced facts; 2 for
-// a usage error, including a command whose use case is not built yet. It
-// prints at most one error line to stderr and never calls os.Exit.
+// a usage error, including a command whose use case is not built yet; 130
+// when a command failed after ctx was cancelled, which is how cmd/stillhere
+// reports a signal. It prints at most one error line to stderr and never
+// calls os.Exit (cmd/stillhere turns off cobra's Windows mousetrap, which
+// would).
 func Execute(ctx context.Context, args []string, stdout, stderr io.Writer, build Build) int {
 	e := &env{
 		stdout: stdout,
@@ -72,8 +77,18 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer, build
 		cmd = root
 	}
 	_, _ = fmt.Fprintln(stderr, errorLine(cmd, err))
+	if ctx.Err() != nil {
+		// Interrupted: whatever failed, it failed because the run was
+		// stopped, which a shell loop must be able to tell apart from "no
+		// repository produced facts" (exit 1).
+		return exitInterrupted
+	}
 	return exitCode(err)
 }
+
+// exitInterrupted is the exit code of an interrupted run: 128 + SIGINT, the
+// shell convention.
+const exitInterrupted = 130
 
 // env is one invocation's composition root: the streams, the global flags,
 // the clock read once, and the logger. It builds adapters on demand, so a
@@ -111,6 +126,7 @@ person's value, and it must not be the basis for performance or pay decisions.`,
 		PersistentPreRunE: func(*cobra.Command, []string) error { return e.setup() },
 	}
 	root.SetFlagErrorFunc(flagError)
+	root.SetHelpCommand(helpCommand())
 
 	f := root.PersistentFlags()
 	f.StringVar(&e.dbPath, "db", "",
@@ -202,18 +218,17 @@ func (e *env) with(ctx context.Context, n need, fn func(app.Deps) error) (err er
 // else ./.mailmap when it exists in the directory the command started in
 // (docs/spec/git-invocation.md#identity-mailmap-and-bots).
 func (e *env) gitRunner(ctx context.Context) (*gitcli.Runner, error) {
-	mailmap := e.mailmapPath
-	if mailmap != "" {
-		if err := readable("--mailmap", mailmap); err != nil {
-			return nil, err
+	flag, mailmap := "--mailmap", e.mailmapPath
+	if mailmap == "" {
+		flag, mailmap = "./.mailmap", ".mailmap"
+		if _, err := os.Lstat(mailmap); errors.Is(err, fs.ErrNotExist) {
+			return gitcli.New(ctx, gitcli.Config{Logger: e.log})
 		}
-	} else {
-		switch _, err := os.Stat(".mailmap"); {
-		case err == nil:
-			mailmap = ".mailmap"
-		case !errors.Is(err, fs.ErrNotExist):
-			return nil, usagef("./.mailmap: %v", err)
-		}
+	}
+	// git reads the file in every repository and silently ignores one it
+	// cannot open, so check it here, once.
+	if err := readable(flag, mailmap); err != nil {
+		return nil, err
 	}
 	return gitcli.New(ctx, gitcli.Config{MailmapFile: mailmap, Logger: e.log})
 }
@@ -298,7 +313,8 @@ func (e *env) printJSON(v any) error {
 	return enc.Encode(v)
 }
 
-// timeFlag is a pflag.Value that parses RFC 3339 and stores UTC.
+// timeFlag is a pflag.Value that parses an RFC 3339 time, or a date that
+// means midnight UTC, and stores UTC.
 type timeFlag struct{ t *time.Time }
 
 func (f timeFlag) String() string {
@@ -309,12 +325,13 @@ func (f timeFlag) String() string {
 }
 
 func (f timeFlag) Set(s string) error {
-	t, err := time.Parse(time.RFC3339, s)
-	if err != nil {
-		return errors.New("want an RFC 3339 time, such as 2026-10-07T00:00:00Z")
+	for _, layout := range []string{time.RFC3339, time.DateOnly} {
+		if t, err := time.Parse(layout, s); err == nil {
+			*f.t = t.UTC()
+			return nil
+		}
 	}
-	*f.t = t.UTC()
-	return nil
+	return errors.New("want an RFC 3339 time, such as 2026-10-07T00:00:00Z, or a date, such as 2026-10-07, which means midnight UTC")
 }
 
 func (f timeFlag) Type() string { return "time" }
@@ -322,7 +339,7 @@ func (f timeFlag) Type() string { return "time" }
 // addNowFlag defines --now; read it with nowOr.
 func addNowFlag(cmd *cobra.Command, t *time.Time) {
 	cmd.Flags().Var(timeFlag{t}, "now",
-		"end of the window, RFC 3339 (default the wall clock, UTC); pass it for reproducible output")
+		"end of the window: an RFC 3339 time, or a date for midnight UTC (default the wall clock, UTC); pass it for reproducible output")
 }
 
 // nowOr returns --now when it was given, else the wall clock Execute read
@@ -366,21 +383,22 @@ func parseMetricIDs(ids []string) ([]domain.MetricID, error) {
 	return out, nil
 }
 
-// readable checks that path names a regular file stillhere can open.
+// readable checks that path names a regular file stillhere can open. It
+// checks the type before opening: opening a FIFO for reading blocks until a
+// writer appears, and no context can cancel that.
 func readable(flag, path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return usagef("%s: %v", flag, err)
+	}
+	if !info.Mode().IsRegular() {
+		return usagef("%s %s: not a regular file", flag, path)
+	}
 	f, err := os.Open(path)
 	if err != nil {
 		return usagef("%s: %v", flag, err)
 	}
-	info, err := f.Stat()
-	_ = f.Close()
-	switch {
-	case err != nil:
-		return usagef("%s: %v", flag, err)
-	case !info.Mode().IsRegular():
-		return usagef("%s %s: not a regular file", flag, path)
-	}
-	return nil
+	return f.Close()
 }
 
 // absFile checks that path is readable and returns it made absolute: git
@@ -450,6 +468,28 @@ func usageArgs(check cobra.PositionalArgs) cobra.PositionalArgs {
 	}
 }
 
+// helpCommand replaces cobra's help command, which prints the root's help
+// and exits 0 for an unknown topic (the root accepts arbitrary arguments,
+// so cobra finds the root for "help nope") and calls os.Exit when printing
+// fails.
+func helpCommand() *cobra.Command {
+	return &cobra.Command{
+		Use:   "help [command]",
+		Short: "Help about any command",
+		Long:  "help prints the help of any command, such as: stillhere help sync github",
+		Args:  cobra.ArbitraryArgs,
+		RunE: func(c *cobra.Command, args []string) error {
+			target, rest, err := c.Root().Find(args)
+			if err != nil || len(rest) > 0 {
+				return usagef("unknown help topic %q (see '%s --help')",
+					strings.Join(args, " "), c.Root().CommandPath())
+			}
+			target.InitDefaultHelpFlag() // so the help lists --help, as cobra's does
+			return target.Help()
+		},
+	}
+}
+
 // subcommandRequired runs when a command that only groups subcommands is
 // called on its own: without arguments it prints help, and with an unknown
 // subcommand it fails with a usage error, where cobra would exit 1.
@@ -468,9 +508,37 @@ func subcommandRequired(cmd *cobra.Command, args []string) error {
 	return usagef("%s (see '%s --help')", msg, cmd.CommandPath())
 }
 
-// errorLine is the one line printed for a failed command.
+// errorLine is the one line printed for a failed command. Each line of the
+// message, such as each error errors.Join collected, becomes one clause,
+// and the clauses are joined with "; ".
 func errorLine(cmd *cobra.Command, err error) string {
-	return cmd.CommandPath() + ": " + strings.Join(strings.Fields(err.Error()), " ")
+	var clauses []string
+	for _, line := range strings.Split(err.Error(), "\n") {
+		if line = terminalSafe(line); line != "" {
+			clauses = append(clauses, line)
+		}
+	}
+	return cmd.CommandPath() + ": " + strings.Join(clauses, "; ")
+}
+
+// terminalSafe returns s as one line a terminal prints literally: control
+// and format characters, which include escape sequences and bidirectional
+// overrides that a path or an argument may carry, are shown escaped the way
+// Go quotes them (\x1b, ‮), and runs of whitespace become one space.
+func terminalSafe(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case unicode.IsSpace(r):
+			b.WriteByte(' ')
+		case unicode.IsControl(r) || unicode.Is(unicode.Cf, r):
+			q := strconv.QuoteRuneToASCII(r)
+			b.WriteString(q[1 : len(q)-1])
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return strings.Join(strings.Fields(b.String()), " ")
 }
 
 // exitCode maps an error to the exit code (docs/spec/report-json.md#exit-codes),

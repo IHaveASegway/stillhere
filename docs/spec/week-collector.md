@@ -58,7 +58,7 @@ Rows are per person, per repo, with `commits`, `lines_added`, and `prod_lines_ad
 
 ## Window
 
-- `--until` is the `--now` instant. It defaults to the system clock in UTC and accepts ISO-8601, so tests don't depend on the clock.
+- `--until` is the `--now` instant. It defaults to the system clock in UTC, so tests pass it and don't depend on the clock. It accepts an RFC 3339 time (`2026-10-07T00:00:00Z`, the profile of ISO 8601 with an explicit offset) or a date (`2026-10-07`), which means midnight UTC.
 - `--since` is `--now` minus the effective number of days: `[week].days`, overridden by `--days`. `--week-sort` overrides `[week].sort` the same way.
 - The report's `window` stores the effective values plus `days_from` and `sort_from` (`cli` or `policy`). The policy hash stays the hash of the file's bytes.
 - `--ignore-revs-file` is accepted on `week` and ignored with one stderr line, because it is not a `git log` option.

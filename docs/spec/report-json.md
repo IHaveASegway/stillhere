@@ -71,6 +71,7 @@ Changes from the 2026-10-07 shape:
 | 0 | At least one repo produced week or still-here facts. This includes partial failure, clone-health skips, and skipped hotspots. |
 | 1 | No repo produced facts: every path failed, or none was a repo. |
 | 2 | A usage error (see below). |
+| 128 + n | Interrupted by signal n (SIGINT, SIGTERM or SIGHUP). stillhere stops every git process, then ends itself with the same signal, so a shell sees it die by that signal (`$?` is 130 for Ctrl-C) and stops a loop. Where a process cannot signal itself (Windows), it exits 130. |
 
 Usage errors:
 

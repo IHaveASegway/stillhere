@@ -12,28 +12,28 @@ import (
 // Build identifies the binary. cmd/stillhere fills it from variables that
 // the release build injects with -ldflags -X.
 type Build struct {
-	Version string // release version without a leading "v", such as "0.1.0"
+	Version string // release version, such as "0.1.0"; a leading "v" is dropped
 	Commit  string // full git SHA the binary was built from
-	Date    string // build time, RFC 3339
+	Date    string // build time, RFC 3339; only an -ldflags build knows it
 }
 
 // resolved fills what -ldflags did not inject from the build information the
 // Go toolchain embeds: the module version of a go install build, and the VCS
-// revision and time of a build from a checkout.
+// revision of a build from a checkout. It never takes the date from there:
+// vcs.time is the commit's time, not the build's.
 func (b Build) resolved() Build {
 	if info, ok := debug.ReadBuildInfo(); ok {
 		if v := info.Main.Version; b.Version == "" && v != "" && v != "(devel)" {
-			b.Version = strings.TrimPrefix(v, "v")
+			b.Version = v
 		}
 		for _, s := range info.Settings {
-			switch {
-			case s.Key == "vcs.revision" && b.Commit == "":
+			if s.Key == "vcs.revision" && b.Commit == "" {
 				b.Commit = s.Value
-			case s.Key == "vcs.time" && b.Date == "":
-				b.Date = s.Value
 			}
 		}
 	}
+	// Module versions and git describe both carry a "v".
+	b.Version = strings.TrimPrefix(b.Version, "v")
 	if b.Version == "" {
 		b.Version = "dev"
 	}
