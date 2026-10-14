@@ -53,10 +53,11 @@ const warnShallowWindow = "shallow-window"
 
 // view is the projection of one FactSet.
 type view struct {
-	now   time.Time
-	days  int // landed@1's window: Input.Days, else the policy's [week] days
-	who   *identity.Directory
-	repos []*repoView // the repositories with facts, in FactSet order (by key)
+	now     time.Time
+	days    int   // landed@1's window: Input.Days, else the policy's [week] days
+	daysErr error // why days is unknown (Input.weekDays); only landed@1 needs it
+	who     *identity.Directory
+	repos   []*repoView // the repositories with facts, in FactSet order (by key)
 }
 
 // repoView is one repository's indexes.
@@ -140,10 +141,8 @@ func newView(in *Input, keep func(*domain.RepoFacts) bool) (*view, error) {
 	if who == nil {
 		who = identity.New(in.Facts, in.Policy)
 	}
-	v := &view{now: in.Facts.Now, days: in.Days, who: who}
-	if v.days <= 0 && in.Policy != nil {
-		v.days = in.Policy.Week.Days
-	}
+	v := &view{now: in.Facts.Now, who: who}
+	v.days, v.daysErr = in.weekDays()
 	for i := range in.Facts.Repos {
 		f := &in.Facts.Repos[i]
 		if f.Status == domain.RepoStatusError || (keep != nil && !keep(f)) {

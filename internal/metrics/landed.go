@@ -1,8 +1,6 @@
 package metrics
 
 import (
-	"fmt"
-
 	"github.com/IHaveASegway/stillhere/internal/domain"
 )
 
@@ -40,8 +38,8 @@ func (landedV1) Definition() Definition {
 func (m landedV1) Compute(in *Input) ([]domain.MetricValue, error) { return computeAlone(m, in) }
 
 func (landedV1) compute(v *view) ([]domain.MetricValue, error) {
-	if v.days <= 0 {
-		return nil, fmt.Errorf("landed@1 needs a window of at least one day, not %d", v.days)
+	if v.daysErr != nil {
+		return nil, v.daysErr
 	}
 	w := v.window(v.days, 0)
 	type acc struct{ landings, lines, prod int }

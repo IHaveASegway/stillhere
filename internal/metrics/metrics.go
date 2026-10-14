@@ -16,6 +16,7 @@
 package metrics
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 
@@ -34,12 +35,34 @@ type Definition struct {
 	Eligibility, BlindSpots, Gaming, Oracle, Validity string
 }
 
-// Input is what every metric computes over.
+// Input is what every metric computes over. Facts is required, with its
+// Now. Policy may be nil, which means no bot or AI patterns (as for
+// identity.New) and no [week] days, so Days must then be set for
+// landed@1; Compute checks that before any metric runs, so a bad Input
+// fails with its own name rather than as one metric's error halfway
+// through.
 type Input struct {
 	Facts  *domain.FactSet
 	Policy *policy.Policy
 	Who    *identity.Directory // nil: built from Facts and Policy
-	Days   int                 // landed@1 window; 0: the policy's [week] days
+	Days   int                 // landed@1 window, at least 1; 0: the policy's [week] days
+}
+
+// weekDays returns landed@1's window in days: Days, else the policy's
+// [week] days, which policy.Parse requires to be at least 1.
+func (in *Input) weekDays() (int, error) {
+	switch {
+	case in.Days > 0:
+		return in.Days, nil
+	case in.Days < 0:
+		return 0, fmt.Errorf("metrics: Input.Days is %d: want at least 1, or 0 for the policy's [week] days", in.Days)
+	case in.Policy != nil && in.Policy.Week.Days > 0:
+		return in.Policy.Week.Days, nil
+	case in.Policy != nil:
+		return 0, fmt.Errorf("metrics: Input.Days is 0 and the policy's [week] days is %d: landed@1 needs a window of at least one day", in.Policy.Week.Days)
+	default:
+		return 0, errors.New("metrics: Input.Days is 0 and there is no policy to take [week] days from: landed@1 needs a window of at least one day")
+	}
 }
 
 // Metric is one version of one metric.
@@ -144,6 +167,9 @@ func Compute(in *Input) ([]domain.MetricValue, error) {
 	v, err := newView(in, nil)
 	if err != nil {
 		return nil, err
+	}
+	if v.daysErr != nil {
+		return nil, v.daysErr
 	}
 	var out []domain.MetricValue
 	for _, m := range All() {

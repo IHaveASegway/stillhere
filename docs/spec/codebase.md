@@ -412,10 +412,10 @@ type Definition struct {
 	Eligibility, BlindSpots, Gaming, Oracle, Validity        string
 }
 type Input struct {
-	Facts  *domain.FactSet
-	Policy *policy.Policy
+	Facts  *domain.FactSet     // required, with Now
+	Policy *policy.Policy      // nil: no bot or AI patterns and no [week] days, so Days must be set
 	Who    *identity.Directory // nil: identity.New(Facts, Policy)
-	Days   int                 // landed@1 window; 0: the policy's [week] days
+	Days   int                 // landed@1 window, at least 1; 0: the policy's [week] days. Compute checks it before any metric runs
 }
 type Metric interface {
 	Definition() Definition
