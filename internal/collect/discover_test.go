@@ -86,6 +86,18 @@ func TestDiscover(t *testing.T) {
 		})
 	})
 
+	t.Run("an empty origin URL clears the ones before it, as git reads the list", func(t *testing.T) {
+		t.Parallel()
+		got := discoverRun(t, git, fx.Reset, fx.WidgetA)
+		const reset = "https://github.com/example/reset.git"
+		discoverCheck(t, got, &Discovery{
+			Repos: []domain.Repo{
+				{Key: reset, Name: "reset", Path: fx.Reset, Remote: reset, Branch: "main", Head: main},
+				{Key: widget, Name: "widget-a", Path: fx.WidgetA, Remote: widget, Branch: "main", Head: main},
+			},
+		})
+	})
+
 	t.Run("bare repositories are scanned, named directly or as a group's member", func(t *testing.T) {
 		t.Parallel()
 		team := fx.Group
@@ -96,8 +108,9 @@ func TestDiscover(t *testing.T) {
 				// A bare repository's branch is HEAD's, though main exists.
 				{Key: "https://github.com/example/web.git", Name: "web", Group: "team", Path: filepath.Join(team, "web.git"), Bare: true, Remote: "https://github.com/example/web.git", Branch: "trunk", Head: trunk},
 				{Key: "local:bare", Name: "bare", Path: fx.Bare, Bare: true, Branch: "trunk", Head: trunk},
-				// A worktree, whose .git is a file, is a repository. notes/,
-				// though it holds a clone, and README.md are not members.
+				// A worktree, whose .git is a file, is a repository. api-link
+				// is api again. notes/, though it holds a clone, README.md and
+				// lost+found, which cannot be read, are not members.
 				{Key: "local:linked", Name: "linked", Group: "team", Path: filepath.Join(team, "linked"), Branch: "main", Head: main},
 			},
 			Groups: []domain.Group{{
@@ -118,6 +131,19 @@ func TestDiscover(t *testing.T) {
 		})
 	})
 
+	t.Run("a directory whose .git names a bare repository is that bare repository", func(t *testing.T) {
+		t.Parallel()
+		got := discoverRun(t, git, fx.Project)
+		const project = "https://github.com/example/project.git"
+		discoverCheck(t, got, &Discovery{
+			Repos: []domain.Repo{
+				// Its worktree project/main is not added, and HEAD names the
+				// default branch, as for any bare repository.
+				{Key: project, Name: "project", Path: fx.Project, Bare: true, Remote: project, Branch: "trunk", Head: trunk},
+			},
+		})
+	})
+
 	t.Run("groups that share a basename get suffixes in path order, and no two share a name", func(t *testing.T) {
 		t.Parallel()
 		got := discoverRun(t, git, fx.SrcB, fx.SrcC, fx.SrcA)
@@ -134,31 +160,39 @@ func TestDiscover(t *testing.T) {
 		})
 	})
 
-	t.Run("a repository named twice is one repository and keeps its group", func(t *testing.T) {
+	t.Run("a repository reached twice is one repository, and keeps its group; a failing one fails once", func(t *testing.T) {
 		t.Parallel()
-		api := filepath.Join(fx.Group, "api")
-		got := discoverRun(t, git, api, fx.WidgetA, fx.WidgetA+string(filepath.Separator), fx.Group)
-		if len(got.Warnings) != 0 {
-			t.Errorf("warnings = %v, want none: one path named twice is not a duplicate clone", got.Warnings)
-		}
-		var paths []string
-		for _, r := range got.Repos {
-			paths = append(paths, r.Path)
-			if r.Path == api && r.Group != "team" {
-				t.Errorf("api has group %q, want team: the group keeps its member", r.Group)
-			}
-		}
-		want := []string{api, filepath.Join(fx.Group, "web.git"), filepath.Join(fx.Group, "linked"), fx.WidgetA}
-		if !discoverSameSet(paths, want) {
-			t.Errorf("repos at %q, want each of %q once", paths, want)
-		}
-	})
-
-	t.Run("the default branch is origin/HEAD's, else main, else master, else HEAD", func(t *testing.T) {
-		t.Parallel()
-		got := discoverRun(t, git, fx.WidgetA, fx.Tracking, fx.MainFirst, fx.MasterOnly, fx.Current, fx.Detached)
+		team := fx.Group
+		api := filepath.Join(team, "api")
+		// widget-link is widget-a; api is also team's member; empty is also
+		// lab's member, and team/api-link is team/api.
+		got := discoverRun(t, git, api, fx.WidgetA, fx.WidgetA+string(filepath.Separator), fx.WidgetLink, team, fx.Lab, fx.Empty)
 		discoverCheck(t, got, &Discovery{
 			Repos: []domain.Repo{
+				{Key: "https://github.com/example/api.git", Name: "api", Group: "team", Path: api, Remote: "https://github.com/example/api.git", Branch: "main", Head: main},
+				{Key: "https://github.com/example/web.git", Name: "web", Group: "team", Path: filepath.Join(team, "web.git"), Bare: true, Remote: "https://github.com/example/web.git", Branch: "trunk", Head: trunk},
+				{Key: widget, Name: "widget-a", Path: fx.WidgetA, Remote: widget, Branch: "main", Head: main},
+				{Key: "local:linked", Name: "linked", Group: "team", Path: filepath.Join(team, "linked"), Branch: "main", Head: main},
+			},
+			Groups: []domain.Group{
+				{Name: "lab", Path: fx.Lab},
+				{Name: "team", Path: team, Repos: []string{"https://github.com/example/api.git", "https://github.com/example/web.git", "local:linked"}},
+			},
+			Failed: []domain.FileError{{Path: fx.Empty, Message: "default branch main has no commits"}},
+		})
+	})
+
+	t.Run("the default branch is origin/HEAD's, else upstream's main or master, else the local main or master, else HEAD", func(t *testing.T) {
+		t.Parallel()
+		got := discoverRun(t, git, fx.WidgetA, fx.Tracking, fx.NoOriginHead, fx.OriginMaster, fx.DanglingHead,
+			fx.MainFirst, fx.MasterOnly, fx.Current, fx.Detached)
+		discoverCheck(t, got, &Discovery{
+			Repos: []domain.Repo{
+				// No origin/HEAD, and Head is still upstream's: origin/main,
+				// which local main lags behind.
+				{Key: "https://github.com/example/no-origin-head.git", Name: "no-origin-head", Path: fx.NoOriginHead, Remote: "https://github.com/example/no-origin-head.git", Branch: "main", Head: trunk},
+				// Upstream's master comes before the local main.
+				{Key: "https://github.com/example/origin-master.git", Name: "origin-master", Path: fx.OriginMaster, Remote: "https://github.com/example/origin-master.git", Branch: "master", Head: trunk},
 				// origin/HEAD names trunk, and Head is origin/trunk: the
 				// local commit on trunk never landed upstream.
 				{Key: "https://github.com/example/tracking.git", Name: "tracking", Path: fx.Tracking, Remote: "https://github.com/example/tracking.git", Branch: "trunk", Head: trunk},
@@ -168,28 +202,44 @@ func TestDiscover(t *testing.T) {
 				{Key: "local:main-first", Name: "main-first", Path: fx.MainFirst, Branch: "main", Head: main},
 				{Key: "local:master-only", Name: "master-only", Path: fx.MasterOnly, Branch: "master", Head: main},
 			},
+			// Not a fall-through to origin/main or the local master: the
+			// clone no longer knows upstream's default branch.
+			Failed: []domain.FileError{{
+				Path:    fx.DanglingHead,
+				Message: "origin/HEAD points at origin/master, which does not exist: upstream renamed or deleted its default branch (git remote set-head origin --auto repairs it)",
+			}},
 		})
-		if local := discoverRevParse(t, git, fx.Tracking, "refs/heads/trunk"); local == trunk {
-			t.Errorf("the fixture's local trunk is origin/trunk (%s), so the case above proves nothing", local)
+		for _, c := range []struct{ dir, ref, want string }{
+			{fx.Tracking, "refs/heads/trunk", trunk},
+			{fx.NoOriginHead, "refs/heads/main", trunk},
+			{fx.OriginMaster, "refs/heads/main", trunk},
+		} {
+			if local := discoverRevParse(t, git, c.dir, c.ref); local == c.want {
+				t.Errorf("%s in %s is %s, the Head wanted above, so that case proves nothing", c.ref, c.dir, local)
+			}
 		}
 	})
 
 	t.Run("a path that is neither a repository nor a group fails alone", func(t *testing.T) {
 		t.Parallel()
-		got := discoverRun(t, git, fx.File, fx.Missing, fx.Empty, fx.Broken, fx.Stray, fx.StrayBare, fx.WidgetA)
+		got := discoverRun(t, git, fx.File, fx.Missing, fx.Empty, fx.Broken, fx.Stray, fx.StrayBare, fx.StrayTree,
+			fx.Headless, fx.Unfinished, fx.WidgetA)
 		if len(got.Repos) != 1 || got.Repos[0].Path != fx.WidgetA {
 			t.Errorf("repos = %+v, want only %s: a failed path must not take the others with it", got.Repos, fx.WidgetA)
 		}
 		if got.Groups != nil {
-			t.Errorf("groups = %+v, want none: a directory with a .git git cannot use is a broken repository, not a group", got.Groups)
+			t.Errorf("groups = %+v, want none: a directory with a .git git cannot use, or a bare repository git rejects, is a broken repository, not a group", got.Groups)
 		}
 		want := map[string]string{
-			fx.Broken:    "", // git's own message, in the user's language
-			fx.Empty:     "no commits",
-			fx.Stray:     "enclosing work tree", // not Outer, found by walking up
-			fx.StrayBare: "inside a bare repository",
-			fx.File:      "not a directory",
-			fx.Missing:   "does not exist",
+			fx.Broken:     "", // git's own message, in the user's language
+			fx.Headless:   "", // likewise
+			fx.Unfinished: "", // likewise
+			fx.Empty:      "no commits",
+			fx.Stray:      "enclosing work tree", // not Outer, found by walking up
+			fx.StrayBare:  "enclosing repository",
+			fx.StrayTree:  "enclosing repository",
+			fx.File:       "not a directory",
+			fx.Missing:    "does not exist",
 		}
 		if len(got.Failed) != len(want) {
 			t.Fatalf("failed = %+v, want one entry for each of %d paths", got.Failed, len(want))
@@ -214,7 +264,7 @@ func TestDiscover(t *testing.T) {
 
 	t.Run("the planted token appears in no struct, warning, error or log line", func(t *testing.T) {
 		t.Parallel()
-		for _, dir := range []string{filepath.Join(fx.WidgetA, ".git"), filepath.Join(fx.UnparsedA, ".git")} {
+		for _, dir := range []string{filepath.Join(fx.WidgetA, ".git"), filepath.Join(fx.UnparsedA, ".git"), filepath.Join(fx.Reset, ".git")} {
 			config, err := os.ReadFile(filepath.Join(dir, "config"))
 			if err != nil || !bytes.Contains(config, []byte(fixture.DiscoveryToken)) {
 				t.Fatalf("%s/config does not hold the token (%v), so this case proves nothing", dir, err)
@@ -228,10 +278,10 @@ func TestDiscover(t *testing.T) {
 			t.Fatalf("gitcli.New: %v", err)
 		}
 		got, err := Discover(t.Context(), logged, []string{
-			fx.WidgetA, fx.WidgetB, fx.Other, fx.Mirror, fx.SCP, fx.HTTPS, fx.UnparsedA, fx.UnparsedB,
-			fx.Bare, fx.Group, fx.Outer, fx.SrcA, fx.SrcB, fx.SrcC,
-			fx.Tracking, fx.MainFirst, fx.MasterOnly, fx.Current, fx.Detached,
-			fx.Empty, fx.Broken, fx.Stray, fx.StrayBare, fx.File, fx.Missing,
+			fx.WidgetA, fx.WidgetB, fx.WidgetLink, fx.Other, fx.Mirror, fx.SCP, fx.HTTPS, fx.UnparsedA, fx.UnparsedB, fx.Reset,
+			fx.Bare, fx.Group, fx.Outer, fx.Project, fx.SrcA, fx.SrcB, fx.SrcC, fx.Lab,
+			fx.Tracking, fx.NoOriginHead, fx.OriginMaster, fx.DanglingHead, fx.MainFirst, fx.MasterOnly, fx.Current, fx.Detached,
+			fx.Empty, fx.Broken, fx.Stray, fx.StrayBare, fx.StrayTree, fx.Headless, fx.Unfinished, fx.File, fx.Missing,
 		})
 		if err != nil {
 			t.Fatalf("Discover: %v", err)
@@ -382,24 +432,6 @@ func discoverRevParse(t *testing.T, git domain.GitRunner, dir, rev string) strin
 		t.Fatalf("rev-parse %s in %s: %v", rev, dir, err)
 	}
 	return strings.TrimSpace(string(out))
-}
-
-// discoverSameSet reports whether got holds each element of want exactly
-// once and nothing else.
-func discoverSameSet(got, want []string) bool {
-	if len(got) != len(want) {
-		return false
-	}
-	count := make(map[string]int, len(want))
-	for _, w := range want {
-		count[w]++
-	}
-	for _, g := range got {
-		if count[g]--; count[g] < 0 {
-			return false
-		}
-	}
-	return true
 }
 
 // discoverPromisor serves a promisor remote that answers nothing: it accepts

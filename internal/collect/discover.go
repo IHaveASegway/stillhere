@@ -27,7 +27,7 @@ type Discovery struct {
 	Repos    []domain.Repo      // health-checked, duplicates removed, sorted by Key
 	Groups   []domain.Group     // sorted by Name
 	Warnings []domain.Warning   // duplicate-repo, shallow-clone, partial-clone; sorted by Repo, Code, Message
-	Failed   []domain.FileError // paths that gave no repository, sorted by Path: a PATH slot that is neither a repo nor a group, or a repo git cannot read or whose default branch has no commit
+	Failed   []domain.FileError // paths that gave no repository, each once, sorted by Path: a PATH slot that is neither a repo nor a group, or a repo git cannot read or whose default branch has no commit; the use cases report each as a run-level discover-failed warning and mark the run partial
 }
 
 // The warning codes discovery emits (docs/spec/report-json.md).
@@ -45,27 +45,38 @@ const (
 	discoverTimeout = 30 * time.Second
 
 	// discoverMaxJobs bounds the repositories inspected at once, and with
-	// them the git processes discovery runs: each repository runs its
-	// commands one after another, three for a work tree with origin/HEAD,
-	// main or master, four for a bare repository, five for a work tree
-	// that falls back to HEAD.
+	// them the git processes discovery runs. Each repository runs its
+	// commands one after another: three for a work tree with origin/HEAD,
+	// four for one without it (the fourth tells a missing origin/HEAD from
+	// one whose target is gone), six for one that falls back to HEAD; four
+	// for a bare repository, five for one that a .git file names.
 	discoverMaxJobs = 8
 )
 
 // discoverKind is what a directory is, as far as the filesystem can tell
-// before git is asked.
+// before git is asked, and then as git confirmed it.
 type discoverKind int
 
 const (
 	discoverOther    discoverKind = iota // neither: a PATH slot like this is a group
 	discoverWorkTree                     // has a .git file or directory (rule 1)
-	discoverBare                         // has HEAD, objects and refs (rule 2)
+	discoverBare                         // has objects and refs, or a name ending in .git (rule 2)
 )
+
+// discoverDir is a directory named on the command line or found in a group.
+type discoverDir struct {
+	path string      // absolute, spelled as it was named or listed
+	info fs.FileInfo // os.Stat of path, through symbolic links: what os.SameFile compares
+}
+
+// dir returns d. discoverCandidate embeds discoverDir, so discoverDistinct
+// takes either.
+func (d discoverDir) dir() discoverDir { return d }
 
 // discoverCandidate is a directory that looks like a repository, waiting for
 // git to confirm it.
 type discoverCandidate struct {
-	path  string // absolute
+	discoverDir
 	group string // the group's final name; "" for a repository named directly
 	kind  discoverKind
 }
@@ -81,12 +92,16 @@ type discoverCandidate struct {
 // repositories and never writes to one or fetches.
 //
 // The filesystem answers first and git confirms: a directory is a candidate
-// only with the layout git itself looks for (a .git entry, or HEAD with
-// objects and refs), and git must then place the repository exactly there.
-// So a plain directory inside another work tree is never taken for a
-// repository, and a candidate git cannot read is a failure rather than "not
-// a repository": a directory with an unusable .git fails instead of
-// becoming a group.
+// only with the layout git itself looks for (a .git entry, or objects and
+// refs), and git must then place the repository exactly there. So a plain
+// directory inside another work tree is never taken for a repository, and a
+// candidate git cannot read is a failure rather than "not a repository": a
+// directory with an unusable .git fails instead of becoming a group.
+//
+// One directory is inspected once, however it is reached: twice by the same
+// path, through its group and on its own, through a symbolic link, or in
+// another letter case on a case-insensitive file system. It is one
+// repository, or one failure, and a repository stays in its group.
 //
 // Every remote passes through redact.URL before it is stored or compared, so
 // no credential in a remote reaches a Repo, a Warning or a Failed message.
@@ -99,23 +114,26 @@ func Discover(ctx context.Context, git domain.GitRunner, paths []string) (*Disco
 	}
 	slots, failed := discoverSlots(paths)
 	var (
-		cands     []discoverCandidate
-		groupDirs []string
+		named     []discoverCandidate
+		groupDirs []discoverDir
 	)
 	for _, slot := range slots {
-		kind, err := discoverSlotKind(slot)
+		kind, err := discoverShape(slot.path)
 		switch {
 		case err != nil:
-			failed = append(failed, discoverFailure(slot, err))
+			failed = append(failed, discoverFailure(slot.path, err))
 		case kind == discoverOther:
 			groupDirs = append(groupDirs, slot)
 		default:
-			cands = append(cands, discoverCandidate{path: slot, kind: kind})
+			named = append(named, discoverCandidate{discoverDir: slot, kind: kind})
 		}
 	}
 	groups, members, memberFailed := discoverGroups(groupDirs)
-	cands = append(cands, members...)
 	failed = append(failed, memberFailed...)
+	// Members come first, in path order, so a repository that is also named
+	// on its own stays in its group (rule 5).
+	slices.SortFunc(members, func(a, b discoverCandidate) int { return cmp.Compare(a.path, b.path) })
+	cands := discoverDistinct(slices.Concat(members, named))
 
 	repos, repoFailed, err := discoverInspect(ctx, git, cands)
 	if err != nil {
@@ -142,68 +160,93 @@ func Discover(ctx context.Context, git domain.GitRunner, paths []string) (*Disco
 	slices.SortFunc(failed, func(a, b domain.FileError) int {
 		return cmp.Or(cmp.Compare(a.Path, b.Path), cmp.Compare(a.Message, b.Message))
 	})
+	// A path named directly and found in a group, whose layout cannot be
+	// read, fails both ways with the same message: it is reported once.
+	failed = slices.Compact(failed)
 	return &Discovery{Repos: kept, Groups: groups, Warnings: warnings, Failed: failed}, nil
 }
 
-// discoverSlots makes each command-line path absolute and drops repeats of
-// the same absolute path, which name one slot. The result is sorted, so that
-// group suffixes and duplicate winners follow path order, never argument
-// order.
-func discoverSlots(paths []string) (slots []string, failed []domain.FileError) {
-	seen := make(map[string]bool, len(paths))
+// discoverSlots makes each command-line path absolute and looks it up. A
+// path that does not exist or is not a directory fails here (rule 4). Paths
+// that name one directory, as the same string, through a symbolic link or in
+// another letter case on a case-insensitive file system, are one slot, under
+// the lexicographically first spelling. The result is sorted, so that group
+// suffixes and duplicate winners follow path order, never argument order.
+func discoverSlots(paths []string) ([]discoverDir, []domain.FileError) {
+	var (
+		abs    []string
+		dirs   []discoverDir
+		failed []domain.FileError
+	)
 	for _, p := range paths {
 		if p == "" {
 			failed = append(failed, domain.FileError{Path: p, Message: "empty path"})
 			continue
 		}
-		abs, err := filepath.Abs(p)
+		a, err := filepath.Abs(p) // also cleans: widget/ and widget are one string
 		if err != nil {
 			failed = append(failed, discoverFailure(p, err))
 			continue
 		}
-		if !seen[abs] {
-			seen[abs] = true
-			slots = append(slots, abs)
+		abs = append(abs, a)
+	}
+	slices.Sort(abs)
+	for _, p := range slices.Compact(abs) {
+		info, err := os.Stat(p)
+		switch {
+		case errors.Is(err, fs.ErrNotExist):
+			failed = append(failed, domain.FileError{Path: p, Message: "does not exist"})
+		case err != nil:
+			failed = append(failed, discoverFailure(p, err))
+		case !info.IsDir():
+			failed = append(failed, domain.FileError{Path: p, Message: "not a directory, so neither a repository nor a group"})
+		default:
+			dirs = append(dirs, discoverDir{path: p, info: info})
 		}
 	}
-	slices.Sort(slots)
-	return slots, failed
+	return discoverDistinct(dirs), failed
 }
 
-// discoverSlotKind says what a PATH slot is before git is asked: a
-// repository candidate, or discoverOther for a directory, which is a group.
-// A path that is not a directory is an error (rule 4).
-func discoverSlotKind(path string) (discoverKind, error) {
-	fi, err := os.Stat(path)
-	switch {
-	case errors.Is(err, fs.ErrNotExist):
-		return 0, errors.New("does not exist")
-	case err != nil:
-		return 0, err
-	case !fi.IsDir():
-		return 0, errors.New("not a directory, so neither a repository nor a group")
+// discoverDistinct keeps the first of dirs that name each directory and
+// drops the later ones, which reach it as another string: through a
+// symbolic link, or in another letter case on a case-insensitive file
+// system, as on macOS by default. A directory's identity is its device and
+// inode, which only os.SameFile compares without the syscall package the
+// dependency rule keeps out of collect, so every pair is compared: 5,000
+// directories take about 12 ms, against seconds for the git processes that
+// then inspect them.
+func discoverDistinct[T interface{ dir() discoverDir }](dirs []T) []T {
+	var kept []T
+	for _, d := range dirs {
+		info := d.dir().info
+		if !slices.ContainsFunc(kept, func(k T) bool { return os.SameFile(k.dir().info, info) }) {
+			kept = append(kept, d)
+		}
 	}
-	return discoverShape(path)
+	return kept
 }
 
 // discoverShape reports whether the directory dir has the layout of a
-// repository: a .git entry, which a work tree, a linked worktree and a
-// submodule checkout all have (rule 1, checked first), or the HEAD, objects
-// and refs that git's own setup looks for in a git directory, which a bare
-// repository has (rule 2).
+// repository, before git is asked. A .git entry, which a work tree, a
+// linked worktree and a submodule checkout all have, makes a work-tree
+// candidate (rule 1, checked first). objects and refs, two of the three
+// entries git's own setup looks for in a git directory, or a name ending in
+// .git, the convention for bare repositories, make a bare candidate (rule
+// 2). HEAD, the third, is left for git to check, so that a bare repository
+// without one fails with git's own message instead of passing for an empty
+// group.
 func discoverShape(dir string) (discoverKind, error) {
 	ok, err := discoverExists(filepath.Join(dir, ".git"), false)
-	if err != nil {
+	switch {
+	case err != nil:
 		return 0, err
-	}
-	if ok {
+	case ok:
 		return discoverWorkTree, nil
+	case strings.HasSuffix(filepath.Base(dir), ".git"):
+		return discoverBare, nil
 	}
-	for _, entry := range []struct {
-		name string
-		dir  bool
-	}{{"HEAD", false}, {"objects", true}, {"refs", true}} {
-		ok, err := discoverExists(filepath.Join(dir, entry.name), entry.dir)
+	for _, sub := range []string{"objects", "refs"} {
+		ok, err := discoverExists(filepath.Join(dir, sub), true)
 		if err != nil {
 			return 0, err
 		}
@@ -237,7 +280,7 @@ func discoverExists(path string, dir bool) (bool, error) {
 // child that is not a directory, or a directory that is not a repository,
 // is not a member and is not reported. A group that cannot be listed fails
 // and takes no name, so it cannot push another group to a suffix.
-func discoverGroups(dirs []string) ([]domain.Group, []discoverCandidate, []domain.FileError) {
+func discoverGroups(dirs []discoverDir) ([]domain.Group, []discoverCandidate, []domain.FileError) {
 	type listed struct {
 		dir     string
 		members []discoverCandidate
@@ -246,13 +289,13 @@ func discoverGroups(dirs []string) ([]domain.Group, []discoverCandidate, []domai
 		ok     []listed
 		failed []domain.FileError
 	)
-	for _, dir := range dirs {
-		members, memberFailed, err := discoverMembers(dir)
+	for _, d := range dirs {
+		members, memberFailed, err := discoverMembers(d.path)
 		if err != nil {
-			failed = append(failed, discoverFailure(dir, err))
+			failed = append(failed, discoverFailure(d.path, err))
 			continue
 		}
-		ok = append(ok, listed{dir, members})
+		ok = append(ok, listed{d.path, members})
 		failed = append(failed, memberFailed...)
 	}
 	listedDirs := make([]string, len(ok))
@@ -275,8 +318,12 @@ func discoverGroups(dirs []string) ([]domain.Group, []discoverCandidate, []domai
 }
 
 // discoverMembers returns the immediate children of the group directory dir
-// that look like repositories. A child whose layout cannot be read is
-// reported, since it may be a repository.
+// that look like repositories; a symbolic link counts as the directory it
+// points at. A child that cannot be looked into, such as lost+found at the
+// root of a mount or a folder the operating system protects, satisfies
+// neither rule 1 nor rule 2 as far as anyone can tell, so it is not a member
+// and is not reported. Any other failure to look is reported, since the
+// child may be a repository.
 func discoverMembers(dir string) ([]discoverCandidate, []domain.FileError, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -287,21 +334,22 @@ func discoverMembers(dir string) ([]discoverCandidate, []domain.FileError, error
 		failed  []domain.FileError
 	)
 	for _, e := range entries {
+		if !e.IsDir() && e.Type()&fs.ModeSymlink == 0 {
+			continue // a file
+		}
 		child := filepath.Join(dir, e.Name())
-		if !e.IsDir() {
-			if e.Type()&fs.ModeSymlink == 0 {
-				continue
-			}
-			if fi, err := os.Stat(child); err != nil || !fi.IsDir() {
-				continue // a link to a file, or a dangling link
-			}
+		info, err := os.Stat(child)
+		if err != nil || !info.IsDir() {
+			continue // a link to a file, a dangling link, or a child removed since the listing
 		}
 		kind, err := discoverShape(child)
 		switch {
+		case errors.Is(err, fs.ErrPermission):
+			continue // unreadable: not a member (rule 3)
 		case err != nil:
 			failed = append(failed, discoverFailure(child, err))
 		case kind != discoverOther:
-			members = append(members, discoverCandidate{path: child, kind: kind})
+			members = append(members, discoverCandidate{discoverDir: discoverDir{path: child, info: info}, kind: kind})
 		}
 	}
 	return members, failed, nil
@@ -382,11 +430,12 @@ func discoverInspect(ctx context.Context, git domain.GitRunner, cands []discover
 }
 
 // discoverRepo confirms one candidate with git and reads what the run needs
-// to know about it: whether it is shallow, its scrubbed origin, whether it
-// is a partial clone, and its default branch and Head. The raw origin URL
-// lives only in this function; the Repo holds redact.URL's form of it.
+// to know about it: what kind of repository it is, whether it is shallow,
+// its scrubbed origin, whether it is a partial clone, and its default branch
+// and Head. The raw origin URL lives only in this function; the Repo holds
+// redact.URL's form of it.
 func discoverRepo(ctx context.Context, git domain.GitRunner, c discoverCandidate) (domain.Repo, error) {
-	shallow, err := discoverProbe(ctx, git, c)
+	kind, shallow, err := discoverProbe(ctx, git, c)
 	if err != nil {
 		return domain.Repo{}, err
 	}
@@ -395,7 +444,7 @@ func discoverRepo(ctx context.Context, git domain.GitRunner, c discoverCandidate
 		return domain.Repo{}, err
 	}
 	var branch, head string
-	if c.kind == discoverBare {
+	if kind == discoverBare {
 		branch, head, err = discoverHEAD(ctx, git, c.path)
 	} else {
 		branch, head, err = discoverWorkTreeBranch(ctx, git, c.path)
@@ -410,7 +459,7 @@ func discoverRepo(ctx context.Context, git domain.GitRunner, c discoverCandidate
 		Name:    name,
 		Group:   c.group,
 		Path:    c.path,
-		Bare:    c.kind == discoverBare,
+		Bare:    kind == discoverBare,
 		Remote:  remote,
 		Branch:  branch,
 		Head:    head,
@@ -419,55 +468,95 @@ func discoverRepo(ctx context.Context, git domain.GitRunner, c discoverCandidate
 	}, nil
 }
 
-// discoverProbe asks git, in one rev-parse, to confirm the candidate and
-// whether it is a shallow clone, which it reports. A work tree must be the
-// top of its own work tree, with an empty --show-prefix, because git walks
-// up past a .git it cannot use and answers for an enclosing work tree. A
-// bare repository must be its own git directory, because in a directory
-// inside a bare repository git answers for that repository.
-func discoverProbe(ctx context.Context, git domain.GitRunner, c discoverCandidate) (bool, error) {
+// discoverProbe asks git, in one rev-parse, to confirm the candidate, and
+// returns what kind of repository git says it is and whether it is a
+// shallow clone. git looks upward from a directory it cannot use, so its
+// answers are checked against the candidate's own path:
+//
+//   - A bare candidate must be its own git directory: in a directory inside
+//     a repository, git answers for that repository.
+//   - A work-tree candidate must be the top of its work tree, with an empty
+//     --show-prefix: past a .git it cannot use, git answers for an enclosing
+//     work tree.
+//   - A work-tree candidate whose .git names a bare repository is that bare
+//     repository (rule 1). That is the bare-clone-plus-worktrees layout,
+//     where .git holds "gitdir: ./.bare" and the worktrees sit beside it, or
+//     a bare clone made into .git itself. A second rev-parse, run only in
+//     this case, checks that .git names the repository git found, rather
+//     than git having walked up into an enclosing bare repository.
+func discoverProbe(ctx context.Context, git domain.GitRunner, c discoverCandidate) (discoverKind, bool, error) {
 	if c.kind == discoverBare {
 		out, err := discoverGit(ctx, git, c.path, nil,
 			"rev-parse", "--is-bare-repository", "--is-shallow-repository", "--absolute-git-dir")
 		if err != nil {
-			return false, err
+			return 0, false, err
 		}
-		bare, shallowAnswer, gitDir := discoverAnswers(out)
-		if bare != "true" {
-			return false, errors.New("a git directory that is not a bare repository; name its work tree instead")
-		}
+		a := discoverAnswers(out, 3)
+		bare, shallow, gitDir := a[0], a[1], a[2]
 		same, err := discoverSameDir(gitDir, c.path)
-		if err != nil {
-			return false, err
+		switch {
+		case err != nil:
+			return 0, false, err
+		case !same:
+			return 0, false, fmt.Errorf("not a repository itself: git answered for the enclosing repository %s instead", gitDir)
+		case bare != "true":
+			return 0, false, errors.New("a git directory that is not a bare repository; name its work tree instead")
 		}
-		if !same {
-			return false, errors.New("inside a bare repository rather than one itself")
-		}
-		return shallowAnswer == "true", nil
+		return discoverBare, shallow == "true", nil
 	}
-	out, err := discoverGit(ctx, git, c.path, nil,
-		"rev-parse", "--is-inside-work-tree", "--is-shallow-repository", "--show-prefix")
+	out, err := discoverGit(ctx, git, c.path, nil, "rev-parse",
+		"--is-inside-work-tree", "--is-bare-repository", "--is-shallow-repository", "--show-prefix", "--absolute-git-dir")
 	if err != nil {
-		return false, err
+		return 0, false, err
 	}
-	inside, shallowAnswer, prefix := discoverAnswers(out)
+	a := discoverAnswers(out, 5)
+	inside, bare, shallow, prefix, gitDir := a[0], a[1], a[2], a[3], a[4]
 	switch {
-	case inside != "true":
-		return false, errors.New("has a .git, but git sees no work tree here")
-	case prefix != "":
-		return false, errors.New("has a .git that git cannot use: git found an enclosing work tree instead")
+	case inside == "true" && prefix == "":
+		return discoverWorkTree, shallow == "true", nil
+	case inside == "true":
+		return 0, false, errors.New("has a .git that git cannot use: git found an enclosing work tree instead")
+	case bare != "true":
+		return 0, false, errors.New("has a .git, but git sees no work tree here")
 	}
-	return shallowAnswer == "true", nil
+	named, err := discoverGitDir(ctx, git, c.path)
+	if err != nil {
+		return 0, false, err
+	}
+	same := false
+	if named != "" {
+		if same, err = discoverSameDir(named, gitDir); err != nil {
+			return 0, false, err
+		}
+	}
+	if !same {
+		return 0, false, fmt.Errorf("has a .git that git cannot use: git found the enclosing repository %s instead", gitDir)
+	}
+	return discoverBare, shallow == "true", nil
 }
 
-// discoverAnswers splits rev-parse output into its first two lines and the
-// rest without its final newline. The last answer is a path or a prefix, so
-// it is never split further.
-func discoverAnswers(out []byte) (first, second, rest string) {
-	s := string(out)
-	first, s, _ = strings.Cut(s, "\n")
-	second, s, _ = strings.Cut(s, "\n")
-	return first, second, strings.TrimSuffix(s, "\n")
+// discoverGitDir returns the repository dir/.git names, as git resolves it:
+// dir/.git itself when it is a git directory, or the repository a .git file
+// points at. It is "" when git cannot use dir/.git.
+func discoverGitDir(ctx context.Context, git domain.GitRunner, dir string) (string, error) {
+	// git dies, with exit 128, when the path is neither a git directory nor
+	// a .git file that names one: an answer here, not a failure to ask.
+	out, err := discoverGit(ctx, git, dir, []int{128}, "rev-parse", "--resolve-git-dir", filepath.Join(dir, ".git"))
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSuffix(string(out), "\n"), nil
+}
+
+// discoverAnswers splits rev-parse output into its n answers, one per line.
+// The last answer is a path, so it is never split further; an answer git did
+// not print is "".
+func discoverAnswers(out []byte, n int) []string {
+	a := strings.SplitN(strings.TrimSuffix(string(out), "\n"), "\n", n)
+	for len(a) < n {
+		a = append(a, "")
+	}
+	return a
 }
 
 // discoverSameDir reports whether a and b name the same directory, through
@@ -491,8 +580,9 @@ func discoverSameDir(a, b string) (bool, error) {
 // older git set only the second, so both are read. The call reads git's
 // whole view of the config, includes and worktree config too, and -z
 // keeps each value intact: "key\nvalue", or just "key" for a key with no
-// value. Exit 1 means no key matched. origin is the first
-// remote.origin.url, the one git fetches from; "" when there is none.
+// value. Exit 1 means no key matched. origin is the URL git fetches from:
+// the first remote.origin.url after the last empty one, which clears the
+// list before it; "" when there is none.
 func discoverConfig(ctx context.Context, git domain.GitRunner, dir string) (origin string, partial bool, err error) {
 	out, err := discoverGit(ctx, git, dir, []int{1},
 		"config", "-z", "--get-regexp", `^(remote\.origin\.url|remote\..+\.promisor|extensions\.partialclone)$`)
@@ -505,7 +595,13 @@ func discoverConfig(ctx context.Context, git domain.GitRunner, dir string) (orig
 		key, value, hasValue := strings.Cut(s.Text(), "\n")
 		switch {
 		case key == "remote.origin.url":
-			if !haveOrigin {
+			// An empty value resets the list, as git reads it since 2.46.
+			// git 2.44 and 2.45 keep it as a URL of its own, which no fetch
+			// can use, so after one of those git would try the URL before it.
+			switch {
+			case value == "":
+				origin, haveOrigin = "", false
+			case !haveOrigin:
 				origin, haveOrigin = value, true
 			}
 		case key == "extensions.partialclone":
@@ -546,24 +642,34 @@ type discoverRef struct {
 }
 
 // discoverWorkTreeBranch resolves a work tree's default branch
-// (discovery.md#default-branch): the branch origin/HEAD points at, if that
-// ref exists and resolves; else main, if refs/heads/main exists; else
-// master; else the current HEAD. One for-each-ref answers the first three,
-// and it leaves out an origin/HEAD whose target is gone.
+// (discovery.md#default-branch, ADR 0009). It is the branch origin/HEAD
+// points at; else main, then master, as upstream had them at the last
+// fetch (refs/remotes/origin/main, refs/remotes/origin/master); else the
+// local main, then master; else the current HEAD. One for-each-ref answers
+// all but the last.
 //
-// Head is the commit the chosen ref points at. For the origin/HEAD rule that
-// is refs/remotes/origin/<branch>, the default branch as of the last fetch,
-// rather than a local branch of the same name, which may lag behind it,
-// carry commits that never landed, or not exist (git clone -b). Analysis
-// never fetches, so a stale clone gives a stale report either way.
+// Head is the commit the chosen ref points at, so whenever the clone has a
+// remote-tracking ref for the branch, Head is upstream's commit as of the
+// last fetch, not a local branch's, which may lag behind it, hold commits
+// that never landed, or not exist (git clone -b). Two clones in the same
+// state get the same Head whether or not they have origin/HEAD, which git
+// leaves out after git init and git push -u. Analysis never fetches, so a
+// stale clone gives a stale report either way.
+//
+// for-each-ref leaves out an origin/HEAD whose target is gone, as when
+// upstream renamed its default branch and a prune deleted the old one. A
+// symbolic-ref, run only when origin/HEAD is not listed, tells that case
+// from a missing origin/HEAD, and it is an error rather than a fall-through
+// to a branch upstream no longer has (rule 4).
 func discoverWorkTreeBranch(ctx context.Context, git domain.GitRunner, dir string) (branch, head string, err error) {
-	out, err := discoverGit(ctx, git, dir, nil, "for-each-ref",
-		"--format=%(refname)%00%(symref)%00%(objectname)%00%(objecttype)",
-		"refs/remotes/origin/HEAD", "refs/heads/main", "refs/heads/master")
+	const originHEAD = "refs/remotes/origin/HEAD"
+	fallback := []string{"refs/remotes/origin/main", "refs/remotes/origin/master", "refs/heads/main", "refs/heads/master"}
+	out, err := discoverGit(ctx, git, dir, nil, slices.Concat([]string{"for-each-ref",
+		"--format=%(refname)%00%(symref)%00%(objectname)%00%(objecttype)", originHEAD}, fallback)...)
 	if err != nil {
 		return "", "", err
 	}
-	refs := make(map[string]discoverRef, 3)
+	refs := make(map[string]discoverRef, 1+len(fallback))
 	s := newScanner(bytes.NewReader(out), bufio.ScanLines)
 	for s.Scan() {
 		f := strings.Split(s.Text(), "\x00")
@@ -577,12 +683,24 @@ func discoverWorkTreeBranch(ctx context.Context, git domain.GitRunner, dir strin
 	if err := s.Err(); err != nil {
 		return "", "", fmt.Errorf("read git for-each-ref output: %w", err)
 	}
-	if r, ok := refs["refs/remotes/origin/HEAD"]; ok && r.symref != "" {
+	r, listed := refs[originHEAD]
+	if listed && r.symref != "" {
 		return discoverCommit(discoverBranchName(r.symref), r)
 	}
-	for _, name := range []string{"main", "master"} {
-		if r, ok := refs["refs/heads/"+name]; ok {
-			return discoverCommit(name, r)
+	if !listed {
+		// --quiet: a missing or non-symbolic ref exits 1 with no output.
+		out, err := discoverGit(ctx, git, dir, []int{1}, "symbolic-ref", "--quiet", originHEAD)
+		if err != nil {
+			return "", "", err
+		}
+		if target := strings.TrimSuffix(string(out), "\n"); target != "" {
+			return "", "", fmt.Errorf("origin/HEAD points at %s, which does not exist: upstream renamed or deleted its default branch (git remote set-head origin --auto repairs it)",
+				strings.TrimPrefix(target, "refs/remotes/"))
+		}
+	}
+	for _, ref := range fallback {
+		if r, ok := refs[ref]; ok {
+			return discoverCommit(discoverBranchName(ref), r)
 		}
 	}
 	return discoverHEAD(ctx, git, dir)
@@ -671,7 +789,10 @@ func discoverName(path string) string {
 // discoverKey is a repository's dedupe and storage key: its scrubbed origin
 // URL, or "local:" plus its name when it has no origin or the origin does
 // not parse. redact.Unparsed is never a key, so two repositories whose
-// remotes do not parse are not taken for one.
+// remotes do not parse are not taken for one by that alone. Two such
+// repositories with the same name do share a key, so the second is skipped
+// as a duplicate: a known limitation of the key, which discovery.md (rule 5)
+// states.
 func discoverKey(remote, name string) string {
 	if remote == "" || remote == redact.Unparsed {
 		return "local:" + name
@@ -681,26 +802,12 @@ func discoverKey(remote, name string) string {
 
 // discoverDedupe keeps one repository per Key (rule 5): the one with the
 // lexicographically first path. Every other path is a duplicate-repo
-// warning naming both paths and the shared remote. The same path found
-// twice, named directly and as a group's member, is one repository named
-// twice: it is kept once, in its group, with no warning. The result is
-// sorted by Key.
+// warning naming both paths and the shared remote. discoverDistinct has
+// already made one directory reached twice into one candidate, so two
+// repositories here are always two directories. The result is sorted by Key.
 func discoverDedupe(repos []domain.Repo) ([]domain.Repo, []domain.Warning) {
-	// named is 1 for a repository named directly, so a group's member sorts
-	// before the same path named on its own.
-	named := func(r domain.Repo) int {
-		if r.Group == "" {
-			return 1
-		}
-		return 0
-	}
 	slices.SortFunc(repos, func(a, b domain.Repo) int {
-		return cmp.Or(
-			cmp.Compare(a.Key, b.Key),
-			cmp.Compare(a.Path, b.Path),
-			cmp.Compare(named(a), named(b)),
-			cmp.Compare(a.Group, b.Group),
-		)
+		return cmp.Or(cmp.Compare(a.Key, b.Key), cmp.Compare(a.Path, b.Path))
 	})
 	var (
 		kept     []domain.Repo
@@ -708,9 +815,7 @@ func discoverDedupe(repos []domain.Repo) ([]domain.Repo, []domain.Warning) {
 	)
 	for _, r := range repos {
 		if n := len(kept); n > 0 && kept[n-1].Key == r.Key {
-			if winner := kept[n-1]; winner.Path != r.Path {
-				warnings = append(warnings, discoverDuplicate(winner, r))
-			}
+			warnings = append(warnings, discoverDuplicate(kept[n-1], r))
 			continue
 		}
 		kept = append(kept, r)
