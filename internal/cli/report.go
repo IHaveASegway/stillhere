@@ -26,7 +26,7 @@ with ranks for the metrics named by --rank. It reads only facts.db.`,
 				return err
 			}
 			req := app.ReportRequest{RunID: run, Rank: ids}
-			return e.with(cmd.Context(), need{policy: true, store: true}, func(d app.Deps) error {
+			return e.with(cmd.Context(), need{store: true}, func(d app.Deps) error {
 				return e.printReport(app.Report(cmd.Context(), d, req))
 			})
 		},

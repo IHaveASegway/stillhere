@@ -217,9 +217,10 @@ type Run struct {
 	Now         time.Time
 	Started     time.Time
 	Finished    time.Time
-	ToolVersion string
-	Policy      PolicyRef
-	Options     map[string]string // effective options; never secrets
+	ToolVersion  string
+	Policy       PolicyRef
+	PolicySource []byte            // policy.Policy.Source: the bytes Policy.SHA256 hashes; readers rebuild the run's policy from it; empty for sync runs
+	Options      map[string]string // effective options; never secrets
 }
 
 type UsageError struct{ Msg string } // exit 2
@@ -262,7 +263,9 @@ type FactStore interface {
 	PutRunFacts(ctx context.Context, runID int64, groups []Group, warnings []Warning) error
 	PutMetrics(ctx context.Context, runID int64, values []MetricValue, ranks []RankInterval) error
 	FinishRun(ctx context.Context, runID int64, status RunStatus) error
-	LatestRun(ctx context.Context, kind RunKind) (Run, error) // complete or partial runs only; ErrNotFound
+	// The read side sees complete and partial runs only: an unknown, running or failed run is ErrNotFound.
+	Run(ctx context.Context, id int64) (Run, error)           // status, tool version, times, options, policy source
+	LatestRun(ctx context.Context, kind RunKind) (Run, error) // the newest one
 	LoadFacts(ctx context.Context, runID int64) (*FactSet, error)
 	LoadMetrics(ctx context.Context, runID int64) ([]MetricValue, []RankInterval, error)
 	Close() error
@@ -435,7 +438,7 @@ func JSON(w io.Writer, m *Model) error
 type Deps struct {
 	Git     domain.GitRunner
 	Store   domain.FactStore // nil for week
-	Policy  *policy.Policy
+	Policy  *policy.Policy   // week and scan only; read use cases rebuild the run's own
 	Log     *slog.Logger
 	Version string
 }
@@ -453,7 +456,8 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer, build
 Every `scan` is a **run**: a snapshot of facts at one set of HEADs, under one policy and one mailmap, with the metric values computed from them.
 
 - **Git-derived facts are stored per run**, not once per commit. The mailmap and the policy can change between runs, and every number in a run must come from one HEAD set, one policy and one mailmap. The cost is repeated rows across runs, bounded by retention. The store is disposable, so this is a two-way door.
-- **Publishing** is a status flip. A run is written as `running` and becomes `complete` (or `partial` when some repo failed) only after its last row. Readers select complete and partial runs only, so nobody sees half a run. A run left `running` by a crash is deleted on the next open.
+- **Publishing** is a status flip. A run is written as `running` and becomes `complete` (or `partial` when some repo failed) only after its last row. Readers select complete and partial runs only, so nobody sees half a run: every `FactStore` read method returns `ErrNotFound` for a running or failed run. A run left `running` by a crash is deleted on the next open.
+- **The policy travels with the run.** `Run.PolicySource` holds exactly the bytes `PolicyRef.SHA256` hashes. Every reader of a stored run (`report`, `explain`, `who-knows`, `me`, `validate`, `mcp`, and a new metric version computed over old facts) rebuilds that policy with `policy.FromSource` and checks its `Ref` against `Run.Policy`. Today's `stillhere.toml`, or a newer packaged default, never changes a stored run's numbers; only `week` and `scan` load a policy file.
 - **Forge facts** (M2) are not per run. They are a replica of GitHub, upserted by node id with a watermark per repo, and each run records the watermark it read.
 - **Metric values** are stored with the run, keyed by `metric@version`. A new metric version can be computed over an old run's facts with `LoadFacts`, which is why `LoadFacts(PutRepoFacts(x)) == x` is tested.
 
@@ -529,6 +533,6 @@ Tests sit at stable boundaries, so a refactor does not rewrite them (Kent Beck, 
 | `TestRankIntervals` | `rank` | reproducible intervals; ineligible subjects unranked |
 | `TestRedact` | `redact` | no credential survives `URL`, `Scrub` or `Message` (userinfo, scp-like and malformed remotes, query strings, quotes, the 180-rune cut); text that holds none is unchanged |
 | `TestRunner` | `gitcli` | per-user and system attributes change neither numstat nor `check-attr`; no askpass, signature or external diff program runs; an inherited `GIT_DIR` changes nothing; a timeout or cancellation kills git's process group and is reported as such even when the reader fails first on the truncated output; a helper that left the group cannot hold `Stream` |
-| `TestStoreRoundTrip` | `sqlite` | `LoadFacts(PutRepoFacts(x)) == x`; readers never see a running run |
+| `TestStoreRoundTrip` | `sqlite` | `LoadFacts(PutRepoFacts(x)) == x`; `Run(id)` returns the run as begun and finished, policy source included; readers never see a running or failed run (`ErrNotFound`) |
 | `TestGitHubSync` | `github` | recorded responses become the expected facts; the token is never stored (M2) |
 | `TestMCPTools` | `mcp` | each tool through the SDK's in-memory client (M4) |

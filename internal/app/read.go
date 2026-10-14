@@ -9,7 +9,10 @@ import (
 )
 
 // The read side: each use case reads the latest complete or partial run
-// unless a run id is given, and never writes.
+// unless a run id is given (FactStore.LatestRun or FactStore.Run), and never
+// writes. It rebuilds the run's own policy with policy.FromSource on
+// Run.PolicySource and checks its Ref against Run.Policy, so today's
+// stillhere.toml never changes a stored run's numbers.
 
 // ExplainResult is one person's values for one metric in one run, the
 // starting point for tracing them to commits.

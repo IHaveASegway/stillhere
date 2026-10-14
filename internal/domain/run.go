@@ -35,5 +35,11 @@ type Run struct {
 	Finished    time.Time
 	ToolVersion string
 	Policy      PolicyRef
-	Options     map[string]string // effective options; never secrets
+	// PolicySource is the policy the run used, as the exact bytes
+	// Policy.SHA256 hashes (policy.Policy.Source). Every reader of the run
+	// rebuilds that policy from it with policy.FromSource instead of
+	// loading today's, so the run's numbers keep their meaning. Empty for
+	// a sync run, which uses no policy.
+	PolicySource []byte
+	Options      map[string]string // effective options; never secrets
 }

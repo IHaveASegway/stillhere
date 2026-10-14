@@ -23,7 +23,7 @@ exactly what their lead sees about them.`,
 				return err
 			}
 			req := app.MeRequest{RunID: run, Email: canonicalEmail(email)}
-			return e.with(cmd.Context(), need{policy: true, store: true}, func(d app.Deps) error {
+			return e.with(cmd.Context(), need{store: true}, func(d app.Deps) error {
 				res, err := app.Me(cmd.Context(), d, req)
 				if err != nil {
 					return err

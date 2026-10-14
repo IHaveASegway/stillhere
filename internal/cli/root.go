@@ -132,7 +132,7 @@ person's value, and it must not be the basis for performance or pay decisions.`,
 	f.StringVar(&e.dbPath, "db", "",
 		"facts database `FILE` (default $STILLHERE_HOME/facts.db; STILLHERE_HOME defaults to ~/.stillhere)")
 	f.StringVar(&e.policyPath, "policy", "",
-		"policy `FILE` (default ./stillhere.toml when present, else the packaged policy)")
+		"policy `FILE` for week and scan (default ./stillhere.toml when present, else the packaged policy); a stored run keeps its own")
 	f.StringVar(&e.mailmapPath, "mailmap", "",
 		"organisation mailmap `FILE` passed to git (default ./.mailmap when present)")
 	f.StringVar(&e.logLevel, "log-level", "info", "stderr log level: debug, info, warn or error")
@@ -174,13 +174,18 @@ func (e *env) setup() error {
 }
 
 // need lists what a command uses: report reads facts.db and runs without
-// git, and sync needs no policy.
+// git, and only week and scan load a policy file. A command that reads a
+// stored run uses the policy the run recorded (Run.PolicySource), never
+// today's.
 type need struct{ git, policy, store bool }
 
 // with builds the dependencies a command needs, runs fn with them, and
 // releases them, joining a failure to close the store to fn's error.
 func (e *env) with(ctx context.Context, n need, fn func(app.Deps) error) (err error) {
 	d := app.Deps{Log: e.log, Version: e.build.Version}
+	if !n.policy && e.policyPath != "" {
+		e.log.Warn("--policy is ignored: only week and scan read a policy file, and a stored run carries its own")
+	}
 	if n.git {
 		git, err := e.gitRunner(ctx)
 		if err != nil {

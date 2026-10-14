@@ -26,7 +26,7 @@ import (
 type Deps struct {
 	Git     domain.GitRunner // nil for commands that only read facts.db
 	Store   domain.FactStore // nil for week
-	Policy  *policy.Policy   // nil for sync
+	Policy  *policy.Policy   // week and scan only; a read use case rebuilds the run's own (policy.FromSource on Run.PolicySource)
 	Log     *slog.Logger
 	Version string // the tool version recorded on every run
 }

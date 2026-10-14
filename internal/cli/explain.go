@@ -31,7 +31,7 @@ a bare name such as durable for its latest version.`,
 			if req.Person == "" {
 				return usagef("explain needs --person EMAIL (see '%s --help')", cmd.CommandPath())
 			}
-			return e.with(cmd.Context(), need{policy: true, store: true}, func(d app.Deps) error {
+			return e.with(cmd.Context(), need{store: true}, func(d app.Deps) error {
 				res, err := app.Explain(cmd.Context(), d, req)
 				if err != nil {
 					return err

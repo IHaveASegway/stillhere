@@ -58,18 +58,25 @@ func (s *Store) FinishRun(ctx context.Context, runID int64, status domain.RunSta
 	return fmt.Errorf("sqlite.Store.FinishRun: %w (#8)", domain.ErrNotImplemented)
 }
 
+// Run returns a complete or partial run by id, or domain.ErrNotFound.
+func (s *Store) Run(ctx context.Context, id int64) (domain.Run, error) {
+	return domain.Run{}, fmt.Errorf("sqlite.Store.Run: %w (#8)", domain.ErrNotImplemented)
+}
+
 // LatestRun returns the newest complete or partial run of the kind, or
 // domain.ErrNotFound.
 func (s *Store) LatestRun(ctx context.Context, kind domain.RunKind) (domain.Run, error) {
 	return domain.Run{}, fmt.Errorf("sqlite.Store.LatestRun: %w (#8)", domain.ErrNotImplemented)
 }
 
-// LoadFacts returns a run's facts exactly as they were put.
+// LoadFacts returns a complete or partial run's facts exactly as they were
+// put, or domain.ErrNotFound.
 func (s *Store) LoadFacts(ctx context.Context, runID int64) (*domain.FactSet, error) {
 	return nil, fmt.Errorf("sqlite.Store.LoadFacts: %w (#8)", domain.ErrNotImplemented)
 }
 
-// LoadMetrics returns a run's metric values and rank intervals.
+// LoadMetrics returns a complete or partial run's metric values and rank
+// intervals, or domain.ErrNotFound.
 func (s *Store) LoadMetrics(ctx context.Context, runID int64) ([]domain.MetricValue, []domain.RankInterval, error) {
 	return nil, nil, fmt.Errorf("sqlite.Store.LoadMetrics: %w (#8)", domain.ErrNotImplemented)
 }

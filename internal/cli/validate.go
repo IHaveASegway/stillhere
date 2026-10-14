@@ -31,7 +31,7 @@ work, so keep the file outside the repository.`,
 				return err
 			}
 			req := app.ValidateRequest{RunID: run, Labels: path}
-			return e.with(cmd.Context(), need{policy: true, store: true}, func(d app.Deps) error {
+			return e.with(cmd.Context(), need{store: true}, func(d app.Deps) error {
 				res, err := app.Validate(cmd.Context(), d, req)
 				if err != nil {
 					return err
