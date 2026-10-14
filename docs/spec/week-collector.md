@@ -67,7 +67,7 @@ Budget: `week` alone finishes in under 60 s for 100 repos.
 
 ## AI-assisted changes
 
-A landing is tagged AI-assisted when its author or any co-author matches a pattern in the versioned `[ai]` policy table. Per the 2026-10-14 decision, the person gets the credit and the change carries the tag; an agent is never a row of its own. Defaults:
+A landing is tagged AI-assisted when its author or any co-author matches a pattern in the versioned `[ai]` policy table. A scan also knows the commits a merge landing brought in, and tags the landing when any of them matches ([ai_assisted@1](../metrics.md#ai_assisted1)); a week run reads only the landing commit. Per the 2026-10-14 decision, the person gets the credit and the change carries the tag; an agent is never a row of its own. Defaults:
 
 | Tool | Signal | Rule |
 | --- | --- | --- |

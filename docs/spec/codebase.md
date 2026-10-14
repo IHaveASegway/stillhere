@@ -92,7 +92,7 @@ type Commit struct {
 	Author     Person
 	AuthorTime time.Time
 	CommitTime time.Time
-	CoAuthors  []Person // Co-authored-by trailers, canonicalised with git check-mailmap
+	CoAuthors  []Person // Co-authored-by trailers, canonicalised with git check-mailmap; trailer order, which credit reads
 	Subject    string   // local only; never sent to an AI
 }
 
@@ -125,8 +125,9 @@ type LineOwner struct {
 }
 
 type IgnoreRevs struct {
-	Source string // "root", "cli" or ""
+	Source string   // "root", "cli" or ""
 	SHA256 string
+	Revs   []string // full SHAs the file lists, lowercased and sorted; durable@1 and simplifying@1 exclude these commits
 }
 
 type FileError struct{ Path, Message string }
@@ -477,7 +478,7 @@ Tests sit at stable boundaries, so a refactor does not rewrite them (Kent Beck, 
 | --- | --- | --- |
 | `TestWeekOracle` | `app` | the week table in the fixture spec |
 | `TestStillHereOracle` | `app` | the still-here table and the concentration walk |
-| `TestChangeOracles` | `app` | `durable@1`, `simplifying@1`, reverts and AI-assisted tags on both fixtures |
+| `TestChangeOracles` | `app` | `durable@1`, `simplifying@1`, reverts and AI-assisted tags on both fixtures; `knowledge_loss@1` and `who_knows@1` on the main fixture |
 | `TestDeterminism` | `app` | two scans of the fixture give byte-identical JSON without `timings` |
 | `TestDiscover` | `collect` | duplicates, bare repos, scp vs HTTPS remotes; a planted token appears in no output |
 | `TestCloneHealth` | `collect` | shallow and partial clones warn and lose only the facts they should |
