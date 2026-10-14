@@ -124,10 +124,12 @@ func Validate(ctx context.Context, d Deps, r ValidateRequest) (*report.Validatio
 	v.Provenance = report.AnswerProvenance(&run, s.facts, ids)
 	v.Caveats = report.AnswerCaveats(s.facts)
 	if v.Unmatched > 0 {
-		v.Caveats = append(v.Caveats, report.Caveat{Code: "unmatched-labels", Message: fmt.Sprintf(
-			"%d labelled changes are not landings of run %d, or name more than one, and were left out: "+
-				"a change id is a landing SHA or an unambiguous prefix of one (pull request ids need the GitHub sync, M2).",
-			v.Unmatched, s.run.ID)})
+		what := fmt.Sprintf("%d labelled changes are not landings of run %d, or name more than one, and were left out", v.Unmatched, s.run.ID)
+		if v.Unmatched == 1 {
+			what = fmt.Sprintf("1 labelled change is not a landing of run %d, or names more than one, and was left out", s.run.ID)
+		}
+		v.Caveats = append(v.Caveats, report.Caveat{Code: "unmatched-labels", Message: what +
+			": a change id is a landing SHA or an unambiguous prefix of one (pull request ids need the GitHub sync, M2)."})
 	}
 	return v, nil
 }
