@@ -158,6 +158,7 @@ The report computes no metric: it arranges the values `internal/metrics` compute
 | `bot_share` | `surviving@1`'s person values in the scope: lines held by bots over all lines |
 | `made_of`, `card.people`, `card.bots` | the repository's `still_here` rows |
 | ranks | `rank.Intervals` over the metric's own clusters, window and eligibility (`metrics.Ranked.Clusters`), with bots left out by the caller; intervals the run stored are used as they are |
+| who-knows lists | `who_knows@1` for the path, per repository: the value about the path itself (subject the repository, or the area `<key>:<path>`: `Value` prod lines, `Detail` `prod_files`, `files_with_majority`), and one value per person (`Value` prod lines under the path; `Detail` `majority_files`, `recent_landings`, `top_author`, the place 1 to 5 among the top authors). Without `top_author`, the top five are picked by the same rule: prod lines, then email. |
 | `card.size`, `card.landings`, `card.age`, `totals`, `skipped`, `files_blamed` | facts: path classes at HEAD, line owners on prod paths, landings in each window, `FirstCommit`, blame errors |
 
 A metric whose values are missing although the run has the facts it computes from gets a `no-values` caveat, so an empty section never passes for a real zero.
@@ -190,7 +191,7 @@ Each answer starts with `provenance` and ends with `caveats`. Values print as `{
 | Command | Answer | Fields |
 | --- | --- | --- |
 | `explain METRIC --person EMAIL` | `Explain` | `metric` (the definition: `id`, `question`, `unit`, `ranked`, `eligibility`, `blind_spots`, `gaming`, `oracle`, `validity`), `subject`, `values[]` (one per scope and window), `changes[]` (a ranked metric's clusters for the person: `{repo, repo_key, landing, time, merge, title, num, den}`; `title` is the landing's commit subject, local output only and never sent to an AI) |
-| `who-knows PATH [--repo KEY]` | `WhoKnows` | `path`, `repo`, `repos[]` of `{repo, key, majority_owners[], top_authors[], recent_landers[], bots[]}`, each a `{email, name, lines, majority_files, recent_landings}`: `who_knows@1` computed over the run's facts under the path, so any prefix works, down to one file |
+| `who-knows PATH [--repo KEY]` | `WhoKnows` | `path`, `repo`, `repos[]` of `{repo, key, lines, prod_files, files_with_majority, majority_owners[], top_authors[], recent_landers[], bots[]}`, each person a `{email, name, lines, majority_files, recent_landings}`: `who_knows@1` answered for the path at query time, so any prefix works, down to one file |
 | `me --email EMAIL` | `Me` | `person`, `values[]`, `ranks[]` of `{metric, scope, window, percent, min_n, eligible, rank_lo, rank_hi, of, estimate, lo, hi, n}`: the person's place in every ranked metric's table, in the scan's rank scope |
 | `validate --labels FILE` | `Validation` | `labels`, `labellers`, `meaningful`, `routine`, `noise`, `unmatched`, `metrics[]` of `{metric, auc, n, meaningful, routine, beta}`; `auc` is `null` without both meaningful and routine changes scored, and `beta` is true below AUC 0.7 or 50 scored labels |
 | `metrics` | `Catalog` | `metrics[]` of definitions, in registry order |

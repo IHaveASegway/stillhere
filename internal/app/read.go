@@ -236,8 +236,7 @@ func WhoKnows(ctx context.Context, d Deps, r WhoKnowsRequest) (*report.WhoKnows,
 	if err != nil {
 		return nil, err
 	}
-	m, err := lookupMetric(report.MetricWhoKnows)
-	if err != nil {
+	if _, err := lookupMetric(report.MetricWhoKnows); err != nil {
 		return nil, err
 	}
 	s, err := load(ctx, d, r.RunID)
@@ -249,15 +248,32 @@ func WhoKnows(ctx context.Context, d Deps, r WhoKnowsRequest) (*report.WhoKnows,
 			"--repo %q is not a repository of run %d: it takes a repository key, as 'stillhere report --format json' lists them", r.Repo, s.run.ID)}
 	}
 	prefix := cleanPrefix(r.Path)
-	under := underPrefix(s.facts, prefix, r.Repo)
-	values, err := m.Compute(&metrics.Input{Facts: under, Policy: s.policy, Who: s.who, Days: s.policy.Week.Days})
+	values, err := whoKnowsValues(s, r.Repo, prefix)
 	if err != nil {
 		return nil, fmt.Errorf("computing %s: %w", report.MetricWhoKnows, err)
 	}
 	run := s.run
 	return report.NewWhoKnows(&report.WhoKnowsInput{
-		Run: &run, Facts: under, Who: s.who, Path: prefix, Repo: r.Repo, Values: values,
+		Run: &run, Facts: underPrefix(s.facts, prefix, r.Repo), Who: s.who, Path: prefix, Repo: r.Repo, Values: values,
 	}), nil
+}
+
+// whoKnowsValues computes who_knows@1 for the code under prefix: per
+// query, because a value for every directory of every repository would
+// outnumber the facts. With the metric contract on main, that is the
+// metric's Compute over the run's facts under the prefix.
+//
+// TODO(#13): the metrics branch (#9, PR #35) answers a prefix itself with
+// metrics.WhoKnows(in, repo, prefix), and its who_knows@1 Compute returns
+// no values. Once both are merged, this body is
+// metrics.WhoKnows(s.input(), repo, prefix); NewWhoKnows already reads that
+// layout (docs/spec/report-json.md#where-the-numbers-come-from).
+func whoKnowsValues(s *stored, repo, prefix string) ([]domain.MetricValue, error) {
+	m, err := lookupMetric(report.MetricWhoKnows)
+	if err != nil {
+		return nil, err
+	}
+	return m.Compute(&metrics.Input{Facts: underPrefix(s.facts, prefix, repo), Policy: s.policy, Who: s.who, Days: s.policy.Week.Days})
 }
 
 func hasRepo(fs *domain.FactSet, key string) bool {

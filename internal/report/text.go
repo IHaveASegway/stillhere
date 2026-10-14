@@ -216,9 +216,16 @@ func shareLine(loss, ai, bots *Share) string {
 	return strings.Join(parts, " · ")
 }
 
+// concentrationText is "majority-owner concentration: 2 authors (0 bots)
+// hold the majority in half of the 10 files with a majority owner (not a
+// truck factor)".
 func concentrationText(c *Concentration) string {
-	return fmt.Sprintf("majority-owner concentration: %s (%s) hold the majority in half of the %s with a majority owner (%s)",
-		plural(c.AuthorsInPrefix, "author", "authors"), plural(c.BotsInPrefix, "bot", "bots"),
+	verb := "hold"
+	if c.AuthorsInPrefix == 1 {
+		verb = "holds"
+	}
+	return fmt.Sprintf("majority-owner concentration: %s (%s) %s the majority in half of the %s with a majority owner (%s)",
+		plural(c.AuthorsInPrefix, "author", "authors"), plural(c.BotsInPrefix, "bot", "bots"), verb,
 		plural(c.FilesWithMajority, "file", "files"), c.Label)
 }
 

@@ -86,12 +86,15 @@ type WhoKnows struct {
 
 // WhoKnowsRepo is who knows the path in one repository.
 type WhoKnowsRepo struct {
-	Repo           string   `json:"repo"` // name
-	Key            string   `json:"key"`
-	MajorityOwners []Knower `json:"majority_owners"` // hold at least half the lines of a file under the path
-	TopAuthors     []Knower `json:"top_authors"`     // up to five, by prod lines under the path, then email
-	RecentLanders  []Knower `json:"recent_landers"`  // credited with a change under the path in the last 90 days
-	Bots           []Knower `json:"bots"`            // listed apart, never mixed into the lists above
+	Repo              string   `json:"repo"` // name
+	Key               string   `json:"key"`
+	Lines             int      `json:"lines"`               // surviving prod non-blank lines under the path
+	ProdFiles         int      `json:"prod_files"`          // prod files under the path
+	FilesWithMajority int      `json:"files_with_majority"` // of those, files with a majority owner
+	MajorityOwners    []Knower `json:"majority_owners"`     // hold at least half the lines of a file under the path
+	TopAuthors        []Knower `json:"top_authors"`         // up to five, by prod lines under the path, then email
+	RecentLanders     []Knower `json:"recent_landers"`      // credited with a change under the path in the last 90 days
+	Bots              []Knower `json:"bots"`                // listed apart, never mixed into the lists above
 }
 
 // Knower is one person's knowledge of a path.

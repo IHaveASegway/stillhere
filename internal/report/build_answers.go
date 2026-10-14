@@ -96,8 +96,9 @@ type WhoKnowsInput struct {
 	Who   People
 	Path  string // repo-relative prefix; "" for the whole repository
 	Repo  string // Repo.Key, or "" for every repository
-	// Values are who_knows@1's values computed over the facts under Path:
-	// one per person and repository (MetricWhoKnows in values.go).
+	// Values are who_knows@1's values for the path, per repository: one
+	// about the path itself and one per person (MetricWhoKnows in
+	// values.go).
 	Values []domain.MetricValue
 }
 
@@ -114,9 +115,20 @@ func NewWhoKnows(in *WhoKnowsInput) *WhoKnows {
 			continue
 		}
 		asked = append(asked, rf)
+		scope := domain.Scope{Kind: domain.ScopeRepo, Key: rf.Repo.Key}
 		r := WhoKnowsRepo{Repo: rf.Repo.Name, Key: rf.Repo.Key}
+		for _, v := range ix[MetricWhoKnows][scope] {
+			if v.Subject.Kind != domain.SubjectPerson {
+				// The value about the path itself: the repository, a
+				// file or a directory.
+				r.Lines, r.ProdFiles = count(v.Value), count(v.Detail[detailProdFiles])
+				r.FilesWithMajority = count(v.Detail[detailFilesWithMajority])
+				break
+			}
+		}
 		var humans []Knower
-		for _, v := range ix.people(MetricWhoKnows, domain.Scope{Kind: domain.ScopeRepo, Key: rf.Repo.Key}) {
+		top := map[string]int{} // the metric's own top-author places, 1 to 5
+		for _, v := range ix.people(MetricWhoKnows, scope) {
 			email := v.Subject.Key
 			k := Knower{
 				Email: email, Name: displayName(in.Who, email),
@@ -125,16 +137,21 @@ func NewWhoKnows(in *WhoKnowsInput) *WhoKnows {
 				RecentLandings: count(v.Detail[detailRecentLandings]),
 			}
 			if isBot(in.Who, email) {
-				r.Bots = append(r.Bots, k)
-			} else {
-				humans = append(humans, k)
+				if k.Lines > 0 {
+					r.Bots = append(r.Bots, k)
+				}
+				continue
+			}
+			humans = append(humans, k)
+			if place := count(v.Detail[detailTopAuthor]); place > 0 {
+				top[email] = place
 			}
 		}
 		for _, k := range humans {
 			if k.MajorityFiles > 0 {
 				r.MajorityOwners = append(r.MajorityOwners, k)
 			}
-			if k.Lines > 0 {
+			if _, ok := top[k.Email]; ok || (len(top) == 0 && k.Lines > 0) {
 				r.TopAuthors = append(r.TopAuthors, k)
 			}
 			if k.RecentLandings > 0 {
@@ -145,15 +162,19 @@ func NewWhoKnows(in *WhoKnowsInput) *WhoKnows {
 			return cmp.Or(cmp.Compare(b.MajorityFiles, a.MajorityFiles), cmp.Compare(b.Lines, a.Lines), cmp.Compare(a.Email, b.Email))
 		})
 		byLines := func(a, b Knower) int { return cmp.Or(cmp.Compare(b.Lines, a.Lines), cmp.Compare(a.Email, b.Email)) }
-		slices.SortFunc(r.TopAuthors, byLines)
-		if len(r.TopAuthors) > 5 {
-			r.TopAuthors = r.TopAuthors[:5]
+		// The metric names the top five; without its places, the same rule
+		// (prod lines, then email) picks them.
+		slices.SortFunc(r.TopAuthors, func(a, b Knower) int {
+			return cmp.Or(cmp.Compare(top[a.Email], top[b.Email]), byLines(a, b))
+		})
+		if len(r.TopAuthors) > maxTopAuthors {
+			r.TopAuthors = r.TopAuthors[:maxTopAuthors]
 		}
 		slices.SortFunc(r.RecentLanders, func(a, b Knower) int {
 			return cmp.Or(cmp.Compare(b.RecentLandings, a.RecentLandings), cmp.Compare(a.Email, b.Email))
 		})
 		slices.SortFunc(r.Bots, byLines)
-		if len(r.MajorityOwners)+len(r.TopAuthors)+len(r.RecentLanders)+len(r.Bots) > 0 {
+		if r.Lines > 0 || len(r.MajorityOwners)+len(r.TopAuthors)+len(r.RecentLanders)+len(r.Bots) > 0 {
 			w.Repos = append(w.Repos, r)
 		}
 	}

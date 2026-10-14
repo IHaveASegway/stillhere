@@ -201,6 +201,13 @@ func knowers(ks []Knower, esc func(string) string, what func(Knower) string) str
 	return strings.Join(parts, " · ")
 }
 
+// pathTotals is "37 surviving prod lines in 12 prod files, 10 with a
+// majority owner".
+func pathTotals(r WhoKnowsRepo) string {
+	return fmt.Sprintf("%s surviving prod lines in %s, %d with a majority owner",
+		grouped(r.Lines), plural(r.ProdFiles, "prod file", "prod files"), r.FilesWithMajority)
+}
+
 func ownerCount(k Knower) string { return "(" + plural(k.MajorityFiles, "file", "files") + ")" }
 func lineCount(k Knower) string  { return grouped(k.Lines) }
 func landingCount(k Knower) string {
@@ -221,7 +228,7 @@ func (w *WhoKnows) writeText(p *printer) {
 	}
 	for _, r := range w.Repos {
 		p.blank()
-		p.line("Repository " + clean(r.Repo))
+		p.line("Repository " + clean(r.Repo) + " · " + pathTotals(r))
 		p.wrapped("  majority owners  ", "                   ", knowers(r.MajorityOwners, clean, ownerCount))
 		p.wrapped("  top authors      ", "                   ", knowers(r.TopAuthors, clean, lineCount))
 		p.wrapped("  recent landers   ", "                   ", knowers(r.RecentLanders, clean, landingCount))
@@ -249,6 +256,7 @@ func (w *WhoKnows) writeMarkdown(p *printer) {
 		p.blank()
 		p.line("## Repository " + mdText(r.Repo))
 		p.blank()
+		p.line("- " + pathTotals(r))
 		p.line("- Majority owners: " + knowers(r.MajorityOwners, mdText, ownerCount))
 		p.line("- Top authors: " + knowers(r.TopAuthors, mdText, lineCount))
 		p.line("- Recent landers: " + knowers(r.RecentLanders, mdText, landingCount))

@@ -23,8 +23,12 @@ const (
 	MetricConcentration = "knowledge_concentration@1" // Value is authors_in_prefix; Detail files_with_majority, bots_in_prefix
 	MetricKnowledgeLoss = "knowledge_loss@1"          // Num is lines held by people gone quiet, Den lines held by people
 	MetricAIAssisted    = "ai_assisted@1"             // Num is AI-assisted landings, Den landings in 365 days
-	MetricWhoKnows      = "who_knows@1"               // per person under a path: Value is prod lines; Detail majority_files, recent_landings
+	MetricWhoKnows      = "who_knows@1"               // per path: one value about the path (Detail prod_files, files_with_majority) and one per person (Value prod lines; Detail majority_files, recent_landings, top_author)
 )
+
+// maxTopAuthors is how many top authors a who-knows answer lists
+// (docs/metrics.md#who_knows1-per-path).
+const maxTopAuthors = 5
 
 // The Detail keys a report reads.
 const (
@@ -37,6 +41,8 @@ const (
 	detailFilesWithMajority = "files_with_majority"
 	detailBotsInPrefix      = "bots_in_prefix"
 	detailRecentLandings    = "recent_landings"
+	detailTopAuthor         = "top_author" // a top author's place, 1 to 5
+	detailProdFiles         = "prod_files"
 )
 
 // valueIndex finds the values of one metric within one scope.
