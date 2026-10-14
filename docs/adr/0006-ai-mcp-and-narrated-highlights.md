@@ -8,7 +8,21 @@ AI should help people and agents understand the facts, either through an Anthrop
 
 ## Decision
 
-- **`stillhere mcp`**: a local stdio server built on the official MCP Go SDK, over `facts.db`. Tools: `summary`, `who_knows(path)`, `changes(person?, repo?, since?)`, `explain(metric, subject)`, `highlights(period)`, `metric_definitions()`, and `diff(change)` only when started with `--allow-source`. stillhere holds no API key on this path; the user's own agent and account do the AI work. A Claude Code plugin can bundle this server with a skill that teaches the agent the schema and the stated limits.
+- **`stillhere mcp`**: a local stdio server built on the official MCP Go SDK, over `facts.db`. stillhere holds no API key on this path; the user's own agent and account do the AI work. A Claude Code plugin can bundle this server with a skill that teaches the agent the schema and the stated limits.
+- **Tools are shaped around the questions an agent asks, not around tables** (amended 2026-10-14, following Anthropic's "Writing effective tools for agents", 2025):
+  - `overview(scope)`: a platform (group) or a single repo. Covers age, size, who the code is made of, concentration, knowledge loss, and AI and bot share.
+  - `person(name)`: breadth (repos), ownership (majority files), survival and recent work. The AI-assisted share is shown only for the user's own identity ([ADR 0007](0007-ai-assisted-attribution.md)).
+  - `who_knows(path)` and `changes(scope, since, person?)`.
+  - `explain(metric, subject)`: the commits and pull requests behind a number.
+  - `highlights(period)`.
+  - `identity_candidates(scope)`: possible duplicate identities, with suggested `.mailmap` lines. They are never applied; `.mailmap` stays the only identity store.
+  - `metrics()`: definitions and blind spots.
+  - `diff(change)`: only when started with `--allow-source`.
+- **Every tool answer** carries:
+  - its provenance: the run, the as-of time and the metric versions;
+  - the caveats that could make it wrong: missing or shallow repos, identity gaps, formatting passes.
+
+  Answers use display names rather than ids. `response_format` is `concise` or `detailed`, lists paginate under the client's token cap, and errors say what to run next. Emails appear only with `--allow-emails`, because the answer goes on to the agent's model provider.
 - **`stillhere narrate`**: uses `anthropic-sdk-go`; the default model is `claude-opus-5-5` and the model is configurable. It writes the highlights summary under these rules:
   - The payload is built from highlight facts only. People become placeholders (`P1`, `P2`, …) and real names are restored locally after the reply. No emails, source code, commit subjects or absolute paths are sent.
   - Every number in the reply must appear in the payload. If one does not, the reply is regenerated once and then dropped.
@@ -20,6 +34,7 @@ AI should help people and agents understand the facts, either through an Anthrop
 ## Alternatives considered
 
 - **A narrator only.** Agents would get no structured access.
+- **One MCP tool per table or metric** (`get_metric`, `list_people`, and so on). Easy to generate, but an agent then spends many calls and much context stitching rows together, and works with ids where it needs names.
 - **AI-judged changes in v1.** This sends source to a provider, its labels are unvalidated, and its cost scales with commit volume.
 - **No AI.** It misses a real need, and MCP is cheap with the official SDK.
 
