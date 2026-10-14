@@ -529,6 +529,15 @@ func Build(dir string) error                                    // BuildContext 
 func BuildContext(ctx context.Context, dir string) error        // the main fixture in dir, which must be empty or absent
 func BuildSibling(dir string) error                             // BuildSiblingContext with context.Background
 func BuildSiblingContext(ctx context.Context, dir string) error // the sibling in dir, which must be empty or absent
+// discovery.go (#4): the discovery and clone-health repositories, as structs of absolute paths
+const DiscoveryToken = "TOKENVALUE"                             // planted in remote URLs; TestDiscover asserts no output holds it
+const DiscoveryWidgetRemote = "https://user:" + DiscoveryToken + "@github.com/example/widget.git"
+type DiscoveryRepos struct{ Root, Upstream, WidgetA, WidgetB, Other, Mirror /* ... one field per path */ string }
+type CloneHealthRepos struct{ Upstream, Full, Shallow, Partial, Extension, OtherPromisor, NotPromisor string }
+func Discovery(t testing.TB) *DiscoveryRepos                    // builds <t.TempDir()>/discovery
+func BuildDiscovery(ctx context.Context, dir string) (*DiscoveryRepos, error)
+func CloneHealth(t testing.TB, promisor string) *CloneHealthRepos // the partial clone's origin is promisor
+func BuildCloneHealth(ctx context.Context, dir, promisor string) (*CloneHealthRepos, error)
 ```
 
 ## Run model

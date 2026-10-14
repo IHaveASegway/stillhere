@@ -553,6 +553,34 @@ Two clones whose `origin` is `https://user:TOKENVALUE@github.com/example/widget.
 - A work-tree clone and a bare mirror with the same HTTPS remote are duplicates.
 - `git@github.com:o/r.git` and `https://github.com/o/r.git` stay two separate repos.
 
+`fixture.Discovery` builds the layout. Every repo is a clone of one upstream whose `main` has two commits and whose `trunk` is one commit ahead of `main`; a clone's `origin` is the URL named below, or absent. Each row is one `Discover` call, and the expected result follows from the layout and [discovery.md](../../docs/spec/discovery.md), not from the code:
+
+| Paths named | Repos (key) | Groups | Warnings and failures | Wrong implementation it catches |
+| --- | --- | --- | --- | --- |
+| `widget-b`, `other`, `widget-a` | `https://github.com/example/other.git`; `https://github.com/example/widget.git` at `widget-a` | | `duplicate-repo`: `skipped <widget-b>; same remote as <widget-a> (https://github.com/example/widget.git)` | the duplicate kept, the token or userinfo in the key, the winner taken from argument order |
+| `widget-a`, `mirror.git` (bare, `origin` without userinfo) | `https://github.com/example/widget.git` at `mirror.git` | | `duplicate-repo` skipping `widget-a` | a mirror and a clone of one remote counted twice |
+| `scp`, `https` | `git@github.com:o/r.git`; `https://github.com/o/r.git` | | | the scp and HTTPS forms collapsed |
+| `unparsed-a`, `unparsed-b` (`https:/user:TOKENVALUE@…`, `https//user:TOKENVALUE@…`) | `local:unparsed-a`, `local:unparsed-b`, remote `<unparsed-remote>` | | | `<unparsed-remote>` used as a key |
+| `bare.git` (`HEAD` → `trunk`, no `origin`), `team` | `…/api.git` (`main`); `…/web.git` (bare, `HEAD` → `trunk`); `local:bare`; `local:linked` (a worktree: `.git` is a file) | `team` holds the three members; `notes/`, which holds a clone, and `README.md` are not members | | a bare repo skipped or read as a group; a worktree missed; a walk deeper than one level |
+| `outer` | `https://github.com/example/outer.git` only | | | the nested clone `outer/inner` added |
+| `b/src`, `c/src-2` (empty), `a/src` | `local:one` in `src`; `local:two` in `src-3` | `src` (`a/src`), `src-2` (`c/src-2`), `src-3` (`b/src`) | | a suffix that collides with another group's own name |
+| `api` and `team` and `widget-a` twice | `api` once, in group `team` | `team` | none | one path named twice warned about, or dropped from its group |
+| `file.txt`, `missing`, `empty` (no commits), `broken` (`.git` file to a missing dir), `outer/stray` (empty `.git` dir), `bare.git/stray.git` (bad `HEAD`), `widget-a` | `widget-a` only | none | six failures, one per path | a failure that stops the run; a broken repo read as a group; git's answer for an enclosing repo taken as the path's own |
+
+The default branch, from one call over the six work trees (the bare rows come from the `bare.git`, `team` call above):
+
+| Repo | Refs | Branch | Head | Wrong implementation it catches |
+| --- | --- | --- | --- | --- |
+| `widget-a` | `origin/HEAD` → `origin/main` | `main` | `main` | |
+| `tracking` | `origin/HEAD` → `origin/trunk`; local `main`; local `trunk` one commit ahead of `origin/trunk` | `trunk` | `trunk` | `main` preferred to `origin/HEAD`; the local commit, which never landed, measured |
+| `main-first` | no `origin`; `main`, `master` (at `trunk`), `feature` checked out | `main` | `main` | `master` or `HEAD` preferred to `main` |
+| `master-only` | no `origin`; `master` (at `main`), `feature` (at `trunk`) checked out | `master` | `main` | `HEAD` preferred to `master` |
+| `current` | no `origin`; only `dev` (at `trunk`) | `dev` | `trunk` | no fallback to `HEAD` |
+| `detached` | no `origin`; no branch; `HEAD` detached at `trunk` | `HEAD` | `trunk` | a detached `HEAD` treated as an error |
+| `bare.git`, `team/web.git` | bare; `main` and `trunk`; `HEAD` → `trunk` | `trunk` | `trunk` | the work-tree rules applied to a bare repo |
+
+The token check runs `Discover` over every path above with git's debug log on: the configs of `widget-a` and `unparsed-a` hold `TOKENVALUE`, and the result (as JSON and as Go values) and the log do not. The clone-health bullets above run on `fixture.CloneHealth`: a complete clone, a `--depth 1` clone, a `--filter=blob:none` clone whose `origin` is the fake promisor, and complete clones marked partial by `extensions.partialClone`, by a promisor remote other than `origin`, and not partial by `remote.origin.promisor=false`.
+
 ## What fails CI
 
 - **Oracles.** Any week or still-here oracle above changes. That includes Frank's 3 versus 2, Ivy's `prod_lines_added` 0, Jules's 0-line commit, Erin's rename insertion of 1, Ada's single mailmapped week row, and both Gina and Hank at `majority_files` 1.
