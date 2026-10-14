@@ -40,10 +40,31 @@ type Metric interface {
 }
 
 // Ranked is a metric people can be ranked on, one metric at a time. It
-// yields the per-change clusters the bootstrap in internal/rank resamples.
+// yields the per-change clusters the bootstrap in internal/rank resamples,
+// framed by the metric itself: its window and its eligibility rule are part
+// of its versioned definition (docs/metrics.md), so the use case that ranks
+// never restates them.
 type Ranked interface {
 	Metric
-	Clusters(in *Input, scope domain.Scope) (rank.Kind, map[domain.Subject][]rank.Cluster, error)
+	Clusters(in *Input, scope domain.Scope) (RankInput, error)
+}
+
+// RankInput is everything rank.Intervals needs to rank one metric in one
+// scope:
+//
+//	rank.Intervals(m.Definition().ID, scope, ri.Window, ri.Kind, ri.Data, ri.Options)
+type RankInput struct {
+	Kind rank.Kind
+	// Window is the metric's own window for in.Facts.Now, such as
+	// durable@1's cohort [now-365d, now-90d). It seeds the bootstrap and
+	// is the Window of the matching MetricValues, which is how ranks join
+	// to values.
+	Window domain.Window
+	// Options carries MinN from the metric's eligibility rule (such as 10
+	// clusters) and, for Sum, the number of week Blocks in Window.
+	// Replicates 0 means rank's default, B = 1000.
+	Options rank.Options
+	Data    map[domain.Subject][]rank.Cluster
 }
 
 // All returns every registered metric version in a stable order.

@@ -394,7 +394,15 @@ type Metric interface {
 }
 type Ranked interface {
 	Metric
-	Clusters(in *Input, scope domain.Scope) (rank.Kind, map[domain.Subject][]rank.Cluster, error)
+	Clusters(in *Input, scope domain.Scope) (RankInput, error)
+}
+// RankInput: the metric owns its window and eligibility (both are part of its versioned definition), so a
+// caller ranks with rank.Intervals(def.ID, scope, ri.Window, ri.Kind, ri.Data, ri.Options) and restates nothing.
+type RankInput struct {
+	Kind    rank.Kind
+	Window  domain.Window // the metric's window for Facts.Now (durable@1: [now-365d, now-90d)); joins ranks to MetricValue.Window
+	Options rank.Options  // MinN from the eligibility rule; Blocks for Sum; Replicates 0 = 1000
+	Data    map[domain.Subject][]rank.Cluster
 }
 func All() []Metric                                    // stable order
 func Lookup(id string) (Metric, error)
@@ -408,9 +416,9 @@ type Cluster struct {
 	Den    float64 // Ratio only
 	Block  int     // Sum only: the week (counted back from Now) the change landed in
 }
-type Options struct {
-	Replicates int // B; default 1000
-	MinN       int // eligibility: clusters per subject
+type Options struct { // supplied by the ranked metric (metrics.RankInput)
+	Replicates int // B; 0 means 1000
+	MinN       int // eligibility: clusters per subject, from the metric's definition
 	Blocks     int // Sum only: week blocks in the window
 }
 func Intervals(id domain.MetricID, scope domain.Scope, w domain.Window, kind Kind, data map[domain.Subject][]Cluster, opt Options) []domain.RankInterval

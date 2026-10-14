@@ -30,10 +30,11 @@ type Cluster struct {
 	Block  int     // Sum only: the week (counted back from Now) the change landed in
 }
 
-// Options tunes the bootstrap.
+// Options tunes the bootstrap. The ranked metric supplies them
+// (metrics.RankInput), because eligibility is part of its definition.
 type Options struct {
-	Replicates int // B; default 1000
-	MinN       int // eligibility: clusters per subject
+	Replicates int // B; 0 means the default, 1000
+	MinN       int // eligibility: clusters per subject, from the metric's definition
 	Blocks     int // Sum only: week blocks in the window
 }
 
