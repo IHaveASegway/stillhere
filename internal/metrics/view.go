@@ -83,8 +83,9 @@ type commitView struct {
 	changes []*domain.FileChange
 	// added and removed count non-blank lines on prod paths in the commit's
 	// own patch; surviving counts the non-blank prod lines blame attributes
-	// to it at HEAD.
-	added, removed, surviving int
+	// to it at HEAD. traced is the part of added whose fate blame can
+	// tell: the lines on paths whose blame did not fail (untracedPaths).
+	added, removed, traced, surviving int
 }
 
 // landingView is one landing with its commit map.
@@ -169,6 +170,7 @@ func newRepoView(f *domain.RepoFacts, who *identity.Directory) *repoView {
 	for _, sha := range f.IgnoreRevs.Revs {
 		ignored[strings.ToLower(sha)] = true
 	}
+	untraced := untracedPaths(f, r.role)
 	for i := range f.Commits {
 		c := &f.Commits[i]
 		r.commits[c.SHA] = &commitView{
@@ -195,6 +197,9 @@ func newRepoView(f *domain.RepoFacts, who *identity.Directory) *repoView {
 		if r.role[fc.Path] == domain.RoleProd {
 			c.added += fc.AddedNonBlank
 			c.removed += fc.RemovedNonBlank
+			if !untraced[fc.Path] {
+				c.traced += fc.AddedNonBlank
+			}
 		}
 	}
 
@@ -229,6 +234,50 @@ func newRepoView(f *domain.RepoFacts, who *identity.Directory) *repoView {
 		r.indexLines(f, who)
 	}
 	return r
+}
+
+// untracedPaths returns the paths on which blame cannot tell whether a
+// commit's added lines survive: every prod path whose blame failed
+// (RepoFacts.BlameErrors: a timeout, a failed git blame, porcelain that did
+// not parse), and every path the history renamed into one of them, because
+// blame follows a file back through its renames, so lines added to old.py
+// are blamed in its successor. It is nil when no prod path failed.
+//
+// Blame treats each file as a bulkhead: one that fails becomes a FileError
+// while the other files are blamed, and LineFacts stays true. The metrics
+// keep the failure inside the same bulkhead. A failed file has no line
+// owners, so its surviving lines are unknown; durable@1 must then leave
+// the lines added to it out of its denominator too, or their authors would
+// score as keeping nothing. Only prod paths seed the set: surviving lines
+// count prod paths at HEAD only, so a failed path with another role hides
+// no surviving line.
+func untracedPaths(f *domain.RepoFacts, role map[string]domain.Role) map[string]bool {
+	var queue []string
+	for _, e := range f.BlameErrors {
+		if role[e.Path] == domain.RoleProd {
+			queue = append(queue, e.Path)
+		}
+	}
+	if len(queue) == 0 {
+		return nil
+	}
+	sources := make(map[string][]string) // a rename's destination → its sources
+	for i := range f.Changes {
+		if fc := &f.Changes[i]; fc.OldPath != "" && fc.OldPath != fc.Path {
+			sources[fc.Path] = append(sources[fc.Path], fc.OldPath)
+		}
+	}
+	out := make(map[string]bool, len(queue))
+	for len(queue) > 0 {
+		p := queue[len(queue)-1]
+		queue = queue[:len(queue)-1]
+		if out[p] {
+			continue
+		}
+		out[p] = true
+		queue = append(queue, sources[p]...)
+	}
+	return out
 }
 
 // indexLines credits every blamed row once per blamed commit and builds the

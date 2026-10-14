@@ -162,15 +162,17 @@ func (c *aiCohorts) addLanding(l *landingView) {
 	}
 }
 
+// addDurable adds one durable@1 cluster to its cohort, with durable@1's own
+// denominator: the added lines on files blame read.
 func (c *aiCohorts) addDurable(k *cluster) {
 	if k.landing.ai {
 		c.aiSurviving += k.surviving
-		c.aiAdded += k.added
+		c.aiAdded += k.traced
 		c.aiN++
 		return
 	}
 	c.otherSurviving += k.surviving
-	c.otherAdded += k.added
+	c.otherAdded += k.traced
 	c.otherN++
 }
 

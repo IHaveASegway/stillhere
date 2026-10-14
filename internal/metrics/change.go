@@ -23,7 +23,9 @@ type cluster struct {
 	person  string
 	// added and removed are non-blank prod lines in the commits' own
 	// patches; surviving is what blame attributes to those commits at HEAD.
-	added, removed, surviving int
+	// traced is the part of added on paths blame read, the denominator
+	// durable@1 divides surviving by (untracedPaths).
+	added, removed, traced, surviving int
 }
 
 // counts reports whether a commit counts in the change metrics: neither a
@@ -39,7 +41,8 @@ func (c *commitView) counts() bool {
 // landings form them unless dropReverted, which is how simplifying@1 leaves
 // out every commit of a reverted landing while durable@1 keeps it (its lines
 // are gone, so it already scores nothing). needLines also skips repositories
-// without blame, whose surviving lines are unknown.
+// without blame, whose surviving lines are unknown; within a repository with
+// blame, the lines on a file whose blame failed are left out through traced.
 func changeClusters(v *view, w domain.Window, needLines, dropReverted bool) []*cluster {
 	var out []*cluster
 	for _, r := range v.repos {
@@ -63,6 +66,7 @@ func changeClusters(v *view, w domain.Window, needLines, dropReverted bool) []*c
 				k := mine[i]
 				k.added += c.added
 				k.removed += c.removed
+				k.traced += c.traced
 				k.surviving += c.surviving
 			}
 			slices.SortFunc(mine, func(a, b *cluster) int { return cmp.Compare(a.person, b.person) })

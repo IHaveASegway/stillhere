@@ -9,7 +9,9 @@ import (
 // added in the cohort, the share that blame still attributes to those
 // commits at HEAD. It is a Ratio metric: the bootstrap resamples a person's
 // clusters (their counted commits in one landing), because lines inside one
-// change are not independent.
+// change are not independent. Both sides of the ratio cover the same lines:
+// those on files blame read (cluster.traced), so a file whose blame failed
+// leaves the ratio instead of scoring its lines as lost.
 type durableV1 struct{}
 
 var durableID = domain.MetricID{Name: "durable", Version: 1}
@@ -20,10 +22,12 @@ func (durableV1) Definition() Definition {
 		ID:       durableID,
 		Question: "Did the code a person wrote last?",
 		Unit: "Σ surviving / Σ added per person over their clusters in the cohort, landings in [now - 365d, now - 90d), per " +
-			"repository, group and all. added: non-blank prod lines of each counted commit's own -U0 -w patch; surviving: the " +
-			"non-blank prod lines blame -w -M (with the repository's ignore-revs file) attributes to it at HEAD. A cluster is one " +
-			"person's counted commits in one landing and needs at least one added line. Merge commits, ignore-revs commits and " +
-			"revert landings are excluded; a reverted landing stays and scores what blame gives it. Detail: reverted_landings.",
+			"repository, group and all. added: non-blank prod lines of each counted commit's own -U0 -w patch, on files blame " +
+			"read; surviving: the non-blank prod lines blame -w -M (with the repository's ignore-revs file) attributes to it at " +
+			"HEAD. Lines added to a file whose blame failed, or to a path the history renamed into one, have unknown survival and " +
+			"are in neither part. A cluster is one person's counted commits in one landing and needs at least one added line. " +
+			"Merge commits, ignore-revs commits and revert landings are excluded; a reverted landing stays and scores what blame " +
+			"gives it. Detail: reverted_landings.",
 		Ranked:      true,
 		Eligibility: "At least 10 clusters in the cohort (open decision 5).",
 		BlindSpots: "A planned replacement of correct code looks not durable. Moves across files credit the mover; a move inside " +
@@ -47,7 +51,7 @@ func (durableV1) compute(v *view) ([]domain.MetricValue, error) {
 		for _, s := range k.repo.scopes {
 			a := lookup(accs, personKey{s, k.person})
 			a.surviving += k.surviving
-			a.added += k.added
+			a.added += k.traced
 			a.n++
 			if k.landing.reverted {
 				a.reverted++
@@ -75,18 +79,19 @@ func (durableV1) Clusters(in *Input, scope domain.Scope) (RankInput, error) {
 		Window:  v.window(cohortFrom, cohortTo),
 		Options: rank.Options{MinN: minClusters},
 		Data: rankData(v, durableClusters(v), func(k *cluster) rank.Cluster {
-			return rank.Cluster{Change: k.landing.sha, Num: float64(k.surviving), Den: float64(k.added)}
+			return rank.Cluster{Change: k.landing.sha, Num: float64(k.surviving), Den: float64(k.traced)}
 		}),
 	}, nil
 }
 
-// durableClusters returns the cohort's clusters that added a prod line: a
-// landing that adds none (a pure rename, a whitespace-only or a test-only
-// change) says nothing about durability.
+// durableClusters returns the cohort's clusters that added a prod line on a
+// file blame read: a landing that adds none (a pure rename, a
+// whitespace-only or a test-only change) says nothing about durability, and
+// neither does one whose added lines are all on files whose blame failed.
 func durableClusters(v *view) []*cluster {
 	var out []*cluster
 	for _, k := range changeClusters(v, v.window(cohortFrom, cohortTo), true, false) {
-		if k.added > 0 {
+		if k.traced > 0 {
 			out = append(out, k)
 		}
 	}
