@@ -166,7 +166,7 @@ Why each row is what it is:
 
 - **Bob, 11.** The merge's first-parent diff adds `side.py` (2) and `side_week.py` (7), which is 9. It does not add `main_only.py`, which is already on the first parent. Delta adds 2.
   - `--no-merges` drops the merge and keeps Cara's October commit, so Cara appears and Bob's 11 becomes 2.
-  - `-m` without `--diff-merges=first-parent` adds the second parent's 5 lines, so Bob becomes 16.
+  - `-m` alone changes nothing on 2.50.1: under `--first-parent` it still yields the first-parent diff, so Bob stays 11. Dropping `--first-parent` as well diffs the merge against its second parent too, which adds `main_only.py`'s 5 lines, so Bob becomes 16, and the walk reaches Cara's October commit, so Cara appears with 7.
 - **Cara absent.** Her February commit is outside the window, and her October commit is not on the first-parent walk; its 7 lines are part of Bob's merge diff. Gina and Hank are absent too.
 - **Erin, 1.** With default rename detection, her row is 1 insertion and 0 deletions on `new_name.py`. `--no-renames` would record a full-file add. Storing the raw `old_name.py => new_name.py` string would fail classification.
 - **Frank, 3.** Numstat counts 3 insertions, but only 2 of his lines are non-blank. A week counter that skips blanks fails here. Frank's still-here count is 2.
