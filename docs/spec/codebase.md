@@ -357,12 +357,12 @@ func Classify(p *policy.Policy, in Input) domain.PathClass
 func Role(p *policy.Policy, path string) domain.Role // path and extension rules only
 
 // collect
-func Discover(ctx context.Context, git domain.GitRunner, paths []string) (*Discovery, error)
+func Discover(ctx context.Context, git domain.GitRunner, paths []string) (*Discovery, error) // an error only when ctx ends
 type Discovery struct {
-	Repos    []domain.Repo    // health-checked, duplicates removed, sorted by Key
-	Groups   []domain.Group
-	Warnings []domain.Warning
-	Failed   []domain.FileError // PATH slots that were neither a repo nor a group
+	Repos    []domain.Repo      // health-checked, duplicates removed, sorted by Key
+	Groups   []domain.Group     // sorted by Name
+	Warnings []domain.Warning   // duplicate-repo, shallow-clone, partial-clone; sorted by Repo, Code, Message
+	Failed   []domain.FileError // paths that gave no repository, sorted by Path: a PATH slot that was neither a repo nor a group, or a repo (named or a group's member) git cannot read or whose default branch has no commit
 }
 type PathAt struct{ Commit, Path string } // a path in the tree of a commit that touched it
 // ClassifyPaths: every path at Head, plus each touched path Head no longer has, sized at its Commit.
