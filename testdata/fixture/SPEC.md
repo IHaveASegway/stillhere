@@ -198,11 +198,11 @@ The headline counts `prod` non-blank lines only.
   - `authors_in_prefix` = 2, `bots_in_prefix` = 0.
 - **Excluded files.** No headline lines come from `tests/test_service.py`, `go.sum`, `vendor/lib.py`, `vendor/new.py`, `gen_out.py`, `bootstrap/cache/config.php`, `notes.csv` or `extra.csv`.
   - A segment check that compares one path component to `bootstrap/cache` leaves the PHP file in `prod`, and Ada's 10 becomes 14.
-  - Dropping the mailmap splits Ada's January `ada@other.example` lines into a second person, which fails her 10.
+  - Dropping the mailmap splits the 3 lines Ada wrote as `ada@other.example` (gamma's 2 in January, `ada_week.py`'s 1 in October) into a second person, leaving 7 at `ada@example.com`, which fails her 10.
 
 ## Change oracles (M1, `TestChangeOracles`)
 
-These values were derived by hand from the History table and the definitions in [metrics.md](../../docs/metrics.md#change-facts-shared-by-durable1-and-simplifying1), then confirmed with plain git 2.50.1: `log -p -U0 -w`, `blame -w -M --line-porcelain`, `rev-list L^1..L` and `log --grep`. The commands and their output are in the pull request for issue #3. No stillhere code produced any of them.
+These values were derived by hand from the History table and the definitions in [metrics.md](../../docs/metrics.md#change-facts-shared-by-durable1-and-simplifying1), then confirmed with plain git 2.50.1: `log -p -U0 -w`, `blame -w -M --line-porcelain`, `rev-list L^1..L` and `log --grep`. The commands and their output are in the pull request for issue #3. No stillhere code produced any of them. An independent audit re-derived every value here and in the [sibling fixture](#sibling-fixture) from the definitions as amended on 2026-10-14, which credit blamed lines like commits, and re-ran the commands with plain git and through `gitcli.Runner`. It changed no number; its pull request holds the evidence.
 
 With `--now 2026-10-07T00:00:00Z`, every window is half-open and starts and ends at 00:00:00Z:
 
@@ -237,7 +237,7 @@ Assert values, not display order. Ratios are exact fractions; three decimals are
 | 15 | 2026-10-06 19:00 | `d0087c6` | itself, Ivy | 0 (`test` role, unclassified) | 0 | 0 |
 | 16 | 2026-10-06 20:00 | `4631a8b` | itself, Jules | 0 (unclassified) | 0 | 0 |
 
-Rows 1–7 are the `durable@1` cohort, and rows 8–16 are the 90-day window. Row 1's other paths add nothing: `tests/test_service.py` is `test`, and `go.sum`, `vendor/lib.py`, `gen_out.py` and `bootstrap/cache/config.php` (23 lines together) are denied. `app.py` and `old_name.py` are absent at HEAD, so path rules alone make them `prod`.
+Rows 1–7 are the `durable@1` cohort, and rows 8–16 are the 90-day window. Row 1's other paths add nothing: `tests/test_service.py` is `test`, and `go.sum`, `vendor/lib.py`, `gen_out.py` and `bootstrap/cache/config.php` (23 lines together) are denied. `app.py` and `old_name.py` are absent at HEAD, so each is classified at the newest commit that added lines to it (`632247d` for `app.py`, `5ea16a9` for `old_name.py`), without the header sniff ([metrics.md](../../docs/metrics.md#change-facts-shared-by-durable1-and-simplifying1)): both are `prod`.
 
 ### durable@1 (main fixture)
 
@@ -299,11 +299,11 @@ Per repository. The root is the only area that holds `prod` lines, so its value 
 | Surviving `prod` lines | Lines |
 | --- | --- |
 | Held by people: the still-here table without the bot | 34 |
-| Whose author has a landing in `[2026-04-10, 2026-10-07)`: Ada 10, Cara 9, Bob 7, Frank 2, Dana 1, Erin 1 | 30 |
-| Whose author has none: Gina 2 (last landing 2026-01-06), Hank 2 (2026-01-07) | 4 |
+| Whose credited person has a landing in `[2026-04-10, 2026-10-07)`: Ada 10, Cara 9, Bob 7, Frank 2, Dana 1, Erin 1 | 30 |
+| Whose credited person has none: Gina 2 (last landing 2026-01-06), Hank 2 (2026-01-07) | 4 |
 | **`knowledge_loss@1`** | **4 / 34 = 0.118** |
 
-GitHub Copilot's 3 lines belong to a bot and are in neither count.
+GitHub Copilot's 3 lines are credited to a bot, because its commit names no co-author, and are in neither count. No commit in the main fixture has a co-author, so here the credited person is always the blame author.
 
 - **Cara is active** through the landing map: row 8 landed her commits on 2026-10-06. She has no first-parent landing of her own.
 - **Ada is one person.** Her 2026-10-06 landing is authored as `ada@other.example`, and the mailmap folds it into the address that holds her 10 lines.
