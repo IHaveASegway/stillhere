@@ -46,6 +46,11 @@ const (
 	majorityPercent = 50  // majority_owner@1: at least half of a file's lines
 )
 
+// warnShallowWindow is the warning the history collector gives a shallow
+// clone whose boundary falls inside the window it collected, or cuts a
+// landing's commit map there (docs/spec/discovery.md#clone-health).
+const warnShallowWindow = "shallow-window"
+
 // view is the projection of one FactSet.
 type view struct {
 	now   time.Time
@@ -59,6 +64,9 @@ type repoView struct {
 	key, group string
 	scopes     []domain.Scope // the scopes it belongs to: its repo, its group, all
 	history    domain.Window  // the landing window the history covers (RepoFacts.History)
+	// cut is true when a shallow clone's boundary cuts the history (warning
+	// shallow-window): landings before the boundary are missing.
+	cut bool
 	// lines is true when blame ran (RepoFacts.LineFacts), so surviving
 	// lines are known; without it they are unknown, not zero.
 	lines bool
@@ -152,6 +160,7 @@ func newRepoView(f *domain.RepoFacts, who *identity.Directory) *repoView {
 		key:     f.Repo.Key,
 		group:   f.Repo.Group,
 		history: f.History,
+		cut:     slices.ContainsFunc(f.Warnings, func(w domain.Warning) bool { return w.Code == warnShallowWindow }),
 		lines:   f.LineFacts,
 		patches: !f.Repo.Partial,
 		role:    make(map[string]domain.Role, len(f.Paths)),
@@ -321,13 +330,23 @@ func (r *repoView) indexLines(f *domain.RepoFacts, who *identity.Directory) {
 	}
 }
 
-// covers reports whether the repository's history holds every landing in w.
-// A week run's history spans only its own days, so a 365-day share computed
-// from it would be a week's share under a year's label: such a repository
-// contributes nothing to a window it does not cover. An unset history (zero
-// window) is trusted as covering everything.
+// covers reports whether the repository's history holds every landing in w,
+// as a count, a sum or a share over w needs. A week run's history spans
+// only its own days, so a 365-day share computed from it would be a week's
+// share under a year's label: such a repository contributes nothing to a
+// window it does not cover. A history a shallow boundary cuts covers no
+// window: the warning does not say where the boundary is, so no window can
+// be trusted to start after it. An unset history (zero window) is trusted
+// as covering everything.
+//
+// Activity needs no coverage (view.active, landings_365d, who_knows@1's
+// recent landers): a landing seen in a window proves activity however much
+// history is missing, so it counts wherever it is seen.
 func (r *repoView) covers(w domain.Window) bool {
-	if r.history == (domain.Window{}) {
+	switch {
+	case r.cut:
+		return false
+	case r.history == (domain.Window{}):
 		return true
 	}
 	return !r.history.Since.After(w.Since) && !r.history.Until.Before(w.Until)
@@ -387,13 +406,13 @@ func (v *view) block(t time.Time) int {
 // active returns the people credited with any commit, merge commits
 // included, in a landing within w, in any repository of the view: "has had
 // a landing" in docs/metrics.md. Through the landing map, a side-branch
-// author is active when the branch lands, whoever merged it.
+// author is active when the branch lands, whoever merged it. Every landing
+// seen in w counts, whether or not the history covers all of w: skipping a
+// repository whose history is short would report its active people as
+// gone.
 func (v *view) active(w domain.Window) map[string]bool {
 	out := make(map[string]bool)
 	for _, r := range v.repos {
-		if !r.covers(w) {
-			continue
-		}
 		for _, l := range r.landings {
 			if !w.Contains(l.time) {
 				continue

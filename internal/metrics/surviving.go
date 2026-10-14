@@ -48,11 +48,10 @@ func (m survivingV1) Compute(in *Input) ([]domain.MetricValue, error) { return c
 
 func (survivingV1) compute(v *view) ([]domain.MetricValue, error) {
 	year := v.window(yearDays, 0)
-	landings := make(map[personKey]int) // landings_365d, through the landing map
+	// landings_365d, through the landing map. It is activity, so every
+	// landing seen in the year counts, covered or not (repoView.covers).
+	landings := make(map[personKey]int)
 	for _, r := range v.repos {
-		if !r.covers(year) {
-			continue
-		}
 		for _, l := range r.landings {
 			if !year.Contains(l.time) {
 				continue

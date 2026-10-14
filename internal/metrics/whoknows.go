@@ -110,8 +110,10 @@ func whoKnows(v *view, r *repoView, prefix string, w domain.Window) []domain.Met
 			people[email].majority++
 		}
 	}
+	// Recent landers are activity: every landing seen in w counts, however
+	// much of w the history covers (repoView.covers).
 	for _, l := range r.landings {
-		if !r.covers(w) || !w.Contains(l.time) {
+		if !w.Contains(l.time) {
 			continue
 		}
 		var landers []string
