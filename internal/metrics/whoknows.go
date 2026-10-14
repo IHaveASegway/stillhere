@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
+	"github.com/IHaveASegway/stillhere/internal/redact"
 )
 
 // whoKnowsV1 is who_knows@1: a routing answer for one path, not a rank. It
@@ -54,16 +55,19 @@ func (whoKnowsV1) compute(*view) ([]domain.MetricValue, error) { return nil, nil
 // path prefix such as "src", "src/" or "src/pay.go" ("" or "." for the whole
 // repository), in the repository whose Repo.Key is repo, or in every
 // repository when repo is "". A prefix matches whole path segments: "src"
-// covers src/pay.go but not srcutil/x.go. An unknown repo key wraps
-// domain.ErrNotFound; a prefix nothing is known under gives no values.
+// covers src/pay.go but not srcutil/x.go. A repo that is no key is matched
+// by its scrubbed form (redact.URL), so a remote pasted with its credentials
+// finds its repository; one that matches neither wraps domain.ErrNotFound.
+// A prefix nothing is known under gives no values.
 func WhoKnows(in *Input, repo, prefix string) ([]domain.MetricValue, error) {
 	if in == nil || in.Facts == nil {
 		return nil, errNoFacts
 	}
-	if repo != "" && !slices.ContainsFunc(in.Facts.Repos, func(f domain.RepoFacts) bool { return f.Repo.Key == repo }) {
-		return nil, fmt.Errorf("metrics: who_knows@1: repository %q: %w", repo, domain.ErrNotFound)
+	key, err := repoKey(in.Facts, repo)
+	if err != nil {
+		return nil, err
 	}
-	v, err := newView(in, func(f *domain.RepoFacts) bool { return repo == "" || f.Repo.Key == repo })
+	v, err := newView(in, func(f *domain.RepoFacts) bool { return key == "" || f.Repo.Key == key })
 	if err != nil {
 		return nil, err
 	}
@@ -74,6 +78,29 @@ func WhoKnows(in *Input, repo, prefix string) ([]domain.MetricValue, error) {
 		out = append(out, whoKnows(v, r, clean, w)...)
 	}
 	return sorted(out), nil
+}
+
+// repoKey returns the Repo.Key that repo names: repo itself when it is a
+// key, else the key its scrubbed form is, since a key is a scrubbed origin
+// URL (or "local:" and a name). "" names every repository. The not-found
+// error quotes the scrubbed form only: the argument comes from the command
+// line or an MCP client and may hold a token, and the error is printed and
+// may be logged (docs/spec/git-invocation.md#url-scrubbing).
+func repoKey(fs *domain.FactSet, repo string) (string, error) {
+	if repo == "" {
+		return "", nil
+	}
+	known := func(key string) bool {
+		return slices.ContainsFunc(fs.Repos, func(f domain.RepoFacts) bool { return f.Repo.Key == key })
+	}
+	if known(repo) {
+		return repo, nil
+	}
+	scrubbed := redact.URL(repo)
+	if known(scrubbed) {
+		return scrubbed, nil
+	}
+	return "", fmt.Errorf("metrics: who_knows@1: repository %q: %w", scrubbed, domain.ErrNotFound)
 }
 
 // cleanPrefix returns a repo-relative prefix without leading or trailing

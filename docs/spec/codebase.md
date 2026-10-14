@@ -437,7 +437,9 @@ func All() []Metric                                    // stable order: the regi
 func Lookup(id string) (Metric, error)                 // an unknown id is a *domain.UsageError
 func Compute(in *Input) ([]domain.MetricValue, error) // every metric, sorted: what a scan stores
 // WhoKnows answers who_knows@1 for the code under a repo-relative path prefix ("" is the root) in one repository,
-// or in all when repo is ""; per query, never stored by a scan. An unknown repo key wraps domain.ErrNotFound.
+// or in all when repo is ""; per query, never stored by a scan. A repo that is no key is matched by its
+// redact.URL form, so a remote pasted with credentials finds its repository; a repo that matches no key either
+// way wraps domain.ErrNotFound, and the error quotes only the scrubbed form.
 func WhoKnows(in *Input, repo, prefix string) ([]domain.MetricValue, error)
 // PersonalAIShare answers ai_assisted@1's share for one person (email: canonical) in every scope they have a
 // cluster in; per query, never part of Compute or stored by a scan, because ADR 0007 shows it only to that
