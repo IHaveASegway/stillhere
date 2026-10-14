@@ -548,6 +548,7 @@ Exit codes are in [report-json.md](report-json.md#exit-codes): 0 when any repo p
 
 - Time comes from `--now` (default: the wall clock in UTC, read once in `cli`). No other code reads the clock except to measure `timings`.
 - Every slice is sorted before it is stored or printed, map keys are sorted, and bootstrap seeds derive from inputs. Two runs on the same inputs produce byte-identical JSON once `timings` is removed.
+- Inside the core an empty slice or map is `nil`, never an allocated empty one: a root commit's `Parents`, a repo without warnings, a `Detail` with no context numbers. Producers return `nil` and the store loads `nil`, so `LoadFacts(PutRepoFacts(x)) == x` is plain `reflect.DeepEqual`. Renderers print `nil` as `[]` or `{}`, never `null` ([report-json.md](report-json.md#rules-that-carry-forward-whatever-the-format)).
 
 ### Security
 
