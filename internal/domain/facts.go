@@ -27,7 +27,7 @@ type Group struct {
 // Warning is a condition that degraded a run without failing it, such as a
 // duplicate or shallow clone.
 type Warning struct {
-	Code    string // duplicate-repo, shallow-clone, shallow-window, partial-clone, numstat-rename, excluded-repo, ...
+	Code    string // duplicate-repo, shallow-clone, shallow-window, partial-clone, numstat-rename, excluded-repo, ignore-revs, ...
 	Message string // already scrubbed
 	Repo    string // Repo.Key; "" for run-level warnings
 }
@@ -131,7 +131,7 @@ type LineOwner struct {
 type IgnoreRevs struct {
 	Source string   // IgnoreRevsRoot, IgnoreRevsCLI or ""
 	SHA256 string   // of the file's bytes; "" when Source is ""
-	Revs   []string // full SHAs the file lists, lowercased and sorted; durable@1 and simplifying@1 exclude these commits
+	Revs   []string // the commits git blame ignores: each listed ID that names a commit, or an annotated tag of one (peeled), lowercased and sorted; durable@1 and simplifying@1 exclude these commits
 }
 
 // The sources of an ignore-revs file (docs/spec/blame-collector.md).
@@ -166,7 +166,7 @@ type RepoFacts struct {
 	Reverts     []Revert
 	LineFacts   bool // blame ran (false for week runs, shallow and partial clones)
 	Owners      []LineOwner
-	IgnoreRevs  IgnoreRevs
+	IgnoreRevs  IgnoreRevs // scan runs, shallow and partial clones included (collect.Blame with no paths resolves it)
 	BlameErrors []FileError
 }
 

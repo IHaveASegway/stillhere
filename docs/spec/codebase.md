@@ -49,7 +49,7 @@ Every module is code someone must keep current, so each one says why it beat the
 | `github.com/spf13/cobra` | `cli` | The convention of the CLIs stillhere sits beside (gh, kubectl, Helm, golangci-lint, GoReleaser), so its help layout, `completion` command and code are familiar to users and contributors. Man pages come from `cobra/doc`; Charm's fang can polish the help later. | `github.com/urfave/cli/v3`: a `context.Context` in every action, flag values from environment variables, no dependencies, and far more active (100+ commits in the six months to 2026-10-14, against cobra's 5). Since v3 it parses flags after arguments exactly as cobra does (tested on v3.14.0). Switching rewrites `cli` and nothing else. |
 | `github.com/BurntSushi/toml` | `policy` | A TOML 1.0 decoder with no dependencies; a policy file is small, so decoding speed does not matter. | `github.com/pelletier/go-toml/v2` |
 | `modernc.org/sqlite` | `sqlite` | SQLite without cgo, so the binary stays static and cross-compiles ([architecture.md](../architecture.md)). | `github.com/mattn/go-sqlite3`, which needs cgo |
-| `golang.org/x/sync` | `collect`, `app` | `errgroup` with `SetLimit` bounds the number of git processes ([Concurrency](#concurrency)). | a hand-written semaphore |
+| `golang.org/x/sync` | `collect`, `app` | `errgroup` with `SetLimit` bounds the number of git processes, and `semaphore` holds the blame slots every repo shares (`collect.BlameSlots`) ([Concurrency](#concurrency)). | a hand-written semaphore |
 | `github.com/cli/go-gh/v2` (M2, #14) | `github` | gh's own auth and API client, so a user's `gh auth login` works unchanged. | `github.com/google/go-github` with our own token handling |
 | `github.com/modelcontextprotocol/go-sdk` (M4, #15) | `mcp` | The official MCP SDK ([ADR 0006](../adr/0006-ai-mcp-and-narrated-highlights.md)). | `github.com/mark3labs/mcp-go` |
 
@@ -79,7 +79,7 @@ type Group struct {
 }
 
 type Warning struct {
-	Code    string // duplicate-repo, shallow-clone, shallow-window, partial-clone, numstat-rename, excluded-repo, ...
+	Code    string // duplicate-repo, shallow-clone, shallow-window, partial-clone, numstat-rename, excluded-repo, ignore-revs, ...
 	Message string // already scrubbed
 	Repo    string // Repo.Key; "" for run-level warnings
 }
@@ -144,7 +144,7 @@ type LineOwner struct {
 type IgnoreRevs struct {
 	Source string   // "root", "cli" or ""
 	SHA256 string
-	Revs   []string // full SHAs the file lists, lowercased and sorted; durable@1 and simplifying@1 exclude these commits
+	Revs   []string // the commits git blame ignores: each listed ID that names a commit, or an annotated tag of one (peeled), lowercased and sorted; durable@1 and simplifying@1 exclude these commits
 }
 
 type FileError struct{ Path, Message string }
@@ -166,7 +166,7 @@ type RepoFacts struct {
 	Reverts     []Revert
 	LineFacts   bool        // blame ran (false for week runs, shallow and partial clones)
 	Owners      []LineOwner
-	IgnoreRevs  IgnoreRevs
+	IgnoreRevs  IgnoreRevs  // scan runs, shallow and partial clones included (collect.Blame with no paths resolves it)
 	BlameErrors []FileError
 }
 
@@ -384,17 +384,20 @@ type HistoryFacts struct {
 	Warnings    []domain.Warning
 }
 type BlameOptions struct {
-	Paths          []string              // classified paths at Head that received a role
+	Paths          []string              // classified paths at Head that received a role; none: only resolve IgnoreRevs, which a scan does for a repo whose line facts it skips (shallow, partial)
 	IgnoreRevsFile string                // CLI override; single-repo runs only; an unreadable or malformed file is a *domain.UsageError
-	Slots          chan struct{}         // shared by every repo: make(chan struct{}, jobs), left empty; Blame sends to take a slot per running git blame and receives to free it
+	Slots          *BlameSlots           // NewBlameSlots(jobs), shared by every repo; nil is an error
 	Timeout        time.Duration         // per file; 0 means 120 s
 	Progress       func(done, total int) // after every 1,000th file and after the last
 }
+type BlameSlots struct{ /* a golang.org/x/sync semaphore; only Blame takes and frees slots */ }
+func NewBlameSlots(n int) *BlameSlots // n git blame processes at once, across the run; below 1 means 1
 func Blame(ctx context.Context, git domain.GitRunner, repo domain.Repo, opt BlameOptions) (*BlameFacts, error)
 type BlameFacts struct {
 	Owners     []domain.LineOwner // sorted by Path, then Commit; CoAuthors from coAuthors
-	IgnoreRevs domain.IgnoreRevs  // the list blame used
-	Errors     []domain.FileError // per file, sorted by Path; a root ignore-revs file not used whole is one too
+	IgnoreRevs domain.IgnoreRevs  // the list blame used: exactly the commits git ignored
+	Errors     []domain.FileError // one per blamed path that failed, sorted by Path; RepoFacts.BlameErrors
+	Warnings   []domain.Warning   // at most one, Code "ignore-revs": the root file was not used, or not whole; the caller adds it to RepoFacts.Warnings
 }
 
 // identity
@@ -572,7 +575,7 @@ Exit codes are in [report-json.md](report-json.md#exit-codes): 0 when any repo p
 
 ### Concurrency
 
-- `golang.org/x/sync/errgroup` with `SetLimit` for fan-out, and one blame slot channel shared across repos, so the number of git processes stays bounded on large machines.
+- `golang.org/x/sync/errgroup` with `SetLimit` for fan-out, and one `collect.BlameSlots` (a `golang.org/x/sync` semaphore) shared across repos, so the number of git processes stays bounded on large machines.
 - Every goroutine is waited for; every I/O call takes the caller's `context.Context`; `cmd/stillhere` cancels it on SIGINT, SIGTERM and SIGHUP (unless SIGHUP is ignored, as under `nohup`), then ends with that signal.
 - Large git outputs are streamed (`GitRunner.Stream`), never buffered whole. Line readers allow long lines (generated files have megabyte lines).
 
@@ -598,7 +601,7 @@ Exit codes are in [report-json.md](report-json.md#exit-codes): 0 when any repo p
 
 Issues are built in parallel branches, so a shared package or file needs a rule that keeps two branches from colliding, or from compiling apart and failing only at merge.
 
-- **`collect` is shared by #4, #5, #6 and #7.** Each collector's unexported identifiers carry its prefix (`discover…`, `classify…`, `history…`, `blame…`). The readers every collector needs are in `scan.go` (`newScanner`, which allows long lines, and `scanNUL` for `-z` output), and the test helper in `collect_test.go` (`newRunner`, a real `gitcli.Runner`). The co-author reader `coAuthors` is in `coauthors.go`: #6 implements it, and #7 calls it for the commits blame attributes lines to, which can be older than any history window. The package has at most one `TestMain`, and it goes in `collect_test.go`.
+- **`collect` is shared by #4, #5, #6 and #7.** Each collector's unexported identifiers carry its prefix (`discover…`, `classify…`, `history…`, `blame…`). The readers every collector needs are in `scan.go` (`newScanner`, which allows long lines, `scanNUL` for `-z` output, and `nonBlank`, the one non-blank predicate that the history and blame collectors both count with), and the test helper in `collect_test.go` (`newRunner`, a real `gitcli.Runner`). The co-author reader `coAuthors` is in `coauthors.go`: #6 implements it, and #7 calls it for the commits blame attributes lines to, which can be older than any history window. The package has at most one `TestMain`, and it goes in `collect_test.go`.
 - **Files that belong to one issue.** #14: `domain/forge.go`, `sqlite/forge.go`, `cli/forge.go`, `app/sync.go`. #15: `app/mcp.go`, `cli/mcp.go`, `internal/mcp`. #5: everything in `policy` but `types.go`, which is this file's contract.
 - **Shared documents.** Each issue edits only the sections its scope names: in [metrics.md](../metrics.md), the entries of the metrics it builds or derives oracles for; in this file, the signatures it changes; in [report-json.md](report-json.md), the shape (#11). Where two branches still touch the same lines, #13 resolves them when it merges, as it does `go.mod` and `go.sum`.
 

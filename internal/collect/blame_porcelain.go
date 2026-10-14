@@ -54,8 +54,9 @@ const (
 //     boundary, and the "ignored" and "unblamable" marks that a repository's
 //     own blame.markIgnoredLines and blame.markUnblamableLines add.
 //   - The content is the record's line after a tab. It adds one line to the
-//     record's commit when anything but whitespace follows the tab
-//     (non-blank is strip() != "", docs/metrics.md).
+//     record's commit when it is non-blank (nonBlank, scan.go: a rune
+//     outside Unicode's White_Space, docs/metrics.md), the predicate the
+//     history collector counts added lines with.
 //
 // author-mail is already mailmapped by git; its angle brackets are removed
 // and it is lowercased, the canonical key. Output that breaks this grammar
@@ -78,7 +79,7 @@ func blameParse(r io.Reader, path string) ([]domain.LineOwner, error) {
 			if cur.seen != blameSeenAuthor {
 				return nil, fmt.Errorf("porcelain line %d: content before its commit's author keys", n)
 			}
-			if len(bytes.TrimSpace(line[1:])) > 0 {
+			if nonBlank(line[1:]) {
 				cur.lines++
 			}
 			cur = nil

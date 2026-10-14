@@ -11,6 +11,8 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/semaphore"
+
 	"github.com/IHaveASegway/stillhere/internal/domain"
 	"github.com/IHaveASegway/stillhere/internal/redact"
 )
@@ -27,20 +29,20 @@ const blameProgressEvery = 1000
 type BlameOptions struct {
 	// Paths are the classified paths at Head that received a role. Each is
 	// blamed once, however often it is listed; a path Head does not have
-	// fails like any other file.
+	// fails like any other file. With no paths, Blame blames nothing and
+	// only resolves IgnoreRevs. A scan calls it that way for a repository
+	// whose line facts it skips (a shallow or partial clone), so durable@1
+	// and simplifying@1 still exclude the commits the list names and a bad
+	// IgnoreRevsFile is still a usage error.
 	Paths []string
 	// IgnoreRevsFile is the --ignore-revs-file override, for single-repo
 	// runs only: it replaces the repository's own .git-blame-ignore-revs.
 	// A file that cannot be read, or that holds a line that is not a full
 	// commit ID, is a *domain.UsageError.
 	IgnoreRevsFile string
-	// Slots bounds the git blame processes of a whole run: one buffered
-	// channel, created empty with one slot per blame allowed at once
-	// (make(chan struct{}, jobs)) and shared by every repository. Blame
-	// sends to take a slot before each git blame starts and receives to
-	// free it when that git blame ends. A nil or unbuffered channel is an
-	// error, because it would block forever.
-	Slots chan struct{}
+	// Slots bounds the git blame processes of a whole run: one
+	// NewBlameSlots(jobs), shared by every repository. Nil is an error.
+	Slots *BlameSlots
 	// Timeout bounds one file's blame; zero means 120 s.
 	Timeout time.Duration
 	// Progress, when not nil, is called after every 1,000th file and after
@@ -49,11 +51,49 @@ type BlameOptions struct {
 	Progress func(done, total int)
 }
 
+// BlameSlots bounds the git blame processes of a whole run, across every
+// repository that shares it. Blame takes a slot before it starts a file's
+// git blame, and before the goroutine that runs it, and frees the slot when
+// that git blame exits. Only Blame takes and frees slots, so a caller cannot
+// get the protocol wrong: the type owns it.
+//
+// It wraps golang.org/x/sync's weighted semaphore, which ends a wait when
+// its context does and serves waiters in arrival order, so repositories
+// that share the slots take turns.
+type BlameSlots struct {
+	sem *semaphore.Weighted
+}
+
+// NewBlameSlots returns n slots, the number of git blame processes a run
+// may have at once; an n below 1 means 1.
+func NewBlameSlots(n int) *BlameSlots {
+	return &BlameSlots{sem: semaphore.NewWeighted(int64(max(n, 1)))}
+}
+
+// acquire takes one slot, or returns false when ctx ends first.
+func (s *BlameSlots) acquire(ctx context.Context) bool {
+	if s.sem.Acquire(ctx, 1) != nil {
+		return false
+	}
+	if ctx.Err() != nil {
+		s.sem.Release(1) // taken as ctx ended: start no more blames
+		return false
+	}
+	return true
+}
+
+// release frees a slot that acquire took.
+func (s *BlameSlots) release() { s.sem.Release(1) }
+
 // BlameFacts is what Blame learned about one repository.
 type BlameFacts struct {
 	Owners     []domain.LineOwner // sorted by Path, then Commit
-	IgnoreRevs domain.IgnoreRevs  // the ignore-revs list blame used
-	Errors     []domain.FileError // sorted by Path; messages scrubbed and truncated
+	IgnoreRevs domain.IgnoreRevs  // the ignore-revs list blame used: exactly the commits git ignored
+	Errors     []domain.FileError // one per blamed path that failed, sorted by Path; messages scrubbed and truncated
+	// Warnings holds at most one warning, with code "ignore-revs": the
+	// repository's own .git-blame-ignore-revs was not used, or not whole.
+	// The caller adds it to RepoFacts.Warnings.
+	Warnings []domain.Warning
 }
 
 // Blame attributes the non-blank lines of every path in opt.Paths at
@@ -64,15 +104,18 @@ type BlameFacts struct {
 //
 // A file is a bulkhead, as a repository is: a blame that fails, times out
 // or prints porcelain that does not parse adds a FileError, and the other
-// files continue. Blame returns an error only for the repository as a
-// whole: its ignore-revs file or its co-authors cannot be read, the
-// ignore-revs list cannot be written, or ctx ends. Then errors.Is(err,
-// context.Canceled) tells a cancelled run, which should stop, from a failed
-// repository, which should not. The temporary ignore-revs list is removed
-// before Blame returns, whatever it returns.
+// files continue. A problem with the repository's own ignore-revs file is a
+// warning, and blame goes on without the lines or the file it could not
+// use. Blame returns an error only for the repository as a whole:
+// IgnoreRevsFile is unusable (a *domain.UsageError), Head's tree cannot be
+// listed, the listed IDs cannot be resolved to commits, the co-authors
+// cannot be read, the ignore-revs list cannot be written, or ctx ends. Then
+// errors.Is(err, context.Canceled) tells a cancelled run, which should
+// stop, from a failed repository, which should not. The temporary
+// ignore-revs list is removed before Blame returns, whatever it returns.
 func Blame(ctx context.Context, git domain.GitRunner, repo domain.Repo, opt BlameOptions) (*BlameFacts, error) {
-	if cap(opt.Slots) == 0 {
-		return nil, errors.New("collect.Blame: BlameOptions.Slots must be a buffered channel")
+	if opt.Slots == nil || opt.Slots.sem == nil {
+		return nil, errors.New("collect.Blame: BlameOptions.Slots must come from NewBlameSlots")
 	}
 	if !blameIsObjectID(repo.Head, 40) && !blameIsObjectID(repo.Head, 64) {
 		return nil, fmt.Errorf("collect.Blame: Repo.Head %q is not a full commit ID", repo.Head)
@@ -83,8 +126,12 @@ func Blame(ctx context.Context, git domain.GitRunner, repo domain.Repo, opt Blam
 		return nil, fmt.Errorf("collect.Blame: %w", err)
 	}
 	facts := &BlameFacts{IgnoreRevs: ignore.revs}
-	if ignore.issue != nil {
-		facts.Errors = append(facts.Errors, *ignore.issue)
+	if ignore.warning != "" {
+		facts.Warnings = []domain.Warning{{
+			Code:    blameIgnoreRevsCode,
+			Message: redact.Message(ignore.warning),
+			Repo:    repo.Key,
+		}}
 	}
 
 	paths := slices.Compact(slices.Sorted(slices.Values(opt.Paths)))
@@ -150,7 +197,7 @@ type blameResult struct {
 // and returns one result per path, in the order of paths. When ctx ends it
 // stops starting blames and leaves the rest of the results empty; the
 // caller checks ctx. Every goroutine it starts has ended before it returns.
-func (b *blamer) all(ctx context.Context, paths []string, slots chan struct{}, progress func(done, total int)) []blameResult {
+func (b *blamer) all(ctx context.Context, paths []string, slots *BlameSlots, progress func(done, total int)) []blameResult {
 	results := make([]blameResult, len(paths))
 	var (
 		wg   sync.WaitGroup
@@ -161,13 +208,13 @@ func (b *blamer) all(ctx context.Context, paths []string, slots chan struct{}, p
 		// Taking the slot before starting the goroutine makes the slots
 		// bound the goroutines as well as the git processes, so a
 		// 50,000-file repository never parks 50,000 goroutines on the
-		// channel (the semaphore in Effective Go, "Channels").
-		if !blameAcquire(ctx, slots) {
+		// semaphore (the semaphore in Effective Go, "Channels").
+		if !slots.acquire(ctx) {
 			break
 		}
 		wg.Go(func() {
 			r := b.file(ctx, path)
-			<-slots // git has exited: free the slot before the bookkeeping
+			slots.release() // git has exited: free the slot before the bookkeeping
 			results[i] = r
 			if progress == nil {
 				return
@@ -182,20 +229,6 @@ func (b *blamer) all(ctx context.Context, paths []string, slots chan struct{}, p
 	}
 	wg.Wait()
 	return results
-}
-
-// blameAcquire takes one of slots, or returns false when ctx ends first.
-func blameAcquire(ctx context.Context, slots chan struct{}) bool {
-	select {
-	case slots <- struct{}{}:
-	case <-ctx.Done():
-		return false
-	}
-	if ctx.Err() != nil {
-		<-slots // select took the slot although ctx had ended: give it back
-		return false
-	}
-	return true
 }
 
 // file blames one path at Head:

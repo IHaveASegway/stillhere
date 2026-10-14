@@ -44,15 +44,18 @@ func TestBlamePorcelain(t *testing.T) {
 			// Ann writes three lines and Ben rewrites the middle one. In
 			// --porcelain, Ann's third line comes back without author lines,
 			// so a parser that carries the previous record's author gives it
-			// to Ben.
+			// to Ben. Ann's commit spells her address Ann@Example.COM, and
+			// git prints it so: the key must still be ann@example.com, as
+			// the history collector lowercases %aE, or one person splits in
+			// two between blame and history.
 			name:  "ann-ben-ann",
 			forms: []string{blameABALinePorcelain, blameABAPorcelain},
 			want: []domain.LineOwner{{
-				Path: "f", Commit: "451620d34153d55c2d7715a7b88b87132e2b19a4",
-				Author: ben, AuthorTime: time.Unix(1767355200, 0).UTC(), Lines: 1,
-			}, {
-				Path: "f", Commit: "494f7fa26ec0eaf3d4ddd56f4e66023dfd7836bb",
+				Path: "f", Commit: "10cb948814dba5f798813e5b31502392922c2766",
 				Author: ann, AuthorTime: time.Unix(1767268800, 0).UTC(), Lines: 2,
+			}, {
+				Path: "f", Commit: "a5203000798708d126f950e9888a4e05421b70b7",
+				Author: ben, AuthorTime: time.Unix(1767355200, 0).UTC(), Lines: 1,
 			}},
 		}} {
 			for i, form := range tc.forms {
@@ -211,25 +214,25 @@ var blameSpecGroup = blamePorcelainText(
 )
 
 // blameABALinePorcelain and blameABAPorcelain are git 2.50.1's blame -w -M
-// of f.py in a two-commit repository: Ann (2026-01-01) writes ann_one,
-// ann_two and ann_three; Ben (2026-01-02) replaces ann_two with ben_two.
-// Captured on 2026-10-14.
+// of f.py in a two-commit repository: Ann <Ann@Example.COM> (2026-01-01)
+// writes ann_one, ann_two and ann_three; Ben <ben@example.com> (2026-01-02)
+// replaces ann_two with ben_two. Captured on 2026-10-14.
 var (
 	blameABALinePorcelain = blamePorcelainText(
-		"494f7fa26ec0eaf3d4ddd56f4e66023dfd7836bb 1 1 1",
+		"10cb948814dba5f798813e5b31502392922c2766 1 1 1",
 		"author Ann",
-		"author-mail <ann@example.com>",
+		"author-mail <Ann@Example.COM>",
 		"author-time 1767268800",
 		"author-tz +0000",
 		"committer Ann",
-		"committer-mail <ann@example.com>",
+		"committer-mail <Ann@Example.COM>",
 		"committer-time 1767268800",
 		"committer-tz +0000",
 		"summary ann writes f.py",
 		"boundary",
 		"filename f.py",
 		"\tann_one = 1",
-		"451620d34153d55c2d7715a7b88b87132e2b19a4 2 2 1",
+		"a5203000798708d126f950e9888a4e05421b70b7 2 2 1",
 		"author Ben",
 		"author-mail <ben@example.com>",
 		"author-time 1767355200",
@@ -239,16 +242,16 @@ var (
 		"committer-time 1767355200",
 		"committer-tz +0000",
 		"summary ben rewrites the middle line",
-		"previous 494f7fa26ec0eaf3d4ddd56f4e66023dfd7836bb f.py",
+		"previous 10cb948814dba5f798813e5b31502392922c2766 f.py",
 		"filename f.py",
 		"\tben_two = 22",
-		"494f7fa26ec0eaf3d4ddd56f4e66023dfd7836bb 3 3 1",
+		"10cb948814dba5f798813e5b31502392922c2766 3 3 1",
 		"author Ann",
-		"author-mail <ann@example.com>",
+		"author-mail <Ann@Example.COM>",
 		"author-time 1767268800",
 		"author-tz +0000",
 		"committer Ann",
-		"committer-mail <ann@example.com>",
+		"committer-mail <Ann@Example.COM>",
 		"committer-time 1767268800",
 		"committer-tz +0000",
 		"summary ann writes f.py",
@@ -257,20 +260,20 @@ var (
 		"\tann_three = 3",
 	)
 	blameABAPorcelain = blamePorcelainText(
-		"494f7fa26ec0eaf3d4ddd56f4e66023dfd7836bb 1 1 1",
+		"10cb948814dba5f798813e5b31502392922c2766 1 1 1",
 		"author Ann",
-		"author-mail <ann@example.com>",
+		"author-mail <Ann@Example.COM>",
 		"author-time 1767268800",
 		"author-tz +0000",
 		"committer Ann",
-		"committer-mail <ann@example.com>",
+		"committer-mail <Ann@Example.COM>",
 		"committer-time 1767268800",
 		"committer-tz +0000",
 		"summary ann writes f.py",
 		"boundary",
 		"filename f.py",
 		"\tann_one = 1",
-		"451620d34153d55c2d7715a7b88b87132e2b19a4 2 2 1",
+		"a5203000798708d126f950e9888a4e05421b70b7 2 2 1",
 		"author Ben",
 		"author-mail <ben@example.com>",
 		"author-time 1767355200",
@@ -280,10 +283,10 @@ var (
 		"committer-time 1767355200",
 		"committer-tz +0000",
 		"summary ben rewrites the middle line",
-		"previous 494f7fa26ec0eaf3d4ddd56f4e66023dfd7836bb f.py",
+		"previous 10cb948814dba5f798813e5b31502392922c2766 f.py",
 		"filename f.py",
 		"\tben_two = 22",
-		"494f7fa26ec0eaf3d4ddd56f4e66023dfd7836bb 3 3 1",
+		"10cb948814dba5f798813e5b31502392922c2766 3 3 1",
 		"\tann_three = 3",
 	)
 )
