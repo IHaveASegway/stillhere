@@ -272,7 +272,14 @@ type FactStore interface {
 }
 ```
 
-M2 adds the forge facts (`ForgeFacts`, pull requests, reviews, login links, watermarks) and their store methods; M4 adds narrations. Each lands with its milestone.
+```go
+// domain/forge.go, filled by the GitHub sync (#14) in M2
+type ForgeFacts struct{}       // pull requests, reviews, login links, watermarks
+type ForgeSource interface{}   // the forge's API: GitHub, later GitLab (ADR 0004)
+type ForgeStore interface{}    // the forge replica in facts.db, upserted by node id with a watermark per repo
+```
+
+The forge ports exist now, empty, so the sync can be built without editing another issue's files: #14 owns `domain/forge.go`, `sqlite/forge.go` (where `*sqlite.Store` implements `ForgeStore`), `cli/forge.go` (which builds the `ForgeSource` adapter) and `app/sync.go`. `ForgeStore` is a port of its own rather than more `FactStore` methods: `FactStore` holds per-run snapshots, while forge facts are a replica that outlives runs ([run model](#run-model)), and a separate port leaves `FactStore` and #8's implementation untouched (Interface Segregation Principle). Store migrations are numbered by `PRAGMA user_version`: 1 is #8's schema, 2 is #14's forge tables. M4 adds narrations the same way.
 
 ## Package APIs
 
@@ -436,11 +443,13 @@ func JSON(w io.Writer, m *Model) error
 
 // app
 type Deps struct {
-	Git     domain.GitRunner
-	Store   domain.FactStore // nil for week
-	Policy  *policy.Policy   // week and scan only; read use cases rebuild the run's own
-	Log     *slog.Logger
-	Version string
+	Git        domain.GitRunner
+	Store      domain.FactStore   // nil for week
+	Forge      domain.ForgeSource // sync only
+	ForgeStore domain.ForgeStore  // sync only: the same *sqlite.Store
+	Policy     *policy.Policy     // week and scan only; read use cases rebuild the run's own
+	Log        *slog.Logger
+	Version    string
 }
 func Week(ctx context.Context, d Deps, r WeekRequest) (*report.Model, error)
 func Scan(ctx context.Context, d Deps, r ScanRequest) (*report.Model, error)

@@ -176,8 +176,9 @@ func (e *env) setup() error {
 // need lists what a command uses: report reads facts.db and runs without
 // git, and only week and scan load a policy file. A command that reads a
 // stored run uses the policy the run recorded (Run.PolicySource), never
-// today's.
-type need struct{ git, policy, store bool }
+// today's. forge, for sync only, builds the GitHub adapter and hands the
+// store over as the forge replica too, so it needs store.
+type need struct{ git, policy, store, forge bool }
 
 // with builds the dependencies a command needs, runs fn with them, and
 // releases them, joining a failure to close the store to fn's error.
@@ -215,6 +216,16 @@ func (e *env) with(ctx context.Context, n need, fn func(app.Deps) error) (err er
 				err = errors.Join(err, fmt.Errorf("closing %s: %w", path, cerr))
 			}
 		}()
+		if n.forge {
+			d.ForgeStore = store
+		}
+	}
+	if n.forge {
+		forge, err := e.forgeSource(ctx)
+		if err != nil {
+			return err
+		}
+		d.Forge = forge
 	}
 	return fn(d)
 }

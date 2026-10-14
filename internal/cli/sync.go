@@ -41,7 +41,7 @@ report.`,
 				}
 				req.Mirrors = filepath.Join(home, "mirrors")
 			}
-			return e.with(cmd.Context(), need{git: true, store: true}, func(d app.Deps) error {
+			return e.with(cmd.Context(), need{git: true, store: true, forge: true}, func(d app.Deps) error {
 				return app.Sync(cmd.Context(), d, req)
 			})
 		},

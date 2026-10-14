@@ -24,11 +24,13 @@ import (
 // Deps are the ports and settings a use case runs with, built by the
 // composition root in internal/cli.
 type Deps struct {
-	Git     domain.GitRunner // nil for commands that only read facts.db
-	Store   domain.FactStore // nil for week
-	Policy  *policy.Policy   // week and scan only; a read use case rebuilds the run's own (policy.FromSource on Run.PolicySource)
-	Log     *slog.Logger
-	Version string // the tool version recorded on every run
+	Git        domain.GitRunner   // nil for commands that only read facts.db
+	Store      domain.FactStore   // nil for week
+	Forge      domain.ForgeSource // sync only: the forge's API
+	ForgeStore domain.ForgeStore  // sync only: the forge replica in facts.db
+	Policy     *policy.Policy     // week and scan only; a read use case rebuilds the run's own (policy.FromSource on Run.PolicySource)
+	Log        *slog.Logger
+	Version    string // the tool version recorded on every run
 }
 
 // WeekRequest asks what landed on the default branch of each repository in

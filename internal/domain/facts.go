@@ -188,8 +188,3 @@ type FactSet struct {
 	Warnings []Warning   // run-level
 	Forge    *ForgeFacts // nil until GitHub data is synced (M2)
 }
-
-// ForgeFacts is the replica of GitHub data (pull requests, reviews, login
-// links and watermarks) that a run read. It is empty until the GitHub sync
-// (#14) adds those facts in M2.
-type ForgeFacts struct{}
