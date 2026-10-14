@@ -1,0 +1,180 @@
+# CI: the checks every change must pass before it merges. Each job is a
+# fitness function for one property the docs promise (Ford, Parsons and Kua,
+# Building Evolutionary Architectures, ch. 2):
+#
+#   lint      the dependency rule (depguard), formatting, a tidy go.mod,
+#             and these workflows themselves
+#   test      the oracles on the oldest git stillhere supports and on the
+#             newest (docs/spec/git-invocation.md#version-floors)
+#   vulncheck no known vulnerability reachable from stillhere's code
+#   release   the release still builds: every archive, the cask and both
+#             images, the moment a change breaks it rather than at tag time
+#
+# Actions are pinned to full commit SHAs, because a tag can be moved to
+# other code; Dependabot (.github/dependabot.yml) proposes updates. Tools
+# run through "go run module@version", which the Go checksum database
+# verifies.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # Weekly, so a new git release or a newly published vulnerability fails
+  # here even in a week without changes.
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+# Read-only by default; no job here publishes anything.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+# An explicit bash runs every step with -eo pipefail, so a failing command
+# on the left of a pipe fails the step.
+defaults:
+  run:
+    shell: bash
+
+env:
+  GORELEASER: github.com/goreleaser/goreleaser/v2@v2.18.3
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # setup-go caches the module and build caches under a key hashed from
+      # cache-dependency-path. Each job lists the files that decide what it
+      # compiles (here the Makefile pins golangci-lint and this file pins
+      # actionlint), so jobs keep separate caches instead of whichever job
+      # finishes first saving one that lacks the others' tools.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod # the toolchain line: go1.27.2
+          cache-dependency-path: |
+            go.sum
+            Makefile
+            .github/workflows/ci.yml
+      - name: go.mod and go.sum are tidy
+        run: go mod tidy -diff
+      - name: golangci-lint, with the depguard rules that encode the dependency rule
+        run: make lint
+      - name: actionlint (shellcheck included) on these workflows
+        run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+      - name: shellcheck on the CI scripts
+        run: shellcheck .github/scripts/*.sh
+
+  test:
+    name: test (git ${{ matrix.git }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        git: [latest, "2.44.0"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - name: Resolve git ${{ matrix.git }}
+        id: git
+        env:
+          WANT: ${{ matrix.git }}
+        run: |
+          .github/scripts/git-from-source.sh resolve "$WANT" | tee -a "$GITHUB_OUTPUT"
+          # The runner image (such as ubuntu24) goes into the cache key: the
+          # build links against its libraries.
+          echo "image=${ImageOS:-unknown}" | tee -a "$GITHUB_OUTPUT"
+      # The cache key names everything the install depends on: the version,
+      # the image and architecture, and the recipe. Restore and save are
+      # separate steps, so a build is cached even when a later test fails.
+      - name: Restore git ${{ steps.git.outputs.version }}
+        id: cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.git.outputs.prefix }}
+          key: git-${{ steps.git.outputs.version }}-${{ steps.git.outputs.image }}-${{ runner.arch }}-${{ hashFiles('.github/scripts/git-from-source.sh') }}
+      - name: Build git ${{ steps.git.outputs.version }} from source
+        if: steps.cache.outputs.cache-hit != 'true'
+        env:
+          VERSION: ${{ steps.git.outputs.version }}
+          PREFIX: ${{ steps.git.outputs.prefix }}
+        run: .github/scripts/git-from-source.sh build "$VERSION" "$PREFIX"
+      - name: Cache git ${{ steps.git.outputs.version }}
+        if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.git.outputs.prefix }}
+          key: ${{ steps.cache.outputs.cache-primary-key }}
+      - name: Put git ${{ steps.git.outputs.version }} first on PATH
+        env:
+          PREFIX: ${{ steps.git.outputs.prefix }}
+        run: echo "$PREFIX/bin" >> "$GITHUB_PATH"
+      # gitcli and the fixture builder run the first git on PATH: fail here,
+      # not with a confusing oracle diff, if that is not the git under test.
+      - name: The git on PATH is git ${{ steps.git.outputs.version }}
+        env:
+          VERSION: ${{ steps.git.outputs.version }}
+        run: |
+          git version
+          test "$(git version)" = "git version $VERSION"
+      - run: go build ./...
+      - run: go vet ./...
+      - name: go test -race (make test)
+        run: make test
+
+  vulncheck:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: | # ci.yml pins govulncheck
+            go.sum
+            .github/workflows/ci.yml
+      # Reports only vulnerabilities in code stillhere can reach, the
+      # standard library of the go.mod toolchain included.
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
+  release:
+    name: release (snapshot)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # GoReleaser reads tags
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache-dependency-path: | # ci.yml pins GoReleaser
+            go.sum
+            .goreleaser.yaml
+            .github/workflows/ci.yml
+      # The arm64 image runs apk in its build: emulate it on this amd64 runner.
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: arm64
+      - name: goreleaser check
+        run: go run "$GORELEASER" check
+      - name: goreleaser release --snapshot (tags, uploads and pushes nothing)
+        run: go run "$GORELEASER" release --snapshot --clean
+      - name: Smoke-test the archives, the cask and the images
+        run: .github/scripts/smoke-release.sh
