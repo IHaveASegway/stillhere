@@ -214,7 +214,7 @@ type RankInterval struct {
 	Subject        Subject
 	Window         Window
 	Estimate       float64
-	Lo, Hi         float64 // 95% interval of the value
+	Lo, Hi         float64 // 95% interval of the value; 0 when not eligible
 	RankLo, RankHi int     // 95% interval of the rank; 0 when not eligible
 	N              int
 	Eligible       bool
