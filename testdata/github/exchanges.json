@@ -1,0 +1,90 @@
+[
+  {
+    "name": "E1 list acme's repositories, page 1",
+    "operation": "Repos",
+    "variables": {"owner": "acme", "after": null},
+    "status": 200,
+    "headers": {"Date": "Fri, 02 Oct 2026 00:00:00 GMT"},
+    "body": "repos-1.json"
+  },
+  {
+    "name": "E2 list acme's repositories, page 2",
+    "operation": "Repos",
+    "variables": {"owner": "acme", "after": "repos-page-2"},
+    "status": 200,
+    "headers": {"Date": "Fri, 02 Oct 2026 00:00:01 GMT"},
+    "body": "repos-2.json"
+  },
+  {
+    "name": "E3 first pass over widget, oldest update first, page 1",
+    "operation": "PullRequests",
+    "variables": {"repo": "R_widget", "first": 50, "after": null, "direction": "ASC"},
+    "status": 200,
+    "headers": {"Date": "Fri, 02 Oct 2026 00:00:02 GMT"},
+    "body": "pulls-asc-1.json"
+  },
+  {
+    "name": "E4 page 2 meets a secondary rate limit with Retry-After",
+    "operation": "PullRequests",
+    "variables": {"repo": "R_widget", "first": 50, "after": "pulls-asc-2", "direction": "ASC"},
+    "status": 403,
+    "headers": {"Date": "Fri, 02 Oct 2026 00:00:03 GMT", "Retry-After": "60"},
+    "body": "secondary-limit.json"
+  },
+  {
+    "name": "E5 page 2 again; other tools spent the hourly points, 40 are left",
+    "operation": "PullRequests",
+    "variables": {"repo": "R_widget", "first": 50, "after": "pulls-asc-2", "direction": "ASC"},
+    "status": 200,
+    "headers": {"Date": "Fri, 02 Oct 2026 00:50:00 GMT"},
+    "body": "pulls-asc-2.json"
+  },
+  {
+    "name": "E6 page 3, after the reset, times out at GitHub's edge",
+    "operation": "PullRequests",
+    "variables": {"repo": "R_widget", "first": 50, "after": "pulls-asc-3", "direction": "ASC"},
+    "status": 502,
+    "headers": {"Date": "Fri, 02 Oct 2026 01:00:02 GMT", "Content-Type": "text/html"},
+    "text": "<html><body><h1>502 Bad Gateway</h1></body></html>"
+  },
+  {
+    "name": "E7 page 3 again, half the size; PR 9 needs follow-ups",
+    "operation": "PullRequests",
+    "variables": {"repo": "R_widget", "first": 25, "after": "pulls-asc-3", "direction": "ASC"},
+    "status": 200,
+    "headers": {"Date": "Fri, 02 Oct 2026 01:00:04 GMT"},
+    "body": "pulls-asc-3.json"
+  },
+  {
+    "name": "E8 the rest of PR 9's labels",
+    "operation": "PullRequestLabels",
+    "variables": {"pull": "PR_09", "after": "labels-09-2"},
+    "status": 200,
+    "headers": {"Date": "Fri, 02 Oct 2026 01:00:05 GMT"},
+    "body": "labels-09.json"
+  },
+  {
+    "name": "E9 the rest of PR 9's reviews",
+    "operation": "PullRequestReviews",
+    "variables": {"pull": "PR_09", "after": "reviews-09-2"},
+    "status": 200,
+    "headers": {"Date": "Fri, 02 Oct 2026 01:00:06 GMT"},
+    "body": "reviews-09.json"
+  },
+  {
+    "name": "E10 the rest of PR 9's commits",
+    "operation": "PullRequestCommits",
+    "variables": {"pull": "PR_09", "after": "commits-09-2"},
+    "status": 200,
+    "headers": {"Date": "Fri, 02 Oct 2026 01:00:07 GMT"},
+    "body": "commits-09.json"
+  },
+  {
+    "name": "E11 a week later: newest update first, down to the watermark less the overlap",
+    "operation": "PullRequests",
+    "variables": {"repo": "R_widget", "first": 50, "after": null, "direction": "DESC"},
+    "status": 200,
+    "headers": {"Date": "Fri, 09 Oct 2026 00:00:00 GMT"},
+    "body": "pulls-desc-1.json"
+  }
+]

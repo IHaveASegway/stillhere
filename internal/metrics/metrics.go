@@ -69,7 +69,7 @@ type RankInput struct {
 
 // All returns every registered metric version in a stable order.
 func All() []Metric {
-	return nil // #9
+	return []Metric{reviewsGiven{}} // #9 adds the rest of the registry
 }
 
 // Lookup returns the metric with id, such as "durable@1", or the latest

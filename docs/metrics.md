@@ -94,9 +94,17 @@ Majority owners of files under the path, the top surviving-line authors, recent 
 
 ### reviews_given@1 (M2)
 - **Question**: Who carries the review load?
-- **Definition**: per person, distinct merged pull requests authored by someone else on which they submitted at least one review (approved, changes requested, or commented) in the last 90 days. Shown with it: review comments written, and the share of approvals with no comment.
-- **Eligibility**: at least 10 reviewed pull requests.
-- **How it can be gamed**: rubber-stamp approvals. The no-comment share is shown next to the count for that reason.
+- **Unit and scope**: merged pull requests reviewed, per person; values for scope `all` and for each group (a pull request belongs to the group that holds its repository's mirror, by `Repo.Key`).
+- **Inputs**: the forge replica the run read (`FactSet.Forge`: pull requests and their reviews), and the run's commits, to link logins to people.
+- **Definition**: per person, distinct merged pull requests authored by someone else on which they submitted at least one review (approved, changes requested, or commented) in the last 90 days. Precisely: a review counts when it was submitted in `[now − 90 days, now)`, by an account with a login, on a pull request merged before `now` by another person (another login, and another person once logins are linked). A review after the merge counts. Shown with it (`Detail`): `reviews` (the reviews counted), `review_comments` (their inline comments), `approvals`, `approvals_no_comment` (approvals with no text and no inline comment), and `no_comment_share` (their share of approvals, present only when there are approvals).
+- **People**: a login is a person when a commit GitHub attributes to it is in the run: the person is the run's mailmapped author of that commit (the most such commits, then the smallest email), so the mailmap stays the only identity store. Any other login is `@login` ([ADR 0004](adr/0004-github-behind-sync-boundary.md)); an app's is `@login[bot]`.
+- **Clusters**: one per person and pull request, `Num` 1, in the week (counted back from `now`) of the person's first counted review of it: a Sum over 13 week blocks.
+- **Eligibility**: at least 10 reviewed pull requests. Bots (an app account, or a `[bots]` match) get values and are never ranked.
+- **Uncertainty**: the week-block bootstrap of Sum metrics, as for `simplifying@1`.
+- **Blind spots**: reviews of pull requests closed unmerged or still open; dismissed reviews; conversation comments outside a review; pairing and review outside GitHub. A reviewer with no commit in the run shows as `@login`, apart from their email row. The replica holds each pull request's latest state, so a review dismissed after `now` is already gone from an older `now`.
+- **How it can be gamed**: rubber-stamp approvals. The no-comment share is shown next to the count for that reason. Reviewing many trivial pull requests, such as dependency bumps.
+- **Fixture oracle**: [testdata/github/README.md, reviews_given@1](../testdata/github/README.md#reviews_given1), asserted by `TestGitHubSync` over the recorded responses.
+- **Validity**: unvalidated until the M2 labelled-sample check.
 
 ### load_bearing@1 (M5)
 - **Definition**: the share of a person's landings in the window that touched a top-decile hotspot, with hotspots computed from the 12 months *before* the window so a person's own changes cannot make a file hot.

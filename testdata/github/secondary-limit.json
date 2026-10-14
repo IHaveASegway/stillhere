@@ -1,0 +1,4 @@
+{
+  "documentation_url": "https://docs.github.com/graphql/overview/rate-limits-and-query-limits-for-the-graphql-api#secondary-rate-limits",
+  "message": "You have exceeded a secondary rate limit. Please wait a few minutes before you try again. If you reach out to GitHub Support for help, please include the request ID 0000:0000:000000:000000:00000000."
+}

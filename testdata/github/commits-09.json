@@ -1,0 +1,13 @@
+{
+  "data": {
+    "rateLimit": {"cost": 1, "remaining": 4994, "resetAt": "2026-10-02T02:00:04Z"},
+    "node": {
+      "commits": {
+        "pageInfo": {"hasNextPage": false, "endCursor": "Mw"},
+        "nodes": [
+          {"commit": {"oid": "0900000000000000000000000000000000000003", "author": {"email": "ada@example.com", "user": {"login": "ada"}}}}
+        ]
+      }
+    }
+  }
+}

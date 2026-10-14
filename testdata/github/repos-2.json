@@ -1,0 +1,14 @@
+{
+  "data": {
+    "rateLimit": {"cost": 1, "remaining": 4998, "resetAt": "2026-10-02T01:00:00Z"},
+    "repositoryOwner": {
+      "repositories": {
+        "pageInfo": {"hasNextPage": false, "endCursor": "repos-end"},
+        "nodes": [
+          {"id": "R_fork", "name": "upstream-fork", "owner": {"login": "acme"}, "isArchived": false, "isFork": true, "defaultBranchRef": {"name": "main"}},
+          {"id": "R_widget", "name": "widget", "owner": {"login": "acme"}, "isArchived": false, "isFork": false, "defaultBranchRef": {"name": "main"}}
+        ]
+      }
+    }
+  }
+}
