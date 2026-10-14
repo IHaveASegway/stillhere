@@ -30,13 +30,15 @@ Read this before touching code. It names every package, what it owns, what it ma
 
 Dependencies point inward, toward the core (ports and adapters: Alistair Cockburn, "Hexagonal Architecture").
 
-- **Core** packages import the standard library and other core packages only. Never `os/exec`, `net`, `net/http`, `database/sql`, a SQL driver, or cobra. `policy` may import the TOML parser. Core code is a functional core: plain functions over facts, testable without git or a database (Gary Bernhardt, "Boundaries").
-- **`collect`** imports core. It runs git only through `domain.GitRunner`, never `os/exec`, and never imports an adapter.
-- **`app`** imports core and `collect`, and reaches the outside only through ports. It never imports an adapter, `os/exec`, `database/sql` or cobra.
-- **Adapters** import core. They never import `app` or `cli`.
-- **`cli`** is the composition root (Mark Seemann, "Composition Root"): it builds the adapters and hands them to `app`.
+- **Core** packages import the standard library and other core packages only, and from the standard library nothing that does I/O, starts a process or opens a connection: no `os` (so no `os/exec`), `syscall`, `net`, `net/http`, `net/rpc`, `net/smtp` or `database/sql`. The only third-party module is the TOML parser, and only `policy` imports it. Core code is a functional core: plain functions over facts, testable without git or a database (Gary Bernhardt, "Boundaries").
+- **`collect`** imports core and `golang.org/x/sync`. It runs git only through `domain.GitRunner`: never `os/exec`, `syscall` or `golang.org/x/sys`, no network package, and never an adapter or `app`.
+- **`app`** imports core, `collect` and `golang.org/x/sync`, and reaches the outside only through the ports in `Deps`. It never imports an adapter, `os/exec`, `syscall`, a network package, `database/sql` or cobra, and opens no file.
+- **Outbound adapters** (`gitcli`, `sqlite`, `github`) import core and the module they wrap (`modernc.org/sqlite`, `cli/go-gh`). They never import `app`, `cli`, `collect` or one another.
+- **Inbound adapters** (`cli`, `mcp`) call `app`. Only `cli` builds adapters: it is the composition root (Mark Seemann, "Composition Root"), which builds them and hands them to `app`. So `mcp` imports `app` and core, its SDK, and no adapter; it serves over stdio, so it imports no network or process package either.
+- **`fixture`** is test support: only tests import it.
+- **A package this layout does not list** is held to the core's rule until it is added here and to the lint config.
 
-`.golangci.yml` enforces the rule with depguard, so a violation fails CI. That makes it an architectural fitness function (Ford, Parsons and Kua, *Building Evolutionary Architectures*, ch. 2). A change that needs an exception edits this file and the lint config together.
+`.golangci.yml` enforces the rule with depguard, so a violation fails CI. Each kind of package has an allow list (the standard library, the internal packages it may import, the modules it owns), with deny entries that win over the standard library and say why; anything else fails. That makes it an architectural fitness function (Ford, Parsons and Kua, *Building Evolutionary Architectures*, ch. 2), and like any test it was checked against planted violations. A change that needs an exception edits this file and the lint config together.
 
 ## Domain types (`internal/domain`)
 
