@@ -561,6 +561,14 @@ Exit codes are in [report-json.md](report-json.md#exit-codes): 0 when any repo p
 - Conventional Commit subjects (`feat:`, `fix:`, `docs:`, `test:`, `ci:`, `chore:`, `refactor:`). GoReleaser groups the changelog by them, and `change_type@1` will read them.
 - Never `git add -A` or `git add .`; add paths by name. `plan.original.md` is local-only and must never be committed.
 
+### Working in parallel
+
+Issues are built in parallel branches, so a shared package or file needs a rule that keeps two branches from colliding, or from compiling apart and failing only at merge.
+
+- **`collect` is shared by #4, #5, #6 and #7.** Each collector's unexported identifiers carry its prefix (`discover…`, `classify…`, `history…`, `blame…`). The readers every collector needs are in `scan.go` (`newScanner`, which allows long lines, and `scanNUL` for `-z` output), and the test helper in `collect_test.go` (`newRunner`, a real `gitcli.Runner`). The package has at most one `TestMain`, and it goes in `collect_test.go`.
+- **Files that belong to one issue.** #14: `domain/forge.go`, `sqlite/forge.go`, `cli/forge.go`, `app/sync.go`. #15: `app/mcp.go`, `cli/mcp.go`, `internal/mcp`. #5: everything in `policy` but `types.go`, which is this file's contract.
+- **Shared documents.** Each issue edits only the sections its scope names: in [metrics.md](../metrics.md), the entries of the metrics it builds or derives oracles for; in this file, the signatures it changes; in [report-json.md](report-json.md), the shape (#11). Where two branches still touch the same lines, #13 resolves them when it merges, as it does `go.mod` and `go.sum`.
+
 ## Tests
 
 Tests sit at stable boundaries, so a refactor does not rewrite them (Kent Beck, "Test Desiderata": tests should be structure-insensitive). They run real git; no test mocks git. The fixture oracles are the contract. A metric without an oracle does not ship, and no test exists outside this list without a reason in its pull request.

@@ -181,6 +181,13 @@ linters:
       - linters:
           - staticcheck
         text: "SA4023"
+      # Package collect's shared readers and test helper are written ahead of
+      # the four collectors that use them (#4-#7), so that those branches do
+      # not each write their own and collide. Delete this rule once they are
+      # used; warn-unused reports when it no longer suppresses anything.
+      - path: internal/collect/(scan|collect_test)\.go
+        linters:
+          - unused
 
 formatters:
   enable:
