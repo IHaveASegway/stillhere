@@ -80,6 +80,7 @@ const (
 	SubjectPerson = "person" // canonical email
 	SubjectArea   = "area"   // Repo.Key + ":" + path prefix
 	SubjectRepo   = "repo"   // Repo.Key
+	SubjectGroup  = "group"  // Group.Name: a group's own numbers, such as its rollup of the concentration walk
 	SubjectChange = "change" // landing SHA, or pull request id from M2
 )
 

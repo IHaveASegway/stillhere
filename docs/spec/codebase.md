@@ -193,7 +193,7 @@ type MetricID struct {
 	Version int
 } // String() is "durable@1"; ParseMetricID accepts "durable@1" and "durable" (latest)
 
-type Subject struct{ Kind, Key string } // person (canonical email), area (repo key + ":" + path prefix), repo, change (landing SHA or PR id)
+type Subject struct{ Kind, Key string } // person (canonical email), area (repo key + ":" + path prefix), repo, group (Group.Name: a group's own numbers), change (landing SHA or PR id)
 type Scope struct{ Kind, Key string }   // repo (Repo.Key), group (Group.Name), all ("")
 
 type MetricValue struct {
@@ -400,8 +400,8 @@ type BlameFacts struct {
 // identity
 func New(fs *domain.FactSet, p *policy.Policy) *Directory
 func (d *Directory) Name(email string) string           // display name rule, spec/git-invocation.md#identity-mailmap-and-bots
-func (d *Directory) Bot(email string) bool
-func (d *Directory) AIAssisted(c *domain.Commit) bool    // ADR 0007
+func (d *Directory) Bot(email string) bool              // a [bots] fragment in the email or display name, or an [ai] agent: agents are never people (ADR 0007)
+func (d *Directory) AIAssisted(c *domain.Commit) bool    // ADR 0007; only a commit credited to a human
 func (d *Directory) Credit(author domain.Person, coAuthors []domain.Person) string // the author, or an agent's first human co-author (ADR 0007); commits and blamed lines alike
 
 // metrics
@@ -414,8 +414,8 @@ type Definition struct {
 type Input struct {
 	Facts  *domain.FactSet
 	Policy *policy.Policy
-	Who    *identity.Directory
-	Days   int // landed@1 window
+	Who    *identity.Directory // nil: identity.New(Facts, Policy)
+	Days   int                 // landed@1 window; 0: the policy's [week] days
 }
 type Metric interface {
 	Definition() Definition
@@ -431,11 +431,14 @@ type RankInput struct {
 	Kind    rank.Kind
 	Window  domain.Window // the metric's window for Facts.Now (durable@1: [now-365d, now-90d)); joins ranks to MetricValue.Window
 	Options rank.Options  // MinN from the eligibility rule; Blocks for Sum; Replicates 0 = 1000
-	Data    map[domain.Subject][]rank.Cluster
+	Data    map[domain.Subject][]rank.Cluster // each person's clusters, sorted by Change; bots left out; nil when empty
 }
-func All() []Metric                                    // stable order
-func Lookup(id string) (Metric, error)
+func All() []Metric                                    // stable order: the registry, one list (a new metric is one file plus one line)
+func Lookup(id string) (Metric, error)                 // an unknown id is a *domain.UsageError
 func Compute(in *Input) ([]domain.MetricValue, error) // every metric, sorted
+// WhoKnows answers who_knows@1 for the code under a repo-relative path prefix ("" is the root) in one repository,
+// or in all when repo is ""; per query, never stored by a scan. An unknown repo key wraps domain.ErrNotFound.
+func WhoKnows(in *Input, repo, prefix string) ([]domain.MetricValue, error)
 
 // rank
 type Kind int // Ratio or Sum
