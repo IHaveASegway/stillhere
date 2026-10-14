@@ -41,8 +41,12 @@ func (d *Directory) AIAssisted(c *domain.Commit) bool {
 	return false // #9
 }
 
-// Credit returns the canonical email credited for c: its author, or the first
-// human co-author when an agent authored it.
-func (d *Directory) Credit(c *domain.Commit) string {
+// Credit returns the canonical email credited for work by author with
+// coAuthors in trailer order: the author, or the first human co-author when
+// the author is an agent (ADR 0007). Commits and blamed lines both go
+// through it (Commit.Author/CoAuthors, LineOwner.Author/CoAuthors), so the
+// change metrics and the ownership metrics agree on who wrote an agent's
+// commit.
+func (d *Directory) Credit(author domain.Person, coAuthors []domain.Person) string {
 	return "" // #9
 }

@@ -23,8 +23,8 @@ Classification follows [spec/classification.md](spec/classification.md): denied 
 
 These rules were settled on 2026-10-14, before the first release, so no metric version changed. Their oracles are in [../testdata/fixture/SPEC.md](../testdata/fixture/SPEC.md#change-oracles-m1-testchangeoracles). The fixtures keep every commit at least a day from every window boundary, so no oracle covers the half-open boundary itself.
 
-- **Added and removed lines.** `added(c)` and `removed(c)` count non-blank lines on `prod` paths in the commit's own patch against its first parent (a root commit against the empty tree): `git log -p -U0 -w`, with git's default rename detection. A path is classified at the scanned HEAD, or by path rules alone when it is absent there. Because of `-w`, a whitespace-only change adds and removes nothing; blame `-w` already gives those lines to their earlier author. A pure rename adds and removes nothing.
-- **Credit.** Each commit is credited to one person (`identity.Credit`): its mailmapped author or, when an agent is the author ([ai_assisted@1](#ai_assisted1)) and a human is a co-author, the first human co-author in trailer order after `git check-mailmap`. An agent commit with no human co-author stays with the agent, in the bot table. No other co-author is credited, so the co-authors GitHub lists on a squash merge earn nothing. The commits a merge landing brought in are credited to their own authors, never to the person who merged them.
+- **Added and removed lines.** `added(c)` and `removed(c)` count non-blank lines on `prod` paths in the commit's own patch against its first parent (a root commit against the empty tree): `git log -p -U0 -w`, with git's default rename detection. A path is classified at the scanned HEAD or, when it is absent there, at the newest commit that added lines to it, without the header sniff ([classification.md](spec/classification.md#order)). Because of `-w`, a whitespace-only change adds and removes nothing; blame `-w` already gives those lines to their earlier author. A pure rename adds and removes nothing.
+- **Credit.** Each commit is credited to one person (`identity.Credit`): its mailmapped author or, when an agent is the author ([ai_assisted@1](#ai_assisted1)) and a human is a co-author, the first human co-author in trailer order after `git check-mailmap`. An agent commit with no human co-author stays with the agent, in the bot table. No other co-author is credited, so the co-authors GitHub lists on a squash merge earn nothing. The commits a merge landing brought in are credited to their own authors, never to the person who merged them. Blamed lines are credited by the same rule, over the blamed commit's author and co-authors (`LineOwner.CoAuthors`), so the ownership metrics and `durable@1` agree on who wrote an agent's commit.
 - **Time.** A commit takes its landing's time (the landing commit's committer time), not its own dates. Every window is half-open, `[since, until)`, like `domain.Window`, counted in 24-hour UTC days. Git's `--since` and `--until` both include the boundary instant (verified on 2.50.1), so a landing at exactly `until` must be dropped in code.
 - **Excluded commits.** These add and remove nothing in either metric and are never part of a cluster. They still count as landings in `landed@1`.
   - A merge commit itself. In v1 it has no patch of its own, which would need a combined diff. `git log -p` prints no diff for a merge, except under `--first-parent`, where it prints the first-parent diff: the side branch's lines, as the merger's. Lines that blame credits to a merge commit still count in `surviving@1`.
@@ -42,21 +42,21 @@ These rules were settled on 2026-10-14, before the first release, so no metric v
 
 ### surviving@1
 - **Question**: Whose lines are still on the default branch?
-- **Definition**: non-blank `prod` lines at HEAD, grouped by the blame author.
+- **Definition**: non-blank `prod` lines at HEAD, grouped by the person credited for the blamed commit ([credit](#change-facts-shared-by-durable1-and-simplifying1)): its author, or the first human co-author of an agent's commit.
 - **Why not ranked**: it rewards tenure.
 
 ## Ownership and knowledge
 
 ### majority_owner@1
-An author with at least 50% of a file's non-blank lines. A 50/50 file has two majority owners and counts once in `files_with_majority`.
+A person credited with at least 50% of a file's non-blank lines. A 50/50 file has two majority owners and counts once in `files_with_majority`.
 
 ### knowledge_concentration@1 (per area)
 Sort authors by `majority_files` descending, then `prod_nonblank_lines` descending, then email ascending. Walk from the top until the running sum is at least `files_with_majority / 2` (true division). Report the number of authors in that prefix and how many are bots. Labelled "not a truck factor": it is not Avelino's degree-of-authorship algorithm.
 
 ### knowledge_loss@1 (per area)
-- **Definition**: the share of an area's surviving `prod` lines whose blame author has had no landing, and (from M2) no submitted review, anywhere in the scanned organization in the last 180 days.
+- **Definition**: the share of an area's surviving `prod` lines whose credited person has had no landing, and (from M2) no submitted review, anywhere in the scanned organization in the last 180 days.
 - **Activity**: a person has had a landing when a commit credited to them, merge commits included, is in a landing within `[now − 180 days, now)`. Through the landing map, a side-branch author is active when the branch lands, whoever merged it.
-- **Bots**: lines blamed to bots are left out of both the numerator and the denominator, because knowledge is held by people. `surviving@1` shows the bot share alongside it.
+- **Bots**: lines credited to bots are left out of both the numerator and the denominator, because knowledge is held by people. `surviving@1` shows the bot share alongside it.
 - **Blind spots**: people who moved to repos outside the scan look gone. Mailmap gaps split one person into two and can make either half look gone.
 - **Fixture oracle**: [SPEC.md, knowledge_loss@1](../testdata/fixture/SPEC.md#knowledge_loss1-main-fixture).
 

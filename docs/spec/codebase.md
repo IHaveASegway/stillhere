@@ -40,6 +40,19 @@ Dependencies point inward, toward the core (ports and adapters: Alistair Cockbur
 
 `.golangci.yml` enforces the rule with depguard, so a violation fails CI. Each kind of package has an allow list (the standard library, the internal packages it may import, the modules it owns), with deny entries that win over the standard library and say why; anything else fails. That makes it an architectural fitness function (Ford, Parsons and Kua, *Building Evolutionary Architectures*, ch. 2), and like any test it was checked against planted violations. A change that needs an exception edits this file and the lint config together.
 
+### Third-party modules
+
+Every module is code someone must keep current, so each one says why it beat the runner-up. Only the package named next to it imports it.
+
+| Module | Package | Why | Runner-up |
+| --- | --- | --- | --- |
+| `github.com/spf13/cobra` | `cli` | The convention of the CLIs stillhere sits beside (gh, kubectl, Helm, golangci-lint, GoReleaser), so its help layout, `completion` command and code are familiar to users and contributors. Man pages come from `cobra/doc`; Charm's fang can polish the help later. | `github.com/urfave/cli/v3`: a `context.Context` in every action, flag values from environment variables, no dependencies, and far more active (100+ commits in the six months to 2026-10-14, against cobra's 5). Since v3 it parses flags after arguments exactly as cobra does (tested on v3.14.0). Switching rewrites `cli` and nothing else. |
+| `github.com/BurntSushi/toml` | `policy` | A TOML 1.0 decoder with no dependencies; a policy file is small, so decoding speed does not matter. | `github.com/pelletier/go-toml/v2` |
+| `modernc.org/sqlite` | `sqlite` | SQLite without cgo, so the binary stays static and cross-compiles ([architecture.md](../architecture.md)). | `github.com/mattn/go-sqlite3`, which needs cgo |
+| `golang.org/x/sync` | `collect`, `app` | `errgroup` with `SetLimit` bounds the number of git processes ([Concurrency](#concurrency)). | a hand-written semaphore |
+| `github.com/cli/go-gh/v2` (M2, #14) | `github` | gh's own auth and API client, so a user's `gh auth login` works unchanged. | `github.com/google/go-github` with our own token handling |
+| `github.com/modelcontextprotocol/go-sdk` (M4, #15) | `mcp` | The official MCP SDK ([ADR 0006](../adr/0006-ai-mcp-and-narrated-highlights.md)). | `github.com/mark3labs/mcp-go` |
+
 ## Domain types (`internal/domain`)
 
 Facts are plain values with no behaviour beyond small helpers. Times are UTC. Slices are sorted before they leave a package (see [Determinism](#determinism)).
@@ -124,7 +137,8 @@ type LineOwner struct {
 	Commit     string
 	Author     Person
 	AuthorTime time.Time
-	Lines      int // non-blank lines blame attributes to Commit in Path at HEAD
+	CoAuthors  []Person // Commit's Co-authored-by trailers, canonicalised and ordered like Commit.CoAuthors; credit reads them (ADR 0007)
+	Lines      int      // non-blank lines blame attributes to Commit in Path at HEAD
 }
 
 type IgnoreRevs struct {
@@ -388,7 +402,7 @@ func New(fs *domain.FactSet, p *policy.Policy) *Directory
 func (d *Directory) Name(email string) string           // display name rule, spec/git-invocation.md#identity-mailmap-and-bots
 func (d *Directory) Bot(email string) bool
 func (d *Directory) AIAssisted(c *domain.Commit) bool    // ADR 0007
-func (d *Directory) Credit(c *domain.Commit) string      // canonical email credited for c
+func (d *Directory) Credit(author domain.Person, coAuthors []domain.Person) string // the author, or an agent's first human co-author (ADR 0007); commits and blamed lines alike
 
 // metrics
 type Definition struct {
@@ -584,7 +598,7 @@ Exit codes are in [report-json.md](report-json.md#exit-codes): 0 when any repo p
 
 Issues are built in parallel branches, so a shared package or file needs a rule that keeps two branches from colliding, or from compiling apart and failing only at merge.
 
-- **`collect` is shared by #4, #5, #6 and #7.** Each collector's unexported identifiers carry its prefix (`discover…`, `classify…`, `history…`, `blame…`). The readers every collector needs are in `scan.go` (`newScanner`, which allows long lines, and `scanNUL` for `-z` output), and the test helper in `collect_test.go` (`newRunner`, a real `gitcli.Runner`). The package has at most one `TestMain`, and it goes in `collect_test.go`.
+- **`collect` is shared by #4, #5, #6 and #7.** Each collector's unexported identifiers carry its prefix (`discover…`, `classify…`, `history…`, `blame…`). The readers every collector needs are in `scan.go` (`newScanner`, which allows long lines, and `scanNUL` for `-z` output), and the test helper in `collect_test.go` (`newRunner`, a real `gitcli.Runner`). The co-author reader `coAuthors` is in `coauthors.go`: #6 implements it, and #7 calls it for the commits blame attributes lines to, which can be older than any history window. The package has at most one `TestMain`, and it goes in `collect_test.go`.
 - **Files that belong to one issue.** #14: `domain/forge.go`, `sqlite/forge.go`, `cli/forge.go`, `app/sync.go`. #15: `app/mcp.go`, `cli/mcp.go`, `internal/mcp`. #5: everything in `policy` but `types.go`, which is this file's contract.
 - **Shared documents.** Each issue edits only the sections its scope names: in [metrics.md](../metrics.md), the entries of the metrics it builds or derives oracles for; in this file, the signatures it changes; in [report-json.md](report-json.md), the shape (#11). Where two branches still touch the same lines, #13 resolves them when it merges, as it does `go.mod` and `go.sum`.
 

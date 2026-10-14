@@ -31,6 +31,10 @@ One `--ignore-revs-file` cannot serve many repos, because commit SHAs belong to 
 
 On 2.50.1, `#` comment lines and SHAs absent from the repo are both accepted (verified). CI checks the floor version.
 
+## Co-authors
+
+Blame names a commit's author, but credit follows [ADR 0007](../adr/0007-ai-assisted-attribution.md): an agent's commit with a human co-author belongs to that human, in the ownership metrics as in `durable@1`. After blaming a repo, read the Co-authored-by trailers of every commit blame attributed lines to with `coAuthors` (`internal/collect/coauthors.go`: one `git log --no-walk --stdin`, one `git check-mailmap --stdin`), and store them on each `LineOwner` in trailer order. The collector stores facts only; `identity.Credit` applies the policy's agent patterns when metrics are computed.
+
 ## Porcelain parsing
 
 `--line-porcelain` (what we run) and `--porcelain` (also accepted) differ. Four naive parsers are wrong:

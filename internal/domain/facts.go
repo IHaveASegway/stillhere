@@ -86,7 +86,7 @@ type Commit struct {
 	Author     Person
 	AuthorTime time.Time
 	CommitTime time.Time
-	CoAuthors  []Person // Co-authored-by trailers, canonicalised with git check-mailmap
+	CoAuthors  []Person // Co-authored-by trailers, canonicalised with git check-mailmap, in trailer order (credit reads the first human)
 	Subject    string   // local only; never sent to an AI
 }
 
@@ -115,19 +115,23 @@ type FileChange struct {
 type Revert struct{ SHA, Reverted string } // full SHAs
 
 // LineOwner is how many non-blank lines blame attributes to one commit in
-// one path at HEAD.
+// one path at HEAD. Lines are credited like commits (identity.Credit over
+// Author and CoAuthors, ADR 0007), so an agent's commit with a human
+// co-author counts for that human in every blame-based metric.
 type LineOwner struct {
 	Path       string
 	Commit     string
 	Author     Person
 	AuthorTime time.Time
-	Lines      int // non-blank lines blame attributes to Commit in Path at HEAD
+	CoAuthors  []Person // Commit's Co-authored-by trailers, canonicalised and ordered like Commit.CoAuthors
+	Lines      int      // non-blank lines blame attributes to Commit in Path at HEAD
 }
 
 // IgnoreRevs records which --ignore-revs-file blame used for a repository.
 type IgnoreRevs struct {
-	Source string // IgnoreRevsRoot, IgnoreRevsCLI or ""
-	SHA256 string
+	Source string   // IgnoreRevsRoot, IgnoreRevsCLI or ""
+	SHA256 string   // of the file's bytes; "" when Source is ""
+	Revs   []string // full SHAs the file lists, lowercased and sorted; durable@1 and simplifying@1 exclude these commits
 }
 
 // The sources of an ignore-revs file (docs/spec/blame-collector.md).
