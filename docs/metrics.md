@@ -174,7 +174,7 @@ A commit is AI-assisted when a trailer or author matches the policy's versioned 
 - **Values**: over landings in `[now − 365 days, now)`.
   - The tag: one value per AI-assisted landing (subject `change`, scope its repository), Value 1. An untagged landing has none.
   - Cohort comparisons per repository and per group (subject `repo` or `group`): the AI-assisted share of the landings (`Num` tagged, `Den` and `N` all), with `Detail` `durable_ai` and `durable_other` (`durable@1`'s `Σ surviving / Σ added` over the clusters of tagged and of untagged landings in its cohort; left out when a side has none), `durable_ai_n` and `durable_other_n` (their clusters), and `reverted_ai` and `reverted_other` (the reverted landings among each).
-  - Per person (each repository, group and all, humans only): the share of their clusters, over non-merge commits, in which one of their own commits is AI-assisted. It is shown only to that person (`me`), never in team views.
+  - Per person (each repository, group and all, humans only): the share of their clusters, over non-merge commits, in which one of their own commits is AI-assisted. It is shown only to that person, so it is computed per query by `metrics.PersonalAIShare`, which only `me` calls, and never by a scan: no stored run holds it, and no team view, `explain` answer or MCP tool that reads a run's values can show it.
 - **Eligibility and uncertainty**: none: a tag and a cohort comparison, never ranked.
 - **Blind spots**: a lower bound, as above; a tool whose trailer the policy does not list (Cursor's is unverified) is missed; GitHub squash merges list human co-authors, who are never tagged.
 - **How it can be gamed**: removing a trailer hides the tag; adding one to a commit no agent touched fakes it.

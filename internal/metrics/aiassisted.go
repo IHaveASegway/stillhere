@@ -1,13 +1,17 @@
 package metrics
 
 import (
+	"strings"
+
 	"github.com/IHaveASegway/stillhere/internal/domain"
 )
 
 // aiAssistedV1 is ai_assisted@1: a tag on changes, and cohort comparisons
 // of the tagged changes against the rest (ADR 0007). A landing is
 // AI-assisted when any commit in its map is (identity.AIAssisted), so a
-// merge landing is tagged through a side-branch commit.
+// merge landing is tagged through a side-branch commit. A person's own
+// share is not among its Compute values: PersonalAIShare answers it per
+// query, for that person only.
 type aiAssistedV1 struct{}
 
 var aiAssistedID = domain.MetricID{Name: "ai_assisted", Version: 1}
@@ -21,8 +25,9 @@ func (aiAssistedV1) Definition() Definition {
 			"group (subject repo or group): the AI-assisted share of the landings, with the cohort comparisons durable_ai and " +
 			"durable_other (durable@1's Σ surviving / Σ added over the clusters of tagged and untagged landings), their cluster " +
 			"counts durable_ai_n and durable_other_n, and reverted_ai and reverted_other (reverted landings among each). Per " +
-			"person (repository, group and all): the share of their clusters, over non-merge commits, in which one of their own " +
-			"commits is AI-assisted; it is shown only to that person.",
+			"person (repository, group and all), on request only (metrics.PersonalAIShare, for that person's own page; never " +
+			"computed by a scan): the share of their clusters, over non-merge commits, in which one of their own commits is " +
+			"AI-assisted.",
 		Ranked:      false,
 		Eligibility: "Not ranked: AI-assisted work is a tag and a cohort comparison, never a ranked row (ADR 0007).",
 		BlindSpots: "A lower bound: editor completions leave no trace, and only the policy's co-author emails and agent authors " +
@@ -41,8 +46,31 @@ func (aiAssistedV1) compute(v *view) ([]domain.MetricValue, error) {
 	year := v.window(yearDays, 0)
 	out := aiTags(v, year)
 	out = append(out, aiCohortValues(v, year)...)
-	out = append(out, aiPersonShares(v, year)...)
 	return sorted(out), nil
+}
+
+// PersonalAIShare returns ai_assisted@1's share for one person: of their
+// clusters of non-merge commits in [now - 365d, now), the share in which
+// one of their own commits is AI-assisted, with one value for each
+// repository, group and the whole run where they have a cluster.
+//
+// ADR 0007 shows this share only to that person. It is therefore computed
+// per query, as WhoKnows is, and never by Compute: a scan does not store
+// it, so no report, explain answer or MCP tool that reads a run's values
+// can show it by accident. Its only caller is the person's own page: the
+// me use case, and from M3 the web server's, where sign-in tells who is
+// asking (ADR 0005). email is trimmed and lowercased; a bot, an agent, or
+// an email with no cluster gets no values.
+func PersonalAIShare(in *Input, email string) ([]domain.MetricValue, error) {
+	v, err := newView(in, nil)
+	if err != nil {
+		return nil, err
+	}
+	email = strings.ToLower(strings.TrimSpace(email))
+	if email == "" || v.who.Bot(email) {
+		return nil, nil
+	}
+	return sorted(aiPersonShare(v, v.window(yearDays, 0), email)), nil
 }
 
 // aiTags returns the tag itself: one value per AI-assisted landing in w.
@@ -100,12 +128,12 @@ func aiCohortValues(v *view, w domain.Window) []domain.MetricValue {
 	return out
 }
 
-// aiPersonShares returns each human's own share: of their clusters of
-// non-merge commits in w, those in which one of their own commits is
-// AI-assisted. Only that person sees it (ADR 0007).
-func aiPersonShares(v *view, w domain.Window) []domain.MetricValue {
+// aiPersonShare returns one person's own share in each scope: of their
+// clusters of non-merge commits in w, those in which one of their own
+// commits is AI-assisted.
+func aiPersonShare(v *view, w domain.Window, email string) []domain.MetricValue {
 	type acc struct{ clusters, ai int }
-	accs := make(map[personKey]*acc)
+	accs := make(map[domain.Scope]*acc)
 	for _, r := range v.repos {
 		if !r.covers(w) {
 			continue
@@ -114,29 +142,27 @@ func aiPersonShares(v *view, w domain.Window) []domain.MetricValue {
 			if !w.Contains(l.time) {
 				continue
 			}
-			mine := make(map[string]bool) // person → one of their commits here is AI-assisted
+			mine, ai := false, false // a commit of theirs is in the landing, and one of those is AI-assisted
 			for _, c := range l.commits {
-				if !c.merge {
-					mine[c.credit] = mine[c.credit] || c.ai
+				if !c.merge && c.credit == email {
+					mine, ai = true, ai || c.ai
 				}
 			}
-			for email, ai := range mine {
-				if v.who.Bot(email) {
-					continue
-				}
-				for _, s := range r.scopes {
-					a := lookup(accs, personKey{s, email})
-					a.clusters++
-					if ai {
-						a.ai++
-					}
+			if !mine {
+				continue
+			}
+			for _, s := range r.scopes {
+				a := lookup(accs, s)
+				a.clusters++
+				if ai {
+					a.ai++
 				}
 			}
 		}
 	}
-	out := make([]domain.MetricValue, 0, len(accs))
-	for k, a := range accs {
-		out = append(out, ratio(aiAssistedID, k.scope, personSubject(k.email), w, a.ai, a.clusters, a.clusters, nil))
+	var out []domain.MetricValue
+	for s, a := range accs {
+		out = append(out, ratio(aiAssistedID, s, personSubject(email), w, a.ai, a.clusters, a.clusters, nil))
 	}
 	return out
 }

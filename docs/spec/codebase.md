@@ -435,10 +435,14 @@ type RankInput struct {
 }
 func All() []Metric                                    // stable order: the registry, one list (a new metric is one file plus one line)
 func Lookup(id string) (Metric, error)                 // an unknown id is a *domain.UsageError
-func Compute(in *Input) ([]domain.MetricValue, error) // every metric, sorted
+func Compute(in *Input) ([]domain.MetricValue, error) // every metric, sorted: what a scan stores
 // WhoKnows answers who_knows@1 for the code under a repo-relative path prefix ("" is the root) in one repository,
 // or in all when repo is ""; per query, never stored by a scan. An unknown repo key wraps domain.ErrNotFound.
 func WhoKnows(in *Input, repo, prefix string) ([]domain.MetricValue, error)
+// PersonalAIShare answers ai_assisted@1's share for one person (email: canonical) in every scope they have a
+// cluster in; per query, never part of Compute or stored by a scan, because ADR 0007 shows it only to that
+// person: app.Me is its only caller. A bot, or an email without clusters, gets no values.
+func PersonalAIShare(in *Input, email string) ([]domain.MetricValue, error)
 
 // rank
 type Kind int // Ratio or Sum

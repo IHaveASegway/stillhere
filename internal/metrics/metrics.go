@@ -135,8 +135,11 @@ func Lookup(id string) (Metric, error) {
 }
 
 // Compute runs every metric over in and returns all values, sorted by
-// metric, scope, subject and window. The facts are projected once and the
-// projection is shared by every metric that reads it.
+// metric, scope, subject and window: what a scan stores with its run. The
+// facts are projected once and the projection is shared by every metric
+// that reads it. Two answers are never part of it, because they are asked
+// per query: WhoKnows, for any path, and PersonalAIShare, which only the
+// person it describes may see.
 func Compute(in *Input) ([]domain.MetricValue, error) {
 	v, err := newView(in, nil)
 	if err != nil {
