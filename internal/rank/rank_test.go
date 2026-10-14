@@ -22,24 +22,40 @@ var (
 	window = domain.Window{Since: fixture.Now.AddDate(0, 0, -90), Until: fixture.Now}                     // simplifying@1
 )
 
+// exact is the number of replicates a case draws when the exact point it
+// checks sits too close to the 2.5% or 97.5% mark for B = 1,000 to settle
+// it. At 400,000 the Monte Carlo error is 0.025 percentage points, and the
+// odds that a seed moves any end checked this way are below 1 in 10,000.
+const exact = 400_000
+
 // TestRankIntervals is the contract test of the bootstrap
 // (docs/metrics.md#ranking-rules, docs/spec/codebase.md#tests): the same
 // inputs give the same intervals, on every machine and Go release, subjects
 // below the minimum sample are listed and not ranked, and a sum's week
 // blocks must match its window.
 //
-// Except where a case says it pins this implementation's output, every
-// expected interval is the exact 2.5% or 97.5% point of the bootstrap
-// distribution, worked out by hand, which B = 1,000 replicates reproduce.
+// Two kinds of expected interval are kept apart, so that a deliberate change
+// to the seed scheme or the stream fails only the case that pins them:
+//   - Hand oracles: the exact 2.5% or 97.5% point of the bootstrap
+//     distribution, worked out by hand. Each one holds for nearly every
+//     seed. The 25th of 1,000 replicates estimates the 2.5% point with a
+//     Monte Carlo error of about half a percentage point, so a case whose
+//     exact point is closer than that to its mark draws exact replicates
+//     instead, and says so.
+//   - The golden master, the one case that pins this implementation's seed,
+//     stream and bounded draw.
 func TestRankIntervals(t *testing.T) {
 	t.Run("the sibling's durable@1 clusters", func(t *testing.T) {
 		// Lena has exactly 10 clusters, the minimum, and is the only one
 		// ranked. Every cluster adds 3 lines, so a replicate is
 		// (3a + 2b)/30 for (a, b, c) ~ Multinomial(10; 0.8, 0.1, 0.1): the
 		// counts of her 3/3 clusters, of L2 (2/3) and of L7 (0/3). Its
-		// distribution puts 2.3% below 20/30 and 4.7% at or below it, and
-		// 89% below 1.
-		got := rank.Intervals(durable, sibling, cohort, rank.Ratio, siblingDurable(), rank.Options{MinN: 10})
+		// distribution puts 2.31% at or below 19/30, 4.65% at or below 20/30
+		// and 89% below 1, so the exact interval is [20/30, 1]. The 2.31% is
+		// within Monte Carlo error of 2.5%: with 1,000 replicates, about a
+		// third of seeds give 19/30, which is that error and not a bug, so
+		// this case draws exact replicates.
+		got := rank.Intervals(durable, sibling, cohort, rank.Ratio, siblingDurable(), rank.Options{MinN: 10, Replicates: exact})
 		check(t, got, durable, sibling, cohort,
 			row{"lena@example.com", 26.0 / 30, 20.0 / 30, 1, 1, 1, 10, true},
 			row{key: "omar@example.com", estimate: 1, n: 9},
@@ -52,8 +68,11 @@ func TestRankIntervals(t *testing.T) {
 		// Lena removed 22 lines in week 3 (S1) and 1 in week 10 (W2), so a
 		// replicate of 13 drawn weeks is 22·c₃ + c₁₀. Missing both weeks has
 		// probability (11/13)¹³ = 11%, and the 97.5% point is S1's week drawn
-		// three times and W2's twice.
-		got := rank.Intervals(simplifying, sibling, window, rank.Sum, siblingSimplifying(), rank.Options{MinN: 10, Blocks: 13})
+		// three times and W2's twice: 97.41% of the distribution is at or
+		// below 67 and 98.32% at or below 68. The 97.41% is within Monte
+		// Carlo error of 97.5%: with 1,000 replicates, about half of seeds
+		// give 67, so this case draws exact replicates.
+		got := rank.Intervals(simplifying, sibling, window, rank.Sum, siblingSimplifying(), rank.Options{MinN: 10, Blocks: 13, Replicates: exact})
 		check(t, got, simplifying, sibling, window,
 			row{"lena@example.com", 23, 0, 68, 1, 1, 10, true},
 			row{key: "omar@example.com", estimate: 21, n: 2},
@@ -138,13 +157,16 @@ func TestRankIntervals(t *testing.T) {
 		// One change a week in 10 of the 13 weeks. Resampling the subject's
 		// own 10 clusters would return 10 in every replicate; resampling
 		// weeks draws X ~ Binomial(13, 10/13) active weeks, with
-		// P(X ≤ 6) = 1.6%, P(X ≤ 7) = 5.7% and P(X = 13) = 3.3%.
+		// P(X ≤ 6) = 1.6%, P(X ≤ 7) = 5.7% and P(X = 13) = 3.3%, so the
+		// exact interval is [7, 13]. P(X ≤ 12) = 96.7% is close enough to
+		// 97.5% that, with 1,000 replicates, about one seed in ten gives
+		// another interval, so this case draws exact replicates.
 		var cs []rank.Cluster
 		for k := range 10 {
 			cs = append(cs, rank.Cluster{Change: fmt.Sprint("c", k), Num: 1, Block: k})
 		}
 		data := map[domain.Subject][]rank.Cluster{person("ada@example.com"): cs}
-		got := rank.Intervals(simplifying, sibling, window, rank.Sum, data, rank.Options{MinN: 10, Blocks: 13})
+		got := rank.Intervals(simplifying, sibling, window, rank.Sum, data, rank.Options{MinN: 10, Blocks: 13, Replicates: exact})
 		check(t, got, simplifying, sibling, window, row{"ada@example.com", 10, 7, 13, 1, 1, 10, true})
 	})
 
