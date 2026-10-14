@@ -21,8 +21,8 @@ Read this before touching code. It names every package, what it owns, what it ma
 | `internal/redact` | URL scrubbing and message truncation | core |
 | `internal/report` | The report model (`stillhere.report/v1`) and its text, Markdown and JSON renderers | core |
 | `internal/gitcli` | `domain.GitRunner` over the `git` binary: hardening, profiles, version floor | outbound adapter |
-| `internal/sqlite` | `domain.FactStore` over `modernc.org/sqlite`, embedded migrations | outbound adapter |
-| `internal/github` | GitHub GraphQL/REST and managed mirrors (M2) | outbound adapter |
+| `internal/sqlite` | `domain.FactStore`, and from M2 `domain.ForgeStore`, over `modernc.org/sqlite`, embedded migrations | outbound adapter |
+| `internal/github` | `domain.ForgeSource` over GitHub GraphQL/REST, and managed mirrors (M2) | outbound adapter |
 | `internal/mcp` | The MCP server (M4) | inbound adapter |
 | `internal/fixture` | Builds the fixture repositories of [../../testdata/fixture/SPEC.md](../../testdata/fixture/SPEC.md) for tests | test support |
 
@@ -251,13 +251,15 @@ type GitRunner interface {
 	Stream(ctx context.Context, cmd GitCmd, fn func(io.Reader) error) error // streamed stdout, for log -p and blame
 }
 
-// GitError is returned for an exit outside OKExit, a timeout, or a failed start.
+// GitError is returned for an exit outside OKExit, a timeout, or a failed start. A timeout or a
+// cancellation is a GitError even when fn also failed on the output the kill truncated.
 type GitError struct {
-	Args   []string // never contains credentials
+	Args   []string // the caller's arguments, redact.Scrub applied: never contains credentials
 	Exit   int      // -1 for a timeout or a failed start
 	Stderr string   // redact.Message applied
-	Err    error
+	Err    error    // errors.Is(err, context.DeadlineExceeded) for a timeout, context.Canceled for a cancellation
 }
+func GitSubcommand(args []string) string // "log" for ["-c", "k=v", "log", ...]: how every message names a git command
 
 type FactStore interface {
 	BeginRun(ctx context.Context, r Run) (int64, error)
@@ -293,8 +295,8 @@ func Message(s string) string   // Scrub, then one line truncated to 180 charact
 
 // gitcli
 type Config struct {
-	Git         string // binary; default "git"
-	MailmapFile string // org mailmap, passed as -c mailmap.file=
+	Git         string // binary; default "git", resolved once to an absolute path
+	MailmapFile string // org mailmap, passed as -c mailmap.file=; made absolute
 	Logger      *slog.Logger
 }
 func New(ctx context.Context, cfg Config) (*Runner, error) // git older than 2.44 → *domain.UsageError
