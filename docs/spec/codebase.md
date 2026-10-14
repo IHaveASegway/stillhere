@@ -407,6 +407,19 @@ func Scan(ctx context.Context, d Deps, r ScanRequest) (*report.Model, error)
 
 // cli
 func Execute(ctx context.Context, args []string, stdout, stderr io.Writer, version string) int // the exit code
+
+// fixture (test support, never imported by production code; repositories in ../../testdata/fixture/SPEC.md)
+var Now = time.Date(2026, time.October, 7, 0, 0, 0, 0, time.UTC) // the --now of every oracle
+const MailmapText = "Ada Example <ada@example.com> <ada@other.example>\n"
+const SiblingMailmapText = "Pia Pair <pia@example.com> <81234567+piapair@users.noreply.github.com>\n"
+func Main(t testing.TB) string                                  // builds <t.TempDir()>/fixture, the main fixture
+func Sibling(t testing.TB) string                               // builds <t.TempDir()>/sibling, the change-case fixture
+func Mailmap(t testing.TB) string                               // writes MailmapText to a 0600 temp file
+func SiblingMailmap(t testing.TB) string                        // writes SiblingMailmapText to a 0600 temp file
+func Build(dir string) error                                    // BuildContext with context.Background
+func BuildContext(ctx context.Context, dir string) error        // the main fixture in dir, which must be empty or absent
+func BuildSibling(dir string) error                             // BuildSiblingContext with context.Background
+func BuildSiblingContext(ctx context.Context, dir string) error // the sibling in dir, which must be empty or absent
 ```
 
 ## Run model
