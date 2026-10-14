@@ -610,7 +610,7 @@ Tests sit at stable boundaries, so a refactor does not rewrite them (Kent Beck, 
 | --- | --- | --- |
 | `TestWeekOracle` | `app` | the week table in the fixture spec |
 | `TestStillHereOracle` | `app` | the still-here table and the concentration walk |
-| `TestChangeOracles` | `app` | `durable@1`, `simplifying@1`, reverts and AI-assisted tags on both fixtures; `knowledge_loss@1` and `who_knows@1` on the main fixture |
+| `TestChangeOracles` | `app` | `durable@1`, `simplifying@1`, reverts and AI-assisted tags on both fixtures; `knowledge_loss@1` and `who_knows@1` on the main fixture; `surviving@1` credit on the sibling, where an agent's blamed lines go to its human co-author |
 | `TestDeterminism` | `app` | two scans of the fixture give byte-identical JSON without `timings` |
 | `TestDiscover` | `collect` | duplicates, bare repos, scp vs HTTPS remotes; a planted token appears in no output |
 | `TestCloneHealth` | `collect` | shallow and partial clones warn and lose only the facts they should |

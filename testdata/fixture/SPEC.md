@@ -512,6 +512,26 @@ Wrong implementations this catches:
 - **Ignore-revs commits kept.** F adds 3 to Omar, and a cluster.
 - **N counts only landings that removed something.** Lena's N is 2, and she is not eligible.
 
+### surviving@1 credit (sibling)
+
+`surviving@1` has no window and excludes no commit. Every non-blank `prod` line at HEAD, blamed with `-w -M` and the repository's ignore-revs file, goes to the person credited for its blamed commit: `identity.Credit` over that commit's author and co-authors (`LineOwner.CoAuthors`), the [rule](../../docs/metrics.md#change-facts-shared-by-durable1-and-simplifying1) that `durable@1` applies to commits.
+
+| Who | surviving@1 | Blamed commits |
+| --- | --- | --- |
+| Lena Lead | 37 | L1 to L10 26 (as in `durable@1`), W1 to W9 9 (W2's 1 is in `lena_2.py`), S1 2 |
+| Omar Ops | 36 | O1 to O9 27 (O10's re-indent stays with O1), S2 5, R3 4 |
+| Quinn Squash | 31 | Q1 6, R2 25 |
+| Pia Pair | 9 | P1 3, P2 2, and C1 4: Copilot is C1's author, and Pia its first human co-author after `check-mailmap` |
+| Uma Legacy | 7 | U0: `legacy_a.py` 2, `legacy_b.py` 2, `legacy_c.py` 1, `legacy_d.py` 2 |
+
+All 120 lines are credited to people, so the bot share is 0 of 120, and Pia is the majority owner of `retry.py`. Copilot and Claude Dupont have no value. A revert's restored lines belong to whoever reverted (R2's 25 are Quinn's, R3's 4 are Omar's), the blind spot `durable@1` names.
+
+Wrong implementations this catches:
+
+- **Grouping by the blame author.** Blame names C1's git author, so `retry.py`'s 4 lines go to Copilot in the bot table: Pia has 5, the bot share is 4 of 120, and Copilot becomes the majority owner of `retry.py`. `durable@1` still credits C1 to Pia, so the two metrics disagree about who wrote the same commit.
+- **Co-authors not canonicalised.** The 4 lines go to `81234567+piapair@users.noreply.github.com`, a second person, and Pia has 5.
+- **Crediting the first co-author whoever the author is.** L3, O4 and P2 give their lines to the agents in their trailers, and Q1 gives its 6 to Claude Dupont: Lena 34, Omar 33, Pia 7, Quinn 25.
+
 ## Tests that are not extra commits in this history
 
 Ada's oracle stays stable only if these cases stay out of the fixture repo.
@@ -556,7 +576,7 @@ Two clones whose `origin` is `https://user:TOKENVALUE@github.com/example/widget.
 ## What fails CI
 
 - **Oracles.** Any week or still-here oracle above changes. That includes Frank's 3 versus 2, Ivy's `prod_lines_added` 0, Jules's 0-line commit, Erin's rename insertion of 1, Ada's single mailmapped week row, and both Gina and Hank at `majority_files` 1.
-- **Change oracles.** Any value in the change-oracle tables of either fixture changes. That includes Bob's move keeping 0 of 2, Ada's `durable@1` N of 2, Cara's absence from `durable@1`, `knowledge_loss@1` at 4/34, Lena eligible at exactly 10 clusters in both metrics, Omar not eligible at 9, S1 simplifying at exactly −20, S2 not simplifying at −16, Q1 untagged, and M tagged through P2.
+- **Change oracles.** Any value in the change-oracle tables of either fixture changes. That includes Bob's move keeping 0 of 2, Ada's `durable@1` N of 2, Cara's absence from `durable@1`, `knowledge_loss@1` at 4/34, Lena eligible at exactly 10 clusters in both metrics, Omar not eligible at 9, S1 simplifying at exactly −20, S2 not simplifying at −16, Q1 untagged, M tagged through P2, and C1's 4 surviving lines credited to Pia (`surviving@1` 9), not to Copilot.
 - **Classification.** `tests/test_service.py` is classified `prod`, or `bootstrap/cache/config.php` is blamed.
 - **Discovery.** A duplicate remote is not skipped, a scrubbed URL contains userinfo, a bare repo is skipped, or the SSH and HTTPS forms of one path are collapsed.
 - **Isolation.** A repo whose git directory was removed makes a sibling repo disappear, or the run exits 1 when the sibling succeeded.
@@ -570,5 +590,5 @@ Two clones whose `origin` is `https://user:TOKENVALUE@github.com/example/widget.
 
 Work out the expected values from the history above and write them into this file before writing the code that computes them. The implementation must never produce its own oracle.
 
-- **Done for M1 (issue #3):** `durable@1` per landing and per person, `simplifying@1`, revert detection, AI-assisted tagging, `knowledge_loss@1` and `who_knows@1`. They are in [Change oracles](#change-oracles-m1-testchangeoracles) and the [Sibling fixture](#sibling-fixture), which holds the revert and AI-assisted cases so that the main oracles don't move.
+- **Done for M1 (issue #3):** `durable@1` per landing and per person, `simplifying@1`, revert detection, AI-assisted tagging, `knowledge_loss@1` and `who_knows@1`. They are in [Change oracles](#change-oracles-m1-testchangeoracles) and the [Sibling fixture](#sibling-fixture), which holds the revert and AI-assisted cases so that the main oracles don't move. The oracle audit (2026-10-14) re-derived them and added [`surviving@1` credit](#surviving1-credit-sibling) on the sibling.
 - **GitHub sync contract tests**: recorded API responses (pull requests, reviews, review comments, team membership, the viewer's verified emails) under `testdata/github/`, with no live calls in CI. Derive the expected facts by hand.
