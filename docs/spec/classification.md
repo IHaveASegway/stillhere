@@ -7,7 +7,7 @@ There is one ordered classifier. The week collector and the blame collector both
 ## Order
 
 1. **Denied path**, decided by the [deny list](#deny-list) and then [.gitattributes](#gitattributes): adds 0 to `lines_added`, is not blamed, and counts toward `skipped.denied_path`.
-2. **Too big**, size greater than `[blame].max_bytes` (default 400000): same, counts toward `skipped.too_big`. Sizes come from `git ls-tree -l <sha>` for paths present at the scanned SHA. A path the history touched (week or scan) that is absent at that SHA is sized with one batched `git cat-file --batch-check` over `<commit>:<path>` lines, where the commit is the newest that added lines to the path; a path missing from that tree has an unknown size (`-1`) and skips this check. No blame is spawned just to learn a size.
+2. **Too big**, size greater than `[blame].max_bytes` (400000 in the packaged policy): same, counts toward `skipped.too_big`. Sizes come from `git ls-tree -l <sha>` for paths present at the scanned SHA. A path the history touched (week or scan) that is absent at that SHA is sized with one batched `git cat-file --batch-check` over `<commit>:<path>` lines, where the commit is the newest that added lines to the path; a path missing from that tree has an unknown size (`-1`) and skips this check. No blame is spawned just to learn a size.
 3. **Generated header**, from the [header sniff](#header-sniff): same, counts toward `skipped.generated_header`.
 4. **Role assigned**: the path survives. Any role counts toward week `lines_added`; only `prod` counts toward the still-here headline.
 5. **No role**: adds 0, is not blamed, and counts toward `skipped.unclassified`.
@@ -20,7 +20,7 @@ Match path **segments**, not substrings. `(^|/)tests(/|$)` matches `tests/test_s
 
 ## Deny list
 
-Exactly one policy file governs a run: `--policy FILE`, else `./stillhere.toml`, else the packaged default. That file replaces the packaged file as a whole. There is no union and no deep merge. A missing required table is a usage error (exit 2), never filled in from the package.
+Exactly one policy file governs a run: `--policy FILE`, else `./stillhere.toml`, else the packaged default. That file replaces the packaged file as a whole. There is no union and no deep merge. A missing required table, or a missing key in one, is a usage error (exit 2), never filled in from the package; the values these specs call defaults are the packaged file's.
 
 - **Packaged default.** `[paths] package_file = "generated_paths.txt"`, with no `deny` key. That embedded text file is the whole deny list. Its header says each non-comment line is an RE2 pattern translated from GitHub Linguist's `vendor.yml` and generated-file rules (MIT, attributed), and records the upstream commit the curator actually read; no SHA is invented. The policy hash covers the TOML bytes, a length prefix, and this file, so editing a pattern changes the hash.
 - **User file.** `[paths] deny = [...]` is the whole list. Setting `package_file`, setting both keys, or setting neither exits 2, because a user file's hash would not cover a packaged text file. A user who wants the packaged patterns copies them into `deny`.
@@ -82,7 +82,7 @@ The default role map. The still-here headline counts `prod` only.
 | migration | segment `migrations`, when the extension role would have been `prod` |
 | seed | segments `seeders`, `factories`, `seeds`, `fixtures`, when the extension role would have been `prod` or `sql` |
 
-Path roles override extension roles. The 2026-10-07 plan left the precedence among path roles implicit (for example `tests/fixtures/x.py`). The proposal is test, then migration, then seed; pin it with a unit test in M0.
+Path roles override extension roles. The 2026-10-07 plan left the precedence among path roles implicit (for example `tests/fixtures/x.py`). The proposal is test, then migration, then seed; pin it with a unit test in M0. Path rules are tried in that order, and the first rule whose pattern matches **and** whose condition admits the extension or name role wins: `db/migrations/seeds/x.sql` (extension role `sql`) is `seed`, because the migration rule admits only `prod`.
 
 ## Open decision #2: weights and gearing
 
