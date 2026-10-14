@@ -35,9 +35,13 @@ import (
 const DefaultTimeout = 300 * time.Second
 
 const (
-	// waitDelay bounds how long Wait waits, after git exits or is killed,
+	// waitDelay bounds how long Stream waits, after git exits or is killed,
 	// for helpers it started to close the pipes they inherited.
 	waitDelay = 5 * time.Second
+
+	// versionTimeout bounds git version, which answers at once unless
+	// something is wrong with the binary.
+	versionTimeout = 10 * time.Second
 
 	// stderrLimit caps the stderr kept per command. Only 180 runes survive
 	// redact.Message, so this is generous, and it stops a runaway or
@@ -96,10 +100,18 @@ func (r *Runner) Run(ctx context.Context, cmd domain.GitCmd) ([]byte, error) {
 // Stream returns nil when fn returned nil and git exited with 0 or a code in
 // cmd.OKExit. It returns a *domain.GitError when git failed, timed out, was
 // cancelled through ctx, or could not start; errors.Is(err,
-// context.Canceled) is true for a cancellation. When fn returns an error,
-// Stream stops git, waits for it, and returns fn's error wrapped with git's
-// scrubbed stderr. In every case git has exited, and been reaped, before
-// Stream returns.
+// context.Canceled) is true for a cancellation and errors.Is(err,
+// context.DeadlineExceeded) for a timeout, even when the kill also made fn
+// fail on a truncated stream. When fn returns an error first, Stream stops
+// git, waits for it, and returns fn's error wrapped with git's scrubbed
+// stderr. In every case git has exited, and been reaped, before Stream
+// returns, and on Unix every process left in git's process group has been
+// killed.
+//
+// A helper that leaves git's process group, such as a daemonising filter,
+// cannot hold Stream past the timeout: once the command's context ends,
+// Stream closes its end of stdout after waitDelay, so fn sees an error
+// instead of blocking.
 func (r *Runner) Stream(ctx context.Context, cmd domain.GitCmd, fn func(io.Reader) error) error {
 	if fn == nil {
 		return errors.New("gitcli: Stream needs a function to read stdout")
@@ -217,13 +229,25 @@ func (r *Runner) exec(ctx context.Context, inv invocation, fn func(io.Reader) er
 		return &domain.GitError{Args: inv.args, Exit: -1, Err: err}
 	}
 
+	// os/exec's WaitDelay closes stdout only while one of its own copy
+	// goroutines is still running. A helper that left git's process group
+	// (so the group kill missed it) and closed stderr but kept stdout open
+	// would block fn, and the drain below, forever (go.dev/issue/23019).
+	// release stops that watch once git has been reaped.
+	release := closeAfter(tctx, waitDelay, stdout)
+	reap := func() error {
+		err := cmd.Wait()
+		killGroup(cmd) // helpers git left behind in its process group
+		release()
+		return err
+	}
 	reaped := false
 	defer func() {
 		if !reaped {
 			// fn panicked: stop git and reap it before the panic continues.
 			abort(errAborted)
 			_, _ = io.Copy(io.Discard, stdout)
-			_ = cmd.Wait()
+			_ = reap()
 		}
 	}()
 	fnErr := fn(stdout)
@@ -233,18 +257,49 @@ func (r *Runner) exec(ctx context.Context, inv invocation, fn func(io.Reader) er
 	// Drain what fn left, so git is never blocked on a full pipe and Wait
 	// never races a reader. After a kill this ends at EOF at once.
 	_, _ = io.Copy(io.Discard, stdout)
-	waitErr := cmd.Wait()
+	waitErr := reap()
 	reaped = true
 
 	r.debug(ctx, inv, started, exitCode(waitErr))
-	return inv.outcome(ctx, actx, tctx, fnErr, waitErr, redact.Message(stderr.String()))
+	return inv.outcome(ctx, tctx, fnErr, waitErr, redact.Message(stderr.String()))
+}
+
+// closeAfter closes c once ctx has been done for delay. The returned release
+// function cancels that and returns only after the watching goroutine has
+// exited.
+func closeAfter(ctx context.Context, delay time.Duration, c io.Closer) (release func()) {
+	done := make(chan struct{})
+	exited := make(chan struct{})
+	go func() {
+		defer close(exited)
+		select {
+		case <-done:
+			return
+		case <-ctx.Done():
+		}
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-done:
+		case <-timer.C:
+			_ = c.Close() // fn's next Read fails; Wait's own Close then fails harmlessly
+		}
+	}()
+	return func() {
+		close(done)
+		<-exited
+	}
 }
 
 // outcome decides what Stream returns once git has been reaped. The order
 // matters: a cancellation or a timeout explains a truncated output, so it
 // wins over fn's error, and fn's error wins over git's own exit status,
 // because a killed git always exits with a failure.
-func (inv invocation) outcome(ctx, actx, tctx context.Context, fnErr, waitErr error, stderr string) error {
+//
+// The timeout is read from the timer itself: tctx.Err() is DeadlineExceeded
+// only when the timer fired before an abort, while an abort after the kill,
+// because fn failed on the truncated stream, leaves it unchanged.
+func (inv invocation) outcome(ctx, tctx context.Context, fnErr, waitErr error, stderr string) error {
 	if fnErr == nil && waitErr == nil {
 		return nil
 	}
@@ -254,13 +309,13 @@ func (inv invocation) outcome(ctx, actx, tctx context.Context, fnErr, waitErr er
 	switch {
 	case ctx.Err() != nil:
 		return fail(-1, ctx.Err())
-	case actx.Err() == nil && tctx.Err() != nil:
+	case errors.Is(tctx.Err(), context.DeadlineExceeded):
 		return fail(-1, context.Cause(tctx))
 	case fnErr != nil:
 		if stderr != "" {
-			return fmt.Errorf("git %s: reading output: %w (stderr: %s)", subcommand(inv.args), fnErr, stderr)
+			return fmt.Errorf("%s: reading output: %w (stderr: %s)", gitName(inv.args), fnErr, stderr)
 		}
-		return fmt.Errorf("git %s: reading output: %w", subcommand(inv.args), fnErr)
+		return fmt.Errorf("%s: reading output: %w", gitName(inv.args), fnErr)
 	}
 
 	var exitErr *exec.ExitError
@@ -307,13 +362,13 @@ func exitCode(waitErr error) int {
 	return -1
 }
 
-// subcommand returns the git subcommand of a caller's arguments, which
-// start with it ("log", "blame", ...).
-func subcommand(args []string) string {
-	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
-		return "command"
+// gitName names a command in messages the way domain.GitError does: "git
+// log", or "git" when the arguments hold no subcommand.
+func gitName(args []string) string {
+	if sub := domain.GitSubcommand(args); sub != "" {
+		return "git " + sub
 	}
-	return args[0]
+	return "git"
 }
 
 // scrubArgs returns a copy of args that is safe to log and to store in a

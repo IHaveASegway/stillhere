@@ -77,7 +77,7 @@ type GitError struct {
 func (e *GitError) Error() string {
 	var b strings.Builder
 	b.WriteString("git")
-	if sub := subcommand(e.Args); sub != "" {
+	if sub := GitSubcommand(e.Args); sub != "" {
 		b.WriteString(" ")
 		b.WriteString(sub)
 	}
@@ -100,9 +100,12 @@ func (e *GitError) Error() string {
 // and errors.Is(err, context.DeadlineExceeded) see through a GitError.
 func (e *GitError) Unwrap() error { return e.Err }
 
-// subcommand returns the first argument that is not an option, skipping the
-// values of git's -c and -C options.
-func subcommand(args []string) string {
+// GitSubcommand returns the git subcommand in a GitCmd's arguments: the
+// first argument that is not an option, skipping the values of git's -c and
+// -C options, so ["-c", "core.quotePath=false", "log"] gives "log". It
+// returns "" when there is none. Every message about a git command names it
+// this way.
+func GitSubcommand(args []string) string {
 	for i := 0; i < len(args); i++ {
 		switch a := args[i]; {
 		case a == "-c" || a == "-C":

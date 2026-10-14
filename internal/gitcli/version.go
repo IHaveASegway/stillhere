@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
@@ -37,6 +38,12 @@ func New(ctx context.Context, cfg Config) (*Runner, error) {
 		return nil, &domain.UsageError{Msg: fmt.Sprintf(
 			"git not found (%v): install git %s or newer", err, floor)}
 	}
+	// LookPath returns a name that contains a separator unchanged, so a
+	// relative Config.Git would otherwise resolve against whatever directory
+	// a later process starts in.
+	if path, err = filepath.Abs(path); err != nil {
+		return nil, fmt.Errorf("gitcli: git binary %s: %w", name, err)
+	}
 	mailmap, err := absMailmap(cfg.MailmapFile)
 	if err != nil {
 		return nil, err
@@ -58,7 +65,7 @@ func New(ctx context.Context, cfg Config) (*Runner, error) {
 	err = r.exec(ctx, invocation{
 		argv:    []string{"version"},
 		env:     r.env(domain.Analysis, nil),
-		timeout: DefaultTimeout,
+		timeout: versionTimeout,
 		dir:     ".",
 		args:    []string{"version"},
 	}, func(stdout io.Reader) error {
