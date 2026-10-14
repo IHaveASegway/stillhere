@@ -2,7 +2,6 @@ package collect
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
@@ -39,5 +38,5 @@ type HistoryFacts struct {
 // History walks the first-parent history of repo.Head over opt.Window and
 // streams git's output into facts (docs/spec/week-collector.md).
 func History(ctx context.Context, git domain.GitRunner, repo domain.Repo, opt HistoryOptions) (*HistoryFacts, error) {
-	return nil, fmt.Errorf("collect.History: %w (#6)", errors.ErrUnsupported)
+	return nil, fmt.Errorf("collect.History: %w (#6)", domain.ErrNotImplemented)
 }

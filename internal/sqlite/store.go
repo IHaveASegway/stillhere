@@ -11,7 +11,6 @@ package sqlite
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
@@ -31,48 +30,48 @@ var _ domain.FactStore = (*Store)(nil)
 // (0700, file 0600) when missing, migrating its schema, and deleting runs a
 // crash left running.
 func Open(ctx context.Context, path string) (*Store, error) {
-	return nil, fmt.Errorf("sqlite.Open: %w (#8)", errors.ErrUnsupported)
+	return nil, fmt.Errorf("sqlite.Open: %w (#8)", domain.ErrNotImplemented)
 }
 
 // BeginRun records r as running and returns its id.
 func (s *Store) BeginRun(ctx context.Context, r domain.Run) (int64, error) {
-	return 0, fmt.Errorf("sqlite.Store.BeginRun: %w (#8)", errors.ErrUnsupported)
+	return 0, fmt.Errorf("sqlite.Store.BeginRun: %w (#8)", domain.ErrNotImplemented)
 }
 
 // PutRepoFacts stores one repository's facts for a running run.
 func (s *Store) PutRepoFacts(ctx context.Context, runID int64, f *domain.RepoFacts) error {
-	return fmt.Errorf("sqlite.Store.PutRepoFacts: %w (#8)", errors.ErrUnsupported)
+	return fmt.Errorf("sqlite.Store.PutRepoFacts: %w (#8)", domain.ErrNotImplemented)
 }
 
 // PutRunFacts stores the run's groups and run-level warnings.
 func (s *Store) PutRunFacts(ctx context.Context, runID int64, groups []domain.Group, warnings []domain.Warning) error {
-	return fmt.Errorf("sqlite.Store.PutRunFacts: %w (#8)", errors.ErrUnsupported)
+	return fmt.Errorf("sqlite.Store.PutRunFacts: %w (#8)", domain.ErrNotImplemented)
 }
 
 // PutMetrics stores the metric values and rank intervals computed for a run.
 func (s *Store) PutMetrics(ctx context.Context, runID int64, values []domain.MetricValue, ranks []domain.RankInterval) error {
-	return fmt.Errorf("sqlite.Store.PutMetrics: %w (#8)", errors.ErrUnsupported)
+	return fmt.Errorf("sqlite.Store.PutMetrics: %w (#8)", domain.ErrNotImplemented)
 }
 
 // FinishRun publishes a run by setting its final status.
 func (s *Store) FinishRun(ctx context.Context, runID int64, status domain.RunStatus) error {
-	return fmt.Errorf("sqlite.Store.FinishRun: %w (#8)", errors.ErrUnsupported)
+	return fmt.Errorf("sqlite.Store.FinishRun: %w (#8)", domain.ErrNotImplemented)
 }
 
 // LatestRun returns the newest complete or partial run of the kind, or
 // domain.ErrNotFound.
 func (s *Store) LatestRun(ctx context.Context, kind domain.RunKind) (domain.Run, error) {
-	return domain.Run{}, fmt.Errorf("sqlite.Store.LatestRun: %w (#8)", errors.ErrUnsupported)
+	return domain.Run{}, fmt.Errorf("sqlite.Store.LatestRun: %w (#8)", domain.ErrNotImplemented)
 }
 
 // LoadFacts returns a run's facts exactly as they were put.
 func (s *Store) LoadFacts(ctx context.Context, runID int64) (*domain.FactSet, error) {
-	return nil, fmt.Errorf("sqlite.Store.LoadFacts: %w (#8)", errors.ErrUnsupported)
+	return nil, fmt.Errorf("sqlite.Store.LoadFacts: %w (#8)", domain.ErrNotImplemented)
 }
 
 // LoadMetrics returns a run's metric values and rank intervals.
 func (s *Store) LoadMetrics(ctx context.Context, runID int64) ([]domain.MetricValue, []domain.RankInterval, error) {
-	return nil, nil, fmt.Errorf("sqlite.Store.LoadMetrics: %w (#8)", errors.ErrUnsupported)
+	return nil, nil, fmt.Errorf("sqlite.Store.LoadMetrics: %w (#8)", domain.ErrNotImplemented)
 }
 
 // Close releases the database. It is safe on a Store whose Open failed.

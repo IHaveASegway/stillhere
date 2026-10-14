@@ -1,10 +1,11 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/spf13/cobra"
+
+	"github.com/IHaveASegway/stillhere/internal/domain"
 )
 
 func (e *env) mcpCommand() *cobra.Command {
@@ -17,7 +18,7 @@ answers an agent's questions from facts.db. It only reads. Diffs are exposed
 only with --allow-source.`,
 		Args: usageArgs(cobra.NoArgs),
 		RunE: func(*cobra.Command, []string) error {
-			return fmt.Errorf("mcp command: %w (#15)", errors.ErrUnsupported)
+			return fmt.Errorf("mcp command: %w (#15)", domain.ErrNotImplemented)
 		},
 	}
 	cmd.Flags().BoolVar(&allowSource, "allow-source", false, "let the agent read diffs and source")

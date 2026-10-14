@@ -2,9 +2,9 @@ package app
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
+	"github.com/IHaveASegway/stillhere/internal/domain"
 	"github.com/IHaveASegway/stillhere/internal/report"
 )
 
@@ -13,5 +13,5 @@ import (
 // publishes the run. It returns domain.ErrNoFacts, alongside the report, when
 // no repository produced facts.
 func Scan(ctx context.Context, d Deps, r ScanRequest) (*report.Model, error) {
-	return nil, fmt.Errorf("app.Scan: %w (#11)", errors.ErrUnsupported)
+	return nil, fmt.Errorf("app.Scan: %w (#11)", domain.ErrNotImplemented)
 }

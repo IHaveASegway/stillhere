@@ -1,10 +1,11 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/spf13/cobra"
+
+	"github.com/IHaveASegway/stillhere/internal/domain"
 )
 
 func (e *env) metricsCommand() *cobra.Command {
@@ -16,7 +17,7 @@ unit, eligibility rule, blind spots, how it can be gamed, and its validity
 status (docs/metrics.md).`,
 		Args: usageArgs(cobra.NoArgs),
 		RunE: func(*cobra.Command, []string) error {
-			return fmt.Errorf("metrics command: %w (#11)", errors.ErrUnsupported)
+			return fmt.Errorf("metrics command: %w (#11)", domain.ErrNotImplemented)
 		},
 	}
 }

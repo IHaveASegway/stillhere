@@ -8,7 +8,6 @@
 package metrics
 
 import (
-	"errors"
 	"fmt"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
@@ -55,10 +54,10 @@ func All() []Metric {
 // Lookup returns the metric with id, such as "durable@1", or the latest
 // version for a bare name such as "durable".
 func Lookup(id string) (Metric, error) {
-	return nil, fmt.Errorf("metrics.Lookup: %w (#9)", errors.ErrUnsupported)
+	return nil, fmt.Errorf("metrics.Lookup: %w (#9)", domain.ErrNotImplemented)
 }
 
 // Compute runs every metric over in and returns all values, sorted.
 func Compute(in *Input) ([]domain.MetricValue, error) {
-	return nil, fmt.Errorf("metrics.Compute: %w (#9)", errors.ErrUnsupported)
+	return nil, fmt.Errorf("metrics.Compute: %w (#9)", domain.ErrNotImplemented)
 }

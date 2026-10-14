@@ -2,7 +2,6 @@ package collect
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
@@ -20,5 +19,5 @@ type Discovery struct {
 // duplicates by scrubbed origin URL, resolves each default branch to a SHA,
 // and checks clone health (docs/spec/discovery.md).
 func Discover(ctx context.Context, git domain.GitRunner, paths []string) (*Discovery, error) {
-	return nil, fmt.Errorf("collect.Discover: %w (#4)", errors.ErrUnsupported)
+	return nil, fmt.Errorf("collect.Discover: %w (#4)", domain.ErrNotImplemented)
 }

@@ -470,11 +470,7 @@ func subcommandRequired(cmd *cobra.Command, args []string) error {
 
 // errorLine is the one line printed for a failed command.
 func errorLine(cmd *cobra.Command, err error) string {
-	msg := err.Error()
-	if errors.Is(err, errors.ErrUnsupported) {
-		msg = "not implemented yet: " + msg
-	}
-	return cmd.CommandPath() + ": " + strings.Join(strings.Fields(msg), " ")
+	return cmd.CommandPath() + ": " + strings.Join(strings.Fields(err.Error()), " ")
 }
 
 // exitCode maps an error to the exit code (docs/spec/report-json.md#exit-codes),
@@ -484,9 +480,10 @@ func exitCode(err error) int {
 	switch {
 	case err == nil:
 		return 0
-	case errors.As(err, &usage), errors.Is(err, errors.ErrUnsupported):
+	case errors.As(err, &usage), errors.Is(err, domain.ErrNotImplemented):
 		// A command whose use case is not built yet is a usage error: the
-		// user cannot get a result from it today.
+		// user cannot get a result from it today. The second case goes with
+		// domain.ErrNotImplemented when the last stub does (#13).
 		return 2
 	default:
 		// Includes domain.ErrNoFacts: no repository produced facts.

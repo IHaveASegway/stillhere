@@ -223,6 +223,7 @@ type Run struct {
 type UsageError struct{ Msg string } // exit 2
 var ErrNoFacts = errors.New("no repository produced facts") // exit 1
 var ErrNotFound = errors.New("not found")
+var ErrNotImplemented = errors.New("not implemented yet") // a stub of the walking skeleton, wrapped with its issue; exit 2; deleted with the last stub (#13)
 ```
 
 ## Ports

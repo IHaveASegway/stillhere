@@ -2,8 +2,9 @@ package app
 
 import (
 	"context"
-	"errors"
 	"fmt"
+
+	"github.com/IHaveASegway/stillhere/internal/domain"
 )
 
 // SyncRequest asks to bring an organization's mirrors and forge facts up to
@@ -18,5 +19,5 @@ type SyncRequest struct {
 // Sync lists the organization's repositories, fetches their bare mirrors and
 // upserts pull requests and reviews into facts.db.
 func Sync(ctx context.Context, d Deps, r SyncRequest) error {
-	return fmt.Errorf("app.Sync: %w (#14)", errors.ErrUnsupported)
+	return fmt.Errorf("app.Sync: %w (#14)", domain.ErrNotImplemented)
 }

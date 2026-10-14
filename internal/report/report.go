@@ -8,7 +8,6 @@
 package report
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -30,15 +29,15 @@ type Model struct {
 
 // Text renders m as aligned plain text, readable at 100 columns.
 func Text(w io.Writer, m *Model) error {
-	return fmt.Errorf("report.Text: %w (#11)", errors.ErrUnsupported)
+	return fmt.Errorf("report.Text: %w (#11)", domain.ErrNotImplemented)
 }
 
 // Markdown renders m as GitHub-flavoured Markdown.
 func Markdown(w io.Writer, m *Model) error {
-	return fmt.Errorf("report.Markdown: %w (#11)", errors.ErrUnsupported)
+	return fmt.Errorf("report.Markdown: %w (#11)", domain.ErrNotImplemented)
 }
 
 // JSON renders m as stillhere.report/v1 JSON, in a stable order.
 func JSON(w io.Writer, m *Model) error {
-	return fmt.Errorf("report.JSON: %w (#11)", errors.ErrUnsupported)
+	return fmt.Errorf("report.JSON: %w (#11)", domain.ErrNotImplemented)
 }

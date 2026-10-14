@@ -11,7 +11,6 @@
 package policy
 
 import (
-	"errors"
 	"fmt"
 	"regexp"
 
@@ -98,13 +97,13 @@ type Ranks struct {
 // Default returns the packaged policy: the embedded default.toml plus the
 // embedded deny list generated_paths.txt.
 func Default() (*Policy, error) {
-	return nil, fmt.Errorf("policy.Default: %w (#5)", errors.ErrUnsupported)
+	return nil, fmt.Errorf("policy.Default: %w (#5)", domain.ErrNotImplemented)
 }
 
 // Parse parses a user's policy file. name is used in messages. A missing
 // required table or a pattern RE2 rejects is a *domain.UsageError.
 func Parse(name string, data []byte) (*Policy, error) {
-	return nil, fmt.Errorf("policy.Parse: %w (#5)", errors.ErrUnsupported)
+	return nil, fmt.Errorf("policy.Parse: %w (#5)", domain.ErrNotImplemented)
 }
 
 // Ref returns the version and hash a run records for this policy.

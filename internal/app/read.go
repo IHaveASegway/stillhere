@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
@@ -54,25 +53,25 @@ type MetricAUC struct {
 
 // Report renders a stored run as a report, optionally with ranks.
 func Report(ctx context.Context, d Deps, r ReportRequest) (*report.Model, error) {
-	return nil, fmt.Errorf("app.Report: %w (#11)", errors.ErrUnsupported)
+	return nil, fmt.Errorf("app.Report: %w (#11)", domain.ErrNotImplemented)
 }
 
 // Explain returns one person's values for one metric.
 func Explain(ctx context.Context, d Deps, r ExplainRequest) (*ExplainResult, error) {
-	return nil, fmt.Errorf("app.Explain: %w (#11)", errors.ErrUnsupported)
+	return nil, fmt.Errorf("app.Explain: %w (#11)", domain.ErrNotImplemented)
 }
 
 // WhoKnows returns who knows the code under a path.
 func WhoKnows(ctx context.Context, d Deps, r WhoKnowsRequest) (*WhoKnowsResult, error) {
-	return nil, fmt.Errorf("app.WhoKnows: %w (#11)", errors.ErrUnsupported)
+	return nil, fmt.Errorf("app.WhoKnows: %w (#11)", domain.ErrNotImplemented)
 }
 
 // Me returns one person's own page.
 func Me(ctx context.Context, d Deps, r MeRequest) (*MeResult, error) {
-	return nil, fmt.Errorf("app.Me: %w (#11)", errors.ErrUnsupported)
+	return nil, fmt.Errorf("app.Me: %w (#11)", domain.ErrNotImplemented)
 }
 
 // Validate scores each ranked metric against hand labels with the AUC.
 func Validate(ctx context.Context, d Deps, r ValidateRequest) (*ValidateResult, error) {
-	return nil, fmt.Errorf("app.Validate: %w (#11)", errors.ErrUnsupported)
+	return nil, fmt.Errorf("app.Validate: %w (#11)", domain.ErrNotImplemented)
 }

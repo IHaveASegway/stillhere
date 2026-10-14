@@ -2,7 +2,6 @@ package collect
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"time"
 
@@ -29,5 +28,5 @@ type BlameFacts struct {
 // commits that wrote them (docs/spec/blame-collector.md). A failure on one
 // file is recorded and the repository continues.
 func Blame(ctx context.Context, git domain.GitRunner, repo domain.Repo, opt BlameOptions) (*BlameFacts, error) {
-	return nil, fmt.Errorf("collect.Blame: %w (#7)", errors.ErrUnsupported)
+	return nil, fmt.Errorf("collect.Blame: %w (#7)", domain.ErrNotImplemented)
 }

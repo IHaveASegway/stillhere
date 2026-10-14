@@ -2,7 +2,6 @@ package collect
 
 import (
 	"context"
-	"errors"
 	"fmt"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
@@ -19,5 +18,5 @@ type PathAt struct{ Commit, Path string }
 // and cat-file --batch-check for absent paths
 // (docs/spec/classification.md).
 func ClassifyPaths(ctx context.Context, git domain.GitRunner, repo domain.Repo, p *policy.Policy, absent []PathAt) ([]domain.PathClass, error) {
-	return nil, fmt.Errorf("collect.ClassifyPaths: %w (#5)", errors.ErrUnsupported)
+	return nil, fmt.Errorf("collect.ClassifyPaths: %w (#5)", domain.ErrNotImplemented)
 }
