@@ -520,7 +520,7 @@ Ada's oracle stays stable only if these cases stay out of the fixture repo.
   - `tests/test_service.py` gets role `test`, and `bootstrap/cache/config.php` is denied.
   - A faked size above `max_bytes` is `too_big`; do not commit a 400 KB blob.
   - Pin the precedence among path roles with `tests/fixtures/x.py` ([classification.md](../../docs/spec/classification.md#roles)).
-- **Rename parser** (`TestNumstatRename`): `dir/{old => new}/file.py` gives `dir/new/file.py`; `{old => new}` gives `new`; `a => b => c` gives warning `numstat-rename` and 0 lines.
+- **Rename paths** (`TestNumstatRename`, a small repository built with `git fast-import`): the collector reads numstat with `-z` ([week-collector.md](../../docs/spec/week-collector.md#parsing)), so each form git would print without it gives the true destination and source, in week and scan runs alike. `dir/{old => new}/file.py` gives `dir/new/file.py`; `x/{y => }/z.py` gives `x/z.py`, not `x//z.py`; `a => b => c` gives `b => c` renamed from `a`, with no warning; a modified file named `{x => y}.py` keeps its name and is not a rename; quoted and octal-escaped names keep their own bytes. Scan runs add each file's non-blank lines from its own patch, so a blank line added in a rename counts in numstat only.
 - **Policy** (`TestPolicy`):
   - A user file that omits `[bots]` exits 2 and names `bots`.
   - `--days 1` against `[week].days = 7` writes `window.days` 1, `days_from` `cli`, and `since` `2026-10-06T00:00:00Z`.
