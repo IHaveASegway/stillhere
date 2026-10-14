@@ -1,0 +1,85 @@
+# Release: pushing a v* tag publishes that commit through every channel in
+# .goreleaser.yaml (the GitHub release with archives and checksums, the
+# Homebrew cask, the images on ghcr.io). Only this workflow holds the
+# credentials that publish, and only for this job.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+# Nothing by default; the job below asks for exactly what it publishes.
+permissions: {}
+
+# One release at a time, and never cancel one halfway through publishing.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+# An explicit bash runs every step with -eo pipefail.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: write # create the GitHub release and upload its assets
+      packages: write # push the images to ghcr.io/ihaveasegway/stillhere
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the changelog runs from the previous tag
+          persist-credentials: false
+      # Release only what was reviewed: the tagged commit must be on main.
+      - name: The tag points at a commit on main
+        run: |
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_REF_NAME is not on main; tag a commit that main contains"
+            exit 1
+          fi
+      # No caches in this job: a cache written by another workflow run must
+      # not be able to change what a release builds or runs.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      # Fail before anything is published if the cask cannot be: the token is
+      # missing or expired, or the tap does not exist or refuses pushes.
+      - name: The tap token can push to IHaveASegway/homebrew-tap
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::the HOMEBREW_TAP_GITHUB_TOKEN secret is not set"
+            exit 1
+          fi
+          if ! push=$(gh api repos/IHaveASegway/homebrew-tap --jq .permissions.push); then
+            echo "::error::HOMEBREW_TAP_GITHUB_TOKEN cannot read IHaveASegway/homebrew-tap: create the tap or renew the token"
+            exit 1
+          fi
+          if [ "$push" != true ]; then
+            echo "::error::HOMEBREW_TAP_GITHUB_TOKEN cannot push to IHaveASegway/homebrew-tap"
+            exit 1
+          fi
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: arm64
+          cache-image: false
+      # A docker-container builder: one build pushes both platforms under one
+      # index, with SBOM and provenance attestations.
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          cache-binary: false
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: goreleaser release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+        run: go run github.com/goreleaser/goreleaser/v2@v2.18.3 release --clean
