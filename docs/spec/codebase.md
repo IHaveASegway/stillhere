@@ -139,6 +139,7 @@ type RepoFacts struct {
 	Status      string // "ok" or "error"
 	Error       string // scrubbed and truncated; "" when ok
 	Warnings    []Warning
+	FirstCommit time.Time   // author time of the earliest root commit reachable from Head; zero when unknown (a shallow clone)
 	History     Window      // the landing window the history covers
 	Paths       []PathClass
 	Commits     []Commit    // landing commits plus every commit a landing brought in
@@ -319,11 +320,12 @@ type HistoryOptions struct {
 }
 func History(ctx context.Context, git domain.GitRunner, repo domain.Repo, opt HistoryOptions) (*HistoryFacts, error)
 type HistoryFacts struct {
-	Commits  []domain.Commit
-	Landings []domain.Landing
-	Changes  []domain.FileChange
-	Reverts  []domain.Revert
-	Warnings []domain.Warning
+	FirstCommit time.Time // git log --max-parents=0 --format=%aI <head>: the earliest root's author time; zero when unknown
+	Commits     []domain.Commit
+	Landings    []domain.Landing
+	Changes     []domain.FileChange
+	Reverts     []domain.Revert
+	Warnings    []domain.Warning
 }
 type BlameOptions struct {
 	Paths          []string      // classified paths that received a role

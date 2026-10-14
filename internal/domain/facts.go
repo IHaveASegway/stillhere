@@ -150,7 +150,8 @@ type RepoFacts struct {
 	Status      string // RepoStatusOK or RepoStatusError
 	Error       string // scrubbed and truncated; "" when ok
 	Warnings    []Warning
-	History     Window // the landing window the history covers
+	FirstCommit time.Time // author time of the earliest root commit reachable from Head; zero when unknown, such as a shallow clone whose boundary hides the roots
+	History     Window    // the landing window the history covers
 	Paths       []PathClass
 	Commits     []Commit // landing commits plus every commit a landing brought in
 	Landings    []Landing

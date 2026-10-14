@@ -3,6 +3,7 @@ package collect
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
 )
@@ -28,11 +29,17 @@ type HistoryOptions struct {
 
 // HistoryFacts is what History learned about one repository.
 type HistoryFacts struct {
-	Commits  []domain.Commit
-	Landings []domain.Landing
-	Changes  []domain.FileChange
-	Reverts  []domain.Revert
-	Warnings []domain.Warning
+	// FirstCommit is the repository's age: the author time of the earliest
+	// root commit reachable from Head (git log --max-parents=0
+	// --format=%aI <head>; a repository can have several roots). It is
+	// zero when unknown, such as in a shallow clone, whose boundary
+	// commits are not roots.
+	FirstCommit time.Time
+	Commits     []domain.Commit
+	Landings    []domain.Landing
+	Changes     []domain.FileChange
+	Reverts     []domain.Revert
+	Warnings    []domain.Warning
 }
 
 // History walks the first-parent history of repo.Head over opt.Window and

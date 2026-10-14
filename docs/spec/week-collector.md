@@ -105,3 +105,13 @@ git <common> rev-list <landing>^1..<landing>
 - **Lines blamed to the merge commit itself** are conflict resolutions, and belong to the merge's author.
 
 The map is stored as facts (landing SHA, commit SHA) alongside the landings.
+
+## Repository age
+
+`RepoFacts.FirstCommit` is the author time of the earliest root commit reachable from the scanned SHA. A repository can have several roots (a merged-in history), so take the minimum:
+
+```
+git <common> log <sha> --max-parents=0 --format=%aI
+```
+
+In a shallow clone the roots are hidden behind the boundary, so `FirstCommit` is left zero (unknown) rather than reporting the boundary's date as the repository's age.
