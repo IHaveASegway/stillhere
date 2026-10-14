@@ -37,11 +37,7 @@ a bare name such as durable for its latest version.`,
 				Subject: domain.Subject{Kind: domain.SubjectPerson, Key: email},
 			}
 			return e.with(cmd.Context(), need{store: true}, func(d app.Deps) error {
-				res, err := app.Explain(cmd.Context(), d, req)
-				if err != nil {
-					return err
-				}
-				return e.printJSON(res)
+				return e.printAnswer(app.Explain(cmd.Context(), d, req))
 			})
 		},
 	}

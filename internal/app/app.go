@@ -1,25 +1,28 @@
 // Package app holds stillhere's use cases: week, scan, report, explain,
-// who-knows, me, validate and sync, and the MCP server's from M4. Each one
-// orchestrates the core and the collectors and reaches the outside world
-// only through the ports it is handed in Deps, so it never imports an
+// who-knows, me, validate, metrics and sync, and the MCP server's from M4.
+// Each one orchestrates the core and the collectors and reaches the outside
+// world only through the ports it is handed in Deps, so it never imports an
 // adapter, os/exec, database/sql or cobra, and never opens a file
 // (docs/spec/codebase.md#the-dependency-rule).
 //
 // Requests arrive already parsed and validated by an inbound adapter (the
 // command line, or the MCP server): a use case never sees a flag, and the
-// adapter, not the use case, picks the output format.
+// adapter, not the use case, picks the output format. Answers are report
+// types, so both adapters render and serve the same shapes.
+//
+// The write side is week (collect, compute, print) and scan (collect,
+// compute, store as one run). The read side loads a stored run with the
+// policy the run recorded and computes nothing that changes it (CQRS: Martin
+// Fowler, "CQRS").
 package app
 
 import (
+	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
 	"github.com/IHaveASegway/stillhere/internal/policy"
-
-	// errgroup bounds the per-repository fan-out of Week and Scan (#11).
-	// Importing it here pins the version in go.mod for every branch.
-	_ "golang.org/x/sync/errgroup"
 )
 
 // Deps are the ports and settings a use case runs with, built by the
@@ -30,8 +33,25 @@ type Deps struct {
 	Forge      domain.ForgeSource // sync only: the forge's API
 	ForgeStore domain.ForgeStore  // sync only: the forge replica in facts.db
 	Policy     *policy.Policy     // week and scan only; a read use case rebuilds the run's own (policy.FromSource on Run.PolicySource)
-	Log        *slog.Logger
-	Version    string // the tool version recorded on every run
+	Log        *slog.Logger       // progress and warnings, on stderr; nil discards them
+	Version    string             // the tool version recorded on every run
+}
+
+// ready returns d with a logger, after checking that it holds the ports op
+// needs: a missing port is the composition root's mistake, not the user's.
+func (d Deps) ready(op string, git, pol, store bool) (Deps, error) {
+	switch {
+	case git && d.Git == nil:
+		return d, fmt.Errorf("%s: no git runner", op)
+	case pol && d.Policy == nil:
+		return d, fmt.Errorf("%s: no policy", op)
+	case store && d.Store == nil:
+		return d, fmt.Errorf("%s: no facts store", op)
+	}
+	if d.Log == nil {
+		d.Log = slog.New(slog.DiscardHandler)
+	}
+	return d, nil
 }
 
 // WeekRequest asks what landed on the default branch of each repository in

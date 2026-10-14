@@ -531,9 +531,15 @@ func Explain(ctx context.Context, d Deps, r ExplainRequest) (*report.Explain, er
 func WhoKnows(ctx context.Context, d Deps, r WhoKnowsRequest) (*report.WhoKnows, error)
 func Me(ctx context.Context, d Deps, r MeRequest) (*report.Me, error)
 func Validate(ctx context.Context, d Deps, r ValidateRequest) (*report.Validation, error)
+func Metrics() *report.Catalog // the registry's definitions: the metrics command and the MCP server's metrics()
 func Sync(ctx context.Context, d Deps, r SyncRequest) error // #14
+// Week and Scan return the model alongside domain.ErrNoFacts when no repository produced facts (a scan then
+// stores nothing). A cancellation, a *domain.UsageError from a collector, or a collector that is not built yet
+// stops the run; any other failure is the repository's, recorded on its RepoFacts. Scan writes the run after
+// computing everything: BeginRun, PutRepoFacts in key order, PutRunFacts, PutMetrics, then FinishRun with complete
+// or partial (a failed repository or PATH), or failed if a write fails. Ranks leave bots out of rank.Intervals.
 // The MCP server's own use cases (overview, person, changes, highlights; ADR 0006) go in app/mcp.go, which #15
-// owns. They answer from #11's report model (the overview and repo cards), so #15 builds on #11's report types.
+// owns. They answer from #11's report model (the overviews and repo cards), so #15 builds on #11's report types.
 
 // cli
 type Build struct{ Version, Commit, Date string } // from -ldflags -X main.version, main.commit, main.date

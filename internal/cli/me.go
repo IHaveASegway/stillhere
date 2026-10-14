@@ -31,11 +31,7 @@ exactly what their lead sees about them.`,
 				return usagef("me needs --email EMAIL (see '%s --help')", cmd.CommandPath())
 			}
 			return e.with(cmd.Context(), need{store: true}, func(d app.Deps) error {
-				res, err := app.Me(cmd.Context(), d, req)
-				if err != nil {
-					return err
-				}
-				return e.printJSON(res)
+				return e.printAnswer(app.Me(cmd.Context(), d, req))
 			})
 		},
 	}

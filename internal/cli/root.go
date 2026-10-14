@@ -11,7 +11,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -309,25 +308,28 @@ func (e *env) printReport(m *report.Model, err error) error {
 	if m == nil {
 		return err
 	}
-	var rerr error
-	switch e.format {
-	case formatJSON:
-		rerr = report.JSON(e.stdout, m)
-	case formatMarkdown:
-		rerr = report.Markdown(e.stdout, m)
-	default:
-		rerr = report.Text(e.stdout, m)
-	}
-	return errors.Join(err, rerr)
+	return errors.Join(err, e.render(m))
 }
 
-// printJSON writes a read-side result as indented JSON.
-// TODO(#11): text and Markdown renderers for the read-side results; until
-// then they print as JSON whatever --format says.
-func (e *env) printJSON(v any) error {
-	enc := json.NewEncoder(e.stdout)
-	enc.SetIndent("", "  ")
-	return enc.Encode(v)
+// printAnswer renders a read command's answer in the chosen --format, or
+// returns the use case's error.
+func (e *env) printAnswer(d report.Document, err error) error {
+	if err != nil {
+		return err
+	}
+	return e.render(d)
+}
+
+// render writes d to stdout in the chosen --format.
+func (e *env) render(d report.Document) error {
+	switch e.format {
+	case formatJSON:
+		return report.JSON(e.stdout, d)
+	case formatMarkdown:
+		return report.Markdown(e.stdout, d)
+	default:
+		return report.Text(e.stdout, d)
+	}
 }
 
 // timeFlag is a pflag.Value that parses an RFC 3339 time, or a date that
