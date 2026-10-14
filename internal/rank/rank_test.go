@@ -24,8 +24,9 @@ var (
 
 // TestRankIntervals is the contract test of the bootstrap
 // (docs/metrics.md#ranking-rules, docs/spec/codebase.md#tests): the same
-// inputs give the same intervals, on every machine and Go release, and
-// subjects below the minimum sample are listed and not ranked.
+// inputs give the same intervals, on every machine and Go release, subjects
+// below the minimum sample are listed and not ranked, and a sum's week
+// blocks must match its window.
 //
 // Except where a case says it pins this implementation's output, every
 // expected interval is the exact 2.5% or 97.5% point of the bootstrap
@@ -147,26 +148,77 @@ func TestRankIntervals(t *testing.T) {
 		check(t, got, simplifying, sibling, window, row{"ada@example.com", 10, 7, 13, 1, 1, 10, true})
 	})
 
+	t.Run("a sum's week blocks must match its window", func(t *testing.T) {
+		// A wrong count of blocks would give plausible but wrong intervals,
+		// so Intervals panics instead. For the 10 weekly changes above,
+		// Blocks 10 (the active weeks only) would give [10, 10], the
+		// zero-width interval that resampling weeks exists to avoid, and
+		// Blocks 52 would give [5, 16]. Every subject's clusters are
+		// checked, eligible or not, so no subject's data can change the
+		// blocks the others draw.
+		var weekly []rank.Cluster
+		for k := range 10 {
+			weekly = append(weekly, rank.Cluster{Change: fmt.Sprint("c", k), Num: 1, Block: k})
+		}
+		data := func(ada, zoe []rank.Cluster) map[domain.Subject][]rank.Cluster {
+			return map[domain.Subject][]rank.Cluster{
+				person("ada@example.com"): slices.Concat(weekly, ada), // eligible
+				person("zoe@example.com"): zoe,                        // not eligible
+			}
+		}
+		bad := func(block int) []rank.Cluster { return []rank.Cluster{{Change: "x", Num: 1, Block: block}} }
+		for _, c := range []struct {
+			name string
+			w    domain.Window
+			kind rank.Kind
+			data map[domain.Subject][]rank.Cluster
+			opt  rank.Options
+		}{
+			{"Blocks left out", window, rank.Sum, data(nil, nil), rank.Options{MinN: 10}},
+			{"Blocks left out, with no data", window, rank.Sum, nil, rank.Options{MinN: 10}},
+			{"Blocks counting the active weeks only", window, rank.Sum, data(nil, nil), rank.Options{MinN: 10, Blocks: 10}},
+			{"Blocks counting a year of weeks", window, rank.Sum, data(nil, nil), rank.Options{MinN: 10, Blocks: 52}},
+			{"an empty window", domain.Window{Since: fixture.Now, Until: fixture.Now}, rank.Sum, data(nil, nil), rank.Options{MinN: 10}},
+			{"a block counted in days", window, rank.Sum, data(bad(81), nil), rank.Options{MinN: 10, Blocks: 13}},
+			{"a block before the window, from an ineligible subject", window, rank.Sum, data(nil, bad(13)), rank.Options{MinN: 10, Blocks: 13}},
+			{"a block after the window's end, from an ineligible subject", window, rank.Sum, data(nil, bad(-1)), rank.Options{MinN: 10, Blocks: 13}},
+			{"an unknown kind", window, rank.Kind(2), data(nil, nil), rank.Options{MinN: 10, Blocks: 13}},
+		} {
+			func() {
+				defer func() {
+					if recover() == nil {
+						t.Errorf("%s: Intervals did not panic", c.name)
+					}
+				}()
+				rank.Intervals(simplifying, sibling, c.w, c.kind, c.data, c.opt)
+			}()
+		}
+	})
+
 	t.Run("intervals depend on each subject's clusters, not their order or the other subjects", func(t *testing.T) {
 		// spread's replicates are finely spread, so any change to a
 		// subject's draws moves its interval.
-		for _, kind := range []rank.Kind{rank.Ratio, rank.Sum} {
+		for _, c := range []struct {
+			id   domain.MetricID
+			w    domain.Window
+			kind rank.Kind
+		}{{durable, cohort, rank.Ratio}, {simplifying, window, rank.Sum}} {
 			opt := rank.Options{MinN: 10, Blocks: 13}
 			data := spread()
-			first := rank.Intervals(durable, sibling, cohort, kind, data, opt)
+			first := rank.Intervals(c.id, sibling, c.w, c.kind, data, opt)
 			if !reflect.DeepEqual(data, spread()) {
-				t.Errorf("kind %d: Intervals modified its input", kind)
+				t.Errorf("%s: Intervals modified its input", c.id)
 			}
-			if again := rank.Intervals(durable, sibling, cohort, kind, spread(), opt); !reflect.DeepEqual(again, first) {
-				t.Errorf("kind %d: a second call got\n%s\nthe first\n%s", kind, format(again), format(first))
+			if again := rank.Intervals(c.id, sibling, c.w, c.kind, spread(), opt); !reflect.DeepEqual(again, first) {
+				t.Errorf("%s: a second call got\n%s\nthe first\n%s", c.id, format(again), format(first))
 			}
 
 			reordered := spread()
 			for _, cs := range reordered {
 				slices.Reverse(cs)
 			}
-			if got := rank.Intervals(durable, sibling, cohort, kind, reordered, opt); !reflect.DeepEqual(got, first) {
-				t.Errorf("kind %d: reversed clusters got\n%s\nin order\n%s", kind, format(got), format(first))
+			if got := rank.Intervals(c.id, sibling, c.w, c.kind, reordered, opt); !reflect.DeepEqual(got, first) {
+				t.Errorf("%s: reversed clusters got\n%s\nin order\n%s", c.id, format(got), format(first))
 			}
 		}
 
@@ -264,7 +316,7 @@ func siblingSimplifying() map[domain.Subject][]rank.Cluster {
 			panic(err)
 		}
 		landed = landed.Add(12 * time.Hour) // every sibling commit is at 12:00:00Z
-		return rank.Cluster{Change: change, Num: lines, Block: int(fixture.Now.Sub(landed) / (7 * 24 * time.Hour))}
+		return rank.Cluster{Change: change, Num: lines, Block: weekBlock(window, landed)}
 	}
 	return map[domain.Subject][]rank.Cluster{
 		person("lena@example.com"): {
@@ -296,6 +348,14 @@ func spread() map[domain.Subject][]rank.Cluster {
 		data[person(name+"@example.com")] = cs
 	}
 	return data
+}
+
+// weekBlock is the Block of a change that landed at t in w, by the rule of
+// rank.Cluster: block k holds [Until − 7(k+1) days, Until − 7k days), so a
+// landing exactly a week before Until is in block 0.
+func weekBlock(w domain.Window, t time.Time) int {
+	const week = 7 * 24 * time.Hour
+	return int((w.Until.Sub(t)+week-1)/week) - 1
 }
 
 func person(email string) domain.Subject {

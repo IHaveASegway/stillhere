@@ -27,9 +27,10 @@ package rank
 
 import (
 	"cmp"
-	"maps"
+	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
 )
@@ -49,7 +50,14 @@ type Cluster struct {
 	Change string  // landing SHA or PR id
 	Num    float64 // the change's numerator
 	Den    float64 // Ratio only
-	Block  int     // Sum only: the week (counted back from Now) the change landed in; 0 is the 7 days before Now
+
+	// Block is Sum only: the window's 7-day block the change landed in,
+	// counted back from the window's end, which is Now for every Sum metric.
+	// Block k holds the landings in [Until − 7(k+1) days, Until − 7k days),
+	// half-open like the window, so a landing at time t is in block
+	// ⌈(Until − t) / 7 days⌉ − 1, and 0 is the last 7 days. It must be in
+	// [0, Options.Blocks).
+	Block int
 }
 
 // Options tunes the bootstrap. The ranked metric supplies them
@@ -57,13 +65,22 @@ type Cluster struct {
 type Options struct {
 	Replicates int // B; 0 means the default, 1000
 	MinN       int // eligibility: clusters per subject, from the metric's definition
-	Blocks     int // Sum only: week blocks in the window, numbered 0 to Blocks-1
+
+	// Blocks is Sum only: the number of 7-day blocks the window holds,
+	// ⌈(Until − Since) / 7 days⌉, the oldest one short when the window is
+	// not a whole number of weeks: 13 for 90 days. Intervals checks it
+	// against the window.
+	Blocks int
 }
 
 const (
 	// defaultReplicates is B when Options.Replicates is 0
 	// (docs/metrics.md#ranking-rules).
 	defaultReplicates = 1000
+
+	// week is the length of a Sum metric's blocks
+	// (docs/metrics.md#ranking-rules).
+	week = 7 * 24 * time.Hour
 
 	// The interval is the central 95% of the replicates. Its ends are given
 	// in thousandths, so the order statistics are computed in integers.
@@ -97,10 +114,24 @@ const (
 // Values are compared exactly: sums of counts are exact in float64, and equal
 // ratios of counts round to the same float64, so they tie. The result
 // depends on each subject's set of clusters, not on their order, and a Ratio
-// subject's value interval depends on its own clusters only. Intervals ranks
-// every subject it is given: leaving bots out is the caller's job
+// subject's value interval depends on its own clusters only. Two Sum
+// subjects with the same totals in every block get the same intervals,
+// because every replicate draws the same blocks for both; two Ratio subjects
+// with the same clusters get intervals that agree only up to Monte Carlo
+// error, because each draws from its own stream. Intervals ranks every
+// subject it is given: leaving bots out is the caller's job
 // (docs/metrics.md#ranking-rules).
+//
+// Intervals panics on input that only a bug in the ranked metric can
+// produce, because such input would otherwise give plausible but wrong
+// intervals: a Kind other than Ratio and Sum and, for Sum, an empty window,
+// an Options.Blocks other than the number of blocks in w, or a cluster whose
+// Block is outside [0, Blocks), whether or not its subject is eligible. Too
+// few blocks hide a count's uncertainty, and too many inflate it. The
+// options are checked even when data is empty, so a misconfigured metric
+// fails on its first call.
 func Intervals(id domain.MetricID, scope domain.Scope, w domain.Window, kind Kind, data map[domain.Subject][]Cluster, opt Options) []domain.RankInterval {
+	blocks := checkOptions(kind, w, opt)
 	if len(data) == 0 {
 		return nil
 	}
@@ -116,6 +147,9 @@ func Intervals(id domain.MetricID, scope domain.Scope, w domain.Window, kind Kin
 	var eligible []int                      // indexes into subjects
 	for i, s := range subjects {
 		all[i] = sortedClusters(data[s])
+		if kind == Sum {
+			checkBlocks(all[i], blocks)
+		}
 		out[i] = domain.RankInterval{
 			Metric:   id,
 			Scope:    scope,
@@ -140,7 +174,7 @@ func Intervals(id domain.MetricID, scope domain.Scope, w domain.Window, kind Kin
 	seed := Seed(id, scope, w)
 	var values [][]float64 // values[j][r]: eligible subject j's value in replicate r
 	if kind == Sum {
-		values = blockReplicates(seed, weekBlocks(opt.Blocks, all), pick(all, eligible), b)
+		values = blockReplicates(seed, blocks, pick(all, eligible), b)
 	} else {
 		values = clusterReplicates(seed, pick(subjects, eligible), pick(all, eligible), b)
 	}
@@ -180,33 +214,32 @@ func clusterReplicates(seed uint64, subjects []domain.Subject, clusters [][]Clus
 }
 
 // blockReplicates draws b replicates of each Sum subject's value. A
-// replicate draws as many week blocks as labels holds, with replacement, the
-// same blocks for every subject, and each subject's value is the sum of its
-// totals in the drawn blocks. Drawing the same weeks for everyone keeps what
-// a week did to the whole team, such as a holiday, out of the comparison
-// between subjects.
-func blockReplicates(seed uint64, labels []int, clusters [][]Cluster, b int) [][]float64 {
-	column := make(map[int]int, len(labels))
-	for i, l := range labels {
-		column[l] = i
-	}
-	totals := make([][]float64, len(clusters)) // totals[j][k]: subject j's Σ Num in block labels[k]
+// replicate draws the window's blocks, as many as it holds, with
+// replacement, the same blocks for every subject, and each subject's value
+// is the sum of its totals in the drawn blocks. Drawing the same weeks for
+// everyone keeps what a week did to the whole team, such as a holiday, out
+// of the comparison between subjects. Every block of the window can be
+// drawn, including one in which nothing landed, and checkBlocks has put
+// every cluster in one of them, so no subject's data changes how many
+// blocks a replicate draws.
+func blockReplicates(seed uint64, blocks int, clusters [][]Cluster, b int) [][]float64 {
+	totals := make([][]float64, len(clusters)) // totals[j][k]: subject j's Σ Num in block k
 	for j, cs := range clusters {
-		totals[j] = make([]float64, len(labels))
+		totals[j] = make([]float64, blocks)
 		for _, c := range cs {
-			totals[j][column[c.Block]] += c.Num
+			totals[j][c.Block] += c.Num
 		}
 	}
 
 	src := newStream(seed, "blocks")
-	drawn := make([]uint64, len(labels))
+	drawn := make([]uint64, blocks)
 	values := make([][]float64, len(clusters))
 	for j := range values {
 		values[j] = make([]float64, b)
 	}
 	for r := range b {
 		for k := range drawn {
-			drawn[k] = bounded(src, uint64(len(labels)))
+			drawn[k] = bounded(src, uint64(blocks))
 		}
 		for j, t := range totals {
 			var v float64
@@ -219,21 +252,43 @@ func blockReplicates(seed uint64, labels []int, clusters [][]Cluster, b int) [][
 	return values
 }
 
-// weekBlocks returns the block labels a Sum replicate draws from, sorted:
-// every week of the window, 0 to blocks-1, including weeks in which nothing
-// landed, plus any other Block a cluster names, so that no cluster is
-// dropped.
-func weekBlocks(blocks int, all [][]Cluster) []int {
-	labels := make(map[int]bool, max(blocks, 0))
-	for k := range max(blocks, 0) {
-		labels[k] = true
+// checkOptions returns the number of 7-day blocks a Sum replicate draws over
+// w, and 0 for Ratio, which has no blocks. It panics on what only a bug in
+// the ranked metric can cause: an unknown kind or, for Sum, an empty window
+// or an opt.Blocks that is not the window's count, such as a count of the
+// weeks in which something landed (fail fast: Shore, "Fail Fast", IEEE
+// Software, 2004).
+func checkOptions(kind Kind, w domain.Window, opt Options) int {
+	switch kind {
+	case Ratio:
+		return 0
+	case Sum:
+		d := w.Until.Sub(w.Since)
+		if d <= 0 {
+			panic(fmt.Sprintf("rank: a Sum metric's window [%s, %s) is empty",
+				w.Since.Format(time.RFC3339), w.Until.Format(time.RFC3339)))
+		}
+		blocks := int((d + week - 1) / week)
+		if opt.Blocks != blocks {
+			panic(fmt.Sprintf("rank: a Sum metric's %g-day window holds %d week blocks, but Options.Blocks is %d",
+				d.Hours()/24, blocks, opt.Blocks))
+		}
+		return blocks
+	default:
+		panic(fmt.Sprintf("rank: unknown Kind %d", kind))
 	}
-	for _, cs := range all {
-		for _, c := range cs {
-			labels[c.Block] = true
+}
+
+// checkBlocks panics when a Sum cluster's Block is outside [0, blocks): only
+// a bug in the ranked metric puts a change outside its window's weeks, such
+// as a landing from outside the window, or a block counted in days.
+func checkBlocks(cs []Cluster, blocks int) {
+	for _, c := range cs {
+		if c.Block < 0 || c.Block >= blocks {
+			panic(fmt.Sprintf("rank: change %q is in week block %d, outside the window's blocks 0 to %d",
+				c.Change, c.Block, blocks-1))
 		}
 	}
-	return slices.Sorted(maps.Keys(labels))
 }
 
 // competitionRanks ranks the subjects within each replicate, the largest

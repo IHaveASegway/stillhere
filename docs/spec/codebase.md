@@ -443,13 +443,18 @@ type Cluster struct {
 	Change string  // landing SHA or PR id
 	Num    float64
 	Den    float64 // Ratio only
-	Block  int     // Sum only: the week (counted back from Now) the change landed in
+	Block  int     // Sum only: the window's 7-day block the change landed in, counted back from w.Until (Now for every Sum
+	               // metric) and half-open like the window: block k holds [Until − 7(k+1) days, Until − 7k days), so a
+	               // landing at t is in block ⌈(Until − t) / 7 days⌉ − 1, and 0 is the last 7 days; in [0, Blocks)
 }
 type Options struct { // supplied by the ranked metric (metrics.RankInput)
 	Replicates int // B; 0 means 1000
 	MinN       int // eligibility: clusters per subject, from the metric's definition
-	Blocks     int // Sum only: week blocks in the window
+	Blocks     int // Sum only: the window's 7-day blocks, ⌈(Until − Since) / 7 days⌉, the oldest one short: 13 for 90 days
 }
+// Intervals panics on what only a bug in the ranked metric produces, rather than publish plausible but wrong
+// intervals: a Kind other than Ratio and Sum and, for Sum, an empty window, a Blocks other than the window's, or a
+// Block outside [0, Blocks) in any subject's clusters, eligible or not. The options are checked even when data is empty.
 func Intervals(id domain.MetricID, scope domain.Scope, w domain.Window, kind Kind, data map[domain.Subject][]Cluster, opt Options) []domain.RankInterval
 func Seed(id domain.MetricID, scope domain.Scope, w domain.Window) uint64
 func AUC(pos, neg []float64) float64
@@ -619,7 +624,7 @@ Tests sit at stable boundaries, so a refactor does not rewrite them (Kent Beck, 
 | `TestBlamePorcelain` | `collect` | `--line-porcelain` and `--porcelain` parse to the same counts |
 | `TestClassify` | `classify` | roles, role precedence, `too_big`, segment matching |
 | `TestPolicy` | `policy` | a missing table or key exits 2; `--days` overrides; the hash covers the deny list; `FromSource(p.Source)` has `p.Ref()` |
-| `TestRankIntervals` | `rank` | reproducible intervals; ineligible subjects unranked |
+| `TestRankIntervals` | `rank` | reproducible intervals; ineligible subjects unranked; a sum's week blocks checked against its window |
 | `TestRedact` | `redact` | no credential survives `URL`, `Scrub` or `Message` (userinfo, scp-like and malformed remotes, query strings, quotes, the 180-rune cut); text that holds none is unchanged |
 | `TestRunner` | `gitcli` | per-user and system attributes change neither numstat nor `check-attr`; no askpass, signature or external diff program runs; an inherited `GIT_DIR` changes nothing; a timeout or cancellation kills git's process group and is reported as such even when the reader fails first on the truncated output; a helper that left the group cannot hold `Stream` |
 | `TestStoreRoundTrip` | `sqlite` | `LoadFacts(PutRepoFacts(x)) == x`; `Run(id)` returns the run as begun and finished, policy source included; readers never see a running or failed run (`ErrNotFound`) |
