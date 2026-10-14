@@ -31,37 +31,47 @@ type DiscoveryRepos struct {
 	Upstream string // the repository the clones were cloned from; never named on a command line
 
 	// Duplicates (discovery rule 5).
-	WidgetA   string // work tree; origin DiscoveryWidgetRemote
-	WidgetB   string // work tree; origin DiscoveryWidgetRemote: a duplicate of WidgetA
-	Other     string // work tree; origin https://github.com/example/other.git
-	Mirror    string // bare mirror of https://github.com/example/widget.git, as stillhere sync writes one
-	SCP       string // work tree; origin git@github.com:o/r.git
-	HTTPS     string // work tree; origin https://github.com/o/r.git
-	UnparsedA string // work tree; origin https:/user:TOKENVALUE@github.com/example/widget.git, which does not parse
-	UnparsedB string // work tree; origin https//user:TOKENVALUE@github.com/example/widget.git, which does not parse
+	WidgetA    string // work tree; origin DiscoveryWidgetRemote
+	WidgetB    string // work tree; origin DiscoveryWidgetRemote: a duplicate of WidgetA
+	WidgetLink string // a symbolic link to WidgetA: the same directory, not a duplicate
+	Other      string // work tree; origin https://github.com/example/other.git
+	Mirror     string // bare mirror of https://github.com/example/widget.git, as stillhere sync writes one
+	SCP        string // work tree; origin git@github.com:o/r.git
+	HTTPS      string // work tree; origin https://github.com/o/r.git
+	UnparsedA  string // work tree; origin https:/user:TOKENVALUE@github.com/example/widget.git, which does not parse
+	UnparsedB  string // work tree; origin https//user:TOKENVALUE@github.com/example/widget.git, which does not parse
+	Reset      string // work tree; remote.origin.url is DiscoveryWidgetRemote, then an empty value that clears it, then https://github.com/example/reset.git
 
 	// Repositories and groups (rules 1, 2, 3 and 6).
-	Bare  string // bare repository named directly; no origin; HEAD is trunk
-	Group string // group team: work tree api, bare web.git (HEAD trunk) and linked, a worktree whose .git is a file; notes/, which holds a clone two levels down, and README.md are not members
-	Outer string // work tree with a nested clone, inner, that discovery must not add
-	SrcA  string // group a/src holding work tree one (no origin)
-	SrcB  string // group b/src holding work tree two (no origin): a second group named src
-	SrcC  string // group c/src-2, empty: a suffix must not take its name
+	Bare    string // bare repository named directly; no origin; HEAD is trunk
+	Group   string // group team: work tree api, bare web.git (HEAD trunk) and linked, a worktree whose .git is a file; api-link, a symbolic link to api, is api again; notes/, which holds a clone two levels down, README.md and lost+found, which nobody may read, are not members
+	Outer   string // work tree with a nested clone, inner, that discovery must not add
+	Project string // project/.git holds "gitdir: ./.bare", which names the bare clone project/.bare (HEAD trunk; origin https://github.com/example/project.git); its worktree project/main sits beside it
+	SrcA    string // group a/src holding work tree one (no origin)
+	SrcB    string // group b/src holding work tree two (no origin): a second group named src
+	SrcC    string // group c/src-2, empty: a suffix must not take its name
+	Lab     string // group lab, whose only member is Empty
 
 	// Default branch.
-	Tracking   string // origin/HEAD is origin/trunk; local main exists; local trunk has one commit origin/trunk lacks
-	MainFirst  string // no origin; main, master (at trunk) and feature; HEAD on feature
-	MasterOnly string // no origin; master (at main) and feature (at trunk); HEAD on feature
-	Current    string // no origin; only branch dev, at trunk
-	Detached   string // no origin; no branch; HEAD detached at trunk
+	Tracking     string // origin/HEAD is origin/trunk; local main exists; local trunk has one commit origin/trunk lacks
+	NoOriginHead string // no origin/HEAD; origin/main was fetched to trunk, and local main lags at main
+	OriginMaster string // no origin/HEAD; origin/master (at trunk) but no origin/main; local main at main
+	DanglingHead string // origin/HEAD names origin/master, which does not exist (upstream renamed master to main); origin/main exists, and local master at main
+	MainFirst    string // no origin; main, master (at trunk) and feature; HEAD on feature
+	MasterOnly   string // no origin; master (at main) and feature (at trunk); HEAD on feature
+	Current      string // no origin; only branch dev, at trunk
+	Detached     string // no origin; no branch; HEAD detached at trunk
 
 	// Paths that are neither a repository nor a group.
-	Empty     string // a repository with no commits
-	Broken    string // a directory whose .git file names a git directory that does not exist
-	Stray     string // outer/stray, whose .git is an empty directory: git skips it and answers for Outer
-	StrayBare string // bare.git/stray.git, laid out like a git directory with a HEAD git rejects: git answers for Bare
-	File      string // a regular file
-	Missing   string // a path that does not exist
+	Empty      string // lab/empty, a repository with no commits
+	Broken     string // a directory whose .git file names a git directory that does not exist
+	Stray      string // outer/stray, whose .git is an empty directory: git skips it and answers for Outer
+	StrayBare  string // bare.git/stray.git, laid out like a git directory with a HEAD git rejects: git answers for Bare
+	StrayTree  string // bare.git/stray-tree, whose .git is an empty directory: git skips it and answers for Bare
+	Headless   string // headless, a bare clone (named without .git) whose HEAD file is gone, so git does not take it for a repository
+	Unfinished string // unfinished.git, an empty directory named like a bare repository, as a mirror whose clone died
+	File       string // a regular file
+	Missing    string // a path that does not exist
 }
 
 // Discovery builds the discovery fixture in a new temporary directory and
@@ -85,33 +95,43 @@ func BuildDiscovery(ctx context.Context, dir string) (*DiscoveryRepos, error) {
 	}
 	in := func(rel ...string) string { return filepath.Join(append([]string{dir}, rel...)...) }
 	r := &DiscoveryRepos{
-		Root:       dir,
-		Upstream:   in("upstream"),
-		WidgetA:    in("widget-a"),
-		WidgetB:    in("widget-b"),
-		Other:      in("other"),
-		Mirror:     in("mirror.git"),
-		SCP:        in("scp"),
-		HTTPS:      in("https"),
-		UnparsedA:  in("unparsed-a"),
-		UnparsedB:  in("unparsed-b"),
-		Bare:       in("bare.git"),
-		Group:      in("team"),
-		Outer:      in("outer"),
-		SrcA:       in("a", "src"),
-		SrcB:       in("b", "src"),
-		SrcC:       in("c", "src-2"),
-		Tracking:   in("tracking"),
-		MainFirst:  in("main-first"),
-		MasterOnly: in("master-only"),
-		Current:    in("current"),
-		Detached:   in("detached"),
-		Empty:      in("empty"),
-		Broken:     in("broken"),
-		Stray:      in("outer", "stray"),
-		StrayBare:  in("bare.git", "stray.git"),
-		File:       in("file.txt"),
-		Missing:    in("missing"),
+		Root:         dir,
+		Upstream:     in("upstream"),
+		WidgetA:      in("widget-a"),
+		WidgetB:      in("widget-b"),
+		WidgetLink:   in("widget-link"),
+		Other:        in("other"),
+		Mirror:       in("mirror.git"),
+		SCP:          in("scp"),
+		HTTPS:        in("https"),
+		UnparsedA:    in("unparsed-a"),
+		UnparsedB:    in("unparsed-b"),
+		Reset:        in("reset"),
+		Bare:         in("bare.git"),
+		Group:        in("team"),
+		Outer:        in("outer"),
+		Project:      in("project"),
+		SrcA:         in("a", "src"),
+		SrcB:         in("b", "src"),
+		SrcC:         in("c", "src-2"),
+		Lab:          in("lab"),
+		Tracking:     in("tracking"),
+		NoOriginHead: in("no-origin-head"),
+		OriginMaster: in("origin-master"),
+		DanglingHead: in("dangling-head"),
+		MainFirst:    in("main-first"),
+		MasterOnly:   in("master-only"),
+		Current:      in("current"),
+		Detached:     in("detached"),
+		Empty:        in("lab", "empty"),
+		Broken:       in("broken"),
+		Stray:        in("outer", "stray"),
+		StrayBare:    in("bare.git", "stray.git"),
+		StrayTree:    in("bare.git", "stray-tree"),
+		Headless:     in("headless"),
+		Unfinished:   in("unfinished.git"),
+		File:         in("file.txt"),
+		Missing:      in("missing"),
 	}
 	if err := discoveryUpstream(ctx, r.Upstream); err != nil {
 		return nil, fmt.Errorf("fixture: build discovery upstream in %s: %w", r.Upstream, err)
@@ -128,11 +148,16 @@ func BuildDiscovery(ctx context.Context, dir string) (*DiscoveryRepos, error) {
 	b.discoveryClone(up, r.HTTPS, "https://github.com/o/r.git")
 	b.discoveryClone(up, r.UnparsedA, "https:/user:"+DiscoveryToken+"@github.com/example/widget.git")
 	b.discoveryClone(up, r.UnparsedB, "https//user:"+DiscoveryToken+"@github.com/example/widget.git")
+	b.discoverySymlink(r.WidgetA, r.WidgetLink)
+	b.discoveryClone(up, r.Reset, DiscoveryWidgetRemote)
+	b.git("-C", r.Reset, "config", "--add", "remote.origin.url", "")
+	b.git("-C", r.Reset, "config", "--add", "remote.origin.url", "https://github.com/example/reset.git")
 
 	// Repositories and groups.
 	b.discoveryClone(up, r.Bare, "", "--bare")
 	b.git("-C", r.Bare, "symbolic-ref", "HEAD", "refs/heads/trunk")
 	b.discoveryClone(up, filepath.Join(r.Group, "api"), "https://github.com/example/api.git")
+	b.discoverySymlink("api", filepath.Join(r.Group, "api-link"))
 	web := filepath.Join(r.Group, "web.git")
 	b.discoveryClone(up, web, "https://github.com/example/web.git", "--bare")
 	b.git("-C", web, "symbolic-ref", "HEAD", "refs/heads/trunk")
@@ -145,6 +170,13 @@ func BuildDiscovery(ctx context.Context, dir string) (*DiscoveryRepos, error) {
 	b.discoveryWrite(filepath.Join(r.Group, "README.md"), "not a repository\n")
 	b.discoveryClone(up, r.Outer, "https://github.com/example/outer.git")
 	b.discoveryClone(up, filepath.Join(r.Outer, "inner"), "https://github.com/example/inner.git")
+	// The bare-clone-plus-worktrees layout: git reads project/.git and
+	// finds the bare repository, and project/main is a worktree of it.
+	bareDir := filepath.Join(r.Project, ".bare")
+	b.discoveryClone(up, bareDir, "https://github.com/example/project.git", "--bare")
+	b.git("-C", bareDir, "symbolic-ref", "HEAD", "refs/heads/trunk")
+	b.discoveryWrite(filepath.Join(r.Project, ".git"), "gitdir: ./.bare\n")
+	b.git("-C", r.Project, "worktree", "add", "--quiet", filepath.Join(r.Project, "main"), "main")
 	b.discoveryClone(up, filepath.Join(r.SrcA, "one"), "")
 	b.discoveryClone(up, filepath.Join(r.SrcB, "two"), "")
 	b.discoveryMkdir(r.SrcC)
@@ -156,6 +188,20 @@ func BuildDiscovery(ctx context.Context, dir string) (*DiscoveryRepos, error) {
 	b.git("-C", r.Tracking, "switch", "--quiet", "trunk")
 	b.row(at(time.February, 1, 12), person{"Cara Dev", "cara@example.com"})
 	b.git("-C", r.Tracking, "commit", "--quiet", "--allow-empty", "--message", "local commit, never pushed")
+	// No origin/HEAD, as after git init and git push -u: upstream's main
+	// as last fetched is still the default branch, ahead of local main.
+	b.discoveryClone(up, r.NoOriginHead, "https://github.com/example/no-origin-head.git")
+	b.git("-C", r.NoOriginHead, "remote", "set-head", "origin", "--delete")
+	b.git("-C", r.NoOriginHead, "update-ref", "refs/remotes/origin/main", "refs/remotes/origin/trunk")
+	b.discoveryClone(up, r.OriginMaster, "https://github.com/example/origin-master.git")
+	b.git("-C", r.OriginMaster, "remote", "set-head", "origin", "--delete")
+	b.git("-C", r.OriginMaster, "update-ref", "refs/remotes/origin/master", "refs/remotes/origin/trunk")
+	b.git("-C", r.OriginMaster, "update-ref", "-d", "refs/remotes/origin/main")
+	// The clone of an upstream that renamed master to main, fetched with
+	// --prune by a git that left origin/HEAD behind (2.44 to 2.47).
+	b.discoveryClone(up, r.DanglingHead, "https://github.com/example/dangling-head.git")
+	b.git("-C", r.DanglingHead, "branch", "--move", "main", "master")
+	b.git("-C", r.DanglingHead, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/master")
 
 	// These four end with no origin, so their branches are made from
 	// origin/trunk before origin is removed.
@@ -182,7 +228,18 @@ func BuildDiscovery(ctx context.Context, dir string) (*DiscoveryRepos, error) {
 	b.discoveryWrite(filepath.Join(r.StrayBare, "HEAD"), "not a ref\n")
 	b.discoveryMkdir(filepath.Join(r.StrayBare, "objects"))
 	b.discoveryMkdir(filepath.Join(r.StrayBare, "refs"))
+	b.discoveryMkdir(filepath.Join(r.StrayTree, ".git"))
+	b.discoveryClone(up, r.Headless, "", "--bare")
+	b.discoveryRemove(filepath.Join(r.Headless, "HEAD"))
+	b.discoveryMkdir(r.Unfinished)
 	b.discoveryWrite(r.File, "not a repository\n")
+
+	// Last, because nothing can be created in it: team/lost+found, as at the
+	// root of an ext4 mount, readable by no one but root. It stays empty, so
+	// the test's temporary directory can still be removed.
+	lostFound := filepath.Join(r.Group, "lost+found")
+	b.discoveryMkdir(lostFound)
+	b.discoveryChmod(lostFound, 0)
 
 	if b.err != nil {
 		return nil, fmt.Errorf("fixture: build discovery repositories in %s: %w", dir, b.err)
@@ -327,6 +384,36 @@ func (b *builder) discoveryMkdir(path string) {
 	}
 	if err := os.MkdirAll(path, 0o700); err != nil {
 		b.err = fmt.Errorf("create %s: %w", path, err)
+	}
+}
+
+// discoverySymlink creates a symbolic link at link that points at target.
+func (b *builder) discoverySymlink(target, link string) {
+	if b.err != nil {
+		return
+	}
+	if err := os.Symlink(target, link); err != nil {
+		b.err = fmt.Errorf("link %s to %s: %w", link, target, err)
+	}
+}
+
+// discoveryRemove removes the file at path.
+func (b *builder) discoveryRemove(path string) {
+	if b.err != nil {
+		return
+	}
+	if err := os.Remove(path); err != nil {
+		b.err = fmt.Errorf("remove %s: %w", path, err)
+	}
+}
+
+// discoveryChmod sets the permission bits of path to mode.
+func (b *builder) discoveryChmod(path string, mode os.FileMode) {
+	if b.err != nil {
+		return
+	}
+	if err := os.Chmod(path, mode); err != nil {
+		b.err = fmt.Errorf("chmod %s: %w", path, err)
 	}
 }
 
