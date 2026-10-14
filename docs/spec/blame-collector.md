@@ -27,7 +27,7 @@ One `--ignore-revs-file` cannot serve many repos, because commit SHAs belong to 
 
 1. **Use the repo's own file.** If `git cat-file -e <sha>:.git-blame-ignore-revs` succeeds, write `git cat-file blob <sha>:.git-blame-ignore-revs` to a temp file and pass it. GitHub's blame view honours the same root file. Check existence first: `git show` on a missing path exits fatally (verified).
 2. **CLI override.** A `--ignore-revs-file` flag overrides the repo's file only on a single-repo run. On a multi-repo run it is a usage error (exit 2).
-3. **Record the source.** Per repo, record which file was used (`root`, `cli`, or none) and its SHA-256.
+3. **Record the source.** Per repo, record which file was used (`root`, `cli`, or none), its SHA-256, and the commits it lists (`IgnoreRevs.Revs`), which `durable@1` and `simplifying@1` exclude ([metrics.md](../metrics.md#change-facts-shared-by-durable1-and-simplifying1)).
 
 On 2.50.1, `#` comment lines and SHAs absent from the repo are both accepted (verified). CI checks the floor version.
 

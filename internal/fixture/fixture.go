@@ -5,7 +5,11 @@
 // fixture is test support. It sits outside the hexagon in
 // docs/spec/codebase.md: it runs git directly through os/exec instead of
 // domain.GitRunner, and no production package imports it. Oracle tests call
-// Main and Mailmap; Build builds the same repository for inspection by hand.
+// Main and Mailmap for the main fixture, and Sibling and SiblingMailmap for the
+// sibling: a separate repository that holds the change cases (AI-assisted
+// trailers, reverts, simplifying deletions, rank eligibility), so they never
+// move the main oracles. Build and BuildSibling build the same repositories
+// for inspection by hand.
 //
 // The build is hermetic. Every git process runs without the machine's global
 // and system configuration, the installation's templates and hooks, the

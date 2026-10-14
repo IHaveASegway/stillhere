@@ -1,8 +1,8 @@
 # Fixture repository and oracles
 
-Status: carried over from the 2026-10-07 plan · the week oracle becomes `go test` in M0, still-here in M1, web escaping in M3
+Status: carried over from the 2026-10-07 plan, change oracles and the sibling fixture added 2026-10-14 · the week oracle becomes `go test` in M0, still-here and change oracles in M1, web escaping in M3
 
-`internal/fixture` builds this repository in a temporary directory for `go test`. Every number below is an oracle: a change that moves one fails CI. Each oracle exists so that one specific wrong implementation fails, and that implementation is named next to it.
+`internal/fixture` builds this repository (`fixture.Main`) and the [sibling fixture](#sibling-fixture) (`fixture.Sibling`) in temporary directories for `go test`. Every number below is an oracle: a change that moves one fails CI. Each oracle exists so that one specific wrong implementation fails, and that implementation is named next to it.
 
 CI runs real git; porcelain output is never faked. The `GitRunner` port exists so git flags live in one place, not so tests can avoid running git.
 
@@ -200,6 +200,318 @@ The headline counts `prod` non-blank lines only.
   - A segment check that compares one path component to `bootstrap/cache` leaves the PHP file in `prod`, and Ada's 10 becomes 14.
   - Dropping the mailmap splits Ada's January `ada@other.example` lines into a second person, which fails her 10.
 
+## Change oracles (M1, `TestChangeOracles`)
+
+These values were derived by hand from the History table and the definitions in [metrics.md](../../docs/metrics.md#change-facts-shared-by-durable1-and-simplifying1), then confirmed with plain git 2.50.1: `log -p -U0 -w`, `blame -w -M --line-porcelain`, `rev-list L^1..L` and `log --grep`. The commands and their output are in the pull request for issue #3. No stillhere code produced any of them.
+
+With `--now 2026-10-07T00:00:00Z`, every window is half-open and starts and ends at 00:00:00Z:
+
+| Window | Interval | Main fixture landings in it |
+| --- | --- | --- |
+| `durable@1` cohort | `[2025-10-07, 2026-07-09)` | 7, from 2026-01-01 to 2026-03-01 |
+| `simplifying@1` window and `who_knows@1` recent landers | `[2026-07-09, 2026-10-07)` | 9, all on 2026-10-06 |
+| `knowledge_loss@1` activity | `[2026-04-10, 2026-10-07)` | the same 9 |
+
+Assert values, not display order. Ratios are exact fractions; three decimals are shown for reading. Short commit IDs are for debugging; tests should not assert them.
+
+### Change facts per landing (main fixture)
+
+`added`, `removed` and `surviving` are non-blank `prod` lines, summed over the commits each landing counts: a merge commit itself never counts. `surviving` is what blame `-w -M` attributes to those commits at HEAD.
+
+| # | When | Landing | Counted commits, credited to | added | removed | surviving |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 2026-01-01 | `5ea16a9` init | itself, Ada | 7 (`app.py` 4, `old_name.py` 3) | 0 | 7 (`service.py` 4, `new_name.py` 3) |
+| 2 | 2026-01-02 | `448e2b9` gamma | itself, Ada (authored as `ada@other.example`) | 2 | 0 | 2 |
+| 3 | 2026-01-04 | `632247d` Bob's move | itself, Bob | 2 | 2 | 0 |
+| 4 | 2026-01-05 | `890b41c` `git mv` | itself, Ada | 0 | 0 | 0 |
+| 5 | 2026-01-06 | `5974eed` | itself, Gina | 2 | 0 | 2 |
+| 6 | 2026-01-07 | `b7e47e8` | itself, Hank | 2 | 0 | 2 |
+| 7 | 2026-03-01 | `3cc4421` | itself, Bob | 5 | 0 | 5 |
+| 8 | 2026-10-06 12:00 | `c010290` merge by Bob | `e08df80` (Cara, written 2026-02-01): 2 added, 2 surviving; `feb652b` (Cara): 7 and 7 | 9 | 0 | 9 |
+| 9 | 2026-10-06 13:00 | `63ddd0a` delta | itself, Bob | 2 | 0 | 2 |
+| 10 | 2026-10-06 14:00 | `9c9559d` | itself, GitHub Copilot (bot) | 3 | 0 | 3 |
+| 11 | 2026-10-06 15:00 | `3fa0614` | itself, Dana | 1 (`vendor/new.py` is denied) | 0 | 1 |
+| 12 | 2026-10-06 16:00 | `4d2753e` Erin's rename | itself, Erin | 1 | 0 | 1 |
+| 13 | 2026-10-06 17:00 | `4709066` | itself, Frank | 2 (the blank does not count) | 0 | 2 |
+| 14 | 2026-10-06 18:00 | `d3c43d8` | itself, Ada (authored as `ada@other.example`) | 1 | 0 | 1 |
+| 15 | 2026-10-06 19:00 | `d0087c6` | itself, Ivy | 0 (`test` role, unclassified) | 0 | 0 |
+| 16 | 2026-10-06 20:00 | `4631a8b` | itself, Jules | 0 (unclassified) | 0 | 0 |
+
+Rows 1–7 are the `durable@1` cohort, and rows 8–16 are the 90-day window. Row 1's other paths add nothing: `tests/test_service.py` is `test`, and `go.sum`, `vendor/lib.py`, `gen_out.py` and `bootstrap/cache/config.php` (23 lines together) are denied. `app.py` and `old_name.py` are absent at HEAD, so path rules alone make them `prod`.
+
+### durable@1 (main fixture)
+
+| Who | Σ surviving / Σ added | durable@1 | N | Ranked |
+| --- | --- | --- | --- | --- |
+| Ada Example | 9 / 9 (rows 1, 2) | 1.000 | 2 | no, below 10 |
+| Bob Builder | 5 / 7 (rows 3, 7) | 0.714 | 2 | no |
+| Gina Split | 2 / 2 | 1.000 | 1 | no |
+| Hank Split | 2 / 2 | 1.000 | 1 | no |
+
+No one else has a value.
+
+- **Bob's move (row 3).** The `-U0 -w` patch keeps alpha and gamma where they are and re-adds beta at the top: 2 added, 2 removed. Blame `-M` credits beta's two lines to the init commit, so the move keeps 0 of its 2. By definition, a move inside one file scores 0 for the mover. That is open decision 6: `durable@2` would blame at the landing commit and leave the move out of `added`. Ada's init keeps all 7 of its lines.
+- **Ada's rename (row 4).** With rename detection the patch has no content lines. It adds nothing, so it is not a cluster, and Ada's N is 2, not 3.
+- **Cara has no value.** Both her commits landed with row 8 on 2026-10-06, inside 90 days, although `e08df80` was written on 2026-02-01. The cohort goes by landing time.
+- **Merges.** Row 8 is outside the cohort, and no line at HEAD is blamed to a merge commit.
+- **Blank lines.** Row 1 adds the blank inside alpha, and it counts in neither column.
+
+Wrong implementations this catches:
+
+- **Missing `-M` in blame.** Beta goes to the move: Ada 7/9 (0.778), Bob 7/7.
+- **`--no-renames` in the patch.** Row 4 adds the 6 non-blank lines of `service.py` and keeps none: Ada 9/15 (0.600), with N 3.
+- **Numstat instead of non-blank lines.** Row 1 adds 5 lines of `app.py`: Ada 9/10.
+- **Roles or the deny list ignored.** Row 1 also adds the 2 lines of `tests/test_service.py`, or the 23 denied lines.
+- **No mailmap.** `ada@other.example` becomes a second person with 2/2.
+- **Commit time instead of landing time.** `e08df80` joins the cohort: Cara 2/2, with N 1.
+- **N counts landings.** Ada's N becomes 3.
+
+### simplifying@1 (main fixture)
+
+| Who | removed | Simplifying landings | N |
+| --- | --- | --- | --- |
+| Ada Example | 0 | 0 | 1 |
+| Bob Builder | 0 | 0 | 1 (row 9; his merge commit is excluded) |
+| Cara Dev | 0 | 0 | 1 (row 8) |
+| Dana Dev | 0 | 0 | 1 |
+| Erin Editor | 0 | 0 | 1 |
+| Frank & Sons | 0 | 0 | 1 |
+| Ivy Tester | 0 | 0 | 1 |
+| Jules Note | 0 | 0 | 1 |
+| GitHub Copilot (bot table) | 0 | 0 | 1 |
+
+No landing in the window removes a `prod` line, no net is negative, and no one has 10 clusters.
+
+- **Erin's rename (row 12)** removes nothing: its patch is the rename plus `w = 4`.
+- **The merge (row 8)** has no patch of its own. The commits it landed are Cara's, and they remove nothing. Ivy's and Jules's rows are clusters with 0 removed.
+- **Bob's move** removes 2 lines, but on 2026-01-04, outside the window.
+
+Wrong implementations this catches:
+
+- **`--no-renames`.** Erin removes 3 (`old_name.py`) and adds 4.
+- **Crediting the merger.** Bob's N becomes 2, and Cara disappears.
+- **A 365-day window.** Bob's move brings 2 removed lines.
+
+### knowledge_loss@1 (main fixture)
+
+Per repository. The root is the only area that holds `prod` lines, so its value is the same.
+
+| Surviving `prod` lines | Lines |
+| --- | --- |
+| Held by people: the still-here table without the bot | 34 |
+| Whose author has a landing in `[2026-04-10, 2026-10-07)`: Ada 10, Cara 9, Bob 7, Frank 2, Dana 1, Erin 1 | 30 |
+| Whose author has none: Gina 2 (last landing 2026-01-06), Hank 2 (2026-01-07) | 4 |
+| **`knowledge_loss@1`** | **4 / 34 = 0.118** |
+
+GitHub Copilot's 3 lines belong to a bot and are in neither count.
+
+- **Cara is active** through the landing map: row 8 landed her commits on 2026-10-06. She has no first-parent landing of her own.
+- **Ada is one person.** Her 2026-10-06 landing is authored as `ada@other.example`, and the mailmap folds it into the address that holds her 10 lines.
+
+Wrong implementations this catches:
+
+- **Landing authors only, without the landing map.** Cara looks gone: 13/34.
+- **No mailmap.** `ada@example.com` holds 7 lines (`service.py` 4, `new_name.py` 3) and has no landing since 2026-01-05: 11/34.
+- **The mailmap on blame but `%ae` on landings.** All 10 of Ada's lines look gone: 14/34.
+- **Bots in the denominator.** 4/37 (0.108).
+
+### who_knows@1 (main fixture)
+
+| Path | Majority owners | Top surviving-line authors | Recent landers (90 days) |
+| --- | --- | --- | --- |
+| `service.py` | Ada (6 of 8 non-blank lines) | Ada 6, Bob 2 | Bob (row 9) |
+| `split.py` | Gina and Hank (2 of 4 each) | Gina 2, Hank 2 | none: last landed 2026-01-07 |
+| `side.py` | Cara (2 of 2) | Cara 2 | Cara (`e08df80`, landed by row 8) |
+
+Wrong implementations this catches:
+
+- **Missing `-M`.** `service.py` becomes Ada 4, Bob 4, with both as majority owners.
+- **`max()` only.** `split.py` loses one of its two owners.
+- **No window on landers.** Gina and Hank appear as recent landers of `split.py`.
+- **Crediting the merger, or patching with `log --first-parent -p`.** Bob replaces Cara as the recent lander of `side.py`: with `--first-parent`, git gives row 8 its first-parent diff, which adds `side.py` and `side_week.py` as Bob's.
+- **Commit time instead of landing time.** `side.py` has no recent lander, because `e08df80` was written in February.
+
+### AI-assisted tags and reverts (main fixture)
+
+There are none. No commit has a `Co-authored-by` trailer, so no landing is AI-assisted: the share is 0 of 16 landings. GitHub Copilot's 2026-10-06 commit names no human co-author, so it is a bot commit, not an AI-assisted one, and it stays in the bot table. The revert query returns nothing.
+
+## Sibling fixture
+
+`fixture.Sibling(t)` builds a second repository, named `sibling`, for the change cases that the main History must not hold. Those are AI-assisted trailers, reverts, a reformat listed in `.git-blame-ignore-revs`, a whitespace-only change, simplifying deletions, and enough landings to rank someone. A separate repository keeps the main oracles from moving.
+
+### Sibling setup
+
+- **Dates.** Every commit is at 12:00:00Z on the stated day, with the same author and committer. No commit is within a day of 2025-10-07, 2026-04-10, 2026-07-09, 2026-09-07 or 2026-09-30, so no window membership depends on how a boundary is treated.
+- **Now.** `--now 2026-10-07T00:00:00Z`, the same as the main fixture. The windows are the ones in the table at the top of the [change oracles](#change-oracles-m1-testchangeoracles).
+- **Mailmap.** The repo config sets `log.mailmap=false`. The test passes this file with `--mailmap`. It maps the GitHub noreply address in C1's trailer to Pia:
+
+```
+Pia Pair <pia@example.com> <81234567+piapair@users.noreply.github.com>
+```
+
+- **Content.** Where a row gives only a line count, the file holds lines `<name>_<i> = <i>`, and the subject is `feat: add <file>`. Every non-blank line is unique in the repository.
+- **Commit IDs.** They are stable, because the build is hermetic and uses SHA-1: HEAD is `d8d9a79387bdaa6e9da6153a9c886c1a4bcfcdfd`. Here they are part of the content, because the revert messages and `.git-blame-ignore-revs` contain full commit IDs. Tests should still find a landing by its row (date and author), not by its SHA.
+
+### Sibling history
+
+All commits are on `main` unless the row says `pia-feature`. Row IDs: `L` and `O` are Lena's and Omar's cohort landings, `W` Lena's window landings, `S` simplifying deletions, `R` reverts.
+
+| Row | When | Author | What | Commit |
+| --- | --- | --- | --- | --- |
+| U0 | 2025-09-15 | Uma Legacy `<uma@example.com>` | `chore: import the legacy modules`: `legacy_a.py` (24 lines), `legacy_b.py` (23 lines in groups of 5, 4, 4, 4 and 6, with a blank line between groups), `legacy_c.py` (26), `legacy_d.py` (6) and `tests/test_legacy.py` (30). More than 365 days old, so it is not a landing in the scan. | `a1a22a5` |
+| L1 | 2025-11-03 | Lena Lead `<lena@example.com>` | `lena_1.py` (3) | `83ab815` |
+| O1 | 2025-11-10 | Omar Ops `<omar@example.com>` | `omar_1.py`: `def omar_job():` and two body lines indented by 4 spaces | `4037fc4` |
+| L2 | 2025-11-17 | Lena | `lena_2.py` (3) | `b9cc6b4` |
+| O2 | 2025-11-24 | Omar | `omar_2.py` (3) | `578b3e9` |
+| L3 | 2025-12-01 | Lena | `lena_3.py` (3); trailer `Co-Authored-By: Claude <noreply@anthropic.com>` | `4e1699d` |
+| O3 | 2025-12-08 | Omar | `omar_3.py` (3) | `570b258` |
+| L4 | 2025-12-15 | Lena | `lena_4.py` (3) | `283bc84` |
+| O4 | 2026-01-12 | Omar | `omar_4.py` (3); trailer `Co-authored-by: aider (gpt-4o) <aider@aider.chat>` | `484ed67` |
+| L5 | 2026-01-19 | Lena | `lena_5.py`: `lena_5_1 = 'one'`, `lena_5_2 = 'two'`, `lena_5_3 = 'three'` | `046d9b3` |
+| O5 | 2026-01-26 | Omar | `omar_5.py` (3) | `2d65aa1` |
+| C1 | 2026-02-02 | Copilot `<copilot@bot.example>` | `retry.py` (4); trailer `Co-authored-by: Pia Pair <81234567+piapair@users.noreply.github.com>` | `f603db9` |
+| L6 | 2026-02-09 | Lena | `lena_6.py` (3) | `4d66e46` |
+| P1 | 2026-02-16 | Pia Pair `<pia@example.com>` | On `pia-feature`: `pia_feature.py` (3) | `da298de` |
+| P2 | 2026-02-18 | Pia | On `pia-feature`: appends 2 lines, `feat: extend pia_feature.py`; trailer `Co-authored-by: Claude Sonnet 4.5 <noreply@anthropic.com>` | `dab1829` |
+| M | 2026-02-20 | Quinn Squash `<quinn@example.com>` | `--no-ff` merge of `pia-feature` into `main`, `Merge branch 'pia-feature'` | `3f0ac54` |
+| O6 | 2026-02-23 | Omar | `omar_6.py` (3) | `d5cdc63` |
+| L7 | 2026-03-02 | Lena | `lena_7.py` (3) | `e8315ae` |
+| Q1 | 2026-03-09 | Quinn | `quota.py` (6). A GitHub squash message: `feat: add quota checks (#7)`, two `* ` lines, a `---------` line, then the trailer `Co-authored-by: Claude Dupont <92345678+cdupont@users.noreply.github.com>` | `110b0a8` |
+| O7 | 2026-03-16 | Omar | `omar_7.py` (3) | `b0e657c` |
+| L8 | 2026-03-23 | Lena | `lena_8.py` (3) | `8ef78ae` |
+| D1 | 2026-03-30 | Omar | `refactor: drop legacy_d_1 to legacy_d_4`: deletes the first 4 lines of `legacy_d.py` | `f4aa78a` |
+| R3 | 2026-04-06 | Omar | `git revert --no-edit` of D1 | `a3b9862` |
+| O8 | 2026-04-20 | Omar | `omar_8.py` (3) | `6cc075a` |
+| L9 | 2026-04-27 | Lena | `lena_9.py` (3) | `36f63ed` |
+| O9 | 2026-05-04 | Omar | `omar_9.py` (3) | `615c8e8` |
+| L10 | 2026-05-11 | Lena | `lena_10.py` (3) | `d5a1250` |
+| O10 | 2026-05-18 | Omar | `style: reindent omar_job`: O1's two body lines go from 4 spaces to 2, and nothing else changes | `dcba94f` |
+| W1 | 2026-07-20 | Lena | `lena_w1.py` (1) | `f8771d0` |
+| F | 2026-07-22 | Omar | `style: use double quotes in lena_5.py`: L5's three lines, `'` to `"` | `50badc4` |
+| IR | 2026-07-24 | Omar | `chore: ignore the quote-style commit in blame`: adds `.git-blame-ignore-revs`, holding a comment line and F's full ID | `9fc6fe0` |
+| W2 | 2026-07-27 | Lena | `fix: set lena_2_2 to 22`: replaces one of L2's lines | `e484ded` |
+| T1 | 2026-07-29 | Pia | `test: remove the legacy tests`: deletes `tests/test_legacy.py` (30 lines) | `01fce1e` |
+| W3 | 2026-08-03 | Lena | `lena_w3.py` (1) | `7960ede` |
+| D | 2026-08-05 | Quinn | `refactor: drop legacy_c_1 to legacy_c_25`: deletes the first 25 lines of `legacy_c.py` | `cbc355c` |
+| R2 | 2026-08-07 | Quinn | `git revert --no-edit` of D | `68df3ee` |
+| W4 | 2026-08-10 | Lena | `lena_w4.py` (1) | `ffa0548` |
+| S2 | 2026-08-12 | Omar | `refactor: fold legacy_b_1 to legacy_b_21`: replaces the first 25 lines of `legacy_b.py` (21 non-blank, 4 blank) with 5 non-blank lines | `11a8664` |
+| W5 | 2026-08-17 | Lena | `lena_w5.py` (1) | `bf438f4` |
+| R1 | 2026-08-19 | Omar | `git revert --no-edit` of L7 | `2cd1663` |
+| W6 | 2026-08-24 | Lena | `lena_w6.py` (1) | `b6ede7d` |
+| W7 | 2026-08-31 | Lena | `lena_w7.py` (1) | `38e12ff` |
+| S1 | 2026-09-14 | Lena | `refactor: fold legacy_a_1 to legacy_a_22`: replaces the first 22 lines of `legacy_a.py`, all non-blank, with 2 non-blank lines and a blank between them | `d656020` |
+| W8 | 2026-09-16 | Lena | `lena_w8.py` (1) | `da33789` |
+| W9 | 2026-09-21 | Lena | `lena_w9.py` (1) | `d8d9a79` |
+
+`main` has 43 first-parent commits: U0, then 25 landings in the `durable@1` cohort (L1 to O10) and 17 in the 90-day window (W1 to W9).
+
+### AI-assisted tags and credit
+
+| Landing | Signal | AI-assisted | Tool | Credited |
+| --- | --- | --- | --- | --- |
+| L3 | `Co-Authored-By: Claude <noreply@anthropic.com>` | yes | Claude Code | Lena |
+| O4 | `Co-authored-by: aider (gpt-4o) <aider@aider.chat>` | yes | Aider | Omar |
+| C1 | Copilot (a bot) is the author; Pia is the co-author | yes | Copilot coding agent | Pia, as `pia@example.com` after `check-mailmap` |
+| M | P2's `Co-authored-by: Claude Sonnet 4.5 <noreply@anthropic.com>` | yes, through P2 | Claude Code | P1 and P2 to Pia; the merge commit to Quinn, but it is excluded |
+| Q1 | `Co-authored-by: Claude Dupont <92345678+cdupont@users.noreply.github.com>` | no: a human co-author | | Quinn; Claude Dupont gets nothing |
+| The other 37 landings | none | no | | their author |
+
+The AI-assisted share is 4 of the 42 landings in the last 365 days.
+
+Wrong implementations this catches:
+
+- **A case-sensitive trailer key.** L3 is missed. A case-sensitive `git log --grep='^Co-authored-by:'` lists four commits and not L3. Git's trailer parsing, `%(trailers:key=Co-authored-by)`, finds all five.
+- **Matching the name.** Q1 is tagged because its co-author is named Claude.
+- **Matching `noreply` loosely.** Q1 is tagged through its GitHub noreply address.
+- **Reading only the landing commit's trailers.** M is not tagged.
+- **Crediting C1's author.** C1 goes to Copilot in the bot table, and Pia's `durable@1` N drops to 1.
+- **Co-authors not canonicalised.** C1 goes to `81234567+piapair@users.noreply.github.com`, a second person.
+- **Crediting human co-authors.** Claude Dupont appears with Q1's 6 lines.
+
+### Reverts
+
+The revert query in [week-collector.md](../../docs/spec/week-collector.md#subjects-and-reverts) returns three links:
+
+| Revert landing | Names | Reverted landing | Effect |
+| --- | --- | --- | --- |
+| R3 (2026-04-06, Omar) | `f4aa78aeb0fd38f06756625ede026fd944b63e84` | D1, in the cohort | R3 restores 4 lines, and blame credits them to R3. As a revert landing it is excluded from `durable@1`. |
+| R2 (2026-08-07, Quinn) | `cbc355c59fb551652e25f528d6e5731e70fc7db7` | D, in the window | D's 25 removed lines do not count. |
+| R1 (2026-08-19, Omar) | `e8315ae2121da7f5a92db7b5c4a236b682b1ee8c` | L7, in the cohort | L7 keeps 0 of 3. R1's 3 removed lines do not count. |
+
+### durable@1 (sibling)
+
+Per cohort landing, in non-blank `prod` lines. `surviving` is blamed at HEAD with `-w -M --ignore-revs-file`, given the file at `HEAD:.git-blame-ignore-revs`.
+
+| Landing | Credited | added | surviving | Why |
+| --- | --- | --- | --- | --- |
+| L1, L3, L4, L6, L8, L9, L10 | Lena | 3 each | 3 each | |
+| L2 | Lena | 3 | 2 | W2 replaced `lena_2_2` |
+| L5 | Lena | 3 | 3 | F is listed in `.git-blame-ignore-revs`, so blame looks through it |
+| L7 | Lena | 3 | 0 | reverted by R1 |
+| O1 to O9 | Omar | 3 each | 3 each | blame `-w` leaves O1's re-indented lines with O1 |
+| O10 | Omar | 0 | 0 | whitespace only: not a cluster |
+| D1 | Omar | 0 | 0 | it only deletes: not a cluster |
+| R3 | Omar | excluded | | a revert landing (blame credits 4 lines to it) |
+| C1 | Pia | 4 | 4 | Copilot is the author; Pia is credited |
+| M | Pia (P1 3, P2 2) | 5 | 5 | the merge commit itself is excluded |
+| Q1 | Quinn | 6 | 6 | |
+
+| Who | Σ surviving / Σ added | durable@1 | N | Eligible |
+| --- | --- | --- | --- | --- |
+| Lena Lead | 26 / 30 | 0.867 | 10 | yes, at exactly 10 |
+| Omar Ops | 27 / 27 | 1.000 | 9 | no |
+| Pia Pair | 9 / 9 | 1.000 | 2 | no |
+| Quinn Squash | 6 / 6 | 1.000 | 1 | no |
+
+Copilot, Uma and Claude Dupont have no value.
+
+Wrong implementations this catches:
+
+- **Blame without the repository's ignore-revs file.** L5's lines go to F: Lena 23/30 (0.767).
+- **A patch without `-w`.** O10 adds 2 lines and keeps none: Omar 27/29 (0.931), with N 10 and eligible.
+- **N counts landings, or clusters with nothing added.** Omar has 12 cohort landings, and 11 of them would be clusters with O10 and D1 counted. Either way he becomes eligible.
+- **Revert landings kept.** R3 becomes 4/4: Omar 31/31, with N 10 and eligible.
+- **Reverted landings dropped.** L7 disappears: Lena 26/27, with N 9, and she is no longer eligible.
+- **More than 10 instead of at least 10.** Lena is not eligible.
+- **Crediting the merger.** Quinn 11/11 with N 2, and Pia 4/4 with N 1.
+- **Patching landings with `log --first-parent -p`.** With `--first-parent`, git gives a merge its first-parent diff, so M adds 5 lines for Quinn that blame credits to P1 and P2: Quinn 6/11 with N 2. Patch the mapped commits with `log --no-walk -p` instead, where a merge prints no diff.
+
+### simplifying@1 (sibling)
+
+Per window landing, in non-blank `prod` lines:
+
+| Landing | Credited | removed | added | net | Counted |
+| --- | --- | --- | --- | --- | --- |
+| W1, W3, W4, W5, W6, W7, W8, W9 | Lena | 0 | 1 each | +1 | yes |
+| W2 | Lena | 1 | 1 | 0 | yes |
+| S1 | Lena | 22 | 2 | −20 | yes, and simplifying |
+| S2 | Omar | 21 | 5 | −16 | yes, not simplifying |
+| IR | Omar | 0 | 0 | 0 | yes: its only path is unclassified |
+| F | Omar | 3 | 3 | 0 | no: listed in `.git-blame-ignore-revs` |
+| R1 | Omar | 3 | 0 | −3 | no: a revert landing |
+| T1 | Pia | 0 | 0 | 0 | yes: the 30 lines are `test` |
+| D | Quinn | 25 | 0 | −25 | no: reverted by R2 |
+| R2 | Quinn | 0 | 25 | +25 | no: a revert landing |
+
+| Who | removed | Simplifying landings | N | Eligible |
+| --- | --- | --- | --- | --- |
+| Lena Lead | 23 (S1 22, W2 1) | 1 (S1) | 10 | yes, at exactly 10 |
+| Omar Ops | 21 (S2) | 0 | 2 (S2, IR) | no |
+| Pia Pair | 0 | 0 | 1 (T1) | no |
+
+Quinn has no value, because both of his window landings are excluded.
+
+Wrong implementations this catches:
+
+- **Numstat, which counts blank lines.** S1 nets −19 and is not simplifying. S2 removes 25, nets −20, and becomes simplifying.
+- **At least 20 removed instead of a net of −20 or less.** S2 becomes simplifying.
+- **Roles ignored.** T1 removes 30: Pia has 30 and a simplifying landing.
+- **Reverted landings kept.** D counts: Quinn has 25 and a simplifying landing.
+- **Revert landings kept.** R1 adds 3 to Omar, and R2 gives Quinn a cluster.
+- **Ignore-revs commits kept.** F adds 3 to Omar, and a cluster.
+- **N counts only landings that removed something.** Lena's N is 2, and she is not eligible.
+
 ## Tests that are not extra commits in this history
 
 Ada's oracle stays stable only if these cases stay out of the fixture repo.
@@ -244,6 +556,7 @@ Two clones whose `origin` is `https://user:TOKENVALUE@github.com/example/widget.
 ## What fails CI
 
 - **Oracles.** Any week or still-here oracle above changes. That includes Frank's 3 versus 2, Ivy's `prod_lines_added` 0, Jules's 0-line commit, Erin's rename insertion of 1, Ada's single mailmapped week row, and both Gina and Hank at `majority_files` 1.
+- **Change oracles.** Any value in the change-oracle tables of either fixture changes. That includes Bob's move keeping 0 of 2, Ada's `durable@1` N of 2, Cara's absence from `durable@1`, `knowledge_loss@1` at 4/34, Lena eligible at exactly 10 clusters in both metrics, Omar not eligible at 9, S1 simplifying at exactly −20, S2 not simplifying at −16, Q1 untagged, and M tagged through P2.
 - **Classification.** `tests/test_service.py` is classified `prod`, or `bootstrap/cache/config.php` is blamed.
 - **Discovery.** A duplicate remote is not skipped, a scrubbed URL contains userinfo, a bare repo is skipped, or the SSH and HTTPS forms of one path are collapsed.
 - **Isolation.** A repo whose git directory was removed makes a sibling repo disappear, or the run exits 1 when the sibling succeeded.
@@ -257,15 +570,5 @@ Two clones whose `origin` is `https://user:TOKENVALUE@github.com/example/widget.
 
 Work out the expected values from the history above and write them into this file before writing the code that computes them. The implementation must never produce its own oracle.
 
-- **`durable@1` per landing** (defined in [../../docs/metrics.md](../../docs/metrics.md)): for each first-parent landing, which of its non-blank added lines are still blamed at HEAD to the commits it landed ([landing map](../../docs/spec/week-collector.md#landing--commit-map)). Bob's merge is the case that needs the map: its lines are blamed to Cara's side-branch commits.
-- **`simplifying@1`**: deleted lines per landing, after classification. Bob's 2026-01-04 move and Erin's rename (0 deletions) are the cases to reason through.
-- **Revert detection**: this history has no revert. Add revert cases only in the sibling repo below, so the oracles above don't move.
-- **AI-assisted tagging**: a NEW sibling fixture repo, so the existing oracles don't move. It contains:
-  - a landing with `Co-Authored-By: Claude <noreply@anthropic.com>`;
-  - one with an `aider@aider.chat` co-author;
-  - one authored by Copilot with a human co-author;
-  - a GitHub-squash-style commit with only a human `Co-authored-by`, which must not be tagged;
-  - a `git revert` landing.
-
-  Derive by hand the expected tags, the person credited, and the revert link.
+- **Done for M1 (issue #3):** `durable@1` per landing and per person, `simplifying@1`, revert detection, AI-assisted tagging, `knowledge_loss@1` and `who_knows@1`. They are in [Change oracles](#change-oracles-m1-testchangeoracles) and the [Sibling fixture](#sibling-fixture), which holds the revert and AI-assisted cases so that the main oracles don't move.
 - **GitHub sync contract tests**: recorded API responses (pull requests, reviews, review comments, team membership, the viewer's verified emails) under `testdata/github/`, with no live calls in CI. Derive the expected facts by hand.

@@ -19,6 +19,20 @@ Each entry states: the question, the unit, the definition, eligibility, uncertai
 
 Classification follows [spec/classification.md](spec/classification.md): denied paths (vendored, generated, lockfiles), the generated-header sniff, `linguist-generated`/`linguist-vendored` attributes, and roles. Headline metrics count role `prod` only. Lines are non-blank (`strip() != ""`). Blame runs with `-w -M` and the repo's own `.git-blame-ignore-revs`. Pure renames add nothing. Moved lines inside a file keep their original author through `-M`. Moves across files are a known gap (see open decision 6 in [product.md](product.md#open-decisions)).
 
+## Change facts (shared by durable@1 and simplifying@1)
+
+These rules were settled on 2026-10-14, before the first release, so no metric version changed. Their oracles are in [../testdata/fixture/SPEC.md](../testdata/fixture/SPEC.md#change-oracles-m1-testchangeoracles). The fixtures keep every commit at least a day from every window boundary, so no oracle covers the half-open boundary itself.
+
+- **Added and removed lines.** `added(c)` and `removed(c)` count non-blank lines on `prod` paths in the commit's own patch against its first parent (a root commit against the empty tree): `git log -p -U0 -w`, with git's default rename detection. A path is classified at the scanned HEAD, or by path rules alone when it is absent there. Because of `-w`, a whitespace-only change adds and removes nothing; blame `-w` already gives those lines to their earlier author. A pure rename adds and removes nothing.
+- **Credit.** Each commit is credited to one person (`identity.Credit`): its mailmapped author or, when an agent is the author ([ai_assisted@1](#ai_assisted1)) and a human is a co-author, the first human co-author in trailer order after `git check-mailmap`. An agent commit with no human co-author stays with the agent, in the bot table. No other co-author is credited, so the co-authors GitHub lists on a squash merge earn nothing. The commits a merge landing brought in are credited to their own authors, never to the person who merged them.
+- **Time.** A commit takes its landing's time (the landing commit's committer time), not its own dates. Every window is half-open, `[since, until)`, like `domain.Window`, counted in 24-hour UTC days. Git's `--since` and `--until` both include the boundary instant (verified on 2.50.1), so a landing at exactly `until` must be dropped in code.
+- **Excluded commits.** These add and remove nothing in either metric and are never part of a cluster. They still count as landings in `landed@1`.
+  - A merge commit itself. In v1 it has no patch of its own, which would need a combined diff. `git log -p` prints no diff for a merge, except under `--first-parent`, where it prints the first-parent diff: the side branch's lines, as the merger's. Lines that blame credits to a merge commit still count in `surviving@1`.
+  - A commit listed in the ignore-revs file that blame used for the repository ([blame-collector.md](spec/blame-collector.md#ignore-revs-per-repository)), because formatting commits are noise ([product.md](product.md#what-meaningful-means-in-v1)).
+  - A revert landing, whose message carries `This reverts commit <sha>.`. An undo is not new work. Counting it would let delete-then-revert earn durable lines (blame credits the restored lines to the revert) and let add-then-revert earn removed lines.
+- **Reverted landings.** A landing is *reverted* when its commit map contains the SHA that a revert landing names. `durable@1` keeps it: its lines are gone, so it already scores 0. `simplifying@1` drops all of its commits.
+- **Clusters.** A cluster is one person's counted commits in one landing. `N`, the number eligibility reads, counts clusters, and the bootstrap resamples them.
+
 ## Context metrics (shown, never ranked)
 
 ### landed@1
@@ -41,30 +55,41 @@ Sort authors by `majority_files` descending, then `prod_nonblank_lines` descendi
 
 ### knowledge_loss@1 (per area)
 - **Definition**: the share of an area's surviving `prod` lines whose blame author has had no landing, and (from M2) no submitted review, anywhere in the scanned organization in the last 180 days.
+- **Activity**: a person has had a landing when a commit credited to them, merge commits included, is in a landing within `[now − 180 days, now)`. Through the landing map, a side-branch author is active when the branch lands, whoever merged it.
+- **Bots**: lines blamed to bots are left out of both the numerator and the denominator, because knowledge is held by people. `surviving@1` shows the bot share alongside it.
 - **Blind spots**: people who moved to repos outside the scan look gone. Mailmap gaps split one person into two and can make either half look gone.
+- **Fixture oracle**: [SPEC.md, knowledge_loss@1](../testdata/fixture/SPEC.md#knowledge_loss1-main-fixture).
 
 ### who_knows@1 (per path)
 Majority owners of files under the path, the top surviving-line authors, recent landers (90 days), and from M2 recent reviewers (90 days). It is a routing answer, not a rank.
+- **Top authors**: up to five, by `prod` non-blank lines under the path, then email ascending.
+- **Recent landers**: people credited with a non-merge commit whose own patch changed a path under the query, in a landing within `[now − 90 days, now)`. A side-branch author counts when the branch lands; the person who merged it does not.
+- **Bots**: listed apart, never mixed into these lists.
+- **Fixture oracle**: [SPEC.md, who_knows@1](../testdata/fixture/SPEC.md#who_knows1-main-fixture).
 
 ## Ranked metrics
 
 ### durable@1
 - **Question**: Did the code a person wrote last?
-- **Cohort**: commits in landings that landed 90 to 365 days before `--now`.
-- **Definition**: for each commit `c`, `added(c)` is the non-blank `prod` lines it added (from its own patch against its first parent, after noise), and `surviving(c)` is the non-blank `prod` lines at HEAD that blame attributes to `c`. Per person, `durable = Σ surviving / Σ added` over their commits in the cohort. Lines blamed to a merge commit itself (conflict resolutions) count toward `surviving@1` for the merge's author. They are excluded from `durable@1` in v1, because a merge's own added lines need a combined diff.
-- **Reverts**: a landing reverted by a later commit ("This reverts commit <sha>") is flagged. Its lines are already gone, so it already counts as not durable.
-- **Eligibility**: at least 10 landings in the cohort (open decision 5).
-- **Blind spots**: a planned replacement of correct code looks "not durable"; moves across files credit the mover; changes younger than 90 days are not scored.
+- **Cohort**: landings in `[now − 365 days, now − 90 days)`. A landing exactly 90 days old belongs to the simplifying window, not to this cohort.
+- **Definition**: for each counted commit `c` ([change facts](#change-facts-shared-by-durable1-and-simplifying1)), `added(c)` comes from its own patch, and `surviving(c)` is the non-blank `prod` lines at HEAD that blame (`-w -M`, with the repo's ignore-revs file) attributes to `c`. Per person, `durable = Σ surviving / Σ added` over their commits in the cohort. Lines blamed to a merge commit itself (conflict resolutions) count toward `surviving@1` for the merge's author. They are excluded from `durable@1` in v1, because a merge's own added lines need a combined diff.
+- **Clusters**: a cluster needs at least one added line. A landing that adds no `prod` line (a pure rename, a whitespace-only or a test-only change) says nothing about durability, so it is not a cluster and does not count toward eligibility.
+- **Reverts**: a reverted landing stays in the cohort and is flagged. Its lines are already gone, so it already counts as not durable. A revert landing is excluded.
+- **Eligibility**: at least 10 clusters in the cohort (open decision 5).
+- **Blind spots**: a planned replacement of correct code looks "not durable"; moves across files credit the mover; a move inside one file counts as lines the mover added, which blame then gives back to their first author, so the mover scores 0 on them (open decision 6); a revert that restores deleted lines takes their blame from the original author; changes younger than 90 days are not scored.
 - **How it can be gamed**: writing in stable, low-traffic code; avoiding risky areas. Load-bearing (M5) is the counterweight.
+- **Fixture oracle**: [SPEC.md, change oracles](../testdata/fixture/SPEC.md#change-oracles-m1-testchangeoracles). Bob's move and Ada's rename in the main fixture; the revert, requote, re-indent, squash, Copilot and eligibility cases in the sibling.
 - **Validity**: unvalidated until the M2 labelled-sample check.
 
 ### simplifying@1
 - **Question**: Did a person remove code, and did the removal stick?
-- **Window**: landings in the last 90 days.
-- **Definition**: per person, the sum of non-blank substantive `prod` lines removed by their commits, excluding commits in reverted landings. A landing is *simplifying* when its net non-blank change is −20 lines or fewer. The count of simplifying landings is shown as context.
-- **Eligibility**: at least 10 landings in the window.
-- **Blind spots**: deleting a feature or its tests looks like simplifying; removed code that comes back later is not detected in v1.
-- **How it can be gamed**: deleting then re-adding. Revert detection catches the plain case.
+- **Window**: landings in `[now − 90 days, now)`.
+- **Definition**: per person, the sum of `removed(c)` over their counted commits in the window ([change facts](#change-facts-shared-by-durable1-and-simplifying1)), leaving out every commit of a reverted landing. A landing is *simplifying* when the net change of its counted commits, `Σ added − Σ removed`, is −20 lines or fewer; −20 counts. The count of simplifying landings is shown as context.
+- **Clusters**: every cluster counts, including one that removed nothing, because for a sum a zero is evidence.
+- **Eligibility**: at least 10 clusters in the window.
+- **Blind spots**: deleting a feature looks like simplifying (deleting its tests does not, because only `prod` lines count); a move counts its lines as removed, though its net is 0, so it is never a simplifying landing by itself; removed code that comes back later is not detected in v1.
+- **How it can be gamed**: deleting then re-adding. Revert detection catches the plain case: neither the reverted landing nor the revert counts.
+- **Fixture oracle**: [SPEC.md, change oracles](../testdata/fixture/SPEC.md#change-oracles-m1-testchangeoracles). Erin's rename and Bob's merge in the main fixture; the −20 boundary, blank lines, a test deletion, the revert pairs and the requote in the sibling.
 - **Validity**: unvalidated until the M2 labelled-sample check.
 
 ### reviews_given@1 (M2)
@@ -81,6 +106,9 @@ Majority owners of files under the path, the top surviving-line authors, recent 
 
 ### ai_assisted@1
 A commit is AI-assisted when a trailer or author matches the policy's versioned pattern list. Defaults: a co-author email of `noreply@anthropic.com` (Claude Code; match the email, not the name), `aider@aider.chat` (Aider), and the Copilot coding agent as author with a human co-author. When an agent is the author and a human the co-author, the human is credited. This is a lower bound, because editor completions leave no trace. It is shown as cohort comparisons in team views; a person's own AI-assisted share is shown only to that person.
+- **Matching**: the trailer key matches in any case (`Co-Authored-By:` counts). Patterns match the co-author's email, never the name: a co-author named Claude with a GitHub noreply address is a person. A Copilot commit without a human co-author is a bot commit, not an AI-assisted one.
+- **Landings**: a landing is AI-assisted when any commit in its commit map is, so a merge landing can be tagged through a side-branch commit.
+- **Fixture oracle**: [SPEC.md, sibling AI-assisted tags](../testdata/fixture/SPEC.md#ai-assisted-tags-and-credit).
 
 ### change_type@1 (M5)
 A pull request label mapped by policy; otherwise the Conventional Commit prefix of the pull request title or squash subject; otherwise `unknown`. Reverts are typed `revert`.
