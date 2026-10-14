@@ -50,6 +50,7 @@ Bare repositories keep `HEAD`. For a managed mirror, `HEAD` is upstream's defaul
 - Unpushed commits never count, in any clone. A user who wants them counted must push.
 - A report can disagree with `git log main` in the same clone. It agrees with `git log origin/main`, and the report's "analysis did not fetch" caveat applies as before.
 - A work tree without `origin/HEAD` costs one more git process (four instead of three). That process tells a missing `origin/HEAD` from one whose target is gone.
+- Known gap: a bare repository is still measured at `HEAD`'s branch in `refs/heads`. For a managed mirror or a plain bare clone, that branch is upstream's. In the bare-clone-plus-worktrees layout, which discovery reads as a bare repository, `refs/heads` holds the user's own branches, so unpushed commits there do count. The fix is to apply this rule to any repository with remote-tracking refs, bare or not. It is left until that layout matters, because it would change what a mirror's Head means.
 
 ## Door
 
