@@ -16,7 +16,8 @@ type Profile int
 // command that forgets to choose cannot reach the network.
 const (
 	// Analysis is offline and hardened: no hooks, no fsmonitor, no external
-	// diff, no system or global config, no prompts, no lazy fetch.
+	// diff or signature program, no system or global config or attributes,
+	// no prompt or askpass program, no lazy fetch.
 	Analysis Profile = iota
 	// Sync is the only network profile: the same hardening, lazy fetch
 	// allowed, credentials from GitCmd.Env. Only stillhere sync uses it, and

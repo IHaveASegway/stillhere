@@ -55,7 +55,7 @@ func New(ctx context.Context, cfg Config) (*Runner, error) {
 	r := &Runner{
 		git:     path,
 		mailmap: mailmap,
-		environ: withoutGitVars(os.Environ()),
+		environ: inheritable(os.Environ()),
 		log:     log,
 	}
 

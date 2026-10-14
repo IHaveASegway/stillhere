@@ -3,12 +3,13 @@
 //
 // Every git process stillhere starts goes through Runner, so the hardening
 // lives in one place (docs/spec/git-invocation.md): the common prefix that
-// disables hooks, fsmonitor and external diff; an environment stripped of
-// inherited GIT_* variables and of system and global config; a profile that
-// keeps analysis offline; a timeout that kills git and everything it
-// started; and errors whose stderr has been scrubbed of credentials. Call
-// sites still spell out their git arguments, so the exact command stays
-// visible where it is used.
+// disables hooks, fsmonitor, external diff, signature verification and the
+// per-user attributes file; an environment stripped of inherited GIT_* and
+// askpass variables and of system and global config and attributes; a
+// profile that keeps analysis offline and prompt-free; a timeout that kills
+// git and everything it started; and errors whose stderr has been scrubbed
+// of credentials. Call sites still spell out their git arguments, so the
+// exact command stays visible where it is used.
 package gitcli
 
 import (
@@ -67,7 +68,7 @@ type Runner struct {
 	git     string   // absolute path of the git binary
 	mailmap string   // absolute path of the org mailmap, or ""
 	version string   // version token printed by git version, such as "2.50.1"
-	environ []string // the process environment without inherited GIT_* variables
+	environ []string // the process environment without inherited GIT_* and askpass variables
 	log     *slog.Logger
 }
 
@@ -138,7 +139,16 @@ type invocation struct {
 // invocation validates cmd and builds its command line and environment:
 //
 //	git -C <dir> --no-optional-locks -c core.hooksPath=/dev/null
-//	    -c core.fsmonitor= -c diff.external= [-c mailmap.file=<org-mailmap>] <args>
+//	    -c core.fsmonitor= -c core.attributesFile=/dev/null -c diff.external=
+//	    -c log.showSignature=false [-c mailmap.file=<org-mailmap>] <args>
+//
+// Command-line -c beats repo-local config. core.attributesFile=/dev/null
+// drops only the per-user attributes file: the repository's .gitattributes
+// and info/attributes still apply, so the linguist checks keep working.
+// diff.external= does not switch external diff off: git would try to run an
+// empty command and fail, so a git diff that forgets --no-ext-diff fails
+// closed instead of running a program the repository names.
+// log.showSignature=false keeps log and show from running gpg.program.
 //
 // Malformed commands are programmer errors, returned as plain errors.
 func (r *Runner) invocation(cmd domain.GitCmd) (invocation, error) {
@@ -159,7 +169,9 @@ func (r *Runner) invocation(cmd domain.GitCmd) (invocation, error) {
 		"--no-optional-locks",
 		"-c", "core.hooksPath=" + os.DevNull,
 		"-c", "core.fsmonitor=",
+		"-c", "core.attributesFile=" + os.DevNull,
 		"-c", "diff.external=",
+		"-c", "log.showSignature=false",
 	}
 	if r.mailmap != "" {
 		argv = append(argv, "-c", "mailmap.file="+r.mailmap)
@@ -183,19 +195,31 @@ func (r *Runner) invocation(cmd domain.GitCmd) (invocation, error) {
 }
 
 // env returns the environment for one command: the process environment
-// without inherited GIT_* variables, then the Sync profile's credential
-// variables, then the hardening. os/exec keeps the last value of a
-// duplicated key, so credential variables can never undo the hardening.
+// without inherited GIT_* and askpass variables, then the Sync profile's
+// credential variables, then the hardening. os/exec keeps the last value of
+// a duplicated key, so credential variables can never undo the hardening.
 func (r *Runner) env(p domain.Profile, credentials []string) []string {
 	hardening := []string{
 		"GIT_TERMINAL_PROMPT=0",
 		"GIT_CONFIG_NOSYSTEM=1",
 		"GIT_CONFIG_GLOBAL=" + os.DevNull,
+		// The system attributes file is not config, so GIT_CONFIG_NOSYSTEM
+		// leaves it in force; it would change numstat and the linguist
+		// checks from one machine to the next.
+		"GIT_ATTR_NOSYSTEM=1",
 	}
 	if p == domain.Analysis {
-		// Blocks promisor lazy fetch on git 2.44+: analysis never touches
-		// the network.
-		hardening = append(hardening, "GIT_NO_LAZY_FETCH=1")
+		hardening = append(hardening,
+			// Blocks promisor lazy fetch on git 2.44+: analysis never
+			// touches the network.
+			"GIT_NO_LAZY_FETCH=1",
+			// GIT_TERMINAL_PROMPT=0 covers only the terminal. git asks
+			// GIT_ASKPASS, then core.askPass, then SSH_ASKPASS first; an
+			// empty GIT_ASKPASS ends that search, so no program prompts.
+			// Sync keeps the variable free for the credential mechanism
+			// M2 chooses.
+			"GIT_ASKPASS=",
+		)
 	}
 	return slices.Concat(r.environ, credentials, hardening)
 }
@@ -385,15 +409,17 @@ func scrubArgs(args []string) []string {
 	return out
 }
 
-// withoutGitVars returns environ without the variables git reads (GIT_*).
-// stillhere may itself run inside a git hook, where an inherited GIT_DIR or
-// GIT_INDEX_FILE would override -C and point every command at the wrong
-// repository.
-func withoutGitVars(environ []string) []string {
+// inheritable returns environ without the variables git reads (GIT_*) and
+// without the askpass programs ssh and git fall back to (SSH_ASKPASS,
+// SSH_ASKPASS_REQUIRE). stillhere may itself run inside a git hook, where
+// an inherited GIT_DIR or GIT_INDEX_FILE would override -C and point every
+// command at the wrong repository; and a desktop session or an IDE terminal
+// often exports an askpass program that would pop up a prompt.
+func inheritable(environ []string) []string {
 	out := make([]string, 0, len(environ))
 	for _, kv := range environ {
 		name, _, _ := strings.Cut(kv, "=")
-		if isGitVar(name) {
+		if dropped(name) {
 			continue
 		}
 		out = append(out, kv)
@@ -401,16 +427,12 @@ func withoutGitVars(environ []string) []string {
 	return out
 }
 
-func isGitVar(name string) bool {
-	const prefix = "GIT_"
-	if len(name) < len(prefix) {
-		return false
-	}
+func dropped(name string) bool {
 	if runtime.GOOS == "windows" {
 		// Environment variable names are case-insensitive on Windows.
-		return strings.EqualFold(name[:len(prefix)], prefix)
+		name = strings.ToUpper(name)
 	}
-	return name[:len(prefix)] == prefix
+	return strings.HasPrefix(name, "GIT_") || name == "SSH_ASKPASS" || name == "SSH_ASKPASS_REQUIRE"
 }
 
 // stderrBuffer keeps the first stderrLimit bytes git writes to stderr and

@@ -10,23 +10,31 @@ Every git process goes through one adapter, `GitRunner.Run(ctx, repo, args, time
 git -C <repo> --no-optional-locks \
   -c core.hooksPath=/dev/null \
   -c core.fsmonitor= \
+  -c core.attributesFile=/dev/null \
   -c diff.external= \
+  -c log.showSignature=false \
   [-c mailmap.file=<org-mailmap>] \
   <args>
 ```
 
-Environment: `GIT_TERMINAL_PROMPT=0`, `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_NO_LAZY_FETCH=1`. Elsewhere in these specs, `git <common>` means this prefix plus this environment.
+Environment: `GIT_TERMINAL_PROMPT=0`, `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null`, `GIT_ATTR_NOSYSTEM=1`, `GIT_NO_LAZY_FETCH=1`, `GIT_ASKPASS=` (empty). Every inherited `GIT_*` variable, `SSH_ASKPASS` and `SSH_ASKPASS_REQUIRE` are removed first. Elsewhere in these specs, `git <common>` means this prefix plus this environment.
 
 | Setting | Why |
 | --- | --- |
 | `core.hooksPath=/dev/null`, `core.fsmonitor=` | A clone must not run its hooks or a filesystem monitor as a side effect of being measured. |
-| `diff.external=` | A repo-local external diff program must not run. |
+| `diff.external=` | A repo-local external diff program must not run. The empty value does not switch external diff off: git tries to run an empty command and fails (verified on 2.50.1). `log` and `show` never run an external diff without `--ext-diff`, so the value matters only for `git diff`, which must pass `--no-ext-diff` (see call-site rules); one that forgets fails closed instead of running the repository's program. |
+| `log.showSignature=false` | A repo-local `log.showSignature=true` makes `log` and `show` run `gpg.program`, which the same config names, for every signed commit (verified). |
 | `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null` | Reproducibility: a machine-wide mailmap or config would make two laptops emit different reports. Repo-local `.git/config` still applies, but it cannot override command-line `-c`. |
+| `core.attributesFile=/dev/null`, `GIT_ATTR_NOSYSTEM=1` | Reproducibility again: attributes are not config, so the two variables above leave the per-user file (`$XDG_CONFIG_HOME/git/attributes`, git's default `core.attributesFile`) and `/etc/gitattributes` in force. Either one can mark a path `-diff` (numstat then counts it as binary) or `linguist-generated` (verified). The repository's own `.gitattributes` and `info/attributes` still apply, in work trees and bare clones alike (verified). |
 | `GIT_NO_LAZY_FETCH=1` | Blocks promisor lazy fetch on Git 2.44+. The promisor remote comes from the repo's own config, the same place a credential-bearing URL lives. Older git ignores the variable. |
 | `--no-optional-locks` | Read-only commands must not take optional locks that contend with the user's own git. |
-| `GIT_TERMINAL_PROMPT=0` | Analysis must never block on a credential prompt. |
+| `GIT_TERMINAL_PROMPT=0`, `GIT_ASKPASS=` | Analysis must never block on a credential prompt. `GIT_TERMINAL_PROMPT=0` covers only the terminal: git first tries `GIT_ASKPASS`, then `core.askPass` from repo-local config, then `SSH_ASKPASS`, which desktop sessions and IDE terminals often export. An empty `GIT_ASKPASS` ends that search (verified). Sync leaves `GIT_ASKPASS` to its credential mechanism. |
 
-Never set `core.attributesFile` empty: it blinds `git check-attr` ([classification.md](classification.md#gitattributes)).
+**Call-site rules.** The prefix cannot fix these, because a more specific setting or an option of one subcommand wins over a `-c`:
+
+- `--no-color` on every `log -p`, `show`, `diff` and `grep` whose output is parsed. A repo-local `color.diff=always` or `color.grep=always` puts ANSI escapes in that output, and `-c color.ui=never` does not override the more specific keys (verified).
+- `--no-ext-diff` on every `git diff`.
+- `--no-ignore-revs-file` before any `--ignore-revs-file` on `blame`. A repo-local `blame.ignoreRevsFile` otherwise adds its list to stillhere's, and blame fails outright when that file is missing; `-c blame.ignoreRevsFile=` does not clear it (verified).
 
 Analysis never writes into a scanned repository: no fetch, no `gc`, no config writes, no index refresh. Temporary files, such as an extracted ignore-revs file, go in stillhere's own temp directory. Only sync writes, and only into the mirrors it owns.
 
@@ -35,7 +43,7 @@ Timeouts per command: blame 120 s per file, a repo's log 300 s. On timeout the c
 - **What is killed.** git runs in its own process group, and a timeout or a cancellation signals the whole group. Once git is reaped, whatever is left in the group is killed too, so a helper that ignored SIGTERM (Sync) does not outlive the command. A helper that left the group with `setsid` is out of reach; it cannot hold the command either, because the runner closes its end of stdout 5 s after the timeout.
 - **What is reported.** A timeout is reported as a timeout (`errors.Is(err, context.DeadlineExceeded)`), even when the reader fails first on the output the kill truncated. A cancellation is reported as one (`context.Canceled`), so a Ctrl-C stops the run while a repository's failure does not.
 
-**Residual risk, named rather than papered over.** A `diff.<driver>.textconv` or a smudge filter named by repo-local config or `.gitattributes` can still run during `log` and `blame`. They are not disabled, because blanking attributes would break the linguist checks. This is defence in depth, not a sandbox: stillhere analyses clones its user already trusts, and never analyses repositories uploaded by other people.
+**Residual risk, named rather than papered over.** A `diff.<driver>.textconv` or a smudge filter named by repo-local config or `.gitattributes` can still run during `log` and `blame`. They are not disabled, because blanking attributes would break the linguist checks. `gpg.program` from repo-local config still runs for any command that verifies signatures on purpose (`--show-signature`, the `%G?` placeholders); no collector does. This is defence in depth, not a sandbox: stillhere analyses clones its user already trusts, and never analyses repositories uploaded by other people.
 
 ## Version floors
 
@@ -61,7 +69,7 @@ git -C <mirror> symbolic-ref HEAD refs/heads/<default branch from the GitHub API
 - `--bare` with an explicit refspec, not `--mirror`. A mirror's refspec is `+refs/*:refs/*` (verified), which copies every ref the server advertises; on GitHub that includes `refs/pull/*` (verify in M2). A plain `--bare` clone has no fetch refspec at all (verified), hence the `config` line. No collector needs tags.
 - `symbolic-ref HEAD` on every sync: `fetch` never moves a bare repo's HEAD, so a renamed upstream default branch would leave HEAD dangling. The GitHub API is the system of record for the default branch.
 - Never `--depth` or `--filter`: shallow and partial clones break line facts ([discovery.md](discovery.md#clone-health)).
-- Hooks, fsmonitor and `diff.external` stay cleared on sync commands. `GIT_NO_LAZY_FETCH` is not set, because these commands fetch on purpose.
+- The whole analysis prefix and environment apply to sync commands too, with two exceptions. `GIT_NO_LAZY_FETCH` is not set, because these commands fetch on purpose. `GIT_ASKPASS` is left to the credential mechanism below; `SSH_ASKPASS` is still removed, so that mechanism is the only prompt path.
 
 ## Credentials
 

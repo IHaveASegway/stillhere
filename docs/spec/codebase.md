@@ -488,7 +488,7 @@ Tests sit at stable boundaries, so a refactor does not rewrite them (Kent Beck, 
 | `TestClassify` | `classify` | roles, role precedence, `too_big`, segment matching |
 | `TestPolicy` | `policy` | a missing table exits 2; `--days` overrides; the hash covers the deny list |
 | `TestRankIntervals` | `rank` | reproducible intervals; ineligible subjects unranked |
-| `TestRunner` | `gitcli` | a timeout or cancellation kills git's process group and is reported as such even when the reader fails first on the truncated output; a helper that left the group cannot hold `Stream`; an inherited `GIT_DIR` changes nothing |
+| `TestRunner` | `gitcli` | per-user and system attributes change neither numstat nor `check-attr`; no askpass, signature or external diff program runs; an inherited `GIT_DIR` changes nothing; a timeout or cancellation kills git's process group and is reported as such even when the reader fails first on the truncated output; a helper that left the group cannot hold `Stream` |
 | `TestStoreRoundTrip` | `sqlite` | `LoadFacts(PutRepoFacts(x)) == x`; readers never see a running run |
 | `TestGitHubSync` | `github` | recorded responses become the expected facts; the token is never stored (M2) |
 | `TestMCPTools` | `mcp` | each tool through the SDK's in-memory client (M4) |

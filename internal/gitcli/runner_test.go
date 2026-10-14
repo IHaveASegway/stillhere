@@ -131,6 +131,91 @@ func TestRunner(t *testing.T) {
 		wantGone(t, readPid(t, pidfile))
 	})
 
+	t.Run("the user's and the system's attributes files do not apply", func(t *testing.T) {
+		dir := newRepo(t)
+		if err := os.Mkdir(filepath.Join(dir, "gen"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, filepath.Join(dir, "gen", "x.go"), "package x\n")
+		writeFile(t, filepath.Join(dir, ".gitattributes"), "gen/** linguist-generated\n")
+		setup(t, dir, "add", "gen/x.go", ".gitattributes")
+		setup(t, dir, "commit", "--quiet", "--message=three")
+		bare := filepath.Join(t.TempDir(), "bare.git")
+		setup(t, "", "clone", "--quiet", "--bare", dir, bare)
+
+		// A per-user attributes file that would make a.txt binary and
+		// generated on this machine only.
+		xdg := t.TempDir()
+		if err := os.Mkdir(filepath.Join(xdg, "git"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, filepath.Join(xdg, "git", "attributes"), "*.txt -diff linguist-generated\n")
+		t.Setenv("XDG_CONFIG_HOME", xdg)
+		r := newRunner(t)
+
+		numstat := run(t, r, dir, nil, "log", "-1", "--numstat", "--format=", "HEAD~1")
+		if numstat != "1\t0\ta.txt\n" {
+			t.Errorf("numstat = %q, want a.txt counted as text", numstat)
+		}
+		// The repository's own .gitattributes still applies, at the scanned
+		// revision, in a work tree and in a bare clone.
+		const want = "a.txt: linguist-generated: unspecified\ngen/x.go: linguist-generated: set\n"
+		for _, repo := range []string{dir, bare} {
+			if got := run(t, r, repo, nil, "check-attr", "--source=HEAD", "linguist-generated", "--", "a.txt", "gen/x.go"); got != want {
+				t.Errorf("check-attr in %s = %q, want %q", filepath.Base(repo), got, want)
+			}
+		}
+		if got := run(t, r, dir, []int{1}, "var", "GIT_ATTR_SYSTEM"); got != "" {
+			t.Errorf("git var GIT_ATTR_SYSTEM = %q, want no system attributes file", got)
+		}
+	})
+
+	t.Run("no askpass program runs, so nothing can prompt", func(t *testing.T) {
+		dir := newRepo(t)
+		marker := filepath.Join(t.TempDir(), "asked")
+		askpass := writeProgram(t, marker)
+		t.Setenv("SSH_ASKPASS", askpass)
+		setup(t, dir, "config", "core.askPass", askpass)
+		r := newRunner(t)
+		fill := func(p domain.Profile) error {
+			_, err := r.Run(t.Context(), domain.GitCmd{
+				Dir: dir, Args: []string{"credential", "fill"}, Profile: p,
+				Stdin: strings.NewReader("protocol=https\nhost=example.com\n\n"),
+			})
+			return err
+		}
+		if err := fill(domain.Analysis); err == nil || !strings.Contains(err.Error(), "terminal prompts disabled") {
+			t.Errorf("Analysis credential fill: err = %v, want git to give up without prompting", err)
+		}
+		// Sync leaves GIT_ASKPASS to its credential mechanism; core.askPass
+		// would come from a mirror's config, which only stillhere writes.
+		setup(t, dir, "config", "--unset", "core.askPass")
+		if err := fill(domain.Sync); err == nil || !strings.Contains(err.Error(), "terminal prompts disabled") {
+			t.Errorf("Sync credential fill: err = %v, want git to give up without prompting", err)
+		}
+		wantNotRun(t, marker)
+	})
+
+	t.Run("repo-local signature and external diff programs never run", func(t *testing.T) {
+		dir := newRepo(t)
+		marker := filepath.Join(t.TempDir(), "ran")
+		program := writeProgram(t, marker)
+		setup(t, dir, "config", "log.showSignature", "true")
+		setup(t, dir, "config", "gpg.program", program)
+		setup(t, dir, "config", "diff.external", program)
+		signed := signedCommit(t, dir)
+		r := newRunner(t)
+		run(t, r, dir, nil, "log", "-1", "--format=%H", signed)
+		run(t, r, dir, nil, "show", "--format=%H", signed)
+		run(t, r, dir, nil, "log", "-1", "-p", "--format=%H")
+		run(t, r, dir, nil, "diff", "--no-ext-diff", "HEAD~1", "HEAD")
+		// A git diff that forgets --no-ext-diff fails closed.
+		if _, err := r.Run(t.Context(), domain.GitCmd{Dir: dir, Args: []string{"diff", "HEAD~1", "HEAD"}}); err == nil {
+			t.Error("git diff without --no-ext-diff succeeded; want it to fail rather than run diff.external")
+		}
+		wantNotRun(t, marker)
+	})
+
 	t.Run("an inherited GIT_DIR cannot redirect a command", func(t *testing.T) {
 		dir := newRepo(t)
 		t.Setenv("GIT_DIR", filepath.Join(t.TempDir(), "elsewhere.git"))
@@ -178,10 +263,16 @@ func newRepo(t *testing.T) string {
 // machine's configuration nor an inherited GIT_ variable.
 func setup(t *testing.T, dir string, args ...string) string {
 	t.Helper()
+	return setupStdin(t, dir, "", args...)
+}
+
+func setupStdin(t *testing.T, dir, stdin string, args ...string) string {
+	t.Helper()
 	if dir != "" {
 		args = append([]string{"-C", dir}, args...)
 	}
 	cmd := exec.CommandContext(t.Context(), "git", args...)
+	cmd.Stdin = strings.NewReader(stdin)
 	env := []string{
 		"GIT_CONFIG_GLOBAL=" + os.DevNull, "GIT_CONFIG_NOSYSTEM=1",
 		"GIT_AUTHOR_NAME=T", "GIT_AUTHOR_EMAIL=t@example.com",
@@ -198,6 +289,44 @@ func setup(t *testing.T, dir string, args ...string) string {
 		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
 	return string(out)
+}
+
+// run runs one command through the runner under test and returns its
+// output, failing the test on an error.
+func run(t *testing.T, r *gitcli.Runner, dir string, okExit []int, args ...string) string {
+	t.Helper()
+	out, err := r.Run(t.Context(), domain.GitCmd{Dir: dir, Args: args, OKExit: okExit})
+	if err != nil {
+		t.Fatalf("git %s: %v", strings.Join(args, " "), err)
+	}
+	return string(out)
+}
+
+// signedCommit writes a copy of HEAD that carries a (bogus) signature, which
+// is enough to make git run gpg.program when it shows signatures.
+func signedCommit(t *testing.T, dir string) string {
+	t.Helper()
+	header, message, _ := strings.Cut(setup(t, dir, "cat-file", "commit", "HEAD"), "\n\n")
+	signed := header + "\ngpgsig -----BEGIN PGP SIGNATURE-----\n \n c2lnbmF0dXJl\n -----END PGP SIGNATURE-----\n\n" + message
+	return strings.TrimSpace(setupStdin(t, dir, signed, "hash-object", "--literally", "-t", "commit", "-w", "--stdin"))
+}
+
+// writeProgram writes a program that records each run in marker and fails.
+func writeProgram(t *testing.T, marker string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "program")
+	script := "#!/bin/sh\necho \"$0 $*\" >>" + shQuote(marker) + "\nexit 1\n"
+	if err := os.WriteFile(path, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func wantNotRun(t *testing.T, marker string) {
+	t.Helper()
+	if runs, err := os.ReadFile(marker); err == nil {
+		t.Errorf("a program named by the environment or the repository ran:\n%s", runs)
+	}
 }
 
 // alias defines a repo-local shell alias: git runs command with sh, as a
