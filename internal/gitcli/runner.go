@@ -397,12 +397,15 @@ func gitName(args []string) string {
 
 // scrubArgs returns a copy of args that is safe to log and to store in a
 // GitError. Credentials never belong in arguments (they travel in
-// GitCmd.Env), so this is defence in depth for any URL an argument carries.
+// GitCmd.Env), so this is defence in depth for any URL or scp-like remote an
+// argument carries. redact.Scrub changes nothing but the credential, so the
+// copy still shows the command that ran: no truncation, no whitespace
+// folding, and arguments without a URL or an @ are left byte for byte.
 func scrubArgs(args []string) []string {
 	out := make([]string, len(args))
 	for i, a := range args {
-		if strings.Contains(a, "://") {
-			a = redact.Message(a)
+		if strings.Contains(a, "://") || strings.Contains(a, "@") {
+			a = redact.Scrub(a)
 		}
 		out[i] = a
 	}

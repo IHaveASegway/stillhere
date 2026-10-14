@@ -4,7 +4,7 @@ import "time"
 
 // Repo is one repository as discovered for a run.
 type Repo struct {
-	Key     string // dedupe and storage key: the scrubbed origin URL, else "local:" + Name
+	Key     string // dedupe and storage key: the scrubbed origin URL, else "local:" + Name (no origin, or one that does not parse)
 	Name    string // directory basename without a trailing ".git"
 	Group   string // group name; "" when the repo was named directly
 	Path    string // absolute path

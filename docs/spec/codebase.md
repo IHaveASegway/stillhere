@@ -45,7 +45,7 @@ Facts are plain values with no behaviour beyond small helpers. Times are UTC. Sl
 ```go
 // Repo is one repository as discovered for a run.
 type Repo struct {
-	Key     string // dedupe and storage key: the scrubbed origin URL, else "local:" + Name
+	Key     string // dedupe and storage key: the scrubbed origin URL, else "local:" + Name (no origin, or one that does not parse)
 	Name    string // directory basename without a trailing ".git"
 	Group   string // group name; "" when the repo was named directly
 	Path    string // absolute path
@@ -272,8 +272,9 @@ M2 adds the forge facts (`ForgeFacts`, pull requests, reviews, login links, wate
 
 ```go
 // redact
-func URL(raw string) string     // userinfo removed; "<unparsed-remote>" when unparsable
-func Message(s string) string   // URL() applied to every URL in s, then truncated to 180 characters
+func URL(raw string) string     // userinfo, query and fragment removed; "<unparsed-remote>" when unparsable or a scheme-less string with an @ that is not user@host:path
+func Scrub(s string) string     // credentials removed from free text (URL() on every URL, user:pass@ prefixes); nothing else changes
+func Message(s string) string   // Scrub, then one line truncated to 180 characters
 
 // gitcli
 type Config struct {
@@ -488,6 +489,7 @@ Tests sit at stable boundaries, so a refactor does not rewrite them (Kent Beck, 
 | `TestClassify` | `classify` | roles, role precedence, `too_big`, segment matching |
 | `TestPolicy` | `policy` | a missing table exits 2; `--days` overrides; the hash covers the deny list |
 | `TestRankIntervals` | `rank` | reproducible intervals; ineligible subjects unranked |
+| `TestRedact` | `redact` | no credential survives `URL`, `Scrub` or `Message` (userinfo, scp-like and malformed remotes, query strings, quotes, the 180-rune cut); text that holds none is unchanged |
 | `TestRunner` | `gitcli` | per-user and system attributes change neither numstat nor `check-attr`; no askpass, signature or external diff program runs; an inherited `GIT_DIR` changes nothing; a timeout or cancellation kills git's process group and is reported as such even when the reader fails first on the truncated output; a helper that left the group cannot hold `Stream` |
 | `TestStoreRoundTrip` | `sqlite` | `LoadFacts(PutRepoFacts(x)) == x`; readers never see a running run |
 | `TestGitHubSync` | `github` | recorded responses become the expected facts; the token is never stored (M2) |

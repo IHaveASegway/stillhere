@@ -87,9 +87,11 @@ The same OS user can still read a process environment. That is the accepted boun
 Applied before any remote string is stored, logged or printed, and to git stderr before it is stored:
 
 - Remove userinfo: `https://user:TOKEN@github.com/o/r.git` becomes `https://github.com/o/r.git`; the same applies to `ssh://user:password@host/…`.
-- The scp form `git@host:path` carries no password and is kept as git printed it.
-- If parsing fails, store `<unparsed-remote>` and never write the raw string.
-- Stored git error messages are truncated to 180 characters after scrubbing.
+- Remove the query and the fragment. A remote needs neither, and a query can carry a token (`?access_token=…`).
+- The scp form `git@host:path` carries no password and is kept as git printed it, as are `host:path` and local paths. A leading `user:password@` on a remote without a scheme is removed. Any other string without a scheme that contains an `@` is not kept: `https:/user:TOKEN@host` and `https//user:TOKEN@host` are malformed URLs, not scp remotes.
+- If parsing fails, store `<unparsed-remote>` and never write the raw string. `<unparsed-remote>` is never a dedupe key ([discovery.md](discovery.md#rules-in-order)): a repo whose remote does not parse is keyed like one without a remote.
+- In free text (git's stderr), every URL is scrubbed as above, and a `user:password@` prefix is removed from scp-like tokens too, as in `fatal: 'user:pw@host:o/r.git' does not appear to be a git repository`.
+- Stored git error messages are truncated to 180 characters after scrubbing, never between a character and its combining marks. Arguments kept for errors and debug logs are scrubbed the same way but not truncated.
 
 ## Identity: mailmap and bots
 
