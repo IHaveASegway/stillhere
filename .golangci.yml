@@ -1,0 +1,192 @@
+# golangci-lint v2 configuration. Run it with `make lint`, which pins v2.14.0.
+#
+# depguard encodes the dependency rule of docs/spec/codebase.md: dependencies
+# point inward, toward the core (Alistair Cockburn, "Hexagonal
+# Architecture"). That makes the rule an architectural fitness function
+# (Ford, Parsons and Kua, Building Evolutionary Architectures, ch. 2): a
+# violation fails the build instead of waiting for a reviewer to notice. A
+# change that needs an exception edits codebase.md and this file together.
+#
+# depguard matches each deny entry as a string prefix, so "net$" denies the
+# net package exactly while net/url stays allowed. It compares an import with
+# the nearest entry that sorts before it, so no entry in a list may be a
+# prefix of another entry in the same list. Test files are exempt, and
+# internal/fixture (test support) and internal/cli (the composition root)
+# match no rule.
+version: "2"
+
+linters:
+  default: standard # errcheck, govet, ineffassign, staticcheck, unused
+  enable:
+    - bodyclose
+    - depguard
+    - errorlint
+    - gocritic
+    - misspell
+    - noctx
+    - nolintlint
+    - revive
+  settings:
+    depguard:
+      rules:
+        core:
+          list-mode: lax
+          files:
+            - "**/internal/domain/**"
+            - "**/internal/policy/**"
+            - "**/internal/classify/**"
+            - "**/internal/identity/**"
+            - "**/internal/metrics/**"
+            - "**/internal/rank/**"
+            - "**/internal/redact/**"
+            - "**/internal/report/**"
+            - "!$test"
+          deny:
+            - pkg: os/exec
+              desc: "core is a functional core: run git through domain.GitRunner (codebase.md#the-dependency-rule)"
+            - pkg: net$
+              desc: "core never touches the network (codebase.md#the-dependency-rule)"
+            - pkg: net/http
+              desc: "core never touches the network (codebase.md#the-dependency-rule)"
+            - pkg: database/sql
+              desc: "core reads facts, not databases: use domain.FactStore (codebase.md#the-dependency-rule)"
+            - pkg: modernc.org/sqlite
+              desc: "core reads facts, not databases: use domain.FactStore (codebase.md#the-dependency-rule)"
+            - pkg: github.com/spf13/cobra
+              desc: "flags belong to internal/cli (codebase.md#the-dependency-rule)"
+            - pkg: github.com/IHaveASegway/stillhere/internal/gitcli
+              desc: "core never imports an adapter: use domain.GitRunner (codebase.md#the-dependency-rule)"
+            - pkg: github.com/IHaveASegway/stillhere/internal/sqlite
+              desc: "core never imports an adapter: use domain.FactStore (codebase.md#the-dependency-rule)"
+            - pkg: github.com/IHaveASegway/stillhere/internal/github
+              desc: "core never imports an adapter (codebase.md#the-dependency-rule)"
+            - pkg: github.com/IHaveASegway/stillhere/internal/mcp
+              desc: "core never imports an adapter (codebase.md#the-dependency-rule)"
+            - pkg: github.com/IHaveASegway/stillhere/internal/collect
+              desc: "core never imports the git anti-corruption layer (codebase.md#the-dependency-rule)"
+            - pkg: github.com/IHaveASegway/stillhere/internal/app
+              desc: "core never imports the use cases (codebase.md#the-dependency-rule)"
+            - pkg: github.com/IHaveASegway/stillhere/internal/cli
+              desc: "core never imports the command line (codebase.md#the-dependency-rule)"
+        collect:
+          list-mode: lax
+          files:
+            - "**/internal/collect/**"
+            - "!$test"
+          deny:
+            - pkg: os/exec
+              desc: "collect runs git only through domain.GitRunner (codebase.md#the-dependency-rule)"
+            - pkg: net$
+              desc: "analysis never touches the network (codebase.md#the-dependency-rule)"
+            - pkg: net/http
+              desc: "analysis never touches the network (codebase.md#the-dependency-rule)"
+            - pkg: database/sql
+              desc: "collect produces facts; storing them is the store's job (codebase.md#the-dependency-rule)"
+            - pkg: modernc.org/sqlite
+              desc: "collect produces facts; storing them is the store's job (codebase.md#the-dependency-rule)"
+            - pkg: github.com/spf13/cobra
+              desc: "flags belong to internal/cli (codebase.md#the-dependency-rule)"
+            - pkg: github.com/IHaveASegway/stillhere/internal/gitcli
+              desc: "collect never imports an adapter: use domain.GitRunner (codebase.md#the-dependency-rule)"
+            - pkg: github.com/IHaveASegway/stillhere/internal/sqlite
+              desc: "collect never imports an adapter (codebase.md#the-dependency-rule)"
+            - pkg: github.com/IHaveASegway/stillhere/internal/github
+              desc: "collect never imports an adapter (codebase.md#the-dependency-rule)"
+            - pkg: github.com/IHaveASegway/stillhere/internal/mcp
+              desc: "collect never imports an adapter (codebase.md#the-dependency-rule)"
+            - pkg: github.com/IHaveASegway/stillhere/internal/app
+              desc: "collect never imports the use cases (codebase.md#the-dependency-rule)"
+            - pkg: github.com/IHaveASegway/stillhere/internal/cli
+              desc: "collect never imports the command line (codebase.md#the-dependency-rule)"
+        app:
+          list-mode: lax
+          files:
+            - "**/internal/app/**"
+            - "!$test"
+          deny:
+            - pkg: os/exec
+              desc: "use cases reach git only through domain.GitRunner (codebase.md#the-dependency-rule)"
+            - pkg: net$
+              desc: "use cases reach the network only through ports (codebase.md#the-dependency-rule)"
+            - pkg: net/http
+              desc: "use cases reach the network only through ports (codebase.md#the-dependency-rule)"
+            - pkg: database/sql
+              desc: "use cases reach facts.db only through domain.FactStore (codebase.md#the-dependency-rule)"
+            - pkg: modernc.org/sqlite
+              desc: "use cases reach facts.db only through domain.FactStore (codebase.md#the-dependency-rule)"
+            - pkg: github.com/spf13/cobra
+              desc: "flags belong to internal/cli (codebase.md#the-dependency-rule)"
+            - pkg: github.com/IHaveASegway/stillhere/internal/gitcli
+              desc: "use cases never import an adapter; internal/cli wires it in (codebase.md#the-dependency-rule)"
+            - pkg: github.com/IHaveASegway/stillhere/internal/sqlite
+              desc: "use cases never import an adapter; internal/cli wires it in (codebase.md#the-dependency-rule)"
+            - pkg: github.com/IHaveASegway/stillhere/internal/github
+              desc: "use cases never import an adapter; internal/cli wires it in (codebase.md#the-dependency-rule)"
+            - pkg: github.com/IHaveASegway/stillhere/internal/mcp
+              desc: "use cases never import an adapter; internal/cli wires it in (codebase.md#the-dependency-rule)"
+            - pkg: github.com/IHaveASegway/stillhere/internal/cli
+              desc: "use cases never import the command line (codebase.md#the-dependency-rule)"
+        adapters:
+          list-mode: lax
+          files:
+            - "**/internal/gitcli/**"
+            - "**/internal/sqlite/**"
+            - "**/internal/github/**"
+            - "**/internal/mcp/**"
+            - "!$test"
+          deny:
+            - pkg: github.com/IHaveASegway/stillhere/internal/app
+              desc: "adapters never import the use cases; internal/cli wires them together (codebase.md#the-dependency-rule)"
+            - pkg: github.com/IHaveASegway/stillhere/internal/cli
+              desc: "adapters never import the command line (codebase.md#the-dependency-rule)"
+    nolintlint:
+      require-explanation: true
+      require-specific: true
+    revive:
+      # Listing any rule replaces revive's defaults, so these are the defaults
+      # without unused-parameter: interface implementations and the stubs of
+      # the walking skeleton keep their documented parameter names.
+      rules:
+        - name: blank-imports
+        - name: context-as-argument
+        - name: context-keys-type
+        - name: dot-imports
+        - name: empty-block
+        - name: error-naming
+        - name: error-return
+        - name: error-strings
+        - name: errorf
+        - name: exported
+        - name: increment-decrement
+        - name: indent-error-flow
+        - name: package-comments
+        - name: range
+        - name: receiver-naming
+        - name: redefines-builtin-id
+        - name: superfluous-else
+        - name: time-naming
+        - name: unexported-return
+        - name: unreachable-code
+        - name: var-declaration
+        - name: var-naming
+  exclusions:
+    # Log any exclusion rule below that no longer matches anything.
+    warn-unused: true
+    rules:
+      # The walking skeleton's stubs (#1) always return an error, so
+      # staticcheck proves "err != nil" always true in every caller (SA4023)
+      # and would fail lint for each issue that codes against a stub. Delete
+      # this rule once no stub is left (#13); warn-unused reports when it no
+      # longer suppresses anything.
+      - linters:
+          - staticcheck
+        text: "SA4023"
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/IHaveASegway/stillhere
