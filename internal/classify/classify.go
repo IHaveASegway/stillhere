@@ -16,10 +16,11 @@ import (
 // Input is everything the classifier needs to know about one path.
 type Input struct {
 	Path      string
-	Size      int64  // -1 when absent at HEAD: path rules only
-	Generated string // linguist-generated: "unspecified", "unset", "set" or a value
-	Vendored  string // linguist-vendored
-	HeaderHit bool   // header sniff matched within the first 40 lines
+	AtHead    bool   // the path exists at Head; false for a path only the history touched
+	Size      int64  // bytes at Head, else at the commit that touched the path; -1 when unknown: no too_big check
+	Generated string // linguist-generated at Head: "unspecified", "unset", "set" or a value
+	Vendored  string // linguist-vendored at Head
+	HeaderHit bool   // header sniff matched within the first 40 lines; always false when AtHead is false, because the sniff reads Head
 }
 
 // Classify returns the verdict on one path under policy p.

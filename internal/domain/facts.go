@@ -62,12 +62,15 @@ const (
 	SkipUnclassified    Skip = "unclassified"
 )
 
-// PathClass is the classifier's verdict on one path.
+// PathClass is the classifier's verdict on one path. A run has one per
+// path: a path the history touched but Head no longer has is classified at
+// the commit that touched it (docs/spec/classification.md#order).
 type PathClass struct {
-	Path string
-	Role Role  // "" when skipped
-	Skip Skip  // "" when a role was assigned
-	Size int64 // bytes at HEAD; -1 when the path is absent at HEAD
+	Path   string
+	Role   Role  // "" when skipped
+	Skip   Skip  // "" when a role was assigned
+	Size   int64 // bytes the too_big check read: at Head, else at the commit that touched the path; -1 when unknown
+	AtHead bool  // the path exists at Head; false for a path only the history touched, which gets no header sniff
 }
 
 // Person is an identity after git applied the mailmap.

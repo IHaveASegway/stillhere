@@ -72,12 +72,13 @@ type Warning struct {
 type Role string // prod, sql, markup, iac, doc, test, migration, seed
 type Skip string // denied_path, too_big, generated_header, unclassified
 
-// PathClass is the classifier's verdict on one path.
+// PathClass is the classifier's verdict on one path; one per path in a run.
 type PathClass struct {
-	Path string
-	Role Role  // "" when skipped
-	Skip Skip  // "" when a role was assigned
-	Size int64 // bytes at HEAD; -1 when the path is absent at HEAD
+	Path   string
+	Role   Role  // "" when skipped
+	Skip   Skip  // "" when a role was assigned
+	Size   int64 // bytes the too_big check read: at HEAD, else at the commit that touched the path; -1 when unknown
+	AtHead bool  // the path exists at HEAD; false for a path only the history touched, which gets no header sniff
 }
 
 // Person is an identity after git applied the mailmap.
@@ -295,10 +296,11 @@ func (p *Policy) Ref() domain.PolicyRef
 // classify
 type Input struct {
 	Path      string
-	Size      int64  // -1 when absent at HEAD: path rules only
-	Generated string // linguist-generated: "unspecified", "unset", "set" or a value
-	Vendored  string // linguist-vendored
-	HeaderHit bool   // header sniff matched within the first 40 lines
+	AtHead    bool   // the path exists at HEAD; false for a path only the history touched
+	Size      int64  // bytes at HEAD, else at the commit that touched the path; -1 when unknown: no too_big check
+	Generated string // linguist-generated at HEAD: "unspecified", "unset", "set" or a value
+	Vendored  string // linguist-vendored at HEAD
+	HeaderHit bool   // header sniff matched within the first 40 lines; always false when !AtHead (the sniff reads HEAD)
 }
 func Classify(p *policy.Policy, in Input) domain.PathClass
 func Role(p *policy.Policy, path string) domain.Role // path and extension rules only
@@ -311,8 +313,11 @@ type Discovery struct {
 	Warnings []domain.Warning
 	Failed   []domain.FileError // PATH slots that were neither a repo nor a group
 }
-type PathAt struct{ Commit, Path string }
-func ClassifyPaths(ctx context.Context, git domain.GitRunner, repo domain.Repo, p *policy.Policy, absent []PathAt) ([]domain.PathClass, error)
+type PathAt struct{ Commit, Path string } // a path in the tree of a commit that touched it
+// ClassifyPaths: every path at Head, plus each touched path Head no longer has, sized at its Commit.
+// touched: every path the history touched (week and scan), one entry per path at the newest commit that
+// added lines to it; later duplicates are ignored. Returns one PathClass per distinct path, sorted by Path.
+func ClassifyPaths(ctx context.Context, git domain.GitRunner, repo domain.Repo, p *policy.Policy, touched []PathAt) ([]domain.PathClass, error)
 type HistoryMode int // HistoryWeek or HistoryScan
 type HistoryOptions struct {
 	Window domain.Window

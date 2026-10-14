@@ -7,7 +7,7 @@ There is one ordered classifier. The week collector and the blame collector both
 ## Order
 
 1. **Denied path**, decided by the [deny list](#deny-list) and then [.gitattributes](#gitattributes): adds 0 to `lines_added`, is not blamed, and counts toward `skipped.denied_path`.
-2. **Too big**, size greater than `[blame].max_bytes` (default 400000): same, counts toward `skipped.too_big`. Sizes come from `git ls-tree -l <sha>` for paths present at the scanned SHA. A week path absent at that SHA is sized with one batched `git cat-file --batch-check` over `<landing-sha>:<path>` lines. No blame is spawned just to learn a size.
+2. **Too big**, size greater than `[blame].max_bytes` (default 400000): same, counts toward `skipped.too_big`. Sizes come from `git ls-tree -l <sha>` for paths present at the scanned SHA. A path the history touched (week or scan) that is absent at that SHA is sized with one batched `git cat-file --batch-check` over `<commit>:<path>` lines, where the commit is the newest that added lines to the path; a path missing from that tree has an unknown size (`-1`) and skips this check. No blame is spawned just to learn a size.
 3. **Generated header**, from the [header sniff](#header-sniff): same, counts toward `skipped.generated_header`.
 4. **Role assigned**: the path survives. Any role counts toward week `lines_added`; only `prod` counts toward the still-here headline.
 5. **No role**: adds 0, is not blamed, and counts toward `skipped.unclassified`.
@@ -65,7 +65,7 @@ The markers, matched case-insensitively, are `code generated`, `@generated`, `do
 - A path counts only when its matched line number is 40 or less.
 - Exit status 1 means no hits, not a failed repo.
 - The marker list is source, not policy.
-- Week paths absent at the scanned SHA get path rules only.
+- A path absent at the scanned SHA gets no header sniff, because the sniff reads that SHA. The deny list, attributes, size and roles still apply to it.
 
 ## Roles
 
