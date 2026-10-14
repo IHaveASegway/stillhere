@@ -328,7 +328,7 @@ Wrong implementations this catches:
 - **Missing `-M`.** `service.py` becomes Ada 4, Bob 4, with both as majority owners.
 - **`max()` only.** `split.py` loses one of its two owners.
 - **No window on landers.** Gina and Hank appear as recent landers of `split.py`.
-- **Crediting the merger.** Bob replaces Cara as the recent lander of `side.py`.
+- **Crediting the merger, or patching with `log --first-parent -p`.** Bob replaces Cara as the recent lander of `side.py`: with `--first-parent`, git gives row 8 its first-parent diff, which adds `side.py` and `side_week.py` as Bob's.
 - **Commit time instead of landing time.** `side.py` has no recent lander, because `e08df80` was written in February.
 
 ### AI-assisted tags and reverts (main fixture)
@@ -475,6 +475,7 @@ Wrong implementations this catches:
 - **Reverted landings dropped.** L7 disappears: Lena 26/27, with N 9, and she is no longer eligible.
 - **More than 10 instead of at least 10.** Lena is not eligible.
 - **Crediting the merger.** Quinn 11/11 with N 2, and Pia 4/4 with N 1.
+- **Patching landings with `log --first-parent -p`.** With `--first-parent`, git gives a merge its first-parent diff, so M adds 5 lines for Quinn that blame credits to P1 and P2: Quinn 6/11 with N 2. Patch the mapped commits with `log --no-walk -p` instead, where a merge prints no diff.
 
 ### simplifying@1 (sibling)
 
