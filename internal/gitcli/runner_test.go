@@ -376,11 +376,24 @@ func wantTimeout(t *testing.T, err error) {
 func wantGone(t *testing.T, pid int) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
-	for syscall.Kill(pid, 0) == nil {
+	for syscall.Kill(pid, 0) == nil && !zombie(pid) {
 		if time.Now().After(deadline) {
 			_ = syscall.Kill(pid, syscall.SIGKILL)
 			t.Fatalf("process %d outlived the git command that started it", pid)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+}
+
+// zombie reports whether pid has died but not been reaped, which happens in
+// a container whose first process does not reap orphans. Only Linux says so
+// cheaply, in /proc; elsewhere init reaps at once.
+func zombie(pid int) bool {
+	stat, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
+	if err != nil {
+		return false
+	}
+	// The state follows the command name, which is in parentheses.
+	i := bytes.LastIndexByte(stat, ')')
+	return i >= 0 && i+2 < len(stat) && stat[i+2] == 'Z'
 }
