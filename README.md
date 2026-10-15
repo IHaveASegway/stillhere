@@ -5,7 +5,7 @@ Change analytics for git and GitHub (what landed, what lasted, who knows it) for
 
 > stillhere measures specific properties of code changes: how long they lasted, how much they simplified, how much review they got. It does not measure a person's value, and it must not be the basis for performance or pay decisions.
 
-**Status:** design. Nothing to install yet; milestone M0 (the walking skeleton) is next.
+**Status:** pre-release; milestone M0 is in progress. No release is tagged yet, so build from source (see [Install](#install)).
 
 - [Product brief](docs/product.md): what it is, who it is for, milestones, open decisions
 - [Metric catalog](docs/metrics.md): every metric's definition, blind spots, and how it can be gamed
