@@ -115,16 +115,26 @@ type FileChange struct {
 type Revert struct{ SHA, Reverted string } // full SHAs
 
 // LineOwner is how many non-blank lines blame attributes to one commit in
-// one path at HEAD. Lines are credited like commits (identity.Credit over
-// Author and CoAuthors, ADR 0007), so an agent's commit with a human
-// co-author counts for that human in every blame-based metric.
+// one path at HEAD, from one path in that commit. Lines are credited like
+// commits (identity.Credit over Author and CoAuthors, ADR 0007), so an
+// agent's commit with a human co-author counts for that human in every
+// blame-based metric.
+//
+// OrigPath is the path the lines had in Commit, as blame names it (its
+// porcelain "filename", git's blame origin): the pair (OrigPath, Commit)
+// is the one key that both blame and the history (FileChange's Path and
+// Commit) give the same lines, whichever renames lie between Commit and
+// HEAD and whether or not the history saw them. Blame usually reaches a
+// commit through one path, so a (Path, Commit) pair has one row; a commit
+// that a merge reached through two paths has one row per path.
 type LineOwner struct {
 	Path       string
 	Commit     string
+	OrigPath   string // the path the lines had in Commit; "" when it is Path, else the path blame followed renames back to
 	Author     Person
 	AuthorTime time.Time
 	CoAuthors  []Person // Commit's Co-authored-by trailers, canonicalised and ordered like Commit.CoAuthors
-	Lines      int      // non-blank lines blame attributes to Commit in Path at HEAD
+	Lines      int      // non-blank lines blame attributes to Commit, from OrigPath, in Path at HEAD
 }
 
 // IgnoreRevs records which --ignore-revs-file blame used for a repository.

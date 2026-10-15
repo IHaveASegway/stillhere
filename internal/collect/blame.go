@@ -87,7 +87,7 @@ func (s *BlameSlots) release() { s.sem.Release(1) }
 
 // BlameFacts is what Blame learned about one repository.
 type BlameFacts struct {
-	Owners     []domain.LineOwner // sorted by Path, then Commit
+	Owners     []domain.LineOwner // sorted by Path, Commit, then OrigPath
 	IgnoreRevs domain.IgnoreRevs  // the ignore-revs list blame used: exactly the commits git ignored
 	Errors     []domain.FileError // one per blamed path that failed, sorted by Path; messages scrubbed and truncated
 	// Warnings holds at most one warning, with code "ignore-revs": the
@@ -170,7 +170,8 @@ func Blame(ctx context.Context, git domain.GitRunner, repo domain.Repo, opt Blam
 	}
 
 	slices.SortFunc(facts.Owners, func(a, b domain.LineOwner) int {
-		return cmp.Or(strings.Compare(a.Path, b.Path), strings.Compare(a.Commit, b.Commit))
+		return cmp.Or(strings.Compare(a.Path, b.Path), strings.Compare(a.Commit, b.Commit),
+			strings.Compare(a.OrigPath, b.OrigPath))
 	})
 	slices.SortFunc(facts.Errors, func(a, b domain.FileError) int {
 		return cmp.Or(strings.Compare(a.Path, b.Path), strings.Compare(a.Message, b.Message))

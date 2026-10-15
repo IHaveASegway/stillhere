@@ -62,19 +62,33 @@ agent_authors = ["copilot"]
 [roles.extensions]
 # The file name's last dot suffix, ignoring case, so an extension holds one
 # dot: ".gz", never ".tar.gz", which a [[roles.path]] pattern can match.
+# An extension takes the role of what its files are for: source code is
+# prod; build, deployment and shell scripts are iac, as a Makefile is; views
+# and templates are markup, as HTML is. So the Kotlin and Groovy scripts of
+# Gradle builds (build.gradle.kts, build.gradle) are iac, and Elixir's and
+# Ruby's templates (.eex, .heex, .leex, .erb) are markup.
 prod = [
   ".php", ".go", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".rb",
   ".java", ".kt", ".swift", ".m", ".mm", ".c", ".h", ".cc", ".cpp", ".hpp",
   ".rs", ".cs", ".vue", ".svelte", ".proto", ".graphql", ".gql", ".lua",
+  ".mts", ".cts", ".cxx", ".hxx", ".hh", ".pyi", ".astro",
+  ".hs", ".ex", ".exs", ".tcl", ".pl", ".pm", ".r", ".asm", ".s",
 ]
 sql = [".sql"]
-markup = [".css", ".scss", ".sass", ".less", ".html", ".htm", ".storyboard", ".xib"]
-iac = [".yml", ".yaml", ".tf", ".hcl", ".toml", ".xml", ".json", ".sh"]
+markup = [
+  ".css", ".scss", ".sass", ".less", ".html", ".htm", ".storyboard", ".xib",
+  ".erb", ".eex", ".heex", ".leex",
+]
+iac = [
+  ".yml", ".yaml", ".tf", ".tfvars", ".hcl", ".toml", ".xml", ".json",
+  ".sh", ".bash", ".zsh", ".zsh-theme", ".bat", ".cmd", ".ps1", ".psm1", ".psd1",
+  ".kts", ".gradle", ".cmake", ".nix",
+]
 doc = [".md", ".rst", ".adoc"]
 
 [roles.names]
 # Exact file names; a name wins over the extension.
-iac = ["Dockerfile", "Makefile", "Containerfile"]
+iac = ["Dockerfile", "Makefile", "Containerfile", "CMakeLists.txt", "Procfile"]
 
 # Path rules: RE2 patterns over the repo-relative path, tried in order. The
 # first whose pattern matches, and whose `when` admits the role the name or

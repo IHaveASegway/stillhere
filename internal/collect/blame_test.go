@@ -31,16 +31,20 @@ func TestBlamePorcelain(t *testing.T) {
 		ben := domain.Person{Name: "Ben", Email: "ben@example.com"}
 		for _, tc := range []struct {
 			name  string
+			path  string   // the path blamed at HEAD
 			forms []string // the same file's blame in each form git printed
 			want  []domain.LineOwner
 		}{{
 			// The size-3 group of service.py in SPEC's measured blame: three
 			// records, the middle one a header without a group size whose
-			// content is a lone tab. Three records, two lines.
+			// content is a lone tab. Three records, two lines, which the
+			// init commit wrote in app.py: blame followed the rename to
+			// service.py back, and its filename names the path in the commit.
 			name:  "spec",
+			path:  "service.py",
 			forms: []string{blameSpecGroup},
 			want: []domain.LineOwner{{
-				Path: "f", Commit: "e9db5aab2e60fc152a91b4249739fcb8d0c7cfc2",
+				Path: "service.py", Commit: "e9db5aab2e60fc152a91b4249739fcb8d0c7cfc2", OrigPath: "app.py",
 				Author: ada, AuthorTime: time.Unix(1767268800, 0).UTC(), Lines: 2,
 			}},
 		}, {
@@ -52,17 +56,37 @@ func TestBlamePorcelain(t *testing.T) {
 			// the history collector lowercases %aE, or one person splits in
 			// two between blame and history.
 			name:  "ann-ben-ann",
+			path:  "f.py",
 			forms: []string{blameABALinePorcelain, blameABAPorcelain},
 			want: []domain.LineOwner{{
-				Path: "f", Commit: "10cb948814dba5f798813e5b31502392922c2766",
+				Path: "f.py", Commit: "10cb948814dba5f798813e5b31502392922c2766",
 				Author: ann, AuthorTime: time.Unix(1767268800, 0).UTC(), Lines: 2,
 			}, {
-				Path: "f", Commit: "a5203000798708d126f950e9888a4e05421b70b7",
+				Path: "f.py", Commit: "a5203000798708d126f950e9888a4e05421b70b7",
 				Author: ben, AuthorTime: time.Unix(1767355200, 0).UTC(), Lines: 1,
+			}},
+		}, {
+			// Ann's root commit writes x.py and y.py; one branch keeps x.py
+			// as z.py, the other y.py, and the merge keeps all four lines.
+			// Blame reaches the root through both parents, so it is guilty
+			// in two paths (git's MORE_THAN_ONE_PATH): --porcelain then
+			// prints a filename at the start of each of the commit's groups,
+			// and nothing else, as the commit's author keys were already
+			// shown. One row per path in the commit, or the lines of one are
+			// matched to the other's history.
+			name:  "one-commit-two-paths",
+			path:  "z.py",
+			forms: []string{blameTwoPathsLinePorcelain, blameTwoPathsPorcelain},
+			want: []domain.LineOwner{{
+				Path: "z.py", Commit: "10818d698c30e39a57bac5fe6596d5fefbcc298a", OrigPath: "x.py",
+				Author: ann, AuthorTime: time.Unix(1767268800, 0).UTC(), Lines: 2,
+			}, {
+				Path: "z.py", Commit: "10818d698c30e39a57bac5fe6596d5fefbcc298a", OrigPath: "y.py",
+				Author: ann, AuthorTime: time.Unix(1767268800, 0).UTC(), Lines: 2,
 			}},
 		}} {
 			for i, form := range tc.forms {
-				got, err := blameParse(strings.NewReader(form), "f")
+				got, err := blameParse(strings.NewReader(form), tc.path)
 				if err != nil {
 					t.Fatalf("%s, form %d: %v", tc.name, i, err)
 				}
@@ -95,8 +119,9 @@ func TestBlamePorcelain(t *testing.T) {
 		if facts.Errors != nil || facts.Warnings != nil || !reflect.DeepEqual(facts.IgnoreRevs, domain.IgnoreRevs{}) {
 			t.Errorf("errors %v, warnings %v, ignore-revs %+v; want none", facts.Errors, facts.Warnings, facts.IgnoreRevs)
 		}
-		// Owners is sorted by Path, then Commit, so each path's list is in
-		// blameParse's order; CoAuthors stays nil, as blameParse leaves it.
+		// Owners is sorted by Path, Commit, then OrigPath, so each path's
+		// list is in blameParse's order; CoAuthors stays nil, as blameParse
+		// leaves it.
 		owners := make(map[string][]domain.LineOwner)
 		lines := make(map[string]int) // prod non-blank lines per email
 		for _, o := range facts.Owners {
@@ -153,21 +178,24 @@ func TestBlamePorcelain(t *testing.T) {
 // author time rather than by commit ID: the init commit keeps beta and
 // alpha, 4 non-blank lines, because -M credits the moved block to it and
 // the blank inside alpha does not count; gamma's 2 lines are Ada's through
-// the mailmap; delta's 2 are Bob's.
+// the mailmap; delta's 2 are Bob's. The init commit and gamma wrote their
+// lines in app.py, which 2026-01-05 renamed to service.py, so blame names
+// app.py as the path they had; delta wrote service.py itself.
 func blameCheckService(t *testing.T, owners []domain.LineOwner) {
 	t.Helper()
 	type row struct {
 		email string
 		lines int
+		orig  string
 	}
 	got := make(map[time.Time]row)
 	for _, o := range owners {
-		got[o.AuthorTime] = row{o.Author.Email, o.Lines}
+		got[o.AuthorTime] = row{o.Author.Email, o.Lines, o.OrigPath}
 	}
 	want := map[time.Time]row{
-		time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC): {"ada@example.com", 4},
-		time.Date(2026, time.January, 2, 12, 0, 0, 0, time.UTC): {"ada@example.com", 2},
-		time.Date(2026, time.October, 6, 13, 0, 0, 0, time.UTC): {"bob@example.com", 2},
+		time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC): {"ada@example.com", 4, "app.py"},
+		time.Date(2026, time.January, 2, 12, 0, 0, 0, time.UTC): {"ada@example.com", 2, "app.py"},
+		time.Date(2026, time.October, 6, 13, 0, 0, 0, time.UTC): {"bob@example.com", 2, ""},
 	}
 	if !maps.Equal(got, want) {
 		t.Errorf("service.py by author time:\n got %v\nwant %v", got, want)
@@ -307,5 +335,89 @@ var (
 		"\tben_two = 22",
 		"10cb948814dba5f798813e5b31502392922c2766 3 3 1",
 		"\tann_three = 3",
+	)
+)
+
+// blameTwoPathsLinePorcelain and blameTwoPathsPorcelain are git 2.50.1's
+// blame -w -M of z.py after a merge: Ann <ann@example.com> (2026-01-01)
+// writes x.py and y.py, two lines each; on side, Ben deletes x.py and moves
+// y.py to z.py; on main, Ann deletes y.py and moves x.py to z.py; Ben's
+// --no-ff merge keeps all four lines. Captured on 2026-10-15.
+var (
+	blameTwoPathsLinePorcelain = blamePorcelainText(
+		"10818d698c30e39a57bac5fe6596d5fefbcc298a 1 1 2",
+		"author Ann",
+		"author-mail <ann@example.com>",
+		"author-time 1767268800",
+		"author-tz +0000",
+		"committer Ann",
+		"committer-mail <ann@example.com>",
+		"committer-time 1767268800",
+		"committer-tz +0000",
+		"summary ann writes x.py and y.py",
+		"boundary",
+		"filename x.py",
+		"\tdef alpha_one(): return 'alpha one'",
+		"10818d698c30e39a57bac5fe6596d5fefbcc298a 2 2",
+		"author Ann",
+		"author-mail <ann@example.com>",
+		"author-time 1767268800",
+		"author-tz +0000",
+		"committer Ann",
+		"committer-mail <ann@example.com>",
+		"committer-time 1767268800",
+		"committer-tz +0000",
+		"summary ann writes x.py and y.py",
+		"boundary",
+		"filename x.py",
+		"\tdef alpha_two(): return 'alpha two'",
+		"10818d698c30e39a57bac5fe6596d5fefbcc298a 1 3 2",
+		"author Ann",
+		"author-mail <ann@example.com>",
+		"author-time 1767268800",
+		"author-tz +0000",
+		"committer Ann",
+		"committer-mail <ann@example.com>",
+		"committer-time 1767268800",
+		"committer-tz +0000",
+		"summary ann writes x.py and y.py",
+		"boundary",
+		"filename y.py",
+		"\tdef gamma_one(): return 'gamma one'",
+		"10818d698c30e39a57bac5fe6596d5fefbcc298a 2 4",
+		"author Ann",
+		"author-mail <ann@example.com>",
+		"author-time 1767268800",
+		"author-tz +0000",
+		"committer Ann",
+		"committer-mail <ann@example.com>",
+		"committer-time 1767268800",
+		"committer-tz +0000",
+		"summary ann writes x.py and y.py",
+		"boundary",
+		"filename y.py",
+		"\tdef gamma_two(): return 'gamma two'",
+	)
+	blameTwoPathsPorcelain = blamePorcelainText(
+		"10818d698c30e39a57bac5fe6596d5fefbcc298a 1 1 2",
+		"author Ann",
+		"author-mail <ann@example.com>",
+		"author-time 1767268800",
+		"author-tz +0000",
+		"committer Ann",
+		"committer-mail <ann@example.com>",
+		"committer-time 1767268800",
+		"committer-tz +0000",
+		"summary ann writes x.py and y.py",
+		"boundary",
+		"filename x.py",
+		"\tdef alpha_one(): return 'alpha one'",
+		"10818d698c30e39a57bac5fe6596d5fefbcc298a 2 2",
+		"\tdef alpha_two(): return 'alpha two'",
+		"10818d698c30e39a57bac5fe6596d5fefbcc298a 1 3 2",
+		"filename y.py",
+		"\tdef gamma_one(): return 'gamma one'",
+		"10818d698c30e39a57bac5fe6596d5fefbcc298a 2 4",
+		"\tdef gamma_two(): return 'gamma two'",
 	)
 )

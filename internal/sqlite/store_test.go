@@ -481,14 +481,15 @@ func sampleFacts(run domain.Run) *domain.FactSet {
 					{SHA: sha('3'), Time: day(100), Merge: true, Commits: []string{sha('3'), sha('4')}},
 				},
 				Changes: []domain.FileChange{
-					{Commit: sha('1'), Path: "cmd/main.go", Added: 10, AddedNonBlank: 8},
+					{Commit: sha('1'), Path: "main.go", Added: 10, AddedNonBlank: 8},
 					{Commit: sha('2'), Path: "cmd/main.go", OldPath: "main.go", Added: 3, Removed: 2, AddedNonBlank: 3, RemovedNonBlank: 1},
 					{Commit: sha('4'), Path: "logo.png", Binary: true, AddedNonBlank: -1, RemovedNonBlank: -1},
 				},
 				Reverts:   []domain.Revert{{SHA: sha('5'), Reverted: sha('2')}},
 				LineFacts: true,
 				Owners: []domain.LineOwner{
-					{Path: "cmd/main.go", Commit: sha('1'), Author: ada, AuthorTime: day(300), Lines: 7},
+					// sha('1') wrote main.go, which sha('2') moved: blame names the path the lines had.
+					{Path: "cmd/main.go", Commit: sha('1'), OrigPath: "main.go", Author: ada, AuthorTime: day(300), Lines: 7},
 					{Path: "cmd/main.go", Commit: sha('2'), Author: claude, AuthorTime: day(200), CoAuthors: []domain.Person{pia, ada}, Lines: 3},
 				},
 				IgnoreRevs: domain.IgnoreRevs{

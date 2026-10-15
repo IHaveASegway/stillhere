@@ -479,14 +479,14 @@ func (l *loader) reverts() error {
 
 func (l *loader) owners() error {
 	return l.each("line_owners", `
-		SELECT repo_id, seq, path, commit_sha, author_name, author_email, author_time, lines
+		SELECT repo_id, seq, path, commit_sha, orig_path, author_name, author_email, author_time, lines
 		FROM line_owners WHERE `+ofRun+` ORDER BY repo_id, seq`,
 		func(rows *sql.Rows) error {
 			var repo, seq, lines int64
 			var o domain.LineOwner
 			var authored sql.NullString
-			if err := rows.Scan(&repo, &seq, &o.Path, &o.Commit, &o.Author.Name, &o.Author.Email, &authored,
-				&lines); err != nil {
+			if err := rows.Scan(&repo, &seq, &o.Path, &o.Commit, &o.OrigPath, &o.Author.Name, &o.Author.Email,
+				&authored, &lines); err != nil {
 				return err
 			}
 			o.Lines = int(lines)

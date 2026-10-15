@@ -91,9 +91,10 @@ type commitView struct {
 	ignored bool   // listed in the ignore-revs file blame used
 	changes []*domain.FileChange
 	// added and removed count non-blank lines on prod paths in the commit's
-	// own patch; surviving counts the non-blank prod lines blame attributes
-	// to it at HEAD. traced is the part of added whose fate blame can
-	// tell: the lines on paths whose blame did not fail (untracedPaths).
+	// own patch. traced is the part of added whose fate blame can tell, and
+	// surviving the non-blank prod lines blame attributes to the commit at
+	// HEAD on the same terms: neither counts a line untracedLines leaves
+	// out, and both ask it by the path the line had in the commit.
 	added, removed, traced, surviving int
 }
 
@@ -178,7 +179,7 @@ func newRepoView(f *domain.RepoFacts, who *identity.Directory) *repoView {
 	for _, sha := range f.IgnoreRevs.Revs {
 		ignored[strings.ToLower(sha)] = true
 	}
-	untraced := untracedPaths(f, r.role)
+	untraced := untracedLines(f, r.role)
 	for i := range f.Commits {
 		c := &f.Commits[i]
 		r.commits[c.SHA] = &commitView{
@@ -205,7 +206,7 @@ func newRepoView(f *domain.RepoFacts, who *identity.Directory) *repoView {
 		if r.role[fc.Path] == domain.RoleProd {
 			c.added += fc.AddedNonBlank
 			c.removed += fc.RemovedNonBlank
-			if !untraced[fc.Path] {
+			if !untraced.has(fc.Path, fc.Commit) {
 				c.traced += fc.AddedNonBlank
 			}
 		}
@@ -239,35 +240,88 @@ func newRepoView(f *domain.RepoFacts, who *identity.Directory) *repoView {
 	}
 
 	if r.lines {
-		r.indexLines(f, who)
+		r.indexLines(f, who, untraced)
 	}
 	return r
 }
 
-// untracedPaths returns the paths on which blame cannot tell whether a
-// commit's added lines survive: every prod path whose blame failed
-// (RepoFacts.BlameErrors: a timeout, a failed git blame, porcelain that did
-// not parse), and every path the history renamed into one of them, because
-// blame follows a file back through its renames, so lines added to old.py
-// are blamed in its successor. It is nil when no prod path failed.
+// untracedIndex holds the lines whose survival blame cannot tell. Both
+// sides of durable@1 ask it about a commit's lines by the path they had in
+// that commit: the added side with a change's own (Path, Commit), the
+// blamed side with a line owner's (OrigPath, Commit), which blame names
+// itself (domain.LineOwner). A line is untraced when its path is in paths,
+// or when lines holds its (path, commit). durable@1 counts an untraced line
+// in neither of its sums (untracedLines). The zero value holds none.
+type untracedIndex struct {
+	paths map[string]bool     // every commit's lines on these paths are untraced: a failed blame
+	lines map[pathCommit]bool // one commit's lines on one path are untraced: a binary change
+}
+
+// pathCommit names a commit's lines by the path they had in that commit.
+type pathCommit struct{ path, commit string }
+
+// has reports whether commit's lines on path, the path they had in commit,
+// are untraced.
+func (u untracedIndex) has(path, commit string) bool {
+	return u.paths[path] || u.lines[pathCommit{path, commit}]
+}
+
+// untracedLines returns the lines on which blame cannot tell whether a
+// commit's added lines survive (docs/metrics.md, "Missing facts are not
+// zeros"). Two facts make lines untraced:
 //
-// Blame treats each file as a bulkhead: one that fails becomes a FileError
-// while the other files are blamed, and LineFacts stays true. The metrics
-// keep the failure inside the same bulkhead. A failed file has no line
-// owners, so its surviving lines are unknown; durable@1 must then leave
-// the lines added to it out of its denominator too, or their authors would
-// score as keeping nothing. Only prod paths seed the set: surviving lines
-// count prod paths at HEAD only, so a failed path with another role hides
-// no surviving line.
-func untracedPaths(f *domain.RepoFacts, role map[string]domain.Role) map[string]bool {
-	var queue []string
-	for _, e := range f.BlameErrors {
-		if role[e.Path] == domain.RoleProd {
-			queue = append(queue, e.Path)
+//   - A binary change (FileChange.Binary: numstat "-", an own patch with no
+//     hunks) has unknown added lines, while blame still attributes every
+//     line of the file, the commit's among them. The fact is about one
+//     path in one commit, and blame names that pair for each line it gives
+//     the commit (LineOwner.OrigPath), whichever renames lie between the
+//     commit and HEAD and whether or not the history saw them: the history
+//     sees none outside its window, and gives up on a commit with too many
+//     rename candidates. So only that pair is untraced, in both sums,
+//     with no walk. Every binary change is held, whatever its path's role:
+//     the role of a line's path can change on the way to HEAD (a binary
+//     file moved out of vendor/), and the blamed side counts prod lines
+//     by their path at HEAD.
+//   - A prod path whose blame failed (RepoFacts.BlameErrors: a timeout, a
+//     failed git blame, porcelain that did not parse) has no line owners,
+//     so its surviving lines are unknown. The fact is about a path at
+//     HEAD, and with no owners no line names the paths its lines had
+//     before; the renames the history recorded are the only link, so the
+//     walk goes back through them: every commit's lines on the path, and
+//     on each path renamed into it, are untraced. A rename the history did
+//     not record leaves lines added before it in Σ added with no surviving
+//     line, which lowers a ratio and never raises one. The walk ignores
+//     when a rename happened, so a path that a rename vacated and a new
+//     file took is untraced along with the old file, in both sums alike.
+//     Only prod paths seed it: the lines blame gives a path of another role
+//     count in no surviving sum, whether or not its blame failed, so the
+//     failure hides nothing.
+//
+// Both facts feed one predicate, untracedIndex.has, which the added and the
+// blamed side of durable@1 both ask with the same key, so its two sums
+// leave out the same lines, whichever fact left a line out (the
+// Specification pattern). Without it a failed file would score its authors
+// as keeping nothing, and a binary one as keeping more than they added.
+// Blame treats each file as a bulkhead (a failed one becomes a FileError
+// while LineFacts stays true), and the metrics keep the failure inside it.
+func untracedLines(f *domain.RepoFacts, role map[string]domain.Role) untracedIndex {
+	var u untracedIndex
+	for i := range f.Changes {
+		if fc := &f.Changes[i]; fc.Binary {
+			if u.lines == nil {
+				u.lines = make(map[pathCommit]bool)
+			}
+			u.lines[pathCommit{fc.Path, fc.Commit}] = true
 		}
 	}
-	if len(queue) == 0 {
-		return nil
+	var failed []string
+	for _, e := range f.BlameErrors {
+		if role[e.Path] == domain.RoleProd {
+			failed = append(failed, e.Path)
+		}
+	}
+	if len(failed) == 0 {
+		return u
 	}
 	sources := make(map[string][]string) // a rename's destination → its sources
 	for i := range f.Changes {
@@ -275,22 +329,24 @@ func untracedPaths(f *domain.RepoFacts, role map[string]domain.Role) map[string]
 			sources[fc.Path] = append(sources[fc.Path], fc.OldPath)
 		}
 	}
-	out := make(map[string]bool, len(queue))
-	for len(queue) > 0 {
-		p := queue[len(queue)-1]
-		queue = queue[:len(queue)-1]
-		if out[p] {
+	u.paths = make(map[string]bool, len(failed))
+	for len(failed) > 0 {
+		p := failed[len(failed)-1]
+		failed = failed[:len(failed)-1]
+		if u.paths[p] {
 			continue
 		}
-		out[p] = true
-		queue = append(queue, sources[p]...)
+		u.paths[p] = true
+		failed = append(failed, sources[p]...)
 	}
-	return out
+	return u
 }
 
 // indexLines credits every blamed row once per blamed commit and builds the
-// prod files with their majority owners.
-func (r *repoView) indexLines(f *domain.RepoFacts, who *identity.Directory) {
+// prod files with their majority owners. A commit's surviving lines leave
+// out the untraced ones, by the path they had in the commit, as its traced
+// lines do.
+func (r *repoView) indexLines(f *domain.RepoFacts, who *identity.Directory, untraced untracedIndex) {
 	credits := make(map[string]string) // blamed commit → credited email
 	r.files = make(map[string]*fileView)
 	for i := range f.Owners {
@@ -308,7 +364,7 @@ func (r *repoView) indexLines(f *domain.RepoFacts, who *identity.Directory) {
 		if role != domain.RoleProd {
 			continue
 		}
-		if c := r.commits[o.Commit]; c != nil {
+		if c := r.commits[o.Commit]; c != nil && !untraced.has(cmp.Or(o.OrigPath, o.Path), o.Commit) {
 			c.surviving += o.Lines
 		}
 		fv := r.files[o.Path]

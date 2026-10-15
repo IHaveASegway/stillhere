@@ -214,7 +214,7 @@ func historyLabel(label, prefix string) (string, error) {
 	}
 	if strings.HasPrefix(label, `"`) {
 		var err error
-		if label, err = historyUnquote(label); err != nil {
+		if label, err = unquotePath(label); err != nil {
 			return "", err
 		}
 	}
@@ -224,63 +224,6 @@ func historyLabel(label, prefix string) (string, error) {
 	}
 	return path, nil
 }
-
-// historyUnquote undoes git's quote_c_style: the surrounding quotes, the
-// escapes \a \b \t \n \v \f \r \" \\, and three-digit octal escapes, which
-// stand for single bytes, so a path that is not valid UTF-8 survives byte
-// for byte. Raw bytes pass through, which is how git prints non-ASCII when
-// core.quotePath is false.
-func historyUnquote(s string) (string, error) {
-	if len(s) < 2 || s[0] != '"' || s[len(s)-1] != '"' {
-		return "", errors.New("malformed quoted path")
-	}
-	s = s[1 : len(s)-1]
-	var b strings.Builder
-	b.Grow(len(s))
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		if c == '"' {
-			return "", errors.New("malformed quoted path")
-		}
-		if c != '\\' {
-			b.WriteByte(c)
-			continue
-		}
-		i++
-		if i >= len(s) {
-			return "", errors.New("malformed quoted path")
-		}
-		switch e := s[i]; e {
-		case 'a':
-			b.WriteByte('\a')
-		case 'b':
-			b.WriteByte('\b')
-		case 't':
-			b.WriteByte('\t')
-		case 'n':
-			b.WriteByte('\n')
-		case 'v':
-			b.WriteByte('\v')
-		case 'f':
-			b.WriteByte('\f')
-		case 'r':
-			b.WriteByte('\r')
-		case '"', '\\':
-			b.WriteByte(e)
-		case '0', '1', '2', '3':
-			if i+2 >= len(s) || !historyOctal(s[i+1]) || !historyOctal(s[i+2]) {
-				return "", errors.New("malformed octal escape in quoted path")
-			}
-			b.WriteByte((e-'0')<<6 | (s[i+1]-'0')<<3 | (s[i+2] - '0'))
-			i += 2
-		default:
-			return "", errors.New("unknown escape in quoted path")
-		}
-	}
-	return b.String(), nil
-}
-
-func historyOctal(c byte) bool { return c >= '0' && c <= '7' }
 
 // historyHunk returns the line counts of a hunk header, "@@ -a[,b] +c[,d]
 // @@ heading": b removed and d added lines, where a missing count is 1.

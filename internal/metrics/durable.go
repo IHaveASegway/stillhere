@@ -9,9 +9,13 @@ import (
 // added in the cohort, the share that blame still attributes to those
 // commits at HEAD. It is a Ratio metric: the bootstrap resamples a person's
 // clusters (their counted commits in one landing), because lines inside one
-// change are not independent. Both sides of the ratio cover the same lines:
-// those on files blame read (cluster.traced), so a file whose blame failed
-// leaves the ratio instead of scoring its lines as lost.
+// change are not independent. Both sides of the ratio leave out the same
+// lines, those whose survival blame cannot tell (untracedLines), so a file
+// whose blame failed leaves the ratio instead of scoring its lines as lost,
+// and a change git took for binary, whose added lines are unknown, leaves it
+// instead of scoring its blamed lines as kept beyond what was added. Nothing
+// else bounds the ratio by 1: blame -M gives a copy inside one file to the
+// commit that wrote the block (#63).
 type durableV1 struct{}
 
 var durableID = domain.MetricID{Name: "durable", Version: 1}
@@ -22,20 +26,24 @@ func (durableV1) Definition() Definition {
 		ID:       durableID,
 		Question: "Did the code a person wrote last?",
 		Unit: "Σ surviving / Σ added per person over their clusters in the cohort, landings in [now - 365d, now - 90d), per " +
-			"repository, group and all. added: non-blank prod lines of each counted commit's own -U0 -w patch, on files blame " +
-			"read; surviving: the non-blank prod lines blame -w -M (with the repository's ignore-revs file) attributes to it at " +
-			"HEAD. Lines added to a file whose blame failed, or to a path the history renamed into one, have unknown survival and " +
-			"are in neither part. A cluster is one person's counted commits in one landing and needs at least one added line. " +
-			"Merge commits, ignore-revs commits and revert landings are excluded; a reverted landing stays and scores what blame " +
-			"gives it. Detail: reverted_landings.",
+			"repository, group and all. added: non-blank prod lines of each counted commit's own -U0 -w patch; surviving: the " +
+			"non-blank prod lines blame -w -M (with the repository's ignore-revs file) attributes to it at HEAD. Lines whose " +
+			"survival blame cannot tell are in neither part, matched by the path they had in their commit (the history's change, " +
+			"blame's filename): those of a change git took for binary (its added lines are unknown), wherever HEAD holds them, and " +
+			"those of a file whose blame failed, or of a path the history renamed into one. A cluster is one person's counted " +
+			"commits in one landing and needs at least one added line in the ratio. Merge commits, ignore-revs commits and revert " +
+			"landings are excluded; a reverted landing stays and scores what blame gives it. Detail: reverted_landings.",
 		Ranked:      true,
 		Eligibility: "At least 10 clusters in the cohort (open decision 5).",
 		BlindSpots: "A planned replacement of correct code looks not durable. Moves across files credit the mover; a move inside " +
 			"one file counts as the mover's added lines, which blame gives back to their first author, so the mover scores 0 on " +
-			"them (open decision 6). A revert that restores deleted lines takes their blame from the original author. Changes " +
-			"younger than 90 days are not scored. Lines blamed to a merge commit (conflict resolutions) are left out in v1.",
-		Gaming:   "Writing in stable, low-traffic code and avoiding risky areas. Load-bearing (M5) is the counterweight.",
-		Oracle:   "testdata/fixture/SPEC.md#change-oracles-m1-testchangeoracles (main fixture and sibling)",
+			"them (open decision 6). A copy inside one file credits its original author with more lines than they added, so a " +
+			"value can pass 1 (#63). A revert that restores deleted lines takes their blame from the original author. Changes " +
+			"younger than 90 days are not scored. Lines blamed to a merge commit (conflict resolutions) are left out in v1. A " +
+			"change git takes for binary scores none of its lines.",
+		Gaming: "Writing in stable, low-traffic code and avoiding risky areas. Load-bearing (M5) is the counterweight.",
+		Oracle: "testdata/fixture/SPEC.md#change-oracles-m1-testchangeoracles (main fixture and sibling) and " +
+			"testdata/fixture/SPEC.md#binary-files-fixturebinary (binary files)",
 		Validity: "Unvalidated until the M2 labelled-sample check (stillhere validate, AUC >= 0.7 on at least 50 labelled changes).",
 	}
 }
@@ -84,10 +92,11 @@ func (durableV1) Clusters(in *Input, scope domain.Scope) (RankInput, error) {
 	}, nil
 }
 
-// durableClusters returns the cohort's clusters that added a prod line on a
-// file blame read: a landing that adds none (a pure rename, a
+// durableClusters returns the cohort's clusters that added a prod line
+// whose survival blame can tell: a landing that adds none (a pure rename, a
 // whitespace-only or a test-only change) says nothing about durability, and
-// neither does one whose added lines are all on files whose blame failed.
+// neither does one whose added lines are all untraced (on files whose blame
+// failed, or in changes git took for binary).
 func durableClusters(v *view) []*cluster {
 	var out []*cluster
 	for _, k := range changeClusters(v, v.window(cohortFrom, cohortTo), true, false) {
