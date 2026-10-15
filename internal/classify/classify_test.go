@@ -97,6 +97,7 @@ func TestClassify(t *testing.T) {
 		}
 		withHeader := func(in classify.Input) classify.Input { in.HeaderHit = true; return in }
 		gone := func(in classify.Input) classify.Input { in.AtHead = false; return in }
+		notFile := func(in classify.Input) classify.Input { in.NotFile = true; return in }
 		for _, c := range []struct {
 			name string
 			in   classify.Input
@@ -129,6 +130,13 @@ func TestClassify(t *testing.T) {
 			{"a build package", at("src/go/build/build.go", 10), domain.RoleProd, ""},
 			{"a storage package", at("internal/storage/postgres.go", 10), domain.RoleProd, ""},
 			{"Laravel's compiled views", at("storage/framework/views/0a1b.php", 10), "", domain.SkipDeniedPath},
+
+			// Only a regular file gets a role: a symbolic link's content is
+			// its target, and a submodule has no lines. The deny list still
+			// comes first.
+			{"a symbolic link", notFile(at("link.py", 7)), "", domain.SkipUnclassified},
+			{"a submodule", notFile(at("libs/parser", -1)), "", domain.SkipUnclassified},
+			{"a denied link", notFile(at("vendor/link.py", 7)), "", domain.SkipDeniedPath},
 
 			// too_big: strictly above [blame] max_bytes, and only with a
 			// known size.

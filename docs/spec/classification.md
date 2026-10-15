@@ -1,6 +1,6 @@
 # Classification
 
-Status: carried over from the 2026-10-07 plan, updated 2026-10-14 (RE2 patterns, `check-attr --source`; then, with #5's code, Linguist's attribute values, the curated deny list, the exact header sniff, `Test.php`; then, from #5's review, `storage` narrowed to Laravel's and `build` left out, test directories for code only) · the week predicate becomes tests in M0, blame roles in M1
+Status: carried over from the 2026-10-07 plan, updated 2026-10-14 (RE2 patterns, `check-attr --source`; then, with #5's code, Linguist's attribute values, the curated deny list, the exact header sniff, `Test.php`; then, from #5's review, a header sniff that reads no attribute and takes descriptions only where a line starts, `storage` narrowed to Laravel's and `build` left out, test directories for code only, links and submodules) · the week predicate becomes tests in M0, blame roles in M1
 
 There is one ordered classifier. The week collector and the blame collector both call it; there is no second, looser filter.
 
@@ -9,8 +9,8 @@ There is one ordered classifier. The week collector and the blame collector both
 1. **Denied path**, decided by the [deny list](#deny-list) and then [.gitattributes](#gitattributes): adds 0 to `lines_added`, is not blamed, and counts toward `skipped.denied_path`.
 2. **Too big**, size greater than `[blame].max_bytes` (400000 in the packaged policy): same, counts toward `skipped.too_big`. Sizes come from `git ls-tree -r -l -z <sha>` for paths present at the scanned SHA. A path the history touched (week or scan) that is absent at that SHA is sized with one batched `git cat-file --batch-check='%(objecttype) %(objectsize)' -Z` over NUL-terminated `<commit>:<path>` lines (`-Z`, Git 2.42+, makes the output NUL-terminated too, which a path holding a newline needs), where the commit is the newest that added lines to the path; a path missing from that tree has an unknown size (`-1`) and skips this check. In a blobless partial clone `ls-tree -l` prints `BAD` for a missing blob's size (verified on 2.50.1), which is also unknown. No blame is spawned just to learn a size.
 3. **Generated header**, from the [header sniff](#header-sniff): same, counts toward `skipped.generated_header`, unless `.gitattributes` turns `linguist-generated` off for the path ([.gitattributes](#gitattributes)).
-4. **Role assigned**: the path survives. Any role counts toward week `lines_added`; only `prod` counts toward the still-here headline.
-5. **No role**: adds 0, is not blamed, and counts toward `skipped.unclassified`.
+4. **Role assigned**: the path survives. Any role counts toward week `lines_added`; only `prod` counts toward the still-here headline. Only a regular file gets a role.
+5. **No role**: adds 0, is not blamed, and counts toward `skipped.unclassified`. That includes a symbolic link (mode `120000`), whose content is its target's name, and a submodule (a gitlink), which has no lines, although numstat counts a link's target and a submodule bump as a changed line (verified on 2.50.1). A path the scanned SHA no longer has is classified as a file: `cat-file --batch-check` has no `%(objectmode)` (verified on 2.50.1), so it cannot tell a deleted link from a file.
 
 ## Patterns
 
@@ -51,13 +51,15 @@ After the deny patterns, one batched call per repo, so git does the reading. Att
 git <common> -c core.ignoreCase=false check-attr -z --source=<sha> --stdin linguist-generated linguist-vendored
 ```
 
-Stdin is NUL-terminated paths: every path at the scanned SHA, plus each touched path that SHA no longer has, which is matched against the attributes at the scanned SHA too. The output is `path\0attribute\0info\0`, where info is `unspecified`, `unset`, `set`, or a value. An attribute is **on** when info is `set` or any value other than `false`, and **off** when info is `unset` or the value `false`. That is how GitHub Linguist reads a boolean attribute (`boolean_attribute` in `lib/linguist/lazy_blob.rb`), so `linguist-vendored=false`, a common way to un-vendor a path, means what it means on GitHub. Per path, in this order:
+Stdin is NUL-terminated paths: every path at the scanned SHA, plus each touched path that SHA no longer has, which is matched against the attributes at the scanned SHA too. The output is `path\0attribute\0info\0`, where info is `unspecified`, `unset`, `set`, or a value. An attribute is **on** when info is `set` or any value other than `false`, and **off** when info is `unset` or the value `false`. That is how GitHub Linguist reads a boolean attribute (`boolean_attribute` in `lib/linguist/lazy_blob.rb`), so `linguist-vendored=false`, a common way to un-vendor a path, means what it means on GitHub. An empty value (`linguist-generated=`) is on too: check-attr prints it as an empty info (verified on 2.50.1), while libgit2, which Linguist reads attributes with, leaves an assignment with an empty value set. Per path, in this order:
 
 1. `denied` starts true if any deny pattern matched.
 2. If either attribute is off, `denied` becomes false. An explicit `-linguist-generated` or `-linguist-vendored` (or `=false`) is the only un-deny.
 3. If either attribute is on, `denied` becomes true. On wins over off on the other attribute.
 
 `linguist-generated` turned off also skips the [header sniff](#header-sniff) step: in Linguist an explicit `linguist-generated` decides whether a file is generated, ahead of every content heuristic, and without it a team could never count a hand-maintained file whose header says `DO NOT EDIT`, because the marker list is source, not policy. `linguist-vendored` says nothing about generated code, so turning it off leaves the sniff in place.
+
+`linguist-documentation` is not read. Linguist leaves documentation out of a repository's language bar, but stillhere does not drop documentation: a Markdown file has the `doc` role, which week `lines_added` counts and the still-here headline does not. A team whose example code should not count as `prod` gives it the `doc` role with a policy path rule. Reading the attribute as the `doc` role is a possible extension, for the owner to decide.
 
 `--source=<sha>` (Git 2.40+) is required. Without it, a bare mirror reports `unspecified` for every attribute (verified), and a work-tree clone reads the checked-out files instead of the scanned SHA, which makes the result depend on whatever branch the user has checked out. `core.ignoreCase=false` makes patterns match the same way on every machine: a clone on macOS or Windows sets `core.ignorecase=true`, under which `*.PY linguist-generated` marks `a.py` (verified on 2.50.1), while a Linux clone, like GitHub's servers, matches case-sensitively. The runner points `core.attributesFile` at `/dev/null` and sets `GIT_ATTR_NOSYSTEM=1`, which drops only the per-user and system files; the repository's `.gitattributes` and `info/attributes` still apply ([git-invocation.md](git-invocation.md#analysis-commands-offline)). In a blobless partial clone the `.gitattributes` blob is absent and lazy fetch is off, so every attribute reads `unspecified` (verified); a partial clone has no line facts, so nothing depends on it.
 
@@ -66,19 +68,31 @@ Stdin is NUL-terminated paths: every path at the scanned SHA, plus each touched 
 Once per repo, at the scanned SHA. This is cheaper than opening every file:
 
 ```
-git <common> grep --no-color --no-column -n -o -z -I -i -E -m 1 -e '<markers joined by |>' <sha> -- \
+git <common> grep --no-color --no-column -n -o -z -a -i -E -m 1 -e '<gate>' \
+  --and \( -e '<described>' -e '<do not modify>' -e '<declared>' \) <sha> -- \
   ':(icase)*<ext>' ... '<name>' '*/<name>' ...
 ```
 
-The markers, matched case-insensitively, are `code generated`, `@generated`, `do not edit`, `auto-generated`, `autogenerated`, `automatically generated`, `generated by`, `this file is generated`, and `this file was generated`.
+A header marks a file generated in one of two ways. Both are matched case-insensitively, and each marker ends at a word boundary, so the identifier `AutogeneratedPos` is none:
 
-- The pathspecs are the policy's role extensions, matched at any depth and ignoring case as the classifier does, and its exact role names at any depth, glob characters escaped; a policy with neither has no pathspec, so every file is read. A path whose only role comes from a path rule, such as `tests/data.csv`, is not sniffed.
-- `-m 1` (Git 2.38+) stops at a file's first matching line, the only one that can decide the line-40 rule, and `-o` prints only the matched marker, so a minified file's megabyte-long line never reaches stillhere.
-- Output records are `<sha>:<path>\0<line>\0<marker>\n` (verified, also in bare mirrors); a path may hold a newline, so a record ends at the first newline after its second NUL. Strip the `<sha>:` prefix before using the path.
+- **A declaration**: `do not edit`, `@generated`, or `<auto-generated` (also `<autogenerated`, .NET's convention). It counts anywhere in a line's first 100 characters, unless a quote (`"`, `'`, a backtick) comes before it there, because then it sits in a string literal: a generator program that prints its output's header, such as `fmt.Fprintln(&b, "// Code generated by mkbuiltin.go. DO NOT EDIT.")`, is no generated file. `do not modify` is a declaration only as a line of its own (`// DO NOT MODIFY!`, `Do not modify this file by hand.`); in a sentence it is advice, as in `Do not modify a Record after handing out a copy to it` (Go's `log/slog`).
+- **A description**: `code generated`, `generated by`, `auto-generated`, `autogenerated`, `auto generated`, `automatically generated` or `machine generated`, or a subject that says so: "this file (or code, class, header, module, program, source, document) is (or was, has been) generated", with optional words such as "entire", "(mostly)", "auto-" or "automatically", and "this is a generated". It counts only as the first words of a line's text: after at most 32 characters of indentation and comment punctuation (`//`, `#`, `/*`, `*`, `<!--`, `--`, `;`), none of them a quote, and optionally after a warning word such as `WARNING:`, `NOTE:` or `DO NOT MODIFY.`. A docstring line starts there too. In mid-sentence the same words describe something else: `Random numbers are generated by a [Source]` in Go's `math/rand`.
+- **The gate** is `generated`, `do not edit` or `do not modify`, which every match of a rule contains. git tests the rules only on lines that match the gate (`--and`), so the sniff is faster than the plain marker list it replaced: 0.8 s on Go's source tree (8,393 files with a role, git 2.50.1 on macOS), against 1.8 s for the old list and 3.2 s for the rules without the gate. Gated and ungated runs gave the same paths and lines on Go's tree and the macOS SDK headers.
+
+The rules were chosen on the files with a role that the packaged deny list keeps, in Go's source tree, Python's standard library, the macOS SDK headers and 1,120 Go modules (a module cache, 2026-10-14). git's ERE engine and Go's RE2 agreed on every file checked.
+
+- No design missed any of the 21,220 files that follow Go's convention, `^// Code generated .* DO NOT EDIT\.$`.
+- On Go's tree, the old list matched 67 other files, 60 of them hand-written (prose, identifiers, generator programs); these rules match 12, 7 of them generated (cgo's `defs_*.go`, an `instgen` table).
+- The alternative, every marker at the start of a comment, misses a header that opens with a warning or a subject: 4,842 more files in the module cache, such as the 3,338 files of Pulumi's AWS SDK (`*** WARNING: this file was generated by`), 1,118 of the Azure SDK for Go (`This code was auto-generated by:`) and the 68 generated `.proto` files of Kubernetes, and 76 macOS SDK headers (Perl's `DO NOT EDIT THIS FILE`, autoconf's `This file is automatically generated by configure`).
+
+- The pathspecs are the policy's role extensions, matched at any depth and ignoring case as the classifier does, and its exact role names at any depth, glob characters escaped; a policy with neither has no pathspec, so every file is read. A file whose only role comes from a path rule without `when` is not sniffed. The packaged policy has no such rule for a file whose name gives it no role, because its test-segment rule admits code and configuration only ([Roles](#roles)).
+- `-a` reads every file as text, so no attribute changes the sniff. `-I` would decide what is binary from the `diff` attribute, which git grep reads from the work tree, not from the scanned SHA, while a bare mirror reads none: a generated file marked `-diff` or `binary` was sniffed in a bare mirror but not in a work tree of the same SHA, and an uncommitted `.gitattributes` edit flipped the result (verified on 2.50.1). `git --attr-source=<sha>` (Git 2.41+) would make `-I` read the scanned SHA, but then a file marked `-diff`, often a generated one, would never be sniffed. The pathspecs keep binary files out in practice.
+- `-m 1` (Git 2.38+) stops at a file's first matching line, the only one that can decide the line-40 rule, and `-o` prints only what matched, which the rules bound, so a minified file's megabyte-long line never reaches stillhere.
+- Output records are `<sha>:<path>\0<line>\0<match>\n`, one for each match on the line, the gate's included (verified, also in bare mirrors); a path may hold a newline, so a record ends at the first newline after its second NUL. Strip the `<sha>:` prefix before using the path.
 - `--no-column` is a call-site rule like `--no-color`: a repo-local `grep.column=true` adds a column field to the output (verified on 2.50.1).
 - A path counts only when its matched line number is 40 or less.
 - Exit status 1 means no hits, not a failed repo.
-- The marker list is source, not policy.
+- The markers are source, not policy: the patterns are constants in `internal/collect`, and the blame cache keys on them.
 - A path absent at the scanned SHA gets no header sniff, because the sniff reads that SHA. The deny list, attributes, size and roles still apply to it.
 
 ## Roles

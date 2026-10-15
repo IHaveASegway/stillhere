@@ -354,6 +354,7 @@ func (ps *Paths) Denies(path string) bool                   // any Deny pattern 
 type Input struct {
 	Path      string
 	AtHead    bool   // the path exists at HEAD; false for a path only the history touched
+	NotFile   bool   // HEAD holds a symbolic link or a submodule at the path: no role, so unclassified unless denied
 	Size      int64  // bytes at HEAD, else at the commit that touched the path; -1 when unknown: no too_big check
 	Generated string // linguist-generated at HEAD: "unspecified", "unset", "set" or a value
 	Vendored  string // linguist-vendored at HEAD
@@ -371,9 +372,11 @@ type Discovery struct {
 	Failed   []domain.FileError // PATH slots that were neither a repo nor a group
 }
 type PathAt struct{ Commit, Path string } // a path in the tree of a commit that touched it
-// ClassifyPaths: every path at Head, plus each touched path Head no longer has, sized at its Commit.
-// touched: every path the history touched (week and scan), one entry per path at the newest commit that
-// added lines to it; later duplicates are ignored. Returns one PathClass per distinct path, sorted by Path.
+// ClassifyPaths: every path at Head, symbolic links and submodules included (they get no role), plus each touched
+// path Head no longer has, sized at its Commit. touched: every path the history touched (week and scan), one entry
+// per path at the newest commit that added lines to it; later duplicates are ignored. Returns one PathClass per
+// distinct path, sorted by Path, so a path the history touched has a class; a consumer may treat a missing one
+// as an error.
 func ClassifyPaths(ctx context.Context, git domain.GitRunner, repo domain.Repo, p *policy.Policy, touched []PathAt) ([]domain.PathClass, error)
 type HistoryMode int // HistoryWeek or HistoryScan
 type HistoryOptions struct {
@@ -620,10 +623,10 @@ Tests sit at stable boundaries, so a refactor does not rewrite them (Kent Beck, 
 | `TestDeterminism` | `app` | two scans of the fixture give byte-identical JSON without `timings` |
 | `TestDiscover` | `collect` | duplicates, bare repos, scp vs HTTPS remotes; a planted token appears in no output |
 | `TestCloneHealth` | `collect` | shallow and partial clones warn and lose only the facts they should |
-| `TestAttributes` | `collect` | `check-attr --source` on a work tree and a bare clone: the scanned commit's attributes, not the checked-out ones, matched case-sensitively under `core.ignorecase=true`; an attribute that settles a generated header; a deleted path classified by Head's attributes |
+| `TestAttributes` | `collect` | `check-attr --source` on a work tree and a bare clone: the scanned commit's attributes, not the checked-out ones, matched case-sensitively under `core.ignorecase=true`; an empty value is on; an attribute that settles a generated header; a deleted path classified by Head's attributes; a header sniff that no attribute changes (`-diff`, `binary`, an uncommitted edit), with each of its rules, prose and a generator program that stay `prod`, and the line-40 limit; a symbolic link and a submodule unclassified |
 | `TestNumstatRename` | `collect` | the rename path forms |
 | `TestBlamePorcelain` | `collect` | `--line-porcelain` and `--porcelain` parse to the same counts |
-| `TestClassify` | `classify` | roles, role precedence, test directories for code and configuration only, `too_big`, segment matching, the deny list's minimum contents and what it leaves out, Linguist's attribute values |
+| `TestClassify` | `classify` | roles, role precedence, test directories for code and configuration only, `too_big`, segment matching, the deny list's minimum contents and what it leaves out, Linguist's attribute values, no role for a link or a submodule |
 | `TestPolicy` | `policy` | a missing table or key exits 2; `[week] days` is the file's, in its hash, and 1 to 36500 (the `--days` override itself is `TestWeekOracle`'s); an extension holds one dot; the hash covers the deny list, and the packaged files hold no CR; `FromSource(p.Source)` has `p.Ref()`; every deny line compiles and the file names RE2, Linguist (MIT) and the upstream commit; the deny prefilter never changes an answer |
 | `TestRankIntervals` | `rank` | reproducible intervals; ineligible subjects unranked |
 | `TestRedact` | `redact` | no credential survives `URL`, `Scrub` or `Message` (userinfo, scp-like and malformed remotes, query strings, quotes, the 180-rune cut); text that holds none is unchanged |

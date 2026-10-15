@@ -20,6 +20,7 @@ import (
 type Input struct {
 	Path      string
 	AtHead    bool   // the path exists at Head; false for a path only the history touched
+	NotFile   bool   // Head holds a symbolic link or a submodule at the path, not a regular file: no role
 	Size      int64  // bytes at Head, else at the commit that touched the path; -1 when unknown: no too_big check
 	Generated string // linguist-generated at Head: "unspecified", "unset", "set" or a value
 	Vendored  string // linguist-vendored at Head
@@ -36,7 +37,9 @@ type Input struct {
 //  3. generated_header: the header sniff hit, unless linguist-generated is
 //     off, because an explicit attribute settles whether a file is
 //     generated, as it does for GitHub Linguist;
-//  4. the role that Role gives;
+//  4. the role that Role gives, for a regular file: a symbolic link's
+//     content is its target and a submodule has no lines, so neither has
+//     a role;
 //  5. unclassified.
 //
 // An attribute is on when git check-attr reports set or any value but
@@ -52,6 +55,8 @@ func Classify(p *policy.Policy, in Input) domain.PathClass {
 		c.Skip = domain.SkipTooBig
 	case in.AtHead && in.HeaderHit && generated != attrOff:
 		c.Skip = domain.SkipGeneratedHeader
+	case in.NotFile:
+		c.Skip = domain.SkipUnclassified
 	default:
 		c.Role = Role(p, in.Path)
 		if c.Role == "" {
