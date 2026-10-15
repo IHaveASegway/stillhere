@@ -10,16 +10,16 @@ Read this before touching code. It names every package, what it owns, what it ma
 | --- | --- | --- |
 | `cmd/stillhere` | `main`: signal handling, then `cli.Execute` | entry point |
 | `internal/cli` | Commands, flags, exit codes, and the composition root (the only place adapters are built and wired) | inbound adapter |
-| `internal/app` | Use cases: week, scan, report, explain, me, who-knows, validate, sync, mcp | application |
+| `internal/app` | Use cases: week, scan, report, explain, me, who-knows, validate, identities, sync, mcp | application |
 | `internal/collect` | git output → facts: discovery, clone health, tree and attributes, history, blame | anti-corruption layer for git |
 | `internal/domain` | Fact types, metric value types, port interfaces, typed errors | core |
 | `internal/policy` | The policy model, embedded default policy and deny list, parsing, hashing | core |
 | `internal/classify` | The ordered path classifier | core |
-| `internal/identity` | Display names, bots, AI-assisted tags, who gets credit | core |
+| `internal/identity` | Display names, bots, AI-assisted tags, who gets credit; identity candidates, suggested and never applied ([identities.md](identities.md)) | core |
 | `internal/metrics` | The metric registry and every metric version | core |
 | `internal/rank` | Cluster bootstrap, rank intervals, eligibility, AUC | core |
 | `internal/redact` | URL scrubbing and message truncation | core |
-| `internal/report` | The report model (`stillhere.report/v1`) and its text, Markdown and JSON renderers | core |
+| `internal/report` | The report model (`stillhere.report/v1`) and its text, Markdown and JSON renderers, and the identities answer's `.mailmap` form | core |
 | `internal/gitcli` | `domain.GitRunner` over the `git` binary: hardening, profiles, version floor | outbound adapter |
 | `internal/sqlite` | `domain.FactStore`, and from M2 `domain.ForgeStore`, over `modernc.org/sqlite`, embedded migrations | outbound adapter |
 | `internal/github` | `domain.ForgeSource` over GitHub GraphQL/REST, and managed mirrors (M2) | outbound adapter |
@@ -476,6 +476,25 @@ func (d *Directory) Name(email string) string           // display name rule, sp
 func (d *Directory) Bot(email string) bool              // a [bots] fragment in the email or display name, or an [ai] agent: agents are never people (ADR 0007)
 func (d *Directory) AIAssisted(c *domain.Commit) bool    // ADR 0007; only a commit credited to a human
 func (d *Directory) Credit(author domain.Person, coAuthors []domain.Person) string // the author, or an agent's first human co-author (ADR 0007); commits and blamed lines alike
+// identity/candidates.go (#26, spec/identities.md): addresses that may be one person, suggested and never applied
+func Candidates(fs *domain.FactSet, who *Directory) *Survey // pure; fs is mailmapped facts, who built over the whole run; bots and agents never appear
+type Survey struct { Candidates []Candidate; Addresses, Bots int } // most confident first; the human addresses examined and the bots left out
+type Candidate struct { // an address is in one candidate at most, so no two .mailmap lines map one alias
+	Confidence      Confidence // the weakest pair's: high (account id, or full name and local part), medium (full name), low
+	Guess, Chained  bool       // a hand-off, never suggested as certain; two addresses linked only through a third
+	Canonical, Name string     // the suggested canonical address (one of Addresses) and display name
+	Addresses       []Address  // by first activity, then email
+	Links           []Link     // each rule's evidence, in the order of Rules
+}
+func (c *Candidate) Rules() []Rule
+type Address struct { Email, Name string; Commits, CoAuthored int; First, Last time.Time; Repos []string } // author times; history and blamed commits
+type Link struct { Rule Rule; Addresses []int; Name string; HandOff *HandOff } // indexes into Addresses; Name for same-name
+type HandOff struct { Gap time.Duration; SharedFiles int; Files []File }      // Files: the first five, by repository and path
+type File struct{ Repo, Path string }                                          // Repo.Key
+type Rule string       // RuleSameName, RuleSameLocalPart, RuleSameAccount, RuleHandOff
+type Confidence string // ConfidenceHigh, ConfidenceMedium, ConfidenceLow
+type RuleDefinition struct { Rule Rule; Matches, Confidence, Risk string }
+func Rules() []RuleDefinition // how each rule links and how it can be wrong; every identities answer carries them
 
 // metrics
 type Definition struct {
@@ -544,7 +563,7 @@ func AUC(pos, neg []float64) float64 // Mann-Whitney, a tie counting 1/2; 0.5 wh
 // report: a view that computes no metric. values.go is the one place that maps each printed
 // number to the metric@version, subject, scope and Detail key it reads (spec/report-json.md#where-the-numbers-come-from).
 type Model struct{ /* stillhere.report/v1: overviews (per group; every repository with --scope all or without groups), repo cards, ranks, caveats and provenance on every section */ }
-type Document interface{ /* sealed: *Model, *Explain, *WhoKnows, *Me, *Validation, *Catalog */ }
+type Document interface{ /* sealed: *Model, *Explain, *WhoKnows, *Me, *Validation, *Catalog, *Identities */ }
 func Text(w io.Writer, d Document) error     // a terminal: 100 columns, untrusted text escaped, no emails
 func Markdown(w io.Writer, d Document) error // GitHub-flavoured: untrusted text escaped, mentions and references unlinked, no emails or repository paths
 func JSON(w io.Writer, d Document) error     // stable order; empty lists [] and maps {}, absent sections null; invalid UTF-8 as U+FFFD, NaN and ±Inf as null; written only when whole
@@ -573,7 +592,12 @@ type Me struct { Provenance Provenance; Person Subject; Values []Value; Ranks []
 type Validation struct { Provenance Provenance; Labels, Labellers, Meaningful, Routine, Noise, Unmatched int; Metrics []MetricAUC; Caveats []Caveat }
 type MetricAUC struct { Metric string; AUC *float64; N, Meaningful, Routine int; Beta bool } // AUC nil without both labels
 type Catalog struct { Metrics []MetricInfo }
-type Identities struct { Provenance Provenance; Caveats []Caveat } // #26 adds the candidates and their evidence; a Document, plus a mailmap rendering
+// #26 (spec/identities.md): emails only in fields named email, so the MCP server can drop them; text and Markdown name none
+type Identities struct { Provenance Provenance; Scope Scope; Addresses, Bots int; Candidates []IdentityCandidate; Rules []IdentityRule; Caveats []Caveat }
+type IdentityCandidate struct { Confidence string; Guess, Commented, Chained bool; Rules []string; Name string; Addresses []IdentityAddress; Links []IdentityLink }
+type IdentitiesInput struct { Run *domain.Run; Facts *domain.FactSet; Scope domain.Scope; Survey *identity.Survey } // Facts: the scope's
+func NewIdentities(in *IdentitiesInput) *Identities // identity.Candidates' survey as an answer, with provenance and caveats (mailmap-at-scan)
+func Mailmap(w io.Writer, id *Identities) error    // the suggested .mailmap lines, evidence as # comments; a low candidate's commented out
 func NewExplain(in *ExplainInput) *Explain    // values, and a ranked metric's clusters per repository as changes
 func NewWhoKnows(in *WhoKnowsInput) *WhoKnows // who_knows@1's values under the path, as lists
 func NewMe(in *MeInput) *Me                   // the person's values and their row in each RankSet
@@ -643,7 +667,7 @@ func WhoKnows(ctx context.Context, d Deps, r WhoKnowsRequest) (*report.WhoKnows,
 func Me(ctx context.Context, d Deps, r MeRequest) (*report.Me, error)
 func Validate(ctx context.Context, d Deps, r ValidateRequest) (*report.Validation, error)
 func Metrics() *report.Catalog // the registry's definitions: the metrics command and the MCP server's metrics()
-func Identities(ctx context.Context, d Deps, r IdentitiesRequest) (*report.Identities, error) // #26: suggested .mailmap merges with evidence, never applied; the identities command and the MCP server's identity_candidates()
+func Identities(ctx context.Context, d Deps, r IdentitiesRequest) (*report.Identities, error) // #26: suggested .mailmap merges with evidence, never applied; the identities command and the MCP server's identity_candidates(). Reads the run's facts and policy, not its metrics; a scope that names no group or repository of the run is a *domain.UsageError
 func Sync(ctx context.Context, d Deps, r SyncRequest) error // #14
 // Week and Scan return the model alongside domain.ErrNoFacts when no repository produced facts (a scan then
 // stores nothing). A cancellation, a *domain.UsageError from a collector, or a collector that is not built yet
