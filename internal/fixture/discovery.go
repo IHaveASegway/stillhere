@@ -53,8 +53,9 @@ type DiscoveryRepos struct {
 	Lab     string // group lab, whose only member is Empty
 
 	// Directories with no repository among their immediate children (rule 3).
-	Inside  string // outer/docs/api, an empty directory inside the work tree Outer, as "stillhere week ." is run in one
-	Mirrors string // mirrors, laid out as sync github writes them: acme/widget.git, oss/tool.git and zeta/lib.git (bare, no origin) one level down, and an empty .stale
+	Inside    string // outer/docs/api, an empty directory inside the work tree Outer, as "stillhere week ." is run in one
+	Mirrors   string // mirrors, laid out as sync github writes them: acme/widget.git, oss/tool.git and zeta/lib.git (bare, no origin) one level down, and an empty .stale
+	Workspace string // outer/src, inside the work tree Outer, holding the group acme with the clone lib (no origin): groups under a home directory or a workspace kept in git
 
 	// Default branch.
 	Tracking     string // origin/HEAD is origin/trunk; local main exists; local trunk has one commit origin/trunk lacks
@@ -121,6 +122,7 @@ func BuildDiscovery(ctx context.Context, dir string) (*DiscoveryRepos, error) {
 		Lab:          in("lab"),
 		Inside:       in("outer", "docs", "api"),
 		Mirrors:      in("mirrors"),
+		Workspace:    in("outer", "src"),
 		Tracking:     in("tracking"),
 		NoOriginHead: in("no-origin-head"),
 		OriginMaster: in("origin-master"),
@@ -193,6 +195,7 @@ func BuildDiscovery(ctx context.Context, dir string) (*DiscoveryRepos, error) {
 		b.discoveryClone(up, filepath.Join(r.Mirrors, filepath.FromSlash(m)), "", "--bare")
 	}
 	b.discoveryMkdir(filepath.Join(r.Mirrors, ".stale"))
+	b.discoveryClone(up, filepath.Join(r.Workspace, "acme", "lib"), "")
 
 	// Default branch. Each repository leaves the rule it tests as the first
 	// that applies, and makes every later rule give a different answer.

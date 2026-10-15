@@ -338,19 +338,33 @@ const discoverDeeperNames = 2
 
 // discoverEmpty says why dir, a PATH that is no repository and has none
 // among its immediate children, gave no repository (rules 3 and 4). That is
-// usually a near miss, and the failure names the path to pass instead:
+// usually a near miss, and the failure names the path to pass instead,
+// asking the more specific question first:
 //
+//   - its subdirectories hold repositories one level deeper, as a mirrors
+//     root holds an owner's directory of mirrors, or a parent holds group
+//     directories: groups are one level deep, so it names up to two of
+//     them, hidden ones left out;
 //   - dir is inside a work tree, as "stillhere week ." is in a
 //     repository's subdirectory: git, which looks upward, names the top
-//     of the work tree, which is the repository to pass;
-//   - its subdirectories hold repositories one level deeper, as a mirrors
-//     root holds an owner's directory of mirrors: groups are one level
-//     deep, so it names up to two of them, hidden ones left out;
+//     of the innermost work tree, which is the repository to pass;
 //   - otherwise it holds no repository that discovery can reach.
+//
+// The order matters where both hold: a directory of groups inside an
+// enclosing work tree, such as a home directory or a workspace kept in
+// git, would otherwise be sent to that enclosing repository rather than to
+// the groups the user meant (#71).
 //
 // Only a cancellation is an error; git failing for any other reason
 // leaves the answer to the filesystem.
 func discoverEmpty(ctx context.Context, git domain.GitRunner, dir string) (domain.FileError, error) {
+	if deeper := discoverDeeper(dir); len(deeper) > 0 {
+		for i, name := range deeper {
+			deeper[i] = redact.Message(name)
+		}
+		return domain.FileError{Path: dir, Message: "no repository among its immediate children, and groups are one level deep: " +
+			"pass a subdirectory that holds repositories, such as " + strings.Join(deeper, " or ")}, nil
+	}
 	// git dies, with exit 128, outside any work tree (and in a bare
 	// repository): an answer here, not a failure to ask.
 	out, err := discoverGit(ctx, git, dir, []int{128}, "rev-parse", "--show-toplevel")
@@ -362,13 +376,6 @@ func discoverEmpty(ctx context.Context, git domain.GitRunner, dir string) (domai
 	if top := strings.TrimSuffix(string(out), "\n"); err == nil && top != "" {
 		top = redact.Message(top)
 		return domain.FileError{Path: dir, Message: fmt.Sprintf("inside repository %s: pass %s", top, top)}, nil
-	}
-	if deeper := discoverDeeper(dir); len(deeper) > 0 {
-		for i, name := range deeper {
-			deeper[i] = redact.Message(name)
-		}
-		return domain.FileError{Path: dir, Message: "no repository among its immediate children, and groups are one level deep: " +
-			"pass a subdirectory that holds repositories, such as " + strings.Join(deeper, " or ")}, nil
 	}
 	return domain.FileError{Path: dir, Message: "no repository among its immediate children, so neither a repository nor a group"}, nil
 }
@@ -398,10 +405,16 @@ func discoverDeeper(dir string) []string {
 	return names
 }
 
-// discoverHolds reports whether the directory dir has a child that looks
+// discoverHolds reports whether dir is a directory with a child that looks
 // like a repository, reading its entries a batch at a time so that a large
-// directory is read only up to the first one.
+// directory is read only up to the first one. It looks before it opens, as
+// discoverMembers does: dir may be a symbolic link to anything, and opening
+// a FIFO blocks in open(2) until a writer appears, which no context and no
+// single Ctrl-C can end (#71).
 func discoverHolds(dir string) bool {
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		return false
+	}
 	f, err := os.Open(dir)
 	if err != nil {
 		return false

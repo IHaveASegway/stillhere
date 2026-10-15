@@ -126,10 +126,21 @@ func TestDeterminism(t *testing.T) {
 		if err != nil {
 			t.Fatalf("app.Report: %v", err)
 		}
-		for _, d := range []struct {
+		type named struct {
 			name string
 			doc  report.Document
-		}{{"scan", s.model}, {"report", m}} {
+		}
+		docs := []named{{"scan", s.model}, {"report", m}}
+		// who-knows quotes its PATH in its answer, header and caveats: one
+		// pasted with a token is answered, and printed, scrubbed (#71).
+		for _, p := range planted {
+			w, err := app.WhoKnows(t.Context(), s.read, app.WhoKnowsRequest{RunID: s.run, Path: p})
+			if err != nil {
+				t.Fatalf("app.WhoKnows(a planted PATH): %v", err)
+			}
+			docs = append(docs, named{"who-knows of a planted PATH", w})
+		}
+		for _, d := range docs {
 			r := render(t, d.doc)
 			noToken(t, d.name+" as JSON", r.json)
 			noToken(t, d.name+" as text", r.text)
@@ -137,19 +148,33 @@ func TestDeterminism(t *testing.T) {
 		}
 
 		// The review of the MVP found a token pasted into sync github's
-		// --org or --mirrors in facts.db (#71). The command line refuses an
-		// organization that is no GitHub name before a run begins, with an
-		// error line that holds no token; a sync run records its options
-		// scrubbed, as a scan does, here one that GitHub's stand-in refuses
-		// after the run began.
+		// --org or --mirrors in facts.db (#71). The command line refuses
+		// each before a run begins, and --db, a URL where a local path
+		// belongs, with an error line that holds no token and says why. A
+		// sync run records its options scrubbed, as a scan does, here one
+		// that GitHub's stand-in refuses after the run began. --db names a
+		// directory in the sync rows, which no open accepts: a check gone
+		// missing ends there, before GitHub could be asked anything, and
+		// only the reason tells it apart.
 		org := "https://x-access-token:" + fixture.DiscoveryToken + "@github.com/acme"
 		mirrors := filepath.Join(t.TempDir(), "https:", "x-access-token:"+fixture.DiscoveryToken+"@github.com", "mirrors")
-		var stderr bytes.Buffer
-		args := []string{"--db", s.db, "sync", "github", "--org", org, "--mirrors", mirrors}
-		if code := cli.Execute(t.Context(), args, io.Discard, &stderr, cli.Build{}); code != 2 {
-			t.Errorf("sync github --org <a URL> exits %d, want 2: %s", code, stderr.Bytes())
+		noDB := t.TempDir()
+		for _, c := range []struct {
+			args []string
+			why  string
+		}{
+			{[]string{"--db", noDB, "sync", "github", "--org", org, "--mirrors", t.TempDir()}, "invalid --org"},
+			{[]string{"--db", noDB, "sync", "github", "--org", "acme", "--mirrors", mirrors},
+				fmt.Sprintf("--mirrors %q: want a local path", redact.Scrub(mirrors))},
+			{[]string{"--db", org + "/facts.db", "report"}, fmt.Sprintf("--db %q: want a local path", redact.Scrub(org+"/facts.db"))},
+		} {
+			var stderr bytes.Buffer
+			code := cli.Execute(t.Context(), c.args, io.Discard, &stderr, cli.Build{})
+			if code != 2 || !bytes.Contains(stderr.Bytes(), []byte(c.why)) {
+				t.Errorf("stillhere %s exits %d: %s; want 2 and %q", c.args[2], code, stderr.Bytes(), c.why)
+			}
+			noToken(t, "the error line of stillhere "+c.args[2], stderr.Bytes())
 		}
-		noToken(t, "sync github's error line", stderr.Bytes())
 		syncErr := app.Sync(t.Context(), app.Deps{Forge: refusingForge{}, ForgeStore: s.store, Store: s.store, Log: log},
 			app.SyncRequest{Org: org, Mirrors: mirrors, Now: fixture.Now})
 		if syncErr == nil {

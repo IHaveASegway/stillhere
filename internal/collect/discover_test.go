@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -173,17 +174,59 @@ func TestDiscover(t *testing.T) {
 			t.Fatal(err)
 		}
 		stale := filepath.Join(fx.Mirrors, ".stale")
-		got := discoverRun(t, git, fx.Inside, fx.Mirrors, stale)
+		got := discoverRun(t, git, fx.Inside, fx.Mirrors, stale, fx.Workspace)
 		discoverCheck(t, got, &Discovery{
 			// No group: a directory of nothing would read as a group that
-			// was read and found empty, and it takes no name.
+			// was read and found empty, and it takes no name. Groups one
+			// level down are named before the work tree a directory is
+			// inside, which would send outer/src to outer.
 			Failed: []domain.FileError{
 				{Path: fx.Mirrors, Message: "no repository among its immediate children, and groups are one level deep: " +
 					"pass a subdirectory that holds repositories, such as acme or oss"},
 				{Path: stale, Message: "no repository among its immediate children, so neither a repository nor a group"},
 				{Path: fx.Inside, Message: "inside repository " + top + ": pass " + top},
+				{Path: fx.Workspace, Message: "no repository among its immediate children, and groups are one level deep: " +
+					"pass a subdirectory that holds repositories, such as acme"},
 			},
 		})
+	})
+
+	t.Run("a symbolic link to a FIFO is never opened", func(t *testing.T) {
+		t.Parallel()
+		// A directory with no repository among its children is read one
+		// level deeper for groups (rule 3), where a link may point at
+		// anything. Opening a FIFO blocks in open(2) until a writer comes,
+		// which no context ends: discovery must look before it opens. It
+		// hung here once (#71). On a hang the open stays blocked until the
+		// test binary exits; the test fails rather than waits for it.
+		dir := t.TempDir()
+		pipe := filepath.Join(dir, "pipe")
+		if err := exec.CommandContext(t.Context(), "mkfifo", pipe).Run(); err != nil {
+			t.Skipf("cannot make a FIFO here: %v", err)
+		}
+		if err := os.Symlink("pipe", filepath.Join(dir, "link")); err != nil {
+			t.Fatal(err)
+		}
+		type result struct {
+			d   *Discovery
+			err error
+		}
+		ctx, done := t.Context(), make(chan result, 1)
+		go func() {
+			d, err := Discover(ctx, git, []string{dir})
+			done <- result{d, err}
+		}()
+		select {
+		case r := <-done:
+			if r.err != nil {
+				t.Fatalf("Discover: %v", r.err)
+			}
+			discoverCheck(t, r.d, &Discovery{Failed: []domain.FileError{
+				{Path: dir, Message: "no repository among its immediate children, so neither a repository nor a group"},
+			}})
+		case <-time.After(30 * time.Second):
+			t.Fatal("Discover still runs after 30 s: it opened the link to a FIFO")
+		}
 	})
 
 	t.Run("a repository reached twice is one repository, and keeps its group; a failing one fails once", func(t *testing.T) {

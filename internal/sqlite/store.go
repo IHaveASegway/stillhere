@@ -121,7 +121,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	}
 	s := &Store{path: abs}
 	if err := s.open(ctx, true); err != nil {
-		return nil, errors.Join(fmt.Errorf("sqlite.Open %s: %w", abs, err), s.Close())
+		return nil, errors.Join(openFailed("sqlite.Open", abs, err), s.Close())
 	}
 	return s, nil
 }
@@ -170,7 +170,20 @@ func OpenExisting(ctx context.Context, path string) (*Store, error) {
 			return nil, &domain.UsageError{Msg: abs + ": a directory, not a facts database file"}
 		}
 	}
-	return nil, fmt.Errorf("sqlite.OpenExisting %s: %w", abs, err)
+	return nil, openFailed("sqlite.OpenExisting", abs, err)
+}
+
+// openFailed wraps err, a failure of op to open the database at path. A
+// *domain.UsageError, such as another program's file or a newer schema, is
+// the user's to fix and the whole message they see, so it names the path
+// and leaves out the operation, which is internal detail (#71). Any other
+// error keeps the operation, for the debug log and a bug report.
+func openFailed(op, path string, err error) error {
+	var usage *domain.UsageError
+	if errors.As(err, &usage) {
+		return &domain.UsageError{Msg: path + ": " + usage.Msg}
+	}
+	return fmt.Errorf("%s %s: %w", op, path, err)
 }
 
 // open connects both pools and migrates the file. writer says whether the

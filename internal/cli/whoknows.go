@@ -17,7 +17,12 @@ func (e *env) whoKnowsCommand() *cobra.Command {
 		Long: `who-knows lists the people who know the code under PATH, a path prefix inside
 a repository: majority owners, the top authors of surviving lines and recent
 landers. It is a routing answer, not a rank. It reads a stored run, by
-default the latest complete one.`,
+default the latest complete one.
+
+PATH is relative to a repository's root, such as src or src/pay.go, as the
+run stores it, and not a path on disk: an absolute path, or one relative to
+the working directory or to a group, names nothing in the run, and the
+answer then says so rather than "nobody".`,
 		Args: usageArgs(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if err := checkRun(run); err != nil {

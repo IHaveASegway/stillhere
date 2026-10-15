@@ -3,7 +3,6 @@ package app_test
 import (
 	"fmt"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/IHaveASegway/stillhere/internal/app"
@@ -158,19 +157,27 @@ func mainChangeOracles(t *testing.T) {
 	t.Run("who-knows of a path no repository has", func(t *testing.T) {
 		// A filesystem path, such as the fixture's path from its group, names
 		// nothing in a repository: the answer is missing, with a no-values
-		// caveat that says which form of path who-knows takes, never
-		// "nobody" (#71). notes.csv is a path the run knows, which no one
-		// holds lines of or landed lately: that one is a real "nobody".
-		for _, c := range []struct {
-			path    string
-			missing bool
-		}{{"fixture/service.py", true}, {"notes.csv", false}} {
+		// caveat that says so and how the run knows its paths, never
+		// "nobody" (#71). The caveat states what the run holds, not one
+		// reader's advice: the MCP server's who_knows takes an absolute
+		// path that the command line does not. notes.csv is a path the run
+		// knows, which no one holds lines of or landed lately: that one is
+		// a real "nobody".
+		noPath := fmt.Sprintf("Repository %s of run %d has no path under %q, so this answer is missing, not a real \"nobody\": "+
+			"the run knows each path relative to its repository's root, such as src or src/pay.go.", r.Name, s.run, "fixture/service.py")
+		for _, c := range []struct{ path, caveat string }{{"fixture/service.py", noPath}, {"notes.csv", ""}} {
 			w := s.whoKnows(t, c.path)
-			missing := slices.ContainsFunc(w.Caveats, func(cv report.Caveat) bool {
-				return cv.Code == "no-values" && strings.Contains(cv.Message, "relative to a repository's root")
-			})
-			if len(w.Repos) != 0 || missing != c.missing {
-				t.Errorf("who-knows %s: %d repositories, caveats %+v; want none, and the no-path caveat %v", c.path, len(w.Repos), w.Caveats, c.missing)
+			var noValues, want []string
+			for _, cv := range w.Caveats {
+				if cv.Code == "no-values" {
+					noValues = append(noValues, cv.Message)
+				}
+			}
+			if c.caveat != "" {
+				want = []string{c.caveat}
+			}
+			if len(w.Repos) != 0 || !slices.Equal(noValues, want) {
+				t.Errorf("who-knows %s: %d repositories, no-values caveats %q; want none, and %q", c.path, len(w.Repos), noValues, want)
 			}
 		}
 	})

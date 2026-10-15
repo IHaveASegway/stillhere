@@ -207,8 +207,8 @@ func (h fileHeader) check(latest int) error {
 	return nil // a new, empty file, or a facts database this binary can migrate
 }
 
-// notFacts is the refusal of a file that another program owns. Open
-// prefixes the path.
+// notFacts is the refusal of a file that another program owns. Open and
+// OpenExisting prefix the path (openFailed).
 func notFacts() error {
 	return &domain.UsageError{Msg: "not a stillhere facts database: use another file"}
 }

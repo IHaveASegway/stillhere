@@ -19,6 +19,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -263,15 +264,17 @@ const defaultMailmapFile = ".mailmap"
 func (e *env) gitRunner(ctx context.Context) (*gitcli.Runner, error) {
 	flag, mailmap := "--mailmap", e.mailmapPath
 	if mailmap == "" {
-		flag, mailmap = "./"+defaultMailmapFile, defaultMailmapFile
-		there, err := implicitFile(flag, mailmap, "--mailmap")
+		// A file the working directory supplied is named by its path
+		// alone (fileLabel).
+		flag, mailmap = "", "./"+defaultMailmapFile
+		there, err := implicitFile(mailmap, defaultMailmapFile, "--mailmap")
 		if err != nil {
 			return nil, err
 		}
 		if !there {
 			return gitcli.New(ctx, gitcli.Config{Logger: e.log})
 		}
-		e.log.Info("using the mailmap in the working directory (--mailmap names another)", "file", flag)
+		e.log.Info("using the mailmap in the working directory (--mailmap names another)", "file", mailmap)
 	}
 	// git reads the file in every repository and silently ignores one it
 	// cannot open, so check it here, once.
@@ -315,7 +318,7 @@ func (e *env) readPolicy(printing bool) (*policy.Policy, error) {
 		return nil, err
 	}
 	if there {
-		data, err := readPolicyFile(shown, defaultPolicyFile)
+		data, err := readPolicyFile("", shown)
 		switch {
 		case err != nil:
 			return nil, err
@@ -336,24 +339,25 @@ func (e *env) readPolicy(printing bool) (*policy.Policy, error) {
 	return p, nil
 }
 
-// readPolicyFile reads a policy file that flag, or the working directory,
-// named: through readable, so that a FIFO or a device is refused rather
-// than opened, and only up to maxPolicyBytes.
+// readPolicyFile reads a policy file that flag, or the working directory
+// (flag ""), named: through readable, so that a FIFO or a device is refused
+// rather than opened, and only up to maxPolicyBytes.
 func readPolicyFile(flag, path string) ([]byte, error) {
 	if err := readable(flag, path); err != nil {
 		return nil, err
 	}
+	label := fileLabel(flag, path)
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, usagef("%s: %v", flag, err)
+		return nil, usagef("%s: %v", label, pathCause(err))
 	}
 	defer func() { _ = f.Close() }()
 	data, err := io.ReadAll(io.LimitReader(f, maxPolicyBytes+1))
 	if err != nil {
-		return nil, usagef("%s: %v", flag, err)
+		return nil, usagef("%s: %v", label, pathCause(err))
 	}
 	if len(data) > maxPolicyBytes {
-		return nil, usagef("%s %s: larger than %d bytes, far more than any policy holds", flag, path, maxPolicyBytes)
+		return nil, usagef("%s: larger than %d bytes, far more than any policy holds", label, maxPolicyBytes)
 	}
 	return data, nil
 }
@@ -372,7 +376,7 @@ func implicitFile(shown, name, flag string) (bool, error) {
 	case errors.Is(err, fs.ErrNotExist):
 		return false, nil
 	case err != nil:
-		return false, usagef("%s: %v", shown, err)
+		return false, usagef("%s: %v", shown, pathCause(err))
 	case fi.Mode()&fs.ModeSymlink != 0:
 		return false, usagef("%s is a symbolic link, which stillhere does not follow in the working directory, where a clone "+
 			"can put one: pass the file with %s to use it", shown, flag)
@@ -383,6 +387,9 @@ func implicitFile(shown, name, flag string) (bool, error) {
 // databasePath resolves --db, else $STILLHERE_HOME/facts.db.
 func (e *env) databasePath() (string, error) {
 	if e.dbPath != "" {
+		if err := localPath("--db", e.dbPath); err != nil {
+			return "", err
+		}
 		return e.dbPath, nil
 	}
 	home, err := stillhereHome()
@@ -396,6 +403,9 @@ func (e *env) databasePath() (string, error) {
 // directory for facts.db and the managed mirrors.
 func stillhereHome() (string, error) {
 	if home := os.Getenv("STILLHERE_HOME"); home != "" {
+		if err := localPath("STILLHERE_HOME", home); err != nil {
+			return "", err
+		}
 		return home, nil
 	}
 	home, err := os.UserHomeDir()
@@ -525,20 +535,43 @@ func parseMetricIDs(ids []string) ([]domain.MetricID, error) {
 
 // readable checks that path names a regular file stillhere can open. It
 // checks the type before opening: opening a FIFO for reading blocks until a
-// writer appears, and no context can cancel that.
+// writer appears, and no context can cancel that. flag is the flag that
+// named the file, or "" for one the working directory supplied.
 func readable(flag, path string) error {
+	label := fileLabel(flag, path)
 	info, err := os.Stat(path)
 	if err != nil {
-		return usagef("%s: %v", flag, err)
+		return usagef("%s: %v", label, pathCause(err))
 	}
 	if !info.Mode().IsRegular() {
-		return usagef("%s %s: not a regular file", flag, path)
+		return usagef("%s: not a regular file", label)
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		return usagef("%s: %v", flag, err)
+		return usagef("%s: %v", label, pathCause(err))
 	}
 	return f.Close()
+}
+
+// fileLabel is how a message names a file a command reads: the flag that
+// named it and its path ("--policy team.toml"), or, for a file the working
+// directory supplied (flag ""), its path alone ("./stillhere.toml").
+func fileLabel(flag, path string) string {
+	if flag == "" {
+		return path
+	}
+	return flag + " " + path
+}
+
+// pathCause is what went wrong with a file, without the operation and the
+// path that an *fs.PathError adds ("stat team.toml: no such file or
+// directory"): the message names the file already (fileLabel).
+func pathCause(err error) error {
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		return pathErr.Err
+	}
+	return err
 }
 
 // absFile checks that path is readable and returns it made absolute: git
@@ -550,9 +583,27 @@ func absFile(flag, path string) (string, error) {
 	}
 	abs, err := filepath.Abs(path)
 	if err != nil {
-		return "", usagef("%s %s: %v", flag, path, err)
+		return "", usagef("%s: %v", fileLabel(flag, path), err)
 	}
 	return abs, nil
+}
+
+// urlScheme matches the start of a URL, such as https:// or ssh://. Its
+// scheme has two characters or more, since one letter is a Windows drive.
+var urlScheme = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]+://`)
+
+// localPath refuses value, given where a local file or directory belongs
+// (what names it: a flag, or STILLHERE_HOME), when it is a URL or holds a
+// credential, which redact.Scrub would remove. Either is a remote pasted
+// into the wrong place. Taken as a path, it would make a directory named
+// after the token, and a scan of that directory would store the name in
+// facts.db and print it in every report (#71). The refusal quotes the
+// value scrubbed, before anything is created or recorded.
+func localPath(what, value string) error {
+	if urlScheme.MatchString(value) || redact.Scrub(value) != value {
+		return usagef("%s %q: want a local path, not a URL or a path that holds a credential", what, redact.Scrub(value))
+	}
+	return nil
 }
 
 // canonicalEmail normalises an email given on the command line to the

@@ -49,6 +49,11 @@ remote URL, config, log or report.`,
 				return usagef("invalid --org %q: want the login of a GitHub organization or user, such as acme",
 					redact.Scrub(req.Org))
 			}
+			// The mirrors are cloned under --mirrors, and a scan stores
+			// their paths: a URL there would put its token in both (#71).
+			if err := localPath("--mirrors", req.Mirrors); err != nil {
+				return err
+			}
 			if req.Mirrors == "" {
 				home, err := stillhereHome()
 				if err != nil {
