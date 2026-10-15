@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json/v2"
+	"fmt"
 	"io"
 	"maps"
 	"math"
@@ -567,7 +568,7 @@ func TestMCPTools(t *testing.T) {
 		{"Solo Dev", "solo@corp.example", "2026-05-02", "init", "main.py", numbered("solo", 10)},
 		{"Solo Dev", "solo@corp.example", "2026-08-02", "feat: more", "more.py", numbered("more", 10)},
 	})
-	scan(t, db, mailmap, platform)
+	scan(t, db, mailmap, domain.ScopeGroup, platform)
 	emails = append(emails, runEmails(t, db, 2)...)
 	for _, e := range []string{"dev@build-box", "ip@[10.0.0.1]", "jürgen@firma.de", "root@localhost", "o'brien@corp.example"} {
 		if !slices.Contains(emails, e) {
@@ -753,6 +754,182 @@ func TestMCPTools(t *testing.T) {
 			t.Errorf("the egress filter gave\n%s\nwant\n%s", b, w)
 		}
 	})
+
+	// AI-assisted shares add up over the scopes, so a share withheld on its
+	// own could be worked out from those shown around it: a group's less its
+	// shown repositories' (ADR 0007's amendment of 2026-10-15). Group ai holds
+	// team, four people with one AI-assisted landing of 12, and solo, one
+	// person with three of 4; group solos holds three repositories of one
+	// person each. The local report shows every share, which is how the test
+	// knows what no answer may let the agent work out.
+	t.Run("AI-assisted shares that add up", func(t *testing.T) {
+		root := t.TempDir()
+		group, solos, lone := filepath.Join(root, "ai"), filepath.Join(root, "solos"), filepath.Join(root, "lone")
+		const trailer = "\n\nCo-Authored-By: Claude <noreply@anthropic.com>"
+		commit := func(name, email string, day int, ai bool) testCommit {
+			subject := "feat: " + strings.ToLower(name) + " " + strconv.Itoa(day)
+			if ai {
+				subject += trailer
+			}
+			file := strings.ToLower(strings.ReplaceAll(name, " ", "_")) + "_" + strconv.Itoa(day) + ".py"
+			return testCommit{name, email, "2026-09-" + fmt.Sprintf("%02d", day), subject, file, numbered("f"+strconv.Itoa(day), 3)}
+		}
+		var team []testCommit
+		for i, who := range []string{"Ann", "Ben", "Cat", "Dan"} {
+			for j := range 3 {
+				day := 1 + 3*i + j
+				team = append(team, commit(who+" Team", strings.ToLower(who)+"@team.example", day, day == 5))
+			}
+		}
+		buildRepo(t, filepath.Join(group, "team"), team)
+		buildRepo(t, filepath.Join(group, "solo"), []testCommit{
+			commit("Sam Solo", "sam@solo.example", 20, true), commit("Sam Solo", "sam@solo.example", 21, true),
+			commit("Sam Solo", "sam@solo.example", 22, false), commit("Sam Solo", "sam@solo.example", 23, true),
+		})
+		for i, who := range []string{"One", "Two", "Three"} {
+			buildRepo(t, filepath.Join(solos, "s"+strconv.Itoa(i+1)), []testCommit{
+				commit("Pat "+who, strings.ToLower(who)+"@solos.example", 24+i, i == 0)})
+		}
+		buildRepo(t, lone, []testCommit{commit("Lee Lone", "lee@lone.example", 28, true)})
+
+		// overview answers each scope's share as the agent sees it, keyed
+		// "all:", "group:NAME" or "repo:NAME"; nil is withheld.
+		type answer struct {
+			Overviews []struct {
+				Scope      report.Scope  `json:"scope"`
+				AIAssisted *report.Share `json:"ai_assisted"`
+			} `json:"overviews"`
+			Repos []struct {
+				Name       string        `json:"name"`
+				AIAssisted *report.Share `json:"ai_assisted"`
+				Card       *struct {
+					AIAssisted *report.Share `json:"ai_assisted"`
+				} `json:"card"`
+			} `json:"repos"`
+			Caveats []report.Caveat `json:"caveats"`
+		}
+		overview := func(t *testing.T, cs *sdk.ClientSession, scope string) (map[string]*report.Share, answer) {
+			t.Helper()
+			text, isErr := callTool(t, cs, "overview", map[string]any{"scope": scope})
+			if isErr {
+				t.Fatalf("overview(%q) failed: %s", scope, text)
+			}
+			var a answer
+			decode(t, text, &a)
+			got := map[string]*report.Share{}
+			for _, o := range a.Overviews {
+				got[o.Scope.Kind+":"+o.Scope.Key] = o.AIAssisted
+			}
+			for _, r := range a.Repos {
+				if r.Card != nil {
+					r.AIAssisted = r.Card.AIAssisted
+				}
+				got["repo:"+r.Name] = r.AIAssisted
+			}
+			return got, a
+		}
+		// local is every share as the local report shows it.
+		local := func(t *testing.T, db string) map[string]*report.Share {
+			t.Helper()
+			st, err := sqlite.OpenReadOnly(ctx, db)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = st.Close() }()
+			a, err := app.Overview(ctx, app.Deps{Store: st}, app.OverviewRequest{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			out := map[string]*report.Share{}
+			for _, o := range a.Overviews {
+				out[o.Scope.Kind+":"+o.Scope.Key] = o.AIAssisted
+			}
+			for _, r := range a.Repos {
+				out["repo:"+r.Name] = r.Card.AIAssisted
+			}
+			return out
+		}
+		// shown checks which shares an answer holds, each as the local
+		// report has it.
+		shown := func(t *testing.T, what string, got, truth map[string]*report.Share, want ...string) {
+			t.Helper()
+			for k, sh := range got {
+				switch {
+				case slices.Contains(want, k) && (sh == nil || truth[k] == nil || *sh != *truth[k]):
+					t.Errorf("%s: %s's share is %+v, want the local report's %+v", what, k, sh, truth[k])
+				case !slices.Contains(want, k) && sh != nil:
+					t.Errorf("%s: %s's share %+v is shown, want it withheld", what, k, sh)
+				}
+			}
+		}
+		// residual is a scope's share less the shares shown below it: what
+		// subtracting gives.
+		residual := func(whole *report.Share, parts ...*report.Share) [2]float64 {
+			r := [2]float64{whole.Num, whole.Den}
+			for _, p := range parts {
+				if p != nil {
+					r[0], r[1] = r[0]-p.Num, r[1]-p.Den
+				}
+			}
+			return r
+		}
+		withheld := func(t *testing.T, cs *sdk.ClientSession, subject, kind string) {
+			t.Helper()
+			text, isErr := callTool(t, cs, "explain", map[string]any{"metric": "ai_assisted", "subject": subject, "subject_kind": kind})
+			if !isErr || !strings.Contains(text, "withheld") || strings.Contains(text, "instead") {
+				t.Errorf("explain(ai_assisted, %s %s) answered %q, want it refused without pointing at another share", kind, subject, text)
+			}
+		}
+
+		db := filepath.Join(root, "group.db")
+		scan(t, db, mailmap, domain.ScopeGroup, group, solos)
+		truth := local(t, db)
+		cs := connect(t, Config{Open: openDB(db), Version: "test"}, 0)
+
+		// Team's share, shown beside the group's, would give solo's away:
+		// both are withheld, and the group's share alone is what is left.
+		got, a := overview(t, cs, "ai")
+		shown(t, "overview(ai)", got, truth, "group:ai")
+		if sh := got["group:ai"]; sh == nil || residual(sh, got["repo:team"], got["repo:solo"]) == residual(truth["repo:solo"]) {
+			t.Errorf("overview(ai): the group's share less its repositories' shown gives solo's own share %+v", truth["repo:solo"])
+		}
+		if !slices.ContainsFunc(a.Caveats, func(c report.Caveat) bool {
+			return c.Code == "ai-few-people" && strings.Contains(c.Message, `"team"`) && strings.Contains(c.Message, `"solo"`)
+		}) {
+			t.Errorf("overview(ai) caveats %v, want ai-few-people naming team and solo", a.Caveats)
+		}
+		// A second call, about one repository, reads the same decision.
+		for _, repo := range []string{"team", "solo"} {
+			got, _ = overview(t, cs, repo)
+			shown(t, "overview("+repo+")", got, truth)
+			withheld(t, cs, repo, "repo")
+		}
+		// Three people of one repository each make a group's share: it is
+		// shown, theirs are not.
+		got, _ = overview(t, cs, "solos")
+		shown(t, "overview(solos)", got, truth, "group:solos")
+		text, isErr := callTool(t, cs, "explain", map[string]any{"metric": "ai_assisted", "subject": "solos", "subject_kind": "group"})
+		var e explainOut
+		if !isErr {
+			decode(t, text, &e)
+		}
+		if len(e.Values) != 1 {
+			t.Errorf("explain(ai_assisted, group solos) answered %s, want the group's share", text)
+		}
+
+		// With --scope all the whole run's share is shown too, and a
+		// repository of one person named on its own hangs from the run: the
+		// run's share less group ai's would be lone's own. Group ai is
+		// withheld on the run's account, and only the run's share is shown.
+		db = filepath.Join(root, "all.db")
+		scan(t, db, mailmap, domain.ScopeAll, group, lone)
+		truth = local(t, db)
+		got, _ = overview(t, connect(t, Config{Open: openDB(db), Version: "test"}, 0), "")
+		shown(t, "overview() of the whole run", got, truth, "all:")
+		if sh := got["all:"]; sh == nil || residual(sh, got["group:ai"], got["repo:lone"]) == residual(truth["repo:lone"]) {
+			t.Errorf("overview(): the whole run's share less those shown gives lone's own share %+v", truth["repo:lone"])
+		}
+	})
 }
 
 // scanPlatform builds both fixtures in one directory, a platform of two
@@ -774,13 +951,14 @@ func scanPlatform(t *testing.T) (db string, git *gitcli.Runner, platform, mailma
 		t.Fatal(err)
 	}
 	db = filepath.Join(root, "facts.db")
-	return db, scan(t, db, mailmap, platform), platform, mailmap
+	return db, scan(t, db, mailmap, domain.ScopeGroup, platform), platform, mailmap
 }
 
-// scan records one scan of platform in db through app.Scan, with the
-// adapters internal/cli builds: a gitcli.Runner with the mailmap, the
-// packaged policy and a sqlite.Store. It returns the runner.
-func scan(t *testing.T, db, mailmap, platform string) *gitcli.Runner {
+// scan records one scan of paths in db through app.Scan, with the adapters
+// internal/cli builds: a gitcli.Runner with the mailmap, the packaged
+// policy and a sqlite.Store, and the rank scope given (--scope). It returns
+// the runner.
+func scan(t *testing.T, db, mailmap, scope string, paths ...string) *gitcli.Runner {
 	t.Helper()
 	ctx := t.Context()
 	git, err := gitcli.New(ctx, gitcli.Config{MailmapFile: mailmap})
@@ -797,7 +975,7 @@ func scan(t *testing.T, db, mailmap, platform string) *gitcli.Runner {
 	}
 	ranks := []domain.MetricID{{Name: "durable", Version: 1}, {Name: "simplifying", Version: 1}}
 	_, err = app.Scan(ctx, app.Deps{Git: git, Store: store, Policy: p, Version: "test"},
-		app.ScanRequest{Paths: []string{platform}, Now: fixture.Now, Rank: ranks, Scope: domain.ScopeGroup})
+		app.ScanRequest{Paths: paths, Now: fixture.Now, Rank: ranks, Scope: scope})
 	if cerr := store.Close(); err == nil {
 		err = cerr
 	}

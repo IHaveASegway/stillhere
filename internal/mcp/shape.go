@@ -242,50 +242,38 @@ func scopeOf(sc domain.Scope, name string) scopeOut {
 	return scopeOut{Kind: sc.Kind, Key: sc.Key, Name: name}
 }
 
-// The AI-assisted shares of repositories and groups. A share over the
-// landings of one or two people is close to one person's own share, which
-// ADR 0007 shows only to that person, so it does not leave the machine:
-// the egress is stricter than the local report, as it is for emails.
+// The AI-assisted shares of the whole run, groups and repositories. A share
+// over the landings of one or two people is close to one person's own
+// share, which ADR 0007 shows only to that person, and shares add up over
+// the scopes, so a share is withheld where it is small and wherever,
+// beside the shares that are shown, it would give a small one away. The
+// run's one decision (app.AIShares, read with its vocabulary) says which:
+// every answer reads it, so no two answers disagree and none can be
+// subtracted from another. The egress is stricter than the local report,
+// as it is for emails.
 
-// minAIPeople is the fewest humans whose landings an AI-assisted share
-// reaching the agent may be made of.
-const minAIPeople = 3
+// withheldWhy is why a share is withheld, as a caveat and a refusal say it,
+// without pointing at a share it could be worked out from.
+func withheldWhy() string {
+	return fmt.Sprintf("fewer than %d people landed in its window, or it would let a share that is withheld be "+
+		"worked out from those shown. A share of one or two people is close to one person's own, which only that "+
+		"person sees (ADR 0007)", app.AIShareMinPeople)
+}
 
-// aiCaveat says that an answer withheld the AI-assisted share of scopes
-// made of too few people.
+// aiCaveat says that an answer withheld the AI-assisted share of scopes.
 func aiCaveat(scopes []string) report.Caveat {
 	scopes = slices.Compact(slices.Sorted(slices.Values(scopes)))
 	if len(scopes) > maxCandidates {
 		scopes = append(scopes[:maxCandidates], fmt.Sprintf("%d more", len(scopes)-maxCandidates))
 	}
-	return report.Caveat{Code: "ai-few-people", Message: fmt.Sprintf(
-		"The AI-assisted share of %s is withheld: fewer than %d people landed in its window, so it would be close to one "+
-			"person's own share, which only that person sees (ADR 0007).", strings.Join(scopes, ", "), minAIPeople)}
+	return report.Caveat{Code: "ai-few-people", Message: fmt.Sprintf("The AI-assisted share of %s is withheld: %s.",
+		strings.Join(scopes, ", "), withheldWhy())}
 }
 
-// aiPeople is how many people a scope's AI-assisted share is made of; 0,
-// which withholds it, when the run's vocabulary is not known.
-func aiPeople(names *app.Names, sc report.Scope) int {
-	if names == nil {
-		return 0
-	}
-	switch sc.Kind {
-	case domain.ScopeRepo:
-		for _, r := range names.Repos {
-			if r.Key == sc.Key {
-				return r.AIPeople
-			}
-		}
-	case domain.ScopeGroup:
-		for _, g := range names.Groups {
-			if g.Name == sc.Key {
-				return g.AIPeople
-			}
-		}
-	case domain.ScopeAll, "":
-		return names.AIPeople
-	}
-	return 0
+// showsAI reports whether the run's decision lets a scope's AI-assisted
+// share leave; none does without the run's vocabulary.
+func showsAI(names *app.Names, sc report.Scope) bool {
+	return names != nil && names.AIShares.Show(domain.Scope{Kind: sc.Kind, Key: sc.Key})
 }
 
 // The overview tool.
@@ -372,10 +360,11 @@ type shaper struct {
 	aiWithheld []string // the scopes whose AI-assisted share was withheld
 }
 
-// share returns a scope's AI-assisted share as it may leave: nil, noted
-// for the caveat, when too few people made it.
+// share returns a scope's AI-assisted share as it may leave: nil, its num
+// and den with it, noted for the caveat, when the run's decision withholds
+// it.
 func (s *shaper) share(sh *report.Share, sc report.Scope, name string) *report.Share {
-	if sh == nil || aiPeople(s.names, sc) >= minAIPeople {
+	if sh == nil || showsAI(s.names, sc) {
 		return sh
 	}
 	s.aiWithheld = append(s.aiWithheld, name)
@@ -615,10 +604,7 @@ func (s *shaper) overviewAnswer(a *app.OverviewAnswer, sc scopeOut) *overviewOut
 		out.Repos = summary
 	}
 	out.head = head{Provenance: f.provenance(a.Provenance, n)}
-	out.tail = tail{Page: out.Page, Caveats: a.Caveats}
-	if len(s.aiWithheld) > 0 {
-		out.Caveats = append(slices.Clip(out.Caveats), aiCaveat(s.aiWithheld))
-	}
+	out.tail = tail{Page: out.Page, Caveats: s.withheldAI(a.Caveats)}
 	return out
 }
 
@@ -643,6 +629,7 @@ type valueOut struct {
 // as many repository values. It returns how many there were in all, and
 // names the repositories it shows in n.
 func (s *shaper) values(vs []report.Value, repos bool, n named) ([]valueOut, int) {
+	vs = s.withholdAI(vs)
 	byKind := map[[2]string][]int{} // metric and scope kind → indexes into vs
 	for i, v := range vs {
 		k := [2]string{v.Metric, v.Scope.Kind}
@@ -687,6 +674,50 @@ func (s *shaper) values(vs []report.Value, repos bool, n named) ([]valueOut, int
 			Den: v.Den, N: v.N, Detail: v.Detail})
 	}
 	return out, len(vs)
+}
+
+// withholdAI drops the AI-assisted values the run's decision withholds,
+// noted for the caveat: a repository's or a group's own share whose scope
+// is withheld, and any other one not about a person. A person's own share
+// is kept, since only their own page holds it (app.Me), as is every value
+// of another metric. explain refuses a withheld share before it reads any;
+// this keeps every answer that lists values on the same decision.
+func (s *shaper) withholdAI(vs []report.Value) []report.Value {
+	var out []report.Value
+	for _, v := range vs {
+		id, err := domain.ParseMetricID(v.Metric)
+		ai := err == nil && report.OwnPageOnly(id)
+		ownShare := v.Subject.Kind == domain.SubjectPerson
+		scopeShare := v.Subject.Kind == domain.SubjectRepo || v.Subject.Kind == domain.SubjectGroup
+		if ai && !ownShare && (!scopeShare || !showsAI(s.names, v.Scope)) {
+			s.aiWithheld = append(s.aiWithheld, scopeName(v.Scope, s.repoName(v.Scope.Key)))
+			continue
+		}
+		out = append(out, v)
+	}
+	return out
+}
+
+// repoName is a repository's name in the run's vocabulary; its key without
+// one.
+func (s *shaper) repoName(key string) string {
+	if s.names != nil {
+		for _, r := range s.names.Repos {
+			if r.Key == key {
+				return r.Name
+			}
+		}
+	}
+	return key
+}
+
+// withheldAI adds the caveat of the AI-assisted shares the answer withheld,
+// if any, to its caveats.
+func (s *shaper) withheldAI(caveats []report.Caveat) []report.Caveat {
+	if len(s.aiWithheld) == 0 {
+		return caveats
+	}
+	return append(slices.Clip(caveats), aiCaveat(s.aiWithheld))
 }
 
 // sameNumbers reports whether two values of one metric say the same.
@@ -737,6 +768,7 @@ func (s *shaper) personAnswer(me *report.Me, p app.NamedPerson, own bool) *perso
 	out.Values, out.ValuesTotal = s.values(me.Values, s.f.detailed, n)
 	out.Ranks, out.RanksTotal = s.ranks(me.Ranks)
 	out.head = head{Provenance: s.f.provenance(me.Provenance, n)}
+	out.Caveats = s.withheldAI(out.Caveats)
 	return out
 }
 
@@ -987,6 +1019,7 @@ func (s *shaper) explainAnswer(e *report.Explain, allowSource bool) *explainOut 
 		n.key(c.RepoKey)
 	}
 	out.head = head{Provenance: f.provenance(e.Provenance, n)}
+	out.Caveats = s.withheldAI(out.Caveats)
 	return out
 }
 

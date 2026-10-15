@@ -68,6 +68,9 @@ type Names struct {
 	// AIPeople counts the humans behind the whole run's AI-assisted share,
 	// as NamedRepo.AIPeople does for one repository.
 	AIPeople int
+	// AIShares is the run's one decision about which AI-assisted shares may
+	// leave the machine (aishare.go), which every answer about the run reads.
+	AIShares AIShares
 }
 
 // NamedGroup is one group of a run.
@@ -191,6 +194,7 @@ func RunNames(ctx context.Context, d Deps, r NamesRequest) (*Names, error) {
 		}
 		n.Groups[i].AIPeople = len(group)
 	}
+	n.AIShares = aiShareDecide(n.Repos, behind, report.WholeRun(s.scope(), len(s.facts.Groups)))
 	return n, nil
 }
 
