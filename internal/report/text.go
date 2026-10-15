@@ -271,7 +271,8 @@ func textPeople(p *printer, indent string, t *StillHere) {
 	cols := []column{{head: "person"}, {head: "prod lines", right: true}, {head: "majority files", right: true},
 		{head: "repos", right: true}, {head: "landings 365d", right: true}}
 	row := func(r StillHereRow) []string {
-		return []string{clean(r.Name), grouped(r.ProdNonblankLines), grouped(r.MajorityFiles), grouped(r.Repos), grouped(r.Landings365d)}
+		return []string{p.person(r.Email, r.Name, r.NameWithheld, clean), grouped(r.ProdNonblankLines),
+			grouped(r.MajorityFiles), grouped(r.Repos), grouped(r.Landings365d)}
 	}
 	p.textTable(indent, cols, withBots(t.Humans, t.Bots, row, len(cols)))
 }
@@ -284,7 +285,8 @@ func textStillHere(p *printer, indent string, t *StillHere) {
 	cols := []column{{head: "person"}, {head: "prod lines", right: true}, {head: "majority files", right: true},
 		{head: "other roles"}}
 	row := func(r StillHereRow) []string {
-		return []string{clean(r.Name), grouped(r.ProdNonblankLines), grouped(r.MajorityFiles), otherRoles(r.LinesByRole)}
+		return []string{p.person(r.Email, r.Name, r.NameWithheld, clean), grouped(r.ProdNonblankLines),
+			grouped(r.MajorityFiles), otherRoles(r.LinesByRole)}
 	}
 	p.textTable(indent, cols, withBots(t.Humans, t.Bots, row, len(cols)))
 }
@@ -315,7 +317,8 @@ func textWeek(p *printer, indent string, m *Model, t *WeekTable) {
 	cols := []column{{head: "person"}, {head: "commits", right: true}, {head: "lines added", right: true},
 		{head: "prod lines added", right: true}}
 	row := func(r WeekRow) []string {
-		return []string{clean(r.Name), grouped(r.Commits), grouped(r.LinesAdded), grouped(r.ProdLinesAdded)}
+		return []string{p.person(r.Email, r.Name, r.NameWithheld, clean), grouped(r.Commits), grouped(r.LinesAdded),
+			grouped(r.ProdLinesAdded)}
 	}
 	p.textTable(indent+"  ", cols, withBots(t.Humans, t.Bots, row, len(cols)))
 }
@@ -349,18 +352,19 @@ func textRanks(p *printer, t *RankTable) {
 	} else {
 		cols := []column{{head: "#"}, {head: "person"}, {head: metricName(t.Metric), right: true},
 			{head: "95% interval", right: true}, {head: "n", right: true}}
+		name := func(r RankRow) string { return p.person(r.Email, r.Name, r.NameWithheld, clean) }
 		var rows [][]string
 		for _, r := range t.Ranked {
-			rows = append(rows, []string{rankText(r.RankLo, r.RankHi), clean(r.Name), estimateText(r.Estimate, t.Percent),
+			rows = append(rows, []string{rankText(r.RankLo, r.RankHi), name(r), estimateText(r.Estimate, t.Percent),
 				intervalText(r.Lo, r.Hi, t.Percent), grouped(r.N)})
 		}
 		for _, r := range t.BelowMin {
-			rows = append(rows, []string{"—", clean(r.Name), "", "", grouped(r.N)})
+			rows = append(rows, []string{"—", name(r), "", "", grouped(r.N)})
 		}
 		if len(t.Bots) > 0 {
 			rows = append(rows, []string{"", "bots", "", "", ""})
 			for _, r := range t.Bots {
-				rows = append(rows, []string{"—", clean(r.Name), estimateText(r.Estimate, t.Percent), "", grouped(r.N)})
+				rows = append(rows, []string{"—", name(r), estimateText(r.Estimate, t.Percent), "", grouped(r.N)})
 			}
 		}
 		p.textTable("  ", cols, rows)
@@ -538,7 +542,8 @@ func textCard(p *printer, m *Model, r *Repo) {
 	if len(c.MadeOf) > 0 {
 		var who []string
 		for _, a := range c.MadeOf {
-			who = append(who, fmt.Sprintf("%s %s (%s)", clean(a.Name), grouped(a.ProdLines), percent(a.Share)))
+			who = append(who, fmt.Sprintf("%s %s (%s)", p.person(a.Email, a.Name, a.NameWithheld, clean),
+				grouped(a.ProdLines), percent(a.Share)))
 		}
 		p.wrapped("  made of: ", "    ", strings.Join(who, ", "))
 	}

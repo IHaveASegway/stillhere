@@ -272,6 +272,10 @@ type personIn struct {
 func (s *server) person(ctx context.Context, in personIn) *sdk.CallToolResult {
 	f, _, _ := common{ResponseFormat: in.ResponseFormat}.format(0, personRows, personDetailedRows)
 	return s.answer(ctx, "person", f, narrowPerson, func(ctx context.Context, c *call) (render, error) {
+		r, err := c.resolver(ctx)
+		if err != nil {
+			return nil, err
+		}
 		p, caveat, err := s.whom(ctx, c, in.Name)
 		if err != nil {
 			return nil, err
@@ -291,7 +295,7 @@ func (s *server) person(ctx context.Context, in personIn) *sdk.CallToolResult {
 		}
 		if errors.Is(err, domain.ErrNotFound) {
 			return nil, notFoundf("%q is in run %d as an author or a co-author, but holds no value: none of their changes "+
-				"left a surviving prod line or landed in a window a metric reads.", p.Name, c.run())
+				"left a surviving prod line or landed in a window a metric reads.", r.named(p), c.run())
 		}
 		if err != nil {
 			return nil, err
@@ -428,7 +432,7 @@ func (s *server) changes(ctx context.Context, in changesIn) *sdk.CallToolResult 
 			if p, caveat, err = r.person(in.Person); err != nil {
 				return nil, err
 			}
-			req.Person, who = p.Key, p.Name
+			req.Person, who = p.Key, r.named(p)
 		}
 		d, err := c.deps(ctx)
 		if err != nil {
@@ -495,7 +499,7 @@ func (s *server) explain(ctx context.Context, in explainIn) *sdk.CallToolResult 
 		}
 		var subject domain.Subject
 		var caveat *report.Caveat
-		var who, area string // the person's name, or the area, for a miss
+		var who, area string // the person as the server names them (resolver.named), or the area, for a miss
 		if in.SubjectKind != "" && in.SubjectKind != domain.SubjectPerson && strings.TrimSpace(in.Subject) == "" {
 			return nil, &domain.UsageError{Msg: fmt.Sprintf(
 				"subject_kind %s needs subject: a repository's name for repo and area, a group's for group", in.SubjectKind)}
@@ -513,7 +517,7 @@ func (s *server) explain(ctx context.Context, in explainIn) *sdk.CallToolResult 
 			if p, caveat, err = s.whom(ctx, c, in.Subject); err != nil {
 				return nil, err
 			}
-			subject, who = domain.Subject{Kind: domain.SubjectPerson, Key: p.Key}, p.Name
+			subject, who = domain.Subject{Kind: domain.SubjectPerson, Key: p.Key}, r.named(p)
 		case domain.SubjectRepo, domain.SubjectArea:
 			rp, err := r.repo(in.Subject)
 			if err != nil {

@@ -24,10 +24,11 @@ type Value struct {
 
 // Subject is what a value is about.
 type Subject struct {
-	Kind string `json:"kind"` // person, area, repo or change
-	Key  string `json:"key"`  // a person's canonical email; JSON only
-	Name string `json:"name"` // a person's display name; "" for other kinds
-	Bot  bool   `json:"bot"`
+	Kind         string `json:"kind"`          // person, area, repo or change
+	Key          string `json:"key"`           // a person's canonical email, or "@login" for an unlinked GitHub account; JSON only
+	Name         string `json:"name"`          // a person's display name, "@login", or "" when there is none a page may show (personName); "" for other kinds
+	NameWithheld bool   `json:"name_withheld"` // a person's name is "" because it gives an address away
+	Bot          bool   `json:"bot"`
 }
 
 // MetricInfo is a metric's published definition (docs/metrics.md).
@@ -107,7 +108,8 @@ type WhoKnowsRepo struct {
 // "@login" when the run cannot link the login to an email.
 type Knower struct {
 	Email          string `json:"email"`
-	Name           string `json:"name"`
+	Name           string `json:"name"`            // as StillHereRow's
+	NameWithheld   bool   `json:"name_withheld"`   // as StillHereRow's
 	Lines          int    `json:"lines"`           // surviving prod non-blank lines under the path
 	MajorityFiles  int    `json:"majority_files"`  // files under the path where the person is a majority owner
 	RecentLandings int    `json:"recent_landings"` // landings in the last 90 days that changed the path

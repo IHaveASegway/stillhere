@@ -147,8 +147,9 @@ func NewWhoKnows(in *WhoKnowsInput) *WhoKnows {
 		top := map[string]int{} // the metric's own top-author places, 1 to 5
 		for _, v := range ix.people(MetricWhoKnows, scope) {
 			email := v.Subject.Key
+			name, withheld := personName(in.Who, email)
 			k := Knower{
-				Email: email, Name: displayName(in.Who, email),
+				Email: email, Name: name, NameWithheld: withheld,
 				Lines:          count(v.Value),
 				MajorityFiles:  count(v.Detail[detailMajorityFiles]),
 				RecentLandings: count(v.Detail[detailRecentLandings]),
@@ -438,6 +439,8 @@ func reposWith(fs *domain.FactSet, keys map[string]bool) []*domain.RepoFacts {
 
 // sameName says when another email in the run has the person's display
 // name: if they are one person, their numbers are split between the two.
+// It compares the names as git recorded them, a withheld one included, and
+// prints none.
 func sameName(fs *domain.FactSet, who People, email string) (Caveat, bool) {
 	name, ok := realName(who, email)
 	if !ok {
@@ -470,6 +473,6 @@ func sameName(fs *domain.FactSet, who People, email string) (Caveat, bool) {
 	return Caveat{
 		Code: codeIdentities,
 		Message: "Another email in this run has the same display name and was not merged: if it is the same person, " +
-			"their numbers are split between the two, and a .mailmap line merges them.",
+			"their numbers are split between the two, and a .mailmap line merges them. " + identitiesHint,
 	}, true
 }

@@ -188,7 +188,11 @@ func (b *builder) metricIDs() []string {
 	return out
 }
 
-func (b *builder) name(email string) string { return displayName(b.in.Who, email) }
+// person is how the report names a person: a row's Name and NameWithheld,
+// from one decision (personName).
+func (b *builder) person(email string) (name string, withheld bool) {
+	return personName(b.in.Who, email)
+}
 
 func (b *builder) bot(email string) bool { return isBot(b.in.Who, email) }
 
@@ -242,7 +246,7 @@ func (b *builder) card(rf *domain.RepoFacts, still *StillHere) RepoCard {
 		for _, r := range still.Humans {
 			if r.ProdNonblankLines > 0 && len(c.MadeOf) < 5 {
 				c.MadeOf = append(c.MadeOf, Author{
-					Email: r.Email, Name: r.Name, ProdLines: r.ProdNonblankLines,
+					Email: r.Email, Name: r.Name, NameWithheld: r.NameWithheld, ProdLines: r.ProdNonblankLines,
 					Share: float64(r.ProdNonblankLines) / float64(total),
 				})
 			}
@@ -391,8 +395,9 @@ func (b *builder) weekTable(scope domain.Scope) *WeekTable {
 	t := &WeekTable{}
 	for _, v := range b.ix.people(MetricLanded, scope) {
 		email := v.Subject.Key
+		name, withheld := b.person(email)
 		row := WeekRow{
-			Email: email, Name: b.name(email), Bot: b.bot(email),
+			Email: email, Name: name, NameWithheld: withheld, Bot: b.bot(email),
 			Commits:        count(v.Value),
 			LinesAdded:     count(v.Detail[detailLinesAdded]),
 			ProdLinesAdded: count(v.Detail[detailProdLinesAdded]),
@@ -425,8 +430,9 @@ func (b *builder) stillHere(scope domain.Scope, blamed int) *StillHere {
 		if fromMajority {
 			b.use(MetricMajority)
 		}
+		name, withheld := b.person(email)
 		row := StillHereRow{
-			Email: email, Name: b.name(email), Bot: b.bot(email),
+			Email: email, Name: name, NameWithheld: withheld, Bot: b.bot(email),
 			ProdNonblankLines: count(v.Value),
 			MajorityFiles:     majority,
 			LinesByRole:       linesByRole(v.Detail),
@@ -559,8 +565,9 @@ func (b *builder) rankTable(rs RankSet) RankTable {
 			continue
 		}
 		email := ri.Subject.Key
+		name, withheld := b.person(email)
 		row := RankRow{
-			Email: email, Name: b.name(email),
+			Email: email, Name: name, NameWithheld: withheld,
 			RankLo: ri.RankLo, RankHi: ri.RankHi,
 			Estimate: ri.Estimate, Lo: ri.Lo, Hi: ri.Hi, N: ri.N,
 		}
@@ -581,7 +588,9 @@ func (b *builder) rankTable(rs RankSet) RankTable {
 	}
 	for _, v := range b.ix.people(rs.Metric.ID, rs.Scope) {
 		if email := v.Subject.Key; b.bot(email) && !listed[email] && sameWindow(v.Window, rs.Window) {
-			t.Bots = append(t.Bots, RankRow{Email: email, Name: b.name(email), Estimate: v.Value, Lo: v.Value, Hi: v.Value, N: v.N})
+			name, withheld := b.person(email)
+			t.Bots = append(t.Bots, RankRow{Email: email, Name: name, NameWithheld: withheld,
+				Estimate: v.Value, Lo: v.Value, Hi: v.Value, N: v.N})
 		}
 	}
 	slices.SortFunc(t.Ranked, func(x, y RankRow) int {

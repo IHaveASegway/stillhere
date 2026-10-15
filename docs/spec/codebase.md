@@ -528,6 +528,13 @@ type DomainKind string // DomainMain, DomainNoreply, DomainMachine, DomainOther:
 type RuleDefinition struct { Rule Rule; Matches, Confidence, Risk string }
 func Rules() []RuleDefinition // how each rule links and how it can be wrong; every identities answer carries them
 func RevealsAddress(name, email string) bool // the name holds an @, or is the address's local part (a login used as a name): a page that prints no address must not print it
+// identity/withheld.go (#52): which names a page may show, decided per name over every person's address in the run, so
+// no page prints on one row what it withholds on another (report-json.md, "Where emails go")
+func (d *Directory) Withheld(email string) bool // its display name holds an @, or is a local part (localForms: whole, before a +tag, a noreply
+                                                // login), ignoring case, of any human address the facts show; a bot's or an agent's address
+                                                // withholds no name, but a bot's name that holds an @ is withheld; false without a name and for a LoginKey
+func LoginKey(key string) bool                  // "@login" or "@login[bot]": a GitHub account no commit of the run links to an email (ADR 0004), the
+                                                // form reviews_given@1 mints; "@example.com" is an address. report and mcp parse keys with it alone
 
 // metrics
 type Definition struct {
@@ -599,10 +606,16 @@ func AUC(pos, neg []float64) float64 // Mann-Whitney, a tie counting 1/2; 0.5 wh
 // number to the metric@version, subject, scope and Detail key it reads (spec/report-json.md#where-the-numbers-come-from).
 type Model struct{ /* stillhere.report/v1: overviews (per group; every repository with --scope all or without groups), repo cards, ranks, caveats and provenance on every section */ }
 type Document interface{ /* sealed: *Model, *Explain, *WhoKnows, *Me, *Validation, *Catalog, *Identities */ }
-func Text(w io.Writer, d Document) error     // a terminal: 100 columns, untrusted text escaped, no emails
-func Markdown(w io.Writer, d Document) error // GitHub-flavoured: untrusted text escaped, mentions and references unlinked, no emails or repository paths
+func Text(w io.Writer, d Document) error     // a terminal: 100 columns, untrusted text escaped, no emails and no name that gives one away
+func Markdown(w io.Writer, d Document) error // GitHub-flavoured: untrusted text escaped, mentions and references unlinked, no emails, names that give one away or repository paths
 func JSON(w io.Writer, d Document) error     // stable order; empty lists [] and maps {}, absent sections null; invalid UTF-8 as U+FFFD, NaN and ±Inf as null; written only when whole
-type People interface{ Name(email string) string; Bot(email string) bool } // *identity.Directory implements it
+type People interface{ Name(email string) string; Bot(email string) bool; Withheld(email string) bool } // *identity.Directory implements it
+// #52: every person row (still-here, week, rank, made_of, who-knows) and person Subject names the person one way in every
+// format, Name and NameWithheld from one call (names.go, personName): Name is the display name, "@login" for a GitHub
+// account no commit links to an email (identity.LoginKey, ADR 0004), and "" when git recorded none or when the name gives
+// an address of the run away (People.Withheld; NameWithheld, json "name_withheld", true). Text and Markdown label such
+// people per page, "(no name 1)" and "(name withheld 1)", in the order the page first names them: a counter, never a hash
+// of the email; a name shaped like a label, or starting with a double quote, is printed Go-quoted (nameText).
 type Input struct {
 	Kind, Tool string // KindWeek or KindScan; the binary's version
 	Run        *domain.Run // nil for week, and for a scan that stored nothing
@@ -644,13 +657,15 @@ type Me struct { Provenance Provenance; Person Subject; Values []Value; Ranks []
 type Validation struct { Provenance Provenance; Labels, Labellers, Meaningful, Routine, Noise, Unmatched int; Metrics []MetricAUC; Caveats []Caveat }
 type MetricAUC struct { Metric string; AUC *float64; N, Meaningful, Routine int; Beta bool } // AUC nil without both labels
 type Catalog struct { Metrics []MetricInfo }
-// #26 (spec/identities.md): emails only in fields named email, and a name that gives an address away (identity.RevealsAddress)
-// withheld as "", so the MCP server can drop emails by field; text and Markdown print no address and no part of one
+// #26 (spec/identities.md): emails only in fields named email, and a name that gives an address away withheld as "", by the
+// rule every page applies (Who.Withheld, #52), so the MCP server can drop emails by field; text and Markdown print no
+// address and no part of one
 type Identities struct { Provenance Provenance; Scope Scope; Addresses, Bots, Shared, Oversized int; Candidates []IdentityCandidate; Rules []IdentityRule; Caveats []Caveat }
 type IdentityCandidate struct { Confidence string; Guess, Commented, Chained bool; Rules []string; Name string; Addresses []IdentityAddress; Links []IdentityLink } // Commented: all but high
 type IdentityAddress struct { Email, Name string; NameWithheld bool; DomainKind string; Canonical bool; Commits, CoAuthored int; First, Last time.Time; Repos []string }
 type IdentityLink struct { Rule string; Addresses []int; Name string; FromName bool; HandOff *IdentityHandOff }
-type IdentitiesInput struct { Run *domain.Run; Facts *domain.FactSet; Scope domain.Scope; Survey *identity.Survey; Forge *ForgeRead } // Facts: the scope's
+type IdentitiesInput struct { Run *domain.Run; Facts *domain.FactSet; Scope domain.Scope; Survey *identity.Survey; Who People; Forge *ForgeRead } // Facts: the scope's;
+                                                                                                                                               // Who: the run's directory, which Survey was found with
 func NewIdentities(in *IdentitiesInput) *Identities // identity.Candidates' survey as an answer, with provenance (AnswerProvenance) and caveats (mailmap-at-scan)
 func Mailmap(w io.Writer, id *Identities) error    // the suggested .mailmap lines, evidence as # comments; every candidate's but a high one's commented out
 func NewExplain(in *ExplainInput) *Explain    // values, and a ranked metric's clusters per repository as changes
@@ -913,7 +928,7 @@ Tests sit at stable boundaries, so a refactor does not rewrite them (Kent Beck, 
 | `TestWeekOracle` | `app` | the week table in the fixture spec, people and bots apart, and the `--days 1` window against `[week] days = 7`: `window.days` 1, `days_from` `cli`, `since` `2026-10-06T00:00:00Z`, and `history`, the window the run collected, equal to it |
 | `TestStillHereOracle` | `app` | the still-here table, people and bots apart, and the concentration walk |
 | `TestChangeOracles` | `app` | `durable@1` and `simplifying@1` per person and per landing, with their rank tables and eligibility, reverts and AI-assisted tags on both fixtures; `knowledge_loss@1` and `who_knows@1` on the main fixture, and with a replica written by hand their reviews (#38): a reviewer who keeps an area's knowledge from counting as lost, with a comment on her own open pull request, recent reviewers of a path (one known only as `@login`; not the author, a bot, a review outside each window, or a squash read as a rebase), on the merge-methods guard a rebase merge's commits in one committer second and a squash that takes no other pull request's landing in its second, and a stored run that a later sync leaves unchanged; `surviving@1` credit on the sibling, where an agent's blamed lines go to its human co-author; and the regression guards: a backdated first-parent commit hides no landing below it; a rebased one lands, and is dated, by its committer time, and is credited to its author; and a revert merged with `--no-ff` is linked to the merge landing, which neither change metric counts, while `surviving@1` keeps the lines the revert restored; and the identity candidates of each fixture, without its mailmap and with it, whose mailmap form changes nothing in `git check-mailmap` until its lines are uncommented |
-| `TestDeterminism` | `app` | two scans of both fixtures as one group, into separate facts.db files, give byte-identical JSON without `timings`, and identical text and Markdown; `report` on the stored run reproduces the scan; a token planted in a URL given as a PATH, in its userinfo, query or fragment, is in no byte of facts.db or its `-wal` and `-shm`, no rendering and no log line; with the cli's Deps (the store as both ports) and a replica that holds the fixture's forge repository beside another organization's, the run keeps only its own repository's watermark, with its name and join, `reviews_given@1` counts its reviews in scope `all`, the group and the repository, a review 7 days before `Now` in week block 0 and one at the window's start in block 12, and `report` reproduces the scan after a later sync renamed the repository |
+| `TestDeterminism` | `app` | two scans of both fixtures as one group, into separate facts.db files, give byte-identical JSON without `timings`, and identical text and Markdown; `report` on the stored run reproduces the scan; a token planted in a URL given as a PATH, in its userinfo, query or fragment, is in no byte of facts.db or its `-wal` and `-shm`, no rendering and no log line; with the cli's Deps (the store as both ports) and a replica that holds the fixture's forge repository beside another organization's, the run keeps only its own repository's watermark, with its name and join, `reviews_given@1` counts its reviews in scope `all`, the group and the repository, a review 7 days before `Now` in week block 0 and one at the window's start in block 12, and `report` reproduces the scan after a later sync renamed the repository; and a repository written with `git fast-import` (#52), whose display names are a login, the same name on another address, an address, none twice, a label's shape and two bots', gives the same bytes over two scans and `report`, labels included, no text or Markdown page (who-knows included) holding a local part a name would give away or a domain, two `(no name N)` labels and four `(name withheld N)`, the label-shaped name printed quoted, and JSON names withheld on both of jdoe's addresses and for the bot named by an address, not for `dependabot[bot]` |
 | `TestDiscover` | `collect` | duplicates, bare repos, scp vs HTTPS remotes; a planted token appears in no output |
 | `TestCloneHealth` | `collect` | shallow and partial clones warn and lose only the facts they should |
 | `TestAttributes` | `collect` | `check-attr --source` on a work tree and a bare clone: the scanned commit's attributes, not the checked-out ones or `attr.tree`'s, matched case-sensitively under `core.ignorecase=true`; an empty value is on; an attribute that settles a generated header; a deleted path classified by Head's attributes; a header sniff that no attribute changes (`-diff`, `binary`, an uncommitted edit), with each of its rules, prose and a generator program that stay `prod`, and the line-40 limit; a symbolic link and a submodule unclassified. History (scan) and Blame on the same pair, under the repository config that each pin of [git-invocation.md](git-invocation.md#repository-settings-that-change-facts) overrides: the same facts in both clones, and the expected ones, with no file binary although Head, the checkout and `attr.tree` each mark files `-diff`, a CRLF-to-LF rename followed, the indent heuristic's owner, a UTF-8 author name, a co-author, a root commit's diff, a gitlink's row and a decomposed path blamed; and no textconv driver or filter run |

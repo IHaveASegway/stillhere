@@ -18,10 +18,13 @@ import (
 const maxWidth = 100
 
 // printer writes lines and keeps the first write error, so a renderer can
-// print section after section and check once at the end.
+// print section after section and check once at the end. It is one page:
+// names labels the people the page cannot name (printer.person in
+// names.go).
 type printer struct {
-	w   io.Writer
-	err error
+	w     io.Writer
+	err   error
+	names pageNames
 }
 
 func (p *printer) line(s string) {

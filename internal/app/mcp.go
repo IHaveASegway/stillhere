@@ -97,7 +97,7 @@ type NamedRepo struct {
 // to an email.
 type NamedPerson struct {
 	Key   string   // the canonical email, or "@login" for a reviewer the forge could not link
-	Name  string   // the display name, as the reports print it
+	Name  string   // as the reports' JSON gives it (report.SubjectOf): the display name, the "@login", or "" when none may be shown, so only an id or an email finds them
 	Bot   bool     // a bot or an agent: listed apart, never ranked
 	Repos []string // names of the repositories they wrote in or hold a value about, sorted
 	Lines int      // surviving@1: their surviving prod lines across the run; 0 without a value
@@ -236,16 +236,13 @@ func mcpAIPeople(s *stored) map[string]map[string]bool {
 	return out
 }
 
-// mcpPersonNamed names one person of a stored run as the reports do. A
-// reviewer the forge could not link to an email is shown by login, as
-// reviews_given@1 keys them.
+// mcpPersonNamed names one person of a stored run exactly as the reports
+// do (report.SubjectOf), which owns the rule: a reviewer the forge could
+// not link to an email by login, as reviews_given@1 keys them, and a
+// person whose name no page may show with "".
 func mcpPersonNamed(key string, s *stored) NamedPerson {
 	sub := report.SubjectOf(domain.Subject{Kind: domain.SubjectPerson, Key: key}, s.who)
-	p := NamedPerson{Key: key, Name: sub.Name, Bot: sub.Bot}
-	if strings.HasPrefix(key, "@") && s.who.Name(key) == "" {
-		p.Name = key
-	}
-	return p
+	return NamedPerson{Key: key, Name: sub.Name, Bot: sub.Bot}
 }
 
 // OverviewRequest asks for the platform view of one scope of a stored run.
@@ -820,8 +817,8 @@ func Highlights(ctx context.Context, d Deps, r HighlightsRequest) (*HighlightsAn
 			t.Of++
 			if ri.RankLo == 1 {
 				sub := report.SubjectOf(ri.Subject, s.who)
-				t.People = append(t.People, report.RankRow{Email: sub.Key, Name: sub.Name, RankLo: ri.RankLo, RankHi: ri.RankHi,
-					Estimate: ri.Estimate, Lo: ri.Lo, Hi: ri.Hi, N: ri.N})
+				t.People = append(t.People, report.RankRow{Email: sub.Key, Name: sub.Name, NameWithheld: sub.NameWithheld,
+					RankLo: ri.RankLo, RankHi: ri.RankHi, Estimate: ri.Estimate, Lo: ri.Lo, Hi: ri.Hi, N: ri.N})
 			}
 		}
 		if len(t.People) == 0 {

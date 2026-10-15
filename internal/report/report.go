@@ -17,7 +17,10 @@
 // The types carry their own JSON field names, so the published shape does
 // not move when an internal type does. Text and Markdown name people by
 // display name only: emails appear in JSON, the machine output, and never in
-// what a person reads or pastes.
+// what a person reads or pastes. A display name that gives an address away
+// is withheld in every format, JSON included (name "" and name_withheld),
+// and a page labels the people it cannot name by their order on it
+// (names.go).
 package report
 
 import (
@@ -272,8 +275,9 @@ type StillHere struct {
 // StillHereRow is one person's surviving lines in one scope. Repos and
 // Landings365d are the breadth and activity a group's overview shows.
 type StillHereRow struct {
-	Email             string         `json:"email"` // the canonical key; JSON only
-	Name              string         `json:"name"`
+	Email             string         `json:"email"`         // the canonical key; JSON only
+	Name              string         `json:"name"`          // the display name, "@login", or "" when there is none a page may show (personName)
+	NameWithheld      bool           `json:"name_withheld"` // the name is "" because it gives an address away
 	Bot               bool           `json:"bot"`
 	ProdNonblankLines int            `json:"prod_nonblank_lines"` // the headline: survival
 	MajorityFiles     int            `json:"majority_files"`      // depth: files where the person holds at least half the lines
@@ -292,7 +296,8 @@ type WeekTable struct {
 // WeekRow is one person's landings in the window.
 type WeekRow struct {
 	Email          string `json:"email"`
-	Name           string `json:"name"`
+	Name           string `json:"name"`          // as StillHereRow's
+	NameWithheld   bool   `json:"name_withheld"` // as StillHereRow's
 	Bot            bool   `json:"bot"`
 	Commits        int    `json:"commits"`          // landings credited to the person
 	LinesAdded     int    `json:"lines_added"`      // numstat insertions, blank lines included, on paths with a role
@@ -379,10 +384,11 @@ type Size struct {
 
 // Author is one of the people a repository is made of.
 type Author struct {
-	Email     string  `json:"email"`
-	Name      string  `json:"name"`
-	ProdLines int     `json:"prod_lines"`
-	Share     float64 `json:"share"` // of the repository's surviving prod lines
+	Email        string  `json:"email"`
+	Name         string  `json:"name"`          // as StillHereRow's
+	NameWithheld bool    `json:"name_withheld"` // as StillHereRow's
+	ProdLines    int     `json:"prod_lines"`
+	Share        float64 `json:"share"` // of the repository's surviving prod lines
 }
 
 // Landings counts a repository's landings.
@@ -436,14 +442,15 @@ type RankTable struct {
 
 // RankRow is one person's estimate and, when eligible, rank interval.
 type RankRow struct {
-	Email    string  `json:"email"`
-	Name     string  `json:"name"`
-	RankLo   int     `json:"rank_lo"` // 95% interval of the rank; 0 when not ranked
-	RankHi   int     `json:"rank_hi"`
-	Estimate float64 `json:"estimate"`
-	Lo       float64 `json:"lo"` // 95% interval of the value; for bots, equal to Estimate
-	Hi       float64 `json:"hi"`
-	N        int     `json:"n"` // clusters: the person's changes the metric counted
+	Email        string  `json:"email"`
+	Name         string  `json:"name"`          // as StillHereRow's
+	NameWithheld bool    `json:"name_withheld"` // as StillHereRow's
+	RankLo       int     `json:"rank_lo"`       // 95% interval of the rank; 0 when not ranked
+	RankHi       int     `json:"rank_hi"`
+	Estimate     float64 `json:"estimate"`
+	Lo           float64 `json:"lo"` // 95% interval of the value; for bots, equal to Estimate
+	Hi           float64 `json:"hi"`
+	N            int     `json:"n"` // clusters: the person's changes the metric counted
 }
 
 // Timings are wall-clock measurements of the run that built the report. They

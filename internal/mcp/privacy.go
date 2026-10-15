@@ -15,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/IHaveASegway/stillhere/internal/app"
+	"github.com/IHaveASegway/stillhere/internal/identity"
 )
 
 // Every answer goes on to the agent's model provider, so what leaves the
@@ -104,8 +105,8 @@ func newWithholder(names *app.Names) *withholder {
 	}
 	for _, p := range names.People {
 		at := strings.LastIndexByte(p.Key, '@')
-		if at <= 0 || at == len(p.Key)-1 {
-			continue // "@login", or not an address
+		if identity.LoginKey(p.Key) || at < 0 || at == len(p.Key)-1 {
+			continue // a login, or not an address; an empty local part (@example.com) is an address
 		}
 		email := strings.ToLower(p.Key)
 		w.ids[email] = pseudonym(email)
@@ -118,9 +119,11 @@ func newWithholder(names *app.Names) *withholder {
 }
 
 // key is the structural layer: the id of a value that holds a person's
-// canonical email. A login (@name) and an id stay as they are.
+// canonical email. A login (identity.LoginKey: @name, @name[bot]) and an id
+// stay as they are; an address with an empty local part (@example.com) is
+// an address, and becomes its id.
 func (w *withholder) key(v string) string {
-	if v == "" || strings.HasPrefix(v, "@") || isPseudonym(v) {
+	if v == "" || identity.LoginKey(v) || isPseudonym(v) {
 		return v
 	}
 	return pseudonym(v)
@@ -233,6 +236,12 @@ func (w *withholder) knownAt(s string, at int) (start, end int, id string, ok bo
 		if r, _ := utf8.DecodeLastRuneInString(s[:start]); start == 0 || !localRune(r) {
 			return start, end, w.ids[local+"@"+domain], true
 		}
+	}
+	// An address with an empty local part (@example.com): only where no
+	// local-part character comes before the @, so it is never the end of
+	// another address.
+	if id, ok := w.ids["@"+domain]; ok && run == at {
+		return at, end, id, true
 	}
 	return 0, 0, "", false
 }

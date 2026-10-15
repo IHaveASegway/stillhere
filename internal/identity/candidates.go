@@ -215,6 +215,9 @@ type File struct {
 // address's own local part, as GitHub names a commit by the account's login
 // when it has no profile name ("jdoe" on jdoe@ or on 12345+jdoe@ at the
 // noreply domain). "John Doe" on john.doe@ is a name, not the local part.
+// It compares one name with one address; Directory.Withheld applies the
+// same rule to a name over every person's address in the run, which is
+// what a page asks.
 func RevealsAddress(name, email string) bool {
 	return strings.ContainsRune(name, '@') || candSelfNamed(name, email)
 }
@@ -568,19 +571,7 @@ func candSelfNamed(name, email string) bool {
 	if name == "" {
 		return false
 	}
-	local, domain := email, ""
-	if i := strings.LastIndexByte(email, '@'); i >= 0 {
-		local, domain = email[:i], email[i+1:]
-	}
-	forms := []string{local}
-	if domain == candNoreply {
-		if id, login, ok := strings.Cut(local, "+"); ok && candDigits(id) {
-			forms = append(forms, login)
-		}
-	} else if i := strings.IndexByte(local, '+'); i > 0 {
-		forms = append(forms, local[:i])
-	}
-	return slices.ContainsFunc(forms, func(f string) bool { return strings.EqualFold(name, f) })
+	return slices.ContainsFunc(localForms(email), func(f string) bool { return strings.EqualFold(name, f) })
 }
 
 // candMachine reports whether a domain is one git makes up from a
