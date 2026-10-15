@@ -478,23 +478,26 @@ func (d *Directory) AIAssisted(c *domain.Commit) bool    // ADR 0007; only a com
 func (d *Directory) Credit(author domain.Person, coAuthors []domain.Person) string // the author, or an agent's first human co-author (ADR 0007); commits and blamed lines alike
 // identity/candidates.go (#26, spec/identities.md): addresses that may be one person, suggested and never applied
 func Candidates(fs *domain.FactSet, who *Directory) *Survey // pure; fs is mailmapped facts, who built over the whole run; bots and agents never appear
-type Survey struct { Candidates []Candidate; Addresses, Bots int } // most confident first; the human addresses examined and the bots left out
+type Survey struct { Candidates []Candidate; Addresses, Bots, Shared, Oversized int } // most confident first; the human addresses examined, the bots left out,
+                                                                                    // the addresses several people use (compared with nothing), the groups of more than 10 left out
 type Candidate struct { // an address is in one candidate at most, so no two .mailmap lines map one alias
-	Confidence      Confidence // the weakest pair's: high (account id, or full name and local part), medium (full name), low
+	Confidence      Confidence // the weakest pair's: high (account id, or a full name and a local part not made from it), medium (a full name), low
 	Guess, Chained  bool       // a hand-off, never suggested as certain; two addresses linked only through a third
-	Canonical, Name string     // the suggested canonical address (one of Addresses) and display name
+	Canonical, Name string     // the suggested canonical address (one of Addresses) and display name, never a default or one that gives an address away
 	Addresses       []Address  // by first activity, then email
 	Links           []Link     // each rule's evidence, in the order of Rules
 }
 func (c *Candidate) Rules() []Rule
-type Address struct { Email, Name string; Commits, CoAuthored int; First, Last time.Time; Repos []string } // author times; history and blamed commits
-type Link struct { Rule Rule; Addresses []int; Name string; HandOff *HandOff } // indexes into Addresses; Name for same-name
+type Address struct { Email, Name string; Domain DomainKind; Commits, CoAuthored int; First, Last time.Time; Repos []string } // author times; history and blamed commits
+type Link struct { Rule Rule; Addresses []int; Name string; FromName bool; HandOff *HandOff } // indexes into Addresses; Name for same-name; FromName: a same-local-part made from the name
 type HandOff struct { Gap time.Duration; SharedFiles int; Files []File }      // Files: the first five, by repository and path
 type File struct{ Repo, Path string }                                          // Repo.Key
 type Rule string       // RuleSameName, RuleSameLocalPart, RuleSameAccount, RuleHandOff
 type Confidence string // ConfidenceHigh, ConfidenceMedium, ConfidenceLow
+type DomainKind string // DomainMain, DomainNoreply, DomainMachine, DomainOther: what a domain says, without naming it
 type RuleDefinition struct { Rule Rule; Matches, Confidence, Risk string }
 func Rules() []RuleDefinition // how each rule links and how it can be wrong; every identities answer carries them
+func RevealsAddress(name, email string) bool // the name holds an @, or is the address's local part (a login used as a name): a page that prints no address must not print it
 
 // metrics
 type Definition struct {
@@ -592,12 +595,15 @@ type Me struct { Provenance Provenance; Person Subject; Values []Value; Ranks []
 type Validation struct { Provenance Provenance; Labels, Labellers, Meaningful, Routine, Noise, Unmatched int; Metrics []MetricAUC; Caveats []Caveat }
 type MetricAUC struct { Metric string; AUC *float64; N, Meaningful, Routine int; Beta bool } // AUC nil without both labels
 type Catalog struct { Metrics []MetricInfo }
-// #26 (spec/identities.md): emails only in fields named email, so the MCP server can drop them; text and Markdown name none
-type Identities struct { Provenance Provenance; Scope Scope; Addresses, Bots int; Candidates []IdentityCandidate; Rules []IdentityRule; Caveats []Caveat }
-type IdentityCandidate struct { Confidence string; Guess, Commented, Chained bool; Rules []string; Name string; Addresses []IdentityAddress; Links []IdentityLink }
+// #26 (spec/identities.md): emails only in fields named email, and a name that gives an address away (identity.RevealsAddress)
+// withheld as "", so the MCP server can drop emails by field; text and Markdown print no address and no part of one
+type Identities struct { Provenance Provenance; Scope Scope; Addresses, Bots, Shared, Oversized int; Candidates []IdentityCandidate; Rules []IdentityRule; Caveats []Caveat }
+type IdentityCandidate struct { Confidence string; Guess, Commented, Chained bool; Rules []string; Name string; Addresses []IdentityAddress; Links []IdentityLink } // Commented: all but high
+type IdentityAddress struct { Email, Name string; NameWithheld bool; DomainKind string; Canonical bool; Commits, CoAuthored int; First, Last time.Time; Repos []string }
+type IdentityLink struct { Rule string; Addresses []int; Name string; FromName bool; HandOff *IdentityHandOff }
 type IdentitiesInput struct { Run *domain.Run; Facts *domain.FactSet; Scope domain.Scope; Survey *identity.Survey } // Facts: the scope's
-func NewIdentities(in *IdentitiesInput) *Identities // identity.Candidates' survey as an answer, with provenance and caveats (mailmap-at-scan)
-func Mailmap(w io.Writer, id *Identities) error    // the suggested .mailmap lines, evidence as # comments; a low candidate's commented out
+func NewIdentities(in *IdentitiesInput) *Identities // identity.Candidates' survey as an answer, with provenance (AnswerProvenance) and caveats (mailmap-at-scan)
+func Mailmap(w io.Writer, id *Identities) error    // the suggested .mailmap lines, evidence as # comments; every candidate's but a high one's commented out
 func NewExplain(in *ExplainInput) *Explain    // values, and a ranked metric's clusters per repository as changes
 func NewWhoKnows(in *WhoKnowsInput) *WhoKnows // who_knows@1's values under the path, as lists
 func NewMe(in *MeInput) *Me                   // the person's values and their row in each RankSet

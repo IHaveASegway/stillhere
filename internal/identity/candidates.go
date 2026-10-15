@@ -22,8 +22,10 @@ import (
 // A wrong merge invents a person, which is worse than a missed one, so every
 // rule leans to precision. A key that many addresses share, or that the
 // facts show two people using, is no evidence that any two of them are one
-// person; addresses linked only through a third are never more than a weak
-// match; and a hand-off is always a guess.
+// person, and an address several people use is compared with nothing. A
+// local part made from the display name says no more than the name, so it
+// never counts as a second signal. Addresses linked only through a third
+// are never more than a weak match, and a hand-off is always a guess.
 
 // Rule is one way two addresses can be linked.
 type Rule string
@@ -39,11 +41,25 @@ const (
 // Confidence is how sure a candidate is that its addresses are one person.
 type Confidence string
 
-// The confidences, most sure first.
+// The confidences, most sure first. Only high rests on evidence the display
+// name does not explain, so only a high candidate's .mailmap lines are
+// suggested as lines; every other one's are written commented out.
 const (
-	ConfidenceHigh   Confidence = "high"   // two rules agree, or GitHub's own account id does
-	ConfidenceMedium Confidence = "medium" // one full name (two words or more) on several addresses
+	ConfidenceHigh   Confidence = "high"   // GitHub's own account id, or a full name with a local part not made from it
+	ConfidenceMedium Confidence = "medium" // one full name (two words or more) and nothing the name does not explain
 	ConfidenceLow    Confidence = "low"    // one weak signal, a chain through a third address, or a hand-off
+)
+
+// DomainKind is what an address's domain says about it without naming it,
+// so a page that prints no address and no part of one can still show it.
+type DomainKind string
+
+// The kinds of domain.
+const (
+	DomainMain    DomainKind = "main"    // the domain most of the scope's addresses use: the organisation's convention
+	DomainNoreply DomainKind = "noreply" // GitHub's noreply domain, an alias by design
+	DomainMachine DomainKind = "machine" // a domain git makes up from a machine's name: no dot, or .local and the like
+	DomainOther   DomainKind = "other"   // any other domain, or none
 )
 
 // RuleDefinition is a rule's published definition: what it links, the
@@ -62,7 +78,7 @@ type RuleDefinition struct {
 const (
 	candHandOffGap   = 30 * 24 * time.Hour // the most time from one address's last commit to the next one's first
 	candHandOffQuiet = 90 * 24 * time.Hour // how long before the run's as-of time the earlier address must have stopped
-	candMaxShare     = 10                  // a name or local part more addresses share is a default, not a person's
+	candMaxShare     = 10                  // a key more addresses share is a default, and a candidate of more addresses is several people's
 	candMinLocal     = 3                   // shorter local parts (initials) are compared with nothing
 	candMaxFiles     = 5                   // shared files a hand-off lists; it counts them all
 	candNoreply      = "users.noreply.github.com"
@@ -70,35 +86,44 @@ const (
 
 // Rules returns the definition of every rule, in a fixed order. Every
 // answer carries them, so whoever reads a candidate also reads how it can
-// be wrong.
+// be wrong. The texts quote no whole address: the MCP server rewrites
+// anything shaped like one.
 func Rules() []RuleDefinition {
 	return []RuleDefinition{
 		{
 			Rule: RuleSameName,
 			Matches: "Addresses whose display names are the same once case, spacing and punctuation are ignored. " +
-				"A default name (root, Your Name, unknown and the like) matches nothing, nor does a name that more " +
-				"than 10 addresses share or that two GitHub accounts use.",
-			Confidence: "Medium for a name of two words or more, low for one word, high when the local parts match too.",
-			Risk: "Different people share names, the more often the shorter and commoner the name, so two people " +
-				"with one common name would become one: a name alone is never high. A name written without spaces, as " +
-				"Chinese, Japanese and Korean names often are, counts as one word and stays low, and a name spelt " +
-				"two ways (José and Jose, Bob and Robert) is missed.",
+				"A default name (root, Your Name, A U Thor, John Doe, a name made only of words such as user, test " +
+				"or unknown) matches nothing, nor does a name that more than 10 addresses share or that two GitHub " +
+				"accounts use. An address several people use, because its local part is a role (team, admin, build " +
+				"and the like) or its commits carry names that differ, is compared by no rule.",
+			Confidence: "Medium for a name of two words or more, low for one word. High only with the same local " +
+				"part, when that local part is not made from the name's words. A name alone, or with a local part " +
+				"made from it, is never high, and the mailmap form writes its lines commented out.",
+			Risk: "Different people share names, the more often the shorter and commoner the name, and the facts " +
+				"cannot tell two people of one name apart: organisations make addresses from names, so two Alex " +
+				"Kims at two employers are both alex.kim. A name written without spaces, as Chinese, Japanese and " +
+				"Korean names often are, counts as one word and stays low, and a name spelt two ways (José and " +
+				"Jose, Bob and Robert) is missed.",
 		},
 		{
 			Rule: RuleSameLocalPart,
 			Matches: "Addresses with the same local part (before the @) on different domains, or that differ only " +
-				"by a +tag. A GitHub noreply address counts as its login: 12345+login@users.noreply.github.com is " +
-				"login. Role and default local parts (admin, dev, info, root and the like), local parts shorter " +
-				"than 3 characters, one that more than 10 addresses share, and one that people with different " +
-				"names or two GitHub accounts use match nothing.",
-			Confidence: "Low on its own, high with the same display name.",
+				"by a +tag. A GitHub noreply address counts as its login: 12345+login@ is login. Role and default " +
+				"local parts (admin, dev, info, root, team and the like), local parts shorter than 3 characters, " +
+				"one that more than 10 addresses share, and one that people with different names, a shared " +
+				"address or two GitHub accounts use match nothing.",
+			Confidence: "Low on its own. With the same full name, high when the local part is not made from the " +
+				"name's words, and medium when it is: ada for Ada Example, or alex.kim or akim2 for Alex Kim, says " +
+				"no more than the name does.",
 			Risk: "A first name or a common login as a local part (alex@, sam@) belongs to many people at different " +
 				"domains, and git makes up user@host addresses from a machine's login name, which several people " +
 				"can share.",
 		},
 		{
-			Rule:       RuleSameAccount,
-			Matches:    "GitHub noreply addresses with the same account id, such as 12345+old@ and 12345+new@users.noreply.github.com after a rename.",
+			Rule: RuleSameAccount,
+			Matches: "GitHub noreply addresses with the same account id, such as 12345+old@ and 12345+new@ at " +
+				"GitHub's noreply domain after a rename.",
 			Confidence: "High: the id is GitHub's own, and a rename keeps it.",
 			Risk:       "A forged address: anyone can write any address into a commit, so a commit is no proof of the account.",
 		},
@@ -106,8 +131,8 @@ func Rules() []RuleDefinition {
 			Rule: RuleHandOff,
 			Matches: "One address's last commit at most 30 days before another's first, both in a file of the same " +
 				"repository, when the first address has no commit in the 90 days before the run's as-of time. Only " +
-				"addresses no other rule links are compared, and an address with two possible successors, or two " +
-				"possible predecessors, gets none.",
+				"addresses no other rule links, and no shared address, are compared, and an address with two " +
+				"possible successors, or two possible predecessors, gets none.",
 			Confidence: "Always low, and a guess: the mailmap form writes its line commented out.",
 			Risk: "A teammate who takes over someone's code when they leave looks exactly like one person changing " +
 				"address. Only someone who knows them can tell.",
@@ -120,6 +145,8 @@ type Survey struct {
 	Candidates []Candidate // most confident first, then by suggested name and first address
 	Addresses  int         // human addresses the facts show: the population the candidates come from
 	Bots       int         // bot and agent addresses (Directory.Bot), which never appear in a candidate
+	Shared     int         // of Addresses, those several people use (a role local part, or names that differ): no rule compares them
+	Oversized  int         // groups of more than 10 addresses that the rules chain together, left out as several people's
 }
 
 // Candidate is a group of canonical emails that may belong to one person.
@@ -150,12 +177,13 @@ func (c *Candidate) Rules() []Rule {
 // run's history window, and the older commits blame attributes lines to.
 type Address struct {
 	Email      string
-	Name       string    // its display name (Directory.Name); "" when the facts show none
-	Commits    int       // commits it authored, each counted once
-	CoAuthored int       // commits whose Co-authored-by trailers name it
-	First      time.Time // the earliest author time of those commits
-	Last       time.Time // the latest
-	Repos      []string  // Repo.Key of every repository it appears in, sorted
+	Name       string     // its display name (Directory.Name); "" when the facts show none
+	Domain     DomainKind // what its domain says about it
+	Commits    int        // commits it authored, each counted once
+	CoAuthored int        // commits whose Co-authored-by trailers name it
+	First      time.Time  // the earliest author time of those commits
+	Last       time.Time  // the latest
+	Repos      []string   // Repo.Key of every repository it appears in, sorted
 }
 
 // Link is one rule's evidence in a candidate: the addresses it links.
@@ -163,6 +191,7 @@ type Link struct {
 	Rule      Rule
 	Addresses []int    // indexes into Candidate.Addresses, ascending
 	Name      string   // RuleSameName: the shared display name, as the first of those addresses shows it
+	FromName  bool     // RuleSameLocalPart: the local part is made from a name the addresses carry, so it adds nothing to it
 	HandOff   *HandOff // RuleHandOff: from Addresses[0] to Addresses[1]; nil for the other rules
 }
 
@@ -178,6 +207,16 @@ type HandOff struct {
 type File struct {
 	Repo string // Repo.Key
 	Path string // repo-relative
+}
+
+// RevealsAddress reports whether a display name gives an address away, so
+// that a page that prints no address must not print the name either: the
+// name holds an @, as an address typed as a name does, or it is the
+// address's own local part, as GitHub names a commit by the account's login
+// when it has no profile name ("jdoe" on jdoe@ or on 12345+jdoe@ at the
+// noreply domain). "John Doe" on john.doe@ is a name, not the local part.
+func RevealsAddress(name, email string) bool {
+	return strings.ContainsRune(name, '@') || candSelfNamed(name, email)
 }
 
 // Candidates finds the groups of canonical emails in fs that may belong to
@@ -204,17 +243,31 @@ func Candidates(fs *domain.FactSet, who *Directory) *Survey {
 	for _, a := range addrs {
 		domains[a.domain]++
 	}
-	comps, linked := candComponents(addrs)
+	mainDomain := candMainDomain(addrs)
+	for _, a := range addrs {
+		a.Domain = candDomainKind(a, mainDomain)
+		if a.shared {
+			s.Shared++
+		}
+	}
+	comps, linked, oversized := candComponents(addrs)
+	s.Oversized = oversized
 	for _, comp := range comps {
 		s.Candidates = append(s.Candidates, comp.candidate(domains))
 	}
 	var singles []*candAddress
 	for i, a := range addrs {
-		if !linked[i] {
+		if !linked[i] && !a.shared {
 			singles = append(singles, a)
 		}
 	}
 	for _, chain := range candHandOffs(fs, singles) {
+		// A chain of more addresses than a candidate may hold is several
+		// people's, as a component of that size is.
+		if len(chain)+1 > candMaxShare {
+			s.Oversized++
+			continue
+		}
 		s.Candidates = append(s.Candidates, candChainCandidate(chain, domains))
 	}
 	slices.SortFunc(s.Candidates, func(a, b Candidate) int {
@@ -231,16 +284,19 @@ func Candidates(fs *domain.FactSet, who *Directory) *Survey {
 // candAddress is one human address while the rules compare it.
 type candAddress struct {
 	Address
-	key     string          // candNameKey of the display name: "" for none or a default name
-	words   int             // the words in key
-	login   bool            // the display name is the address's own local part, as GitHub names a commit by a login without a profile name
-	handle  string          // the local part the local-part rule compares; "" when it compares none
-	account string          // a GitHub noreply address's account id; "" for every other address
-	domain  string          // after the last @; "" for an address without one
-	noreply bool            // a GitHub noreply address
-	files   map[File]bool   // what it touched or holds lines in; collected only for a possible hand-off (candFiles)
-	repos   map[string]bool // while collecting
-	counted map[string]bool // while collecting: commit SHAs already counted, so a commit two repositories share counts once
+	key       string          // candNameKey of the display name: "" for none or a default name
+	words     int             // the words in key
+	selfNamed bool            // the display name is the address's own local part (candSelfNamed)
+	handle    string          // the local part the local-part rule compares; "" when it compares none
+	account   string          // a GitHub noreply address's account id; "" for every other address
+	login     string          // a GitHub noreply address's login, in either form; "" for every other address
+	domain    string          // after the last @; "" for an address without one
+	noreply   bool            // a GitHub noreply address
+	shared    bool            // several people use it: a role local part, or commits under names that differ
+	files     map[File]bool   // what it touched or holds lines in; collected only for a possible hand-off (candFiles)
+	repos     map[string]bool // while collecting
+	counted   map[string]bool // while collecting: commit SHAs already counted, so a commit two repositories share counts once
+	names     map[string]bool // while collecting: the author names its commits carry
 }
 
 // candCollect gathers every human address the facts show, as a commit's
@@ -264,7 +320,8 @@ func candCollect(fs *domain.FactSet, who *Directory) ([]*candAddress, int) {
 			bots[email] = true
 			return nil
 		}
-		a := &candAddress{Address: Address{Email: email}, repos: map[string]bool{}, counted: map[string]bool{}}
+		a := &candAddress{Address: Address{Email: email},
+			repos: map[string]bool{}, counted: map[string]bool{}, names: map[string]bool{}}
 		byEmail[email] = a
 		return a
 	}
@@ -286,16 +343,17 @@ func candCollect(fs *domain.FactSet, who *Directory) ([]*candAddress, int) {
 	for _, a := range byEmail {
 		a.Name = who.Name(a.Email)
 		a.key, a.words = candNameKey(a.Name)
-		a.handle, a.account, a.domain, a.noreply = candLocal(a.Email)
-		if a.handle != "" {
-			local, _ := candNameKey(a.handle)
-			a.login = a.key != "" && a.key == local
-		}
+		var role bool
+		a.handle, a.account, a.login, a.domain, a.noreply, role = candLocal(a.Email)
+		a.selfNamed = candSelfNamed(a.Name, a.Email)
+		// A GitHub noreply address is one account's by construction, so
+		// names that differ on it are a person's name changing.
+		a.shared = !a.noreply && (role || !candOwnNamesAgree(a))
 		for r := range a.repos {
 			a.Repos = append(a.Repos, r)
 		}
 		slices.Sort(a.Repos)
-		a.repos, a.counted = nil, nil
+		a.repos, a.counted, a.names = nil, nil, nil
 		addrs = append(addrs, a)
 	}
 	slices.SortFunc(addrs, func(x, y *candAddress) int { return cmp.Compare(x.Email, y.Email) })
@@ -304,29 +362,34 @@ func candCollect(fs *domain.FactSet, who *Directory) ([]*candAddress, int) {
 
 // candPeople calls fn for a commit's author and each distinct co-author:
 // the people a commit is evidence about.
-func candPeople(author domain.Person, coAuthors []domain.Person, fn func(email string, authored bool)) {
+func candPeople(author domain.Person, coAuthors []domain.Person, fn func(p domain.Person, email string, authored bool)) {
 	self := canonical(author.Email)
-	fn(self, true)
+	fn(author, self, true)
 	for i, co := range coAuthors {
 		email := canonical(co.Email)
 		dup := func(p domain.Person) bool { return canonical(p.Email) == email }
 		if email != self && !slices.ContainsFunc(coAuthors[:i], dup) {
-			fn(email, false)
+			fn(co, email, false)
 		}
 	}
 }
 
 // candSee records one commit for its author and each distinct co-author:
 // the repository and, the first time the commit is seen, the count and the
-// author time.
+// author time. It keeps the author's name, which tells whether several
+// people commit as one address; a trailer's name is whatever the commit's
+// author typed, so it is not kept.
 func candSee(address func(email string) *candAddress, repo, sha string, at time.Time,
 	author domain.Person, coAuthors []domain.Person) {
-	candPeople(author, coAuthors, func(email string, authored bool) {
+	candPeople(author, coAuthors, func(p domain.Person, email string, authored bool) {
 		a := address(email)
 		if a == nil {
 			return
 		}
 		a.repos[repo] = true
+		if authored && p.Name != "" {
+			a.names[p.Name] = true
+		}
 		if a.counted[sha] {
 			return
 		}
@@ -368,7 +431,7 @@ func candFiles(fs *domain.FactSet, need map[string]*candAddress) {
 			if len(c.Parents) > 1 {
 				continue
 			}
-			candPeople(c.Author, c.CoAuthors, func(email string, _ bool) {
+			candPeople(c.Author, c.CoAuthors, func(_ domain.Person, email string, _ bool) {
 				if a := need[email]; a != nil {
 					byCommit[c.SHA] = append(byCommit[c.SHA], a)
 				}
@@ -384,7 +447,7 @@ func candFiles(fs *domain.FactSet, need map[string]*candAddress) {
 		}
 		for j := range rf.Owners {
 			o := &rf.Owners[j]
-			candPeople(o.Author, o.CoAuthors, func(email string, _ bool) {
+			candPeople(o.Author, o.CoAuthors, func(_ domain.Person, email string, _ bool) {
 				if a := need[email]; a != nil {
 					add(a, File{Repo: repo, Path: o.Path})
 				}
@@ -402,7 +465,7 @@ func candNameKey(name string) (string, int) {
 		return !unicode.IsLetter(r) && !unicode.IsMark(r) && !unicode.IsDigit(r)
 	})
 	key := strings.Join(words, " ")
-	if key == "" || candDefaultName(key) {
+	if key == "" || candDefaultName(key, words) {
 		return "", 0
 	}
 	return key, len(words)
@@ -410,39 +473,63 @@ func candNameKey(name string) (string, int) {
 
 // candDefaultName reports whether a normalised name is one that git's
 // documentation, an operating system or a tool fills in, which says nothing
-// about who committed.
-func candDefaultName(key string) bool {
+// about who committed: a name made only of generic words ("Unknown User",
+// "Build User", "Your Name", "Firstname Lastname"), git's own test author
+// ("A U Thor"), or the name the Pro Git book's first-time setup types
+// ("John Doe").
+func candDefaultName(key string, words []string) bool {
 	switch key {
-	case "your name", "root", "admin", "administrator", "user", "unknown", "none", "nobody",
-		"anonymous", "ubuntu", "ec2 user", "vagrant", "test", "test user", "localhost", "git", "github",
-		"gitlab", "developer", "dev", "default":
+	case "a u thor", "john doe", "jane doe":
+		return true
+	}
+	for _, w := range words {
+		if !candGenericWord(w) {
+			return false
+		}
+	}
+	return true
+}
+
+// candGenericWord reports whether a word of a name is one a default name is
+// made of rather than a person's.
+func candGenericWord(w string) bool {
+	switch w {
+	case "user", "users", "unknown", "root", "admin", "administrator", "build", "builder", "git", "github",
+		"gitlab", "test", "tester", "testing", "default", "local", "localhost", "example", "name", "firstname",
+		"lastname", "first", "last", "full", "real", "your", "my", "none", "nobody", "anonymous", "dev",
+		"developer", "ubuntu", "vagrant", "ec2", "ci", "deploy", "system", "server", "author", "committer":
 		return true
 	}
 	return false
 }
 
 // candLocal reads an address's local part for the local-part rule: a
-// GitHub noreply address counts as its login, and its id is the account; a
-// +tag is dropped elsewhere. The handle is "" for a local part the rule
-// compares with nothing: a role or default one, or one shorter than
-// candMinLocal.
-func candLocal(email string) (handle, account, domain string, noreply bool) {
+// GitHub noreply address counts as its login, and its id, when the address
+// has one, is the account; a +tag is dropped elsewhere. The handle is ""
+// for a local part the rule compares with nothing: a role or default one,
+// or one shorter than candMinLocal. role reports a role or default local
+// part on any domain but GitHub's noreply one, where it is a login.
+func candLocal(email string) (handle, account, login, domain string, noreply, role bool) {
 	local := email
 	if i := strings.LastIndexByte(email, '@'); i >= 0 {
 		local, domain = email[:i], email[i+1:]
 	}
 	if domain == candNoreply {
 		noreply = true
-		if id, login, ok := strings.Cut(local, "+"); ok && candDigits(id) {
-			account, local = id, login
+		if id, l, ok := strings.Cut(local, "+"); ok && candDigits(id) {
+			account, local = id, l
 		}
-	} else if i := strings.IndexByte(local, '+'); i > 0 {
-		local = local[:i]
+		login = local
+	} else {
+		if i := strings.IndexByte(local, '+'); i > 0 {
+			local = local[:i]
+		}
+		role = candDefaultLocal(local)
 	}
 	if utf8.RuneCountInString(local) >= candMinLocal && !candDefaultLocal(local) {
 		handle = local
 	}
-	return handle, account, domain, noreply
+	return handle, account, login, domain, noreply, role
 }
 
 // candDefaultLocal reports whether a local part belongs to a role, a
@@ -471,6 +558,88 @@ func candDigits(s string) bool {
 	return true
 }
 
+// candSelfNamed reports whether a display name is only the address's own
+// local part, as GitHub names a commit by the account's login when it has
+// no profile name: the whole local part, the part before a +tag, or a
+// noreply address's login, ignoring case. Such a name says nothing about
+// who the person is, and gives the address away.
+func candSelfNamed(name, email string) bool {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return false
+	}
+	local, domain := email, ""
+	if i := strings.LastIndexByte(email, '@'); i >= 0 {
+		local, domain = email[:i], email[i+1:]
+	}
+	forms := []string{local}
+	if domain == candNoreply {
+		if id, login, ok := strings.Cut(local, "+"); ok && candDigits(id) {
+			forms = append(forms, login)
+		}
+	} else if i := strings.IndexByte(local, '+'); i > 0 {
+		forms = append(forms, local[:i])
+	}
+	return slices.ContainsFunc(forms, func(f string) bool { return strings.EqualFold(name, f) })
+}
+
+// candMachine reports whether a domain is one git makes up from a
+// machine's name when no address is configured: one without a dot, or a
+// local network's.
+func candMachine(d string) bool {
+	if d == "" {
+		return false
+	}
+	if !strings.Contains(d, ".") {
+		return true
+	}
+	for _, suffix := range []string{".local", ".localdomain", ".lan", ".home", ".internal", ".(none)"} {
+		if strings.HasSuffix(d, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// candMainDomain is the domain most of the addresses use, GitHub's noreply
+// domain and machine domains aside: the organisation's convention. A tie
+// has none.
+func candMainDomain(addrs []*candAddress) string {
+	count := map[string]int{}
+	for _, a := range addrs {
+		if a.domain != "" && !a.noreply && !candMachine(a.domain) {
+			count[a.domain]++
+		}
+	}
+	best, most, tie := "", 0, false
+	for _, d := range candKeys(count) {
+		switch n := count[d]; {
+		case n > most:
+			best, most, tie = d, n, false
+		case n == most:
+			tie = true
+		}
+	}
+	if tie {
+		return ""
+	}
+	return best
+}
+
+// candDomainKind is what an address's domain says about it, given the
+// scope's main domain.
+func candDomainKind(a *candAddress, mainDomain string) DomainKind {
+	switch {
+	case a.noreply:
+		return DomainNoreply
+	case candMachine(a.domain):
+		return DomainMachine
+	case a.domain != "" && a.domain == mainDomain:
+		return DomainMain
+	}
+	return DomainOther
+}
+
 // candGroup is one rule's key and the addresses that share it.
 type candGroup struct {
 	rule    Rule
@@ -489,12 +658,16 @@ type candComponent struct {
 
 // candComponents groups the addresses by each rule's key, keeps the groups
 // that are evidence, and joins groups that share an address into
-// components: one candidate each. A group is no evidence when more than
-// candMaxShare addresses share its key, or when it holds two GitHub
-// accounts (GitHub's terms allow one person one free personal account), or,
-// for a local part, when its addresses carry different names: then the key
-// is evidently several people's.
-func candComponents(addrs []*candAddress) ([]*candComponent, map[int]bool) {
+// components: one candidate each. A shared address is in no group. A group
+// is no evidence when more than candMaxShare addresses share its key, or
+// when it holds two GitHub accounts (GitHub's terms allow one person one
+// free personal account), or, for a local part, when a shared address uses
+// it or its addresses carry different names: then the key is evidently
+// several people's. A component of more than candMaxShare addresses is
+// several people's chained together, so it is left out, and counted. It
+// returns the components, the addresses the groups link (those left out
+// included), and the number of components left out.
+func candComponents(addrs []*candAddress) ([]*candComponent, map[int]bool, int) {
 	byName, byHandle, byAccount := map[string][]int{}, map[string][]int{}, map[string][]int{}
 	for i, a := range addrs {
 		if a.key != "" {
@@ -507,24 +680,47 @@ func candComponents(addrs []*candAddress) ([]*candComponent, map[int]bool) {
 			byAccount[a.account] = append(byAccount[a.account], i)
 		}
 	}
-	shared := func(idx []int) bool { return len(idx) >= 2 && len(idx) <= candMaxShare }
+	// people is the addresses a group links: those that are not shared,
+	// when two or more are. A shared address's name is still one of its
+	// people's names, so the name stays evidence and the address drops out.
+	people := func(idx []int) []int {
+		var out []int
+		for _, i := range idx {
+			if !addrs[i].shared {
+				out = append(out, i)
+			}
+		}
+		if len(out) < 2 {
+			return nil
+		}
+		return out
+	}
+	anyShared := func(idx []int) bool { return slices.ContainsFunc(idx, func(i int) bool { return addrs[i].shared }) }
 	validName, validHandle := map[string]bool{}, map[string]bool{}
 	var groups []candGroup
 	for _, key := range candKeys(byName) {
-		if idx := byName[key]; shared(idx) && candAccounts(addrs, idx) <= 1 {
+		idx := byName[key]
+		if len(idx) > candMaxShare || candAccounts(addrs, idx) > 1 {
+			continue
+		}
+		if m := people(idx); m != nil {
 			validName[key] = true
-			groups = append(groups, candGroup{rule: RuleSameName, members: idx})
+			groups = append(groups, candGroup{rule: RuleSameName, members: m})
 		}
 	}
 	for _, key := range candKeys(byHandle) {
-		if idx := byHandle[key]; shared(idx) && candAccounts(addrs, idx) <= 1 && candNamesAgree(addrs, idx) {
-			validHandle[key] = true
-			groups = append(groups, candGroup{rule: RuleSameLocalPart, members: idx})
+		// A local part a shared address uses is evidently several people's.
+		idx := byHandle[key]
+		if len(idx) < 2 || len(idx) > candMaxShare || anyShared(idx) || candAccounts(addrs, idx) > 1 ||
+			!candNamesAgree(addrs, idx) {
+			continue
 		}
+		validHandle[key] = true
+		groups = append(groups, candGroup{rule: RuleSameLocalPart, members: idx})
 	}
 	for _, key := range candKeys(byAccount) {
-		if idx := byAccount[key]; len(idx) >= 2 {
-			groups = append(groups, candGroup{rule: RuleSameAccount, members: idx})
+		if m := people(byAccount[key]); m != nil {
+			groups = append(groups, candGroup{rule: RuleSameAccount, members: m})
 		}
 	}
 	parent := make([]int, len(addrs))
@@ -546,7 +742,7 @@ func candComponents(addrs []*candAddress) ([]*candComponent, map[int]bool) {
 		}
 	}
 	byRoot := map[int]*candComponent{}
-	var out []*candComponent
+	var comps []*candComponent
 	linked := map[int]bool{}
 	for _, g := range groups {
 		root := find(g.members[0])
@@ -554,7 +750,7 @@ func candComponents(addrs []*candAddress) ([]*candComponent, map[int]bool) {
 		if c == nil {
 			c = &candComponent{addrs: addrs, validName: validName, validHandle: validHandle}
 			byRoot[root] = c
-			out = append(out, c)
+			comps = append(comps, c)
 		}
 		c.groups = append(c.groups, g)
 		for _, m := range g.members {
@@ -564,15 +760,22 @@ func candComponents(addrs []*candAddress) ([]*candComponent, map[int]bool) {
 			}
 		}
 	}
-	for _, c := range out {
+	var out []*candComponent
+	oversized := 0
+	for _, c := range comps {
+		if len(c.members) > candMaxShare {
+			oversized++
+			continue
+		}
 		slices.Sort(c.members)
+		out = append(out, c)
 	}
 	slices.SortFunc(out, func(x, y *candComponent) int { return cmp.Compare(x.members[0], y.members[0]) })
-	return out, linked
+	return out, linked, oversized
 }
 
 // candKeys returns a map's keys, sorted.
-func candKeys(m map[string][]int) []string {
+func candKeys[V any](m map[string]V) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)
@@ -581,36 +784,82 @@ func candKeys(m map[string][]int) []string {
 	return keys
 }
 
-// candAccounts counts the distinct GitHub accounts among the addresses.
+// candAccounts counts the distinct GitHub accounts among the addresses. An
+// id-form noreply address's account is its id; an old-form one
+// (login@users.noreply.github.com, which accounts made before 18 July 2017
+// may still use) names its account by its login, which is the account of an
+// id-form address of the same login when the group holds one.
 func candAccounts(addrs []*candAddress, idx []int) int {
-	var seen []string
+	var ids, idLogins, logins []string
 	for _, i := range idx {
-		if a := addrs[i].account; a != "" && !slices.Contains(seen, a) {
-			seen = append(seen, a)
+		if a := addrs[i]; a.account != "" {
+			if !slices.Contains(ids, a.account) {
+				ids = append(ids, a.account)
+			}
+			idLogins = append(idLogins, strings.ToLower(a.login))
 		}
 	}
-	return len(seen)
+	for _, i := range idx {
+		a := addrs[i]
+		if login := strings.ToLower(a.login); a.noreply && a.account == "" && login != "" &&
+			!slices.Contains(idLogins, login) && !slices.Contains(logins, login) {
+			logins = append(logins, login)
+		}
+	}
+	return len(ids) + len(logins)
 }
 
 // candNamesAgree reports whether no two of the addresses carry different
-// names: two names differ when neither's words are all among the other's,
-// so "ada" and "Ada Example" agree, and "Ada Example" and "Ada Lovelace" do
-// not. A name that is only the address's own local part says nothing about
-// who it is, so "jdoe" on jdoe@ agrees with any name.
+// names (candAgree). A name that is only the address's own local part says
+// nothing about who it is, so "jdoe" on jdoe@ agrees with any name.
 func candNamesAgree(addrs []*candAddress, idx []int) bool {
 	for i, x := range idx {
 		for _, y := range idx[i+1:] {
 			a, b := addrs[x], addrs[y]
-			if a.key == "" || b.key == "" || a.login || b.login || a.key == b.key {
+			if a.key == "" || b.key == "" || a.selfNamed || b.selfNamed {
 				continue
 			}
-			wa, wb := strings.Fields(a.key), strings.Fields(b.key)
-			if !candSubset(wa, wb) && !candSubset(wb, wa) {
+			if !candAgree(a.key, b.key) {
 				return false
 			}
 		}
 	}
 	return true
+}
+
+// candOwnNamesAgree reports whether the names an address's commits carry
+// can all be one person's, by the rule candNamesAgree applies across
+// addresses; a default name, or the address's own local part, agrees with
+// any. An address whose names differ is several people's mailbox.
+func candOwnNamesAgree(a *candAddress) bool {
+	var keys []string
+	for name := range a.names {
+		if candSelfNamed(name, a.Email) {
+			continue
+		}
+		key, _ := candNameKey(name)
+		if key == "" || slices.Contains(keys, key) {
+			continue
+		}
+		for _, k := range keys {
+			if !candAgree(k, key) {
+				return false
+			}
+		}
+		keys = append(keys, key)
+	}
+	return true
+}
+
+// candAgree reports whether two normalised names can be one person's: one's
+// words are all among the other's, so "ada" and "ada example" agree, and
+// "ada example" and "ada lovelace" do not.
+func candAgree(x, y string) bool {
+	if x == y {
+		return true
+	}
+	wx, wy := strings.Fields(x), strings.Fields(y)
+	return candSubset(wx, wy) || candSubset(wy, wx)
 }
 
 func candSubset(a, b []string) bool {
@@ -622,6 +871,97 @@ func candSubset(a, b []string) bool {
 	return true
 }
 
+// candDerived reports whether a local part is made from a name's words, as
+// an organisation's convention or a person's habit makes one: some of the
+// words, in the name's order or reversed, each whole or as its initial
+// (ada, adaexample, ada.example, aexample, kim.alex), whatever the
+// separators, and with any number after them (alex.kim2). Such a local
+// part says no more than the name does: two people of that name would both
+// have it. A letter outside ASCII matches itself or any run of ASCII
+// letters, so José matches jose and a transliterated name its spelling:
+// when in doubt, the local part is the name's.
+func candDerived(local, nameKey string) bool {
+	var b strings.Builder
+	for _, r := range strings.ToLower(local) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+		}
+	}
+	s := strings.TrimRightFunc(b.String(), unicode.IsDigit)
+	words := strings.Fields(nameKey)
+	if s == "" || len(words) == 0 {
+		return false
+	}
+	reversed := slices.Clone(words)
+	slices.Reverse(reversed)
+	return candSpells(s, words) || candSpells(s, reversed)
+}
+
+// candSpells reports whether s is made of some of words, in their order,
+// each whole or as its first letter, and at least one of them.
+func candSpells(s string, words []string) bool {
+	// at[p] holds 1 when s[:p] is spelt by none of the words seen so far,
+	// and 2 when by at least one: positions s can be cut at.
+	at := make([]uint8, len(s)+1)
+	at[0] = 1
+	for _, w := range words {
+		next := slices.Clone(at) // the word left out
+		for p, how := range at {
+			if how == 0 {
+				continue
+			}
+			for _, q := range candWordEnds(s, p, w) {
+				next[q] |= 2
+			}
+			for _, q := range candWordEnds(s, p, candFirst(w)) {
+				next[q] |= 2
+			}
+		}
+		at = next
+	}
+	return at[len(s)]&2 != 0
+}
+
+// candFirst is a word's first letter.
+func candFirst(w string) string {
+	_, n := utf8.DecodeRuneInString(w)
+	return w[:n]
+}
+
+// candWordEnds returns where s can be cut after spelling w from position
+// from: an ASCII character matches itself; a letter outside ASCII matches
+// itself or a run of ASCII letters, as a transliteration does. A spelling
+// that uses no character of s does not count.
+func candWordEnds(s string, from int, w string) []int {
+	reach := []int{from}
+	for _, r := range w {
+		var next []int
+		for _, p := range reach {
+			if r < utf8.RuneSelf {
+				if p < len(s) && rune(s[p]) == r {
+					next = append(next, p+1)
+				}
+				continue
+			}
+			if strings.HasPrefix(s[p:], string(r)) {
+				next = append(next, p+utf8.RuneLen(r))
+			}
+			for q := p; ; q++ {
+				next = append(next, q)
+				if q >= len(s) || s[q] >= utf8.RuneSelf || !unicode.IsLetter(rune(s[q])) {
+					break
+				}
+			}
+		}
+		slices.Sort(next)
+		reach = slices.Compact(next)
+		if len(reach) == 0 {
+			return nil
+		}
+	}
+	return slices.DeleteFunc(reach, func(p int) bool { return p == from })
+}
+
 // The strength of the direct evidence between two addresses.
 const (
 	candNone = iota // linked only through a third address
@@ -631,9 +971,14 @@ const (
 )
 
 // strength is the direct evidence that two addresses of a component are one
-// person: GitHub's account id, or a full name and a local part together, is
-// high; a full name alone is medium; a one-word name or a local part alone
-// is low.
+// person. Evidence the display name does not explain is high: GitHub's
+// account id, or a full name with the same local part when that local part
+// is not made from the name's words. A full name alone is medium, and so is
+// a full name with a local part made from it, which two people of that name
+// would both have: counting it as a second rule would count one signal
+// twice, where record linkage assumes the fields it compares are
+// independent (Fellegi and Sunter, 1969). A one-word name or a local part
+// alone is low.
 func (c *candComponent) strength(a, b *candAddress) int {
 	if a.account != "" && a.account == b.account {
 		return candHigh
@@ -641,7 +986,7 @@ func (c *candComponent) strength(a, b *candAddress) int {
 	name := a.key != "" && a.key == b.key && c.validName[a.key]
 	handle := a.handle != "" && a.handle == b.handle && c.validHandle[a.handle]
 	switch {
-	case name && a.words >= 2 && handle:
+	case name && a.words >= 2 && handle && !candDerived(a.handle, a.key):
 		return candHigh
 	case name && a.words >= 2:
 		return candMedium
@@ -686,8 +1031,15 @@ func (c *candComponent) candidate(domains map[string]int) Candidate {
 			l.Addresses = append(l.Addresses, at[c.addrs[m]])
 		}
 		slices.Sort(l.Addresses)
-		if g.rule == RuleSameName {
+		switch g.rule {
+		case RuleSameName:
 			l.Name = members[l.Addresses[0]].Name
+		case RuleSameLocalPart:
+			handle := c.addrs[g.members[0]].handle
+			l.FromName = slices.ContainsFunc(g.members, func(m int) bool {
+				a := c.addrs[m]
+				return a.key != "" && !a.selfNamed && candDerived(handle, a.key)
+			})
 		}
 		out.Links = append(out.Links, l)
 	}
@@ -701,6 +1053,11 @@ func (c *candComponent) candidate(domains map[string]int) Candidate {
 // candByFirst orders addresses by first activity, then email.
 func candByFirst(x, y *candAddress) int {
 	return cmp.Or(x.First.Compare(y.First), cmp.Compare(x.Email, y.Email))
+}
+
+// candByLast orders addresses by last activity, then email.
+func candByLast(x, y *candAddress) int {
+	return cmp.Or(x.Last.Compare(y.Last), cmp.Compare(x.Email, y.Email))
 }
 
 // candSortLinks orders links by the order of Rules, then by their first
@@ -720,7 +1077,8 @@ func candSortLinks(links []Link) {
 // alias by design; then, for a hand-off, the newest, which the person moved
 // to; then the one at the domain most of the scope's people use, which is
 // the organisation's convention; then the most commits, the most
-// co-authored, the latest activity, and the smallest email.
+// co-authored, the latest activity, and the smallest email. A shared
+// address is never in a candidate, so it is never canonical.
 func candPreferred(domains map[string]int, newest bool) func(a, b *candAddress) int {
 	return func(a, b *candAddress) int {
 		if a.noreply != b.noreply {
@@ -744,10 +1102,19 @@ func candPreferred(domains map[string]int, newest bool) func(a, b *candAddress) 
 // candName is the display name suggested for a candidate: the canonical
 // address's when it has two words or more, else the name of more words
 // another address carries (an address whose name is a login or a default
-// gets the person's full name), else the canonical address's own, which is
-// "" for a default name: the line then keeps each commit's own name.
+// gets the person's full name), else the canonical address's own. A default
+// name, or one that gives away an address of the candidate
+// (RevealsAddress), is never suggested: with no other name, it is "", and
+// the line keeps each commit's own name.
 func candName(canon *candAddress, members []*candAddress) string {
-	if canon.words >= 2 {
+	usable := func(a *candAddress) bool {
+		return a.key != "" && !slices.ContainsFunc(members, func(m *candAddress) bool { return RevealsAddress(a.Name, m.Email) })
+	}
+	own := 0
+	if usable(canon) {
+		own = canon.words
+	}
+	if own >= 2 {
 		return canon.Name
 	}
 	// fuller orders names of more words first, then the address with more
@@ -756,13 +1123,21 @@ func candName(canon *candAddress, members []*candAddress) string {
 		return cmp.Or(cmp.Compare(b.words, a.words), cmp.Compare(b.Commits, a.Commits),
 			b.Last.Compare(a.Last), cmp.Compare(a.Name, b.Name))
 	}
-	if best := slices.MinFunc(members, fuller); best.words > canon.words {
-		return best.Name
+	var named []*candAddress
+	for _, m := range members {
+		if usable(m) {
+			named = append(named, m)
+		}
 	}
-	if canon.key == "" {
-		return ""
+	if len(named) > 0 {
+		if best := slices.MinFunc(named, fuller); best.words > own {
+			return best.Name
+		}
 	}
-	return canon.Name
+	if own > 0 {
+		return canon.Name
+	}
+	return ""
 }
 
 // candPublic copies the evidence of the addresses, in order.
@@ -774,7 +1149,7 @@ func candPublic(members []*candAddress) []Address {
 	return out
 }
 
-// candEdge is one possible hand-off.
+// candEdge is one hand-off.
 type candEdge struct {
 	from, to *candAddress
 	handOff  HandOff
@@ -787,57 +1162,76 @@ type candEdge struct {
 // possible successors, or two possible predecessors, is ambiguous and gets
 // none, so what is left are chains, each in time order: an address, the one
 // after it, and so on.
+//
+// It never lists the pairs the times allow, which a burst of new addresses
+// (an organisation moving everyone to a new domain) makes quadratic in time
+// and memory. The times alone pick, by binary search, the addresses whose
+// files it reads. An index from each file to those addresses, in time
+// order, then finds an address's successors in a file by binary search, and
+// the search stops at a second one, which settles that the address is
+// ambiguous; predecessors are found the same way. The shared files are
+// listed only for the hand-offs that survive, each address in two at most,
+// so the work is the facts' size times a logarithm.
 func candHandOffs(fs *domain.FactSet, singles []*candAddress) [][]candEdge {
 	if fs.Now.IsZero() || len(singles) < 2 {
 		return nil
 	}
 	quiet := fs.Now.Add(-candHandOffQuiet)
-	sorted := slices.Clone(singles)
-	slices.SortFunc(sorted, candByFirst)
-	// The pairs the times allow, before any file is read: few addresses
-	// stopped long enough ago, and fewer began soon after.
-	var pairs [][2]*candAddress
-	need := map[string]*candAddress{}
-	for _, a := range sorted {
-		if a.Last.IsZero() || !a.Last.Before(quiet) {
-			continue
-		}
-		limit := a.Last.Add(candHandOffGap)
-		start := sort.Search(len(sorted), func(i int) bool { return sorted[i].First.After(a.Last) })
-		for _, b := range sorted[start:] {
-			if b.First.After(limit) {
-				break
-			}
-			pairs = append(pairs, [2]*candAddress{a, b})
-			need[a.Email], need[b.Email] = a, b
+	starts := slices.Clone(singles)
+	slices.SortFunc(starts, candByFirst)
+	var stops []*candAddress // the addresses that stopped long enough ago
+	for _, a := range singles {
+		if !a.Last.IsZero() && a.Last.Before(quiet) {
+			stops = append(stops, a)
 		}
 	}
-	if len(pairs) == 0 {
+	if len(stops) == 0 {
+		return nil
+	}
+	slices.SortFunc(stops, candByLast)
+	// The addresses the times allow in a hand-off, before any file is read:
+	// a quiet address with one that began within the gap after its last
+	// commit, and an address that began within the gap after a quiet one's.
+	need := map[string]*candAddress{}
+	for _, a := range stops {
+		if i := candFirstAfter(starts, a.Last); i < len(starts) && !starts[i].First.After(a.Last.Add(candHandOffGap)) {
+			need[a.Email] = a
+		}
+	}
+	for _, b := range starts {
+		if i := candLastFrom(stops, b.First.Add(-candHandOffGap)); i < len(stops) && stops[i].Last.Before(b.First) {
+			need[b.Email] = b
+		}
+	}
+	if len(need) == 0 {
 		return nil
 	}
 	candFiles(fs, need)
-	var edges []candEdge
-	for _, p := range pairs {
-		a, b := p[0], p[1]
-		if n, files := candShared(a, b); n > 0 {
-			edges = append(edges, candEdge{from: a, to: b,
-				handOff: HandOff{Gap: b.First.Sub(a.Last), SharedFiles: n, Files: files}})
+	// Each file's addresses in need by first activity, and its quiet ones
+	// by last activity: the order of starts and stops.
+	after, before := map[File][]*candAddress{}, map[File][]*candAddress{}
+	for _, a := range starts {
+		for f := range a.files {
+			after[f] = append(after[f], a)
 		}
 	}
-	out, in := map[*candAddress]int{}, map[*candAddress]int{}
-	for _, e := range edges {
-		out[e.from]++
-		in[e.to]++
+	for _, a := range stops {
+		for f := range a.files {
+			before[f] = append(before[f], a)
+		}
 	}
 	next, hasPrev := map[*candAddress]candEdge{}, map[*candAddress]bool{}
-	for _, e := range edges {
-		if out[e.from] == 1 && in[e.to] == 1 {
-			next[e.from] = e
-			hasPrev[e.to] = true
+	for _, a := range stops {
+		b := candSuccessor(a, after)
+		if b == nil || candPredecessor(b, before) != a {
+			continue
 		}
+		n, files := candShared(a, b)
+		next[a] = candEdge{from: a, to: b, handOff: HandOff{Gap: b.First.Sub(a.Last), SharedFiles: n, Files: files}}
+		hasPrev[b] = true
 	}
 	var chains [][]candEdge
-	for _, a := range sorted {
+	for _, a := range starts {
 		if _, ok := next[a]; !ok || hasPrev[a] {
 			continue
 		}
@@ -850,8 +1244,62 @@ func candHandOffs(fs *domain.FactSet, singles []*candAddress) [][]candEdge {
 	return chains
 }
 
+// candSuccessor is the only address that began within the gap after a's
+// last commit in a file a touched, or nil when there is none or more than
+// one. after holds each file's addresses by first activity.
+func candSuccessor(a *candAddress, after map[File][]*candAddress) *candAddress {
+	limit := a.Last.Add(candHandOffGap)
+	var only *candAddress
+	for f := range a.files {
+		list := after[f]
+		for i := candFirstAfter(list, a.Last); i < len(list) && !list[i].First.After(limit); i++ {
+			switch b := list[i]; {
+			case only == nil:
+				only = b
+			case b != only:
+				return nil
+			}
+		}
+	}
+	return only
+}
+
+// candPredecessor is the only quiet address whose last commit came within
+// the gap before b's first in a file b touched, or nil when there is none
+// or more than one. before holds each file's quiet addresses by last
+// activity.
+func candPredecessor(b *candAddress, before map[File][]*candAddress) *candAddress {
+	from := b.First.Add(-candHandOffGap)
+	var only *candAddress
+	for f := range b.files {
+		list := before[f]
+		for i := candLastFrom(list, from); i < len(list) && list[i].Last.Before(b.First); i++ {
+			switch a := list[i]; {
+			case only == nil:
+				only = a
+			case a != only:
+				return nil
+			}
+		}
+	}
+	return only
+}
+
+// candFirstAfter is the index of the first address in list, sorted by
+// first activity, that began after t.
+func candFirstAfter(list []*candAddress, t time.Time) int {
+	return sort.Search(len(list), func(i int) bool { return list[i].First.After(t) })
+}
+
+// candLastFrom is the index of the first address in list, sorted by last
+// activity, whose last commit came at t or later.
+func candLastFrom(list []*candAddress, t time.Time) int {
+	return sort.Search(len(list), func(i int) bool { return !list[i].Last.Before(t) })
+}
+
 // candShared counts the files two addresses both touched or hold lines in,
-// in the same repository, and lists the first candMaxFiles of them.
+// in the same repository, and lists the first candMaxFiles of them in a
+// slice of their own, so the evidence holds no more than it shows.
 func candShared(a, b *candAddress) (int, []File) {
 	small, large := a.files, b.files
 	if len(large) < len(small) {
@@ -866,7 +1314,7 @@ func candShared(a, b *candAddress) (int, []File) {
 	slices.SortFunc(shared, func(x, y File) int { return cmp.Or(cmp.Compare(x.Repo, y.Repo), cmp.Compare(x.Path, y.Path)) })
 	n := len(shared)
 	if n > candMaxFiles {
-		shared = slices.Clip(shared[:candMaxFiles])
+		shared = slices.Clone(shared[:candMaxFiles])
 	}
 	return n, shared
 }

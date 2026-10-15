@@ -1,8 +1,6 @@
 package report
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"math"
@@ -25,16 +23,22 @@ import (
 // docs/spec/git-invocation.md#identity-mailmap-and-bots).
 //
 // Emails appear only in fields named email, so a reader that must not show
-// them, such as the MCP server without --allow-emails, can drop them: no
-// other field holds an address or a part of one. Text and Markdown print
-// none either, as everywhere (docs/spec/report-json.md): an address is
-// shown by its domain and a short hash. Only Mailmap, whose output is made
-// of addresses, prints them.
+// them, such as the MCP server without --allow-emails, can drop them. A
+// display name that gives an address away (identity.RevealsAddress: it holds
+// an @, or it is one of the candidate's local parts, as GitHub names a
+// commit by a login) is withheld in every field: it is "", and an address's
+// name_withheld says so. So no other field holds a person's address or a
+// part of one. Text and Markdown print none either, as everywhere
+// (docs/spec/report-json.md): an address is shown by its number and the kind
+// of its domain. Only Mailmap, whose output is made of addresses, prints
+// them.
 type Identities struct {
 	Provenance Provenance          `json:"provenance"`
 	Scope      Scope               `json:"scope"`      // the repositories the candidates come from: all, a group, or one repository
 	Addresses  int                 `json:"addresses"`  // human addresses the scope's facts show
 	Bots       int                 `json:"bots"`       // bot and agent addresses, which never appear in a candidate
+	Shared     int                 `json:"shared"`     // of addresses, those several people use (a role local part, or names that differ): no rule compares them
+	Oversized  int                 `json:"oversized"`  // groups of more than 10 addresses that the rules chain together, left out as several people's
 	Candidates []IdentityCandidate `json:"candidates"` // most confident first
 	Rules      []IdentityRule      `json:"rules"`      // every rule's definition, in order
 	Caveats    []Caveat            `json:"caveats"`
@@ -44,7 +48,7 @@ type Identities struct {
 type IdentityCandidate struct {
 	Confidence string            `json:"confidence"` // high, medium or low
 	Guess      bool              `json:"guess"`      // a hand-off: never suggested as certain
-	Commented  bool              `json:"commented"`  // the mailmap form writes its lines commented out: every low candidate
+	Commented  bool              `json:"commented"`  // the mailmap form writes its lines commented out: every candidate that is not high
 	Chained    bool              `json:"chained"`    // two of the addresses are linked only through a third
 	Rules      []string          `json:"rules"`      // the rules that link the addresses, in the order of rules
 	Name       string            `json:"name"`       // the display name suggested for the person; "" keeps each commit's own
@@ -56,21 +60,24 @@ type IdentityCandidate struct {
 // counted over the run's history and the older commits blame attributes
 // lines to.
 type IdentityAddress struct {
-	Email      string    `json:"email"` // the canonical email; JSON only
-	Name       string    `json:"name"`  // its display name
-	Canonical  bool      `json:"canonical"`
-	Commits    int       `json:"commits"`     // commits it authored
-	CoAuthored int       `json:"co_authored"` // commits whose Co-authored-by trailers name it
-	First      time.Time `json:"first"`       // the earliest author time of those commits
-	Last       time.Time `json:"last"`
-	Repos      []string  `json:"repos"` // the repositories' keys, sorted
+	Email        string    `json:"email"`         // the canonical email; JSON only
+	Name         string    `json:"name"`          // its display name; "" when withheld or when the facts show none
+	NameWithheld bool      `json:"name_withheld"` // the name gives an address away (identity.RevealsAddress), so it is not shown
+	DomainKind   string    `json:"domain_kind"`   // main, noreply, machine or other (identity.DomainKind): the domain without naming it
+	Canonical    bool      `json:"canonical"`
+	Commits      int       `json:"commits"`     // commits it authored
+	CoAuthored   int       `json:"co_authored"` // commits whose Co-authored-by trailers name it
+	First        time.Time `json:"first"`       // the earliest author time of those commits
+	Last         time.Time `json:"last"`
+	Repos        []string  `json:"repos"` // the repositories' keys, sorted
 }
 
 // IdentityLink is one rule's evidence in a candidate.
 type IdentityLink struct {
 	Rule      string           `json:"rule"`
 	Addresses []int            `json:"addresses"` // indexes into the candidate's addresses
-	Name      string           `json:"name"`      // same-name: the display name they share; "" otherwise
+	Name      string           `json:"name"`      // same-name: the display name they share, "" when withheld; "" for the other rules
+	FromName  bool             `json:"from_name"` // same-local-part: the local part is made from the name, so it adds nothing to it
 	HandOff   *IdentityHandOff `json:"hand_off"`  // hand-off: from the first address to the second; null otherwise
 }
 
@@ -110,10 +117,16 @@ type IdentitiesInput struct {
 // addresses are the run's, which git mailmapped when it was scanned.
 const identCodeMailmap = "mailmap-at-scan"
 
+// identNoChain says how git applies a mailmap, which a person editing one
+// must know: the caveat and the mailmap form's header both say it.
+const identNoChain = "git applies one .mailmap line per commit and never follows a chain: if an alias in a " +
+	"suggested line is already the canonical address of lines in a .mailmap, change those lines to the " +
+	"suggested canonical address too, or their commits stay apart and the next scan suggests the same line again"
+
 // NewIdentities builds the identities answer. Like every answer, it arranges
 // what another package computed, identity.Candidates here, and computes
 // nothing itself; it adds where the facts come from and what could make the
-// candidates wrong.
+// candidates wrong, and it withholds every name that gives an address away.
 func NewIdentities(in *IdentitiesInput) *Identities {
 	scope := in.Scope
 	if scope == (domain.Scope{}) {
@@ -125,14 +138,11 @@ func NewIdentities(in *IdentitiesInput) *Identities {
 		fs = &domain.FactSet{}
 	}
 	names := map[string]string{}
-	var repos []*domain.RepoFacts
 	for i := range fs.Repos {
-		rf := &fs.Repos[i]
-		names[rf.Repo.Key] = rf.Repo.Name
-		repos = append(repos, rf)
+		names[fs.Repos[i].Repo.Key] = fs.Repos[i].Repo.Name
 	}
 	if s := in.Survey; s != nil {
-		id.Addresses, id.Bots = s.Addresses, s.Bots
+		id.Addresses, id.Bots, id.Shared, id.Oversized = s.Addresses, s.Bots, s.Shared, s.Oversized
 		for i := range s.Candidates {
 			id.Candidates = append(id.Candidates, identCandidate(&s.Candidates[i], names))
 		}
@@ -140,35 +150,45 @@ func NewIdentities(in *IdentitiesInput) *Identities {
 	for _, def := range identity.Rules() {
 		id.Rules = append(id.Rules, IdentityRule{ID: string(def.Rule), Matches: def.Matches, Confidence: def.Confidence, Risk: def.Risk})
 	}
-	id.Provenance = answerProvenance(in.Run, fs, repos, nil)
-	id.Caveats = append(answerCaveats(repos), Caveat{
+	// The answer covers every repository of the scope's facts and reads no
+	// metric and no forge fact.
+	id.Provenance = AnswerProvenance(in.Run, fs, nil)
+	id.Caveats = append(AnswerCaveats(fs), Caveat{
 		Code: identCodeMailmap,
 		Message: "These are the run's addresses, which git mailmapped when the run was scanned: an address the " +
-			"mailmap merged is in no candidate, and a .mailmap line added since takes effect at the next scan.",
+			"mailmap merged is in no candidate, and a .mailmap line added since takes effect at the next scan. " +
+			identSentence(identNoChain) + ".",
 	})
 	return id
 }
 
 func identCandidate(c *identity.Candidate, names map[string]string) IdentityCandidate {
+	emails := make([]string, len(c.Addresses))
+	for i, a := range c.Addresses {
+		emails[i] = a.Email
+	}
+	name, _ := identShown(c.Name, emails)
 	out := IdentityCandidate{
 		Confidence: string(c.Confidence),
 		Guess:      c.Guess,
-		Commented:  c.Confidence == identity.ConfidenceLow,
+		Commented:  c.Confidence != identity.ConfidenceHigh,
 		Chained:    c.Chained,
-		Name:       c.Name,
+		Name:       name,
 	}
 	for _, r := range c.Rules() {
 		out.Rules = append(out.Rules, string(r))
 	}
 	for _, a := range c.Addresses {
+		name, withheld := identShown(a.Name, emails)
 		out.Addresses = append(out.Addresses, IdentityAddress{
-			Email: a.Email, Name: a.Name, Canonical: a.Email == c.Canonical,
-			Commits: a.Commits, CoAuthored: a.CoAuthored, First: a.First, Last: a.Last,
-			Repos: slices.Clone(a.Repos),
+			Email: a.Email, Name: name, NameWithheld: withheld, DomainKind: string(a.Domain),
+			Canonical: a.Email == c.Canonical, Commits: a.Commits, CoAuthored: a.CoAuthored,
+			First: a.First, Last: a.Last, Repos: slices.Clone(a.Repos),
 		})
 	}
 	for _, l := range c.Links {
-		link := IdentityLink{Rule: string(l.Rule), Addresses: slices.Clone(l.Addresses), Name: l.Name}
+		name, _ := identShown(l.Name, emails)
+		link := IdentityLink{Rule: string(l.Rule), Addresses: slices.Clone(l.Addresses), Name: name, FromName: l.FromName}
 		if h := l.HandOff; h != nil {
 			ho := &IdentityHandOff{GapDays: h.Gap.Hours() / 24, SharedFiles: h.SharedFiles}
 			for _, f := range h.Files {
@@ -181,18 +201,44 @@ func identCandidate(c *identity.Candidate, names map[string]string) IdentityCand
 	return out
 }
 
-// identIntro says what the page holds, and why it shows no email.
+// identShown is a display name as the answer shows it: "" and true when it
+// gives away one of the candidate's addresses (identity.RevealsAddress), as
+// an address typed as a name or a login used as one does.
+func identShown(name string, emails []string) (string, bool) {
+	if slices.ContainsFunc(emails, func(e string) bool { return identity.RevealsAddress(name, e) }) {
+		return "", true
+	}
+	return name, false
+}
+
+// identIntro says what the page holds, and why it shows no address.
 const identIntro = "addresses that may belong to one person, with the evidence, for a person to review: stillhere " +
-	"applies none. This page names no email, as no text or Markdown page does: --format mailmap prints the " +
-	".mailmap lines, and --format json the addresses."
+	"applies none. This page names no address and no part of one, as no text or Markdown page does: an address " +
+	"is shown by its number and the kind of its domain (the main domain, which most of the scope's addresses " +
+	"use; GitHub noreply; a machine's; or another, lettered when a candidate has several), and a display name " +
+	"that gives an address away is withheld. --format mailmap prints the .mailmap lines, and --format json the " +
+	"addresses."
 
 // identSummary is "11 addresses of people in 1 repository, 1 bot or agent
 // left out · 2 candidates".
 func identSummary(id *Identities) string {
 	s := plural(id.Addresses, "address", "addresses") + " of people in " +
 		plural(len(id.Provenance.Heads), "repository", "repositories")
+	var aside []string
 	if id.Bots > 0 {
-		s += ", " + plural(id.Bots, "bot or agent", "bots and agents") + " left out"
+		aside = append(aside, plural(id.Bots, "bot or agent", "bots and agents")+" left out")
+	}
+	if id.Shared > 0 {
+		aside = append(aside, plural(id.Shared, "shared address", "shared addresses")+
+			" (a role mailbox, or several people's names) compared with nothing")
+	}
+	if id.Oversized > 0 {
+		// identity's limit on a candidate's addresses (candMaxShare).
+		aside = append(aside, plural(id.Oversized, "group", "groups")+
+			" of more than 10 linked addresses left out as several people's")
+	}
+	if len(aside) > 0 {
+		s += ", " + strings.Join(aside, ", ")
 	}
 	return s + " · " + plural(len(id.Candidates), "candidate", "candidates")
 }
@@ -201,14 +247,14 @@ func identSummary(id *Identities) string {
 const identNone = "no candidates: no two addresses share a display name, a local part or a GitHub account, and " +
 	"no address took over from another that stopped"
 
-// identTitle is "Ada Example · high confidence · same-name, same-local-part";
-// a hand-off names each address's person in order.
+// identTitle is "Ada Example · medium confidence · same-name,
+// same-local-part"; a hand-off names each address's person in order.
 func identTitle(c IdentityCandidate, esc func(string) string) string {
 	title := identPerson(c.Name, esc)
 	if c.Guess {
 		var names []string
 		for _, a := range c.Addresses {
-			names = append(names, identPerson(a.Name, esc))
+			names = append(names, identAddressName(a, esc))
 		}
 		title = strings.Join(names, " → ")
 	}
@@ -226,11 +272,19 @@ func identPerson(name string, esc func(string) string) string {
 	return esc(name)
 }
 
-// identAddressText is "…@example.com (6c2d1f) · Ada Example · 2 commits ·
-// 2026-01-01 → 2026-01-05 · fixture · canonical", or, for Mailmap, the same
-// with the email itself first.
+// identAddressName is an address's display name, or what stands for it.
+func identAddressName(a IdentityAddress, esc func(string) string) string {
+	if a.NameWithheld {
+		return "(name withheld)"
+	}
+	return identPerson(a.Name, esc)
+}
+
+// identAddressText is "main domain · Ada Example · 2 commits · 2026-01-01 →
+// 2026-01-05 · fixture · canonical", or, for Mailmap, the same with the
+// email itself first.
 func identAddressText(a IdentityAddress, label string, pv Provenance, esc func(string) string) string {
-	parts := []string{label, identPerson(a.Name, esc), plural(a.Commits, "commit", "commits")}
+	parts := []string{label, identAddressName(a, esc), plural(a.Commits, "commit", "commits")}
 	if a.CoAuthored > 0 {
 		parts[2] += ", co-author of " + plural(a.CoAuthored, "commit", "commits")
 	}
@@ -250,16 +304,56 @@ func identAddressText(a IdentityAddress, label string, pv Provenance, esc func(s
 	return strings.Join(parts, " · ")
 }
 
-// identLabel shows an address without printing it: its domain, and the
-// start of its SHA-256, so two addresses at one domain stay apart, as the
-// no-name placeholder keeps two nameless people apart (displayName).
-func identLabel(email string, esc func(string) string) string {
-	sum := sha256.Sum256([]byte(email))
-	tag := " (" + hex.EncodeToString(sum[:3]) + ")"
-	if i := strings.LastIndexByte(email, '@'); i >= 0 {
-		return "…@" + esc(email[i+1:]) + tag
+// identLabels names a candidate's addresses without printing any part of
+// one: by the kind of their domain (identity.DomainKind), with a letter
+// when a candidate has two addresses of a kind that can differ (a machine,
+// another domain), the same letter for the same domain. A letter says
+// whether two addresses share a domain and matches nothing outside the
+// page, where a hash of the address would confirm a guess of it.
+func identLabels(c IdentityCandidate) []string {
+	count := map[string]int{}
+	for _, a := range c.Addresses {
+		count[a.DomainKind]++
 	}
-	return "…" + tag
+	letters, used := map[string]string{}, map[string]int{}
+	out := make([]string, len(c.Addresses))
+	for i, a := range c.Addresses {
+		label := identKind(a.DomainKind)
+		lettered := a.DomainKind == string(identity.DomainMachine) || a.DomainKind == string(identity.DomainOther)
+		if lettered && count[a.DomainKind] > 1 {
+			key := a.DomainKind + "\x00" + identDomain(a.Email)
+			letter, ok := letters[key]
+			if !ok {
+				letter = string(rune('A' + used[a.DomainKind]))
+				used[a.DomainKind]++
+				letters[key] = letter
+			}
+			label += " " + letter
+		}
+		out[i] = label
+	}
+	return out
+}
+
+// identKind is how a page names a kind of domain.
+func identKind(kind string) string {
+	switch identity.DomainKind(kind) {
+	case identity.DomainMain:
+		return "main domain"
+	case identity.DomainNoreply:
+		return "GitHub noreply"
+	case identity.DomainMachine:
+		return "machine"
+	}
+	return "other domain"
+}
+
+// identDomain is an email's domain, compared only to letter the labels.
+func identDomain(email string) string {
+	if i := strings.LastIndexByte(email, '@'); i >= 0 {
+		return email[i+1:]
+	}
+	return ""
 }
 
 // identRepoName is a repository's name, from the heads the answer covers.
@@ -280,9 +374,17 @@ func identWhy(c IdentityCandidate, esc, path func(string) string) []string {
 		which := identWhich(l.Addresses, len(c.Addresses))
 		switch identity.Rule(l.Rule) {
 		case identity.RuleSameName:
-			out = append(out, which+" carry the display name \""+esc(l.Name)+"\"")
+			if l.Name == "" {
+				out = append(out, which+" carry one display name, withheld because it gives an address away")
+			} else {
+				out = append(out, which+" carry the display name \""+esc(l.Name)+"\"")
+			}
 		case identity.RuleSameLocalPart:
-			out = append(out, which+" have the same local part")
+			if l.FromName {
+				out = append(out, which+" have the same local part, made from the name, so it says no more than the name does")
+			} else {
+				out = append(out, which+" have the same local part")
+			}
 		case identity.RuleSameAccount:
 			out = append(out, which+" are GitHub noreply addresses of one account")
 		case identity.RuleHandOff:
@@ -359,8 +461,11 @@ func identGap(d time.Duration) string {
 // them.
 func identCommentedNote(c IdentityCandidate, inMailmap bool) string {
 	what := "a weak match"
-	if c.Guess {
+	switch {
+	case c.Guess:
 		what = "a guess"
+	case c.Confidence == string(identity.ConfidenceMedium):
+		what = "a match on the display name, which two people of one name would also make"
 	}
 	if inMailmap {
 		return what + ", so its lines are commented out: uncomment them only if you know these addresses are one person"
@@ -396,8 +501,9 @@ func (id *Identities) writeText(p *printer) {
 	for i, c := range id.Candidates {
 		p.blank()
 		p.wrapped(fmt.Sprintf("%d. ", i+1), "   ", identTitle(c, clean))
+		labels := identLabels(c)
 		for j, a := range c.Addresses {
-			p.wrapped(fmt.Sprintf("   %d. ", j+1), "      ", identAddressText(a, identLabel(a.Email, clean), id.Provenance, clean))
+			p.wrapped(fmt.Sprintf("   %d. ", j+1), "      ", identAddressText(a, labels[j], id.Provenance, clean))
 		}
 		for _, why := range identWhy(c, clean, clean) {
 			p.wrapped("   ", "     ", why)
@@ -430,8 +536,9 @@ func (id *Identities) writeMarkdown(p *printer) {
 		p.blank()
 		p.line(fmt.Sprintf("## %d. %s", i+1, identTitle(c, mdText)))
 		p.blank()
-		cols := []column{{head: "#", right: true}, {head: "Address"}, {head: "Name"}, {head: "Commits", right: true},
+		cols := []column{{head: "#", right: true}, {head: "Domain"}, {head: "Name"}, {head: "Commits", right: true},
 			{head: "Co-authored", right: true}, {head: "First"}, {head: "Last"}, {head: "Repositories"}, {head: "Canonical"}}
+		labels := identLabels(c)
 		var rows [][]string
 		for j, a := range c.Addresses {
 			var repos []string
@@ -442,7 +549,7 @@ func (id *Identities) writeMarkdown(p *printer) {
 			if a.Canonical {
 				canonical = "yes"
 			}
-			rows = append(rows, []string{strconv.Itoa(j + 1), identLabel(a.Email, mdText), identPerson(a.Name, mdText),
+			rows = append(rows, []string{strconv.Itoa(j + 1), mdText(labels[j]), identAddressName(a, mdText),
 				grouped(a.Commits), grouped(a.CoAuthored), date(a.First), date(a.Last), repoList(repos, mdText), canonical})
 		}
 		p.mdTable(cols, rows)
@@ -467,9 +574,10 @@ func (id *Identities) writeMarkdown(p *printer) {
 
 // Mailmap renders an identities answer as .mailmap lines for a person to
 // review, each candidate's evidence above its lines as # comments
-// (gitmailmap(5)). A high or medium candidate's lines are written as lines;
-// a low one's, every guess among them, are written commented out, so adding
-// the output to a .mailmap unread merges nobody on a weak match. Each line
+// (gitmailmap(5)). Only a high candidate's lines, which rest on evidence the
+// display name does not explain, are written as lines; every other
+// candidate's are written commented out, so adding the output to a .mailmap
+// unread merges nobody the facts cannot tell from someone else. Each line
 // maps one alias to the candidate's canonical address and suggested name:
 // "Name <canonical> <alias>", which replaces both for every commit with the
 // alias, whatever its name.
@@ -494,9 +602,10 @@ func (id *Identities) writeMailmap(p *printer) {
 	p.wrapped("# ", "#   ", "stillhere identities · "+scopeText(id.Scope, clean, id.Provenance)+" · "+provenanceText(id.Provenance))
 	p.wrapped("# ", "# ", "Suggested .mailmap lines for a person to review: stillhere applies none, because git's "+
 		"mailmap is the only identity store. A wrong line merges two people into one who does not exist, so read "+
-		"each candidate's evidence before adding its lines to a .mailmap, or to the file --mailmap names. A weak "+
-		"match or a guess is written commented out: uncomment it only if you know the addresses are one person. "+
-		"A line takes effect at the next scan.")
+		"each candidate's evidence before adding its lines to a .mailmap, or to the file --mailmap names. Only a "+
+		"candidate with evidence the display name does not explain (one GitHub account, or a local part not made "+
+		"from the name) is written as lines; every other one's lines are commented out: uncomment them only if "+
+		"you know the addresses are one person. "+identSentence(identNoChain)+". A line takes effect at the next scan.")
 	p.wrapped("# ", "# ", identSummary(id))
 	if len(id.Candidates) == 0 {
 		p.line("#")

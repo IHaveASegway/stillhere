@@ -27,9 +27,12 @@ guess). stillhere applies none of them: git's .mailmap is the only identity
 store, and a wrong line merges two people into one who does not exist.
 
 --format mailmap prints the suggested .mailmap lines with the evidence as
-comments, for a person to review; a weak match or a guess is commented out.
-The text and Markdown forms name no email, and --format json gives the
-addresses. A line added to a .mailmap takes effect at the next scan.`,
+comments, for a person to review. Only a match with evidence the display
+name does not explain (one GitHub account, or a local part not made from the
+name) is written as a line; every other one is commented out, since two
+people of one name look like one person with two addresses. The text and
+Markdown forms print no address and no part of one, and --format json gives
+the addresses. A line added to a .mailmap takes effect at the next scan.`,
 		Args: usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if err := checkRun(run); err != nil {
