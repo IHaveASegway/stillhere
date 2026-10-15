@@ -10,7 +10,7 @@ Each entry states: the question, the unit, the definition, eligibility, uncertai
 
 - **Commit**: one git commit, with its author identified by the mailmapped email.
 - **Landing**: a first-parent commit on the default branch. A merge landing `M` owns the commits in `git rev-list M^1..M`: the merge itself plus everything it brought in, which also covers octopus merges. A squash or rebase landing owns itself. See [spec/week-collector.md](spec/week-collector.md#landing--commit-map).
-- **Change**: a landing in M1. From M2, a pull request when GitHub knows one (its landings grouped together). Moving to pull-request grouping is a version bump for any metric whose values move.
+- **Change**: a landing in M1. From M2, a pull request when GitHub knows one (its landings grouped together). Moving to pull-request grouping is a version bump for any metric whose values move. The validity check already uses this grain (`metrics.Changes`, #77): a label names a landing or a pull request, and each ranked metric scores the change by what it adds to the metric's clusters ([validity checks](#validity-checks)), so no metric's values move.
 - **Person**: a canonical email after `.mailmap`. Bots (policy name patterns) are never people in ranks.
 - **Area**: a directory prefix, or a CODEOWNERS entry when the repo has one.
 - **Scope**: a repo or a group of repos. Ranks never mix groups unless asked to.
@@ -151,7 +151,7 @@ Majority owners of files under the path, the top surviving-line authors, recent 
 - **Blind spots**: a planned replacement of correct code looks "not durable"; moves across files credit the mover; a move inside one file counts as lines the mover added, which blame then gives back to their first author, so the mover scores 0 on them (open decision 6); a copy inside one file credits its original author with more lines than they added, so a value can pass 1 (Ann's 2-line block pasted twice more by Bob: Ann 6 / 2, [#63](https://github.com/IHaveASegway/stillhere/issues/63)); so can a reformat listed in the ignore-revs file that splits a line into several, because blame gives every part to the line's author (a call split over five lines, as a formatter does, gave the 2-line commit that wrote it all 6 lines on git 2.50.1: 6 / 2); a revert that restores deleted lines takes their blame from the original author; a `prod` file later moved to a path blame does not read, such as a denied path under `vendor/`, keeps its lines in `Σ added` and none in `Σ surviving`, so its author looks as if they kept nothing (Pat 0 / 4 in the [binary-file guard](../testdata/fixture/SPEC.md#binary-files-fixturebinary)); changes younger than 90 days are not scored; a change git takes for binary scores none of its lines, and no caveat says how many it left out yet ([#64](https://github.com/IHaveASegway/stillhere/issues/64)).
 - **How it can be gamed**: writing in stable, low-traffic code; avoiding risky areas. Load-bearing (M5) is the counterweight.
 - **Fixture oracle**: [SPEC.md, change oracles](../testdata/fixture/SPEC.md#change-oracles-m1-testchangeoracles). Bob's move and Ada's rename in the main fixture; the revert, requote, re-indent, squash, Copilot and eligibility cases in the sibling; binary files, and text files moved across roles, in the [binary-file guard](../testdata/fixture/SPEC.md#binary-files-fixturebinary).
-- **Validity**: unvalidated until the M2 labelled-sample check.
+- **Validity**: beta: not yet checked against a lead's labels (`stillhere label`, then `stillhere validate`: AUC ≥ 0.7 on at least 50 scored labels, [validation.md](validation.md)). A change is scored by Σ surviving / Σ added over its clusters, in this cohort. Reference: the model panel has not run yet.
 - **Changelog**:
   - 2026-10-14 (#54), before the first release, so the version stays 1: a change git takes for binary leaves both sums ([missing facts](#change-facts-shared-by-durable1-and-simplifying1)), matched to the lines blame gives its commit by the path they had in that commit. Until then those lines counted in `Σ surviving` and not in `Σ added`, so a binary file made a person keep more lines than they added (5 over 2, a durability of 2.5). `ai_assisted@1`'s `durable_ai` and `durable_other` read the same sums and changed with it.
   - 2026-10-15 (#70), before the first release, so the version stays 1: a value passing 1 that way was a bug. `Σ surviving` classifies a blamed line by the path it had in its commit, as `Σ added` classifies a change ([surviving lines](#change-facts-shared-by-durable1-and-simplifying1)), where it took the role of the line's path at HEAD. A text file moved onto a `prod` path from `vendor/`, `tests/` or a name with no role kept lines that were never added (Uma 5 / 2, Tess 5 / 1 and Nate 6 / 1 in the binary-file guard), and a `prod` file moved into `tests/` kept none (Kim 0 / 3). A file whose blame failed now leaves its lines out whatever its role at HEAD, since a `test` file can hold surviving lines. `ai_assisted@1`'s `durable_ai` and `durable_other` read the same sums and changed with them.
@@ -168,7 +168,7 @@ Majority owners of files under the path, the top surviving-line authors, recent 
 - **Blind spots**: deleting a feature looks like simplifying (deleting its tests does not, because only `prod` lines count); a move counts its lines as removed, though its net is 0, so it is never a simplifying landing by itself; removed code that comes back later is not detected in v1.
 - **How it can be gamed**: deleting then re-adding. Revert detection catches the plain case: neither the reverted landing nor the revert counts.
 - **Fixture oracle**: [SPEC.md, change oracles](../testdata/fixture/SPEC.md#change-oracles-m1-testchangeoracles). Erin's rename and Bob's merge in the main fixture; the −20 boundary, blank lines, a test deletion, the revert pairs and the requote in the sibling.
-- **Validity**: unvalidated until the M2 labelled-sample check.
+- **Validity**: beta: not yet checked against a lead's labels (`stillhere label`, then `stillhere validate`: AUC ≥ 0.7 on at least 50 scored labels, [validation.md](validation.md)). A change is scored by the `prod` lines its clusters removed, in this window. Reference: the model panel has not run yet.
 
 ### reviews_given@1 (M2)
 - **Question**: Who carries the review load?
@@ -182,7 +182,7 @@ Majority owners of files under the path, the top surviving-line authors, recent 
 - **Blind spots**: reviews of pull requests closed unmerged or still open; dismissed reviews; conversation comments outside a review; pairing and review outside GitHub. A reviewer with no commit in the run shows as `@login`, apart from their email row. A clone through a host alias (an `~/.ssh/config` Host, or `ssh.github.com`) names another host, so its repository's pull requests do not count, and neither do those of a repository whose collection failed. The replica holds each pull request's latest state, so a review dismissed after `now` is already gone from an older `now`.
 - **How it can be gamed**: rubber-stamp approvals. The no-comment share is shown next to the count for that reason. Reviewing many trivial pull requests, such as dependency bumps.
 - **Fixture oracle**: [testdata/github/README.md, reviews_given@1](../testdata/github/README.md#reviews_given1), asserted by `TestGitHubSync` over the recorded responses.
-- **Validity**: unvalidated until the M2 labelled-sample check.
+- **Validity**: beta: not yet checked against a lead's labels (`stillhere label`, then `stillhere validate`: AUC ≥ 0.7 on at least 50 scored labels, [validation.md](validation.md)). A change is scored at this metric's grain, its pull request (#77): the people other than its author who submitted a review of it in the window, its clusters; a change of the window that no one else reviewed, or that no pull request landed, scores 0 in a repository whose GitHub data the run read, and one elsewhere is not scored. Reference: the model panel has not run yet.
 - **Changelog**: 2026-10-15 (#69): logins compare without case, so one account whose login a pull request carries in another case, after the account changed its case, is one subject (`@zoe`, not `@Zoe` and `@zoe`), and is linked to its person whatever case its commits carry it in. This mends a split no definition meant: a login names one GitHub account, which GitHub compares without case. No release had shipped `reviews_given@1`, so it keeps `@1`. A run stored before kept the case in its keys, and is read with them lowercased ([run model](spec/codebase.md#run-model)), unless it holds one login in two cases: those stay two subjects, as they were ranked, until a new scan.
 
 ### load_bearing@1 (M5)
@@ -233,7 +233,22 @@ Each highlight is about a *change*, links to its evidence, and shows ties togeth
 
 ## Validity checks
 
-`stillhere validate --labels labels.csv` reads hand labels (change id, `meaningful` / `routine` / `noise`, labeller) and reports, per metric version, how well the metric separates meaningful from routine changes (AUC). A ranked metric stays marked "beta" until it reaches AUC ≥ 0.7 on at least 50 labelled changes. The labels file holds judgments about colleagues' work, so it is kept outside the repo by default.
+`stillhere label` samples a stored run's changes and asks a lead to label each `meaningful`, `routine` or `noise`, blinded to every metric value and to the author; `stillhere validate` reads the labels (change, label, labeller) and reports, per metric version, how well the metric separates meaningful from routine changes: the AUC, with a 95% bootstrap interval, and n. The protocol, the rubric with worked examples, and the reference result are in [validation.md](validation.md).
+
+- **The grain.** A labelled change is a landing, or a pull request with the landings that put it on the default branch (`metrics.Changes`), named by a landing's SHA or a prefix of at least 7 digits, or by `#950`, `pr:950` or `owner/name#950`. Each ranked metric scores it by what the change adds to its clusters, in scope `all` (`metrics.Scorer`): a ratio by its clusters' Σ numerator over Σ denominator, a sum by their sum. `durable@1` and `simplifying@1` find its clusters by its landings, `reviews_given@1` by its pull request (#77). A change with no cluster is not scored, except by `reviews_given@1`, which has a cluster per reviewer: a change of its window with none, in a repository whose GitHub data the run read, is a change no one else reviewed, and scores 0. Each entry's Validity line says what its measure of a change is.
+- **The bar.** A ranked metric stays marked "beta" until a lead's labels give it an AUC ≥ 0.7 on at least 50 of its scored labels. Noise is in no AUC.
+- **The reference.** Until then, a result from a panel of model raters on public repositories is shown beside the mark, never in its place ([ADR 0014](adr/0014-labels-are-evidence-not-the-gate.md)).
+- **The labels** hold judgments about colleagues' work, so the file is kept beside the facts database, outside every repository, by default.
+
+The Validity line of a ranked metric takes one of these forms, with the date of the labels and the repositories they come from:
+
+```
+- **Validity**: beta: not yet checked against a lead's labels (...). Reference: the model panel has not run yet.
+- **Validity**: beta: not yet checked against a lead's labels (...). Reference: AUC x.xx (lo–hi) on n model-panel labels (date; k public repositories; size baseline x.xx), not yet a lead's labels.
+- **Validity**: AUC x.xx (lo–hi) on n lead labels (date; one organization). Reference: AUC x.xx (lo–hi) on n model-panel labels (date).
+```
+
+The numbers are `validate`'s: the AUC, its interval in parentheses, and n, the labels the metric scored.
 
 ## Adding a metric
 
@@ -250,5 +265,5 @@ Copy this block, fill every line, add a fixture oracle, and register the metric:
 - Blind spots:
 - How it can be gamed:
 - Fixture oracle: testdata/...
-- Validity: unvalidated | AUC x.xx on n labels (date)
+- Validity: context (not ranked) | beta: not yet checked against a lead's labels | AUC x.xx (lo–hi) on n lead labels (date); and for a ranked metric, its measure of one change and the reference result (see Validity checks)
 ```

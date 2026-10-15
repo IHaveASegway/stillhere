@@ -442,6 +442,9 @@ func aucRow(a MetricAUC) []string {
 	auc := "—"
 	if a.AUC != nil {
 		auc = fmt.Sprintf("%.2f", *a.AUC)
+		if a.Lo != nil && a.Hi != nil {
+			auc += fmt.Sprintf(" (%.2f–%.2f)", *a.Lo, *a.Hi)
+		}
 	}
 	status := "meets the bar (AUC ≥ 0.7 on ≥ 50 labels)"
 	if a.Beta {
@@ -451,7 +454,7 @@ func aucRow(a MetricAUC) []string {
 }
 
 func (v *Validation) summary() string {
-	return fmt.Sprintf("%s from %s: %d meaningful, %d routine, %d noise · %d not matched to a landing of the run",
+	return fmt.Sprintf("%s from %s: %d meaningful, %d routine, %d noise · %d not matched to a change of the run",
 		plural(v.Labels, "labelled row", "labelled rows"), plural(v.Labellers, "labeller", "labellers"),
 		v.Meaningful, v.Routine, v.Noise, v.Unmatched)
 }
@@ -459,7 +462,7 @@ func (v *Validation) summary() string {
 func (v *Validation) writeText(p *printer) {
 	p.line("validate · " + provenanceText(v.Provenance))
 	p.wrapped("  ", "  ", v.summary())
-	p.line("  AUC: the chance a meaningful change scores above a routine one; 0.5 is chance")
+	p.wrapped("  ", "  ", "AUC: the chance a meaningful change scores above a routine one; 0.5 is chance; in parentheses, its 95% interval")
 	p.blank()
 	if len(v.Metrics) == 0 {
 		p.line("  no ranked metric scored a labelled change")
@@ -480,7 +483,7 @@ func (v *Validation) writeMarkdown(p *printer) {
 	p.blank()
 	p.line("- " + provenanceText(v.Provenance))
 	p.line("- " + v.summary())
-	p.line("- AUC: the chance a meaningful change scores above a routine one; 0.5 is chance.")
+	p.line("- AUC: the chance a meaningful change scores above a routine one; 0.5 is chance. In parentheses, its 95% bootstrap interval.")
 	p.blank()
 	if len(v.Metrics) == 0 {
 		p.line("No ranked metric scored a labelled change.")

@@ -31,7 +31,10 @@ const (
 // last 90 days.
 type reviewsGiven struct{}
 
-var _ Ranked = reviewsGiven{}
+var (
+	_ Ranked       = reviewsGiven{}
+	_ zeroMeasured = reviewsGiven{}
+)
 
 // Definition returns reviews_given@1's catalog entry.
 func (reviewsGiven) Definition() Definition {
@@ -51,7 +54,7 @@ func (reviewsGiven) Definition() Definition {
 		Gaming: "rubber-stamp approvals, which the share of approvals with no comment shows next to the count; " +
 			"reviewing many trivial pull requests, such as dependency bumps",
 		Oracle:   "testdata/github/README.md#reviews_given1 (TestGitHubSync)",
-		Validity: "unvalidated until the M2 labelled-sample check",
+		Validity: betaValidity,
 	}
 }
 
@@ -154,6 +157,22 @@ func (m reviewsGiven) Clusters(in *Input, scope domain.Scope) (RankInput, error)
 		slices.SortFunc(cs, func(a, b rank.Cluster) int { return cmp.Compare(a.Change, b.Change) })
 	}
 	return ri, nil
+}
+
+// measuredZero says which changes reviews_given@1 measures as 0 although
+// they have no cluster (#77, docs/metrics.md#validity-checks): one that
+// landed in its window in a repository whose GitHub data the run read (a
+// page or a finished sync), whether a pull request no one else reviewed
+// landed it or it was pushed straight to the branch. Elsewhere its reviews
+// are unknown, so it is not measured: a 0 there would read a missing sync
+// as no review.
+func (reviewsGiven) measuredZero(in *Input, w domain.Window) func(*Change) bool {
+	v, err := newView(in, nil)
+	if err != nil {
+		return func(*Change) bool { return false }
+	}
+	x := v.reviews()
+	return func(c *Change) bool { return x != nil && x.known[c.Repo] && w.Contains(c.Time) }
 }
 
 // reviewsGivenWindow is [now − 90 days, now).

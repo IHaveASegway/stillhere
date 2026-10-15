@@ -160,7 +160,7 @@ type Validation struct {
 	Meaningful int         `json:"meaningful"` // rows labelled meaningful
 	Routine    int         `json:"routine"`
 	Noise      int         `json:"noise"`     // read and left out of every AUC
-	Unmatched  int         `json:"unmatched"` // rows whose change is not a landing of the run, or is ambiguous
+	Unmatched  int         `json:"unmatched"` // rows that name no change of the run (a landing or a pull request), or several
 	Metrics    []MetricAUC `json:"metrics"`   // sorted by metric id
 	Caveats    []Caveat    `json:"caveats"`
 }
@@ -169,7 +169,9 @@ type Validation struct {
 type MetricAUC struct {
 	Metric     string   `json:"metric"`
 	AUC        *float64 `json:"auc"` // 0.5 is chance; nil when no meaningful or no routine change was scored
-	N          int      `json:"n"`   // labelled changes the metric scored
+	Lo         *float64 `json:"lo"`  // 95% bootstrap interval of AUC (rank.AUCInterval); nil with AUC
+	Hi         *float64 `json:"hi"`
+	N          int      `json:"n"` // labelled changes the metric scored, each at its own grain (metrics.Scorer)
 	Meaningful int      `json:"meaningful"`
 	Routine    int      `json:"routine"`
 	Beta       bool     `json:"beta"` // below AUC 0.7 or 50 scored labels: the metric stays marked beta

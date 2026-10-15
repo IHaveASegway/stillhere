@@ -124,14 +124,14 @@ Each milestone ships and gets used before the next starts. Numbers come before U
 |---|---|---|
 | **M0** Walking skeleton | Go module; discovery; classification; `stillhere week`; CI on git 2.45 (the version floor) and latest; GoReleaser publishing to a Homebrew tap and a Docker image | `brew install` works; the fixture's week oracle passes |
 | **M1** What lasted | Blame collector; ownership, knowledge concentration and loss; `durable@1`, `simplifying@1`; revert detection; AI-assisted tag; facts store (SQLite) and metric registry; `explain`; snapshots with cheap backfill | Fixture oracles for every metric; a real 80-repo scan inside the budget |
-| **M2** Reviews and ranks | GitHub App; `sync github` (pull requests, reviews, comments, labels, managed mirrors); `reviews_given@1`; per-metric ranks with intervals (`--rank`); `stillhere me`; validity check against hand labels | Contract tests on recorded API responses; rank intervals verified on the fixture; the labelled-sample check run once |
+| **M2** Reviews and ranks | GitHub App; `sync github` (pull requests, reviews, comments, labels, managed mirrors); `reviews_given@1`; per-metric ranks with intervals (`--rank`); `stillhere me`; validity check against hand labels (`stillhere label`, `stillhere validate`) | Contract tests on recorded API responses; rank intervals verified on the fixture; the labelled-sample check run once |
 | **M3** Team web | `stillhere serve` with Sign in with GitHub; leads team sees ranks; own pages; highlights; code-area views | Auth tests (state, sessions, escaping); one real deployment |
 | **M4** Agents | `stillhere mcp`; narrated highlights (Anthropic, pseudonymized) | MCP tools tested with the official SDK client; redaction and numbers-check tests |
 | **M5** Load-bearing and typed | Hotspots and coupling; `load_bearing@1`; `change_type@1` | Hotspot engine decided (open decision 1); oracles pass |
 
 ## Open decisions
 
-Recommendations that were not approved stay open. The baseline is what happens if nobody decides. Decisions already written up as ADRs await the owner too, with status Proposed in the [ADR index](adr/README.md): today 0009, 0010, 0011 and 0012, and 0007's amendment on the AI-assisted shares the MCP server sends.
+Recommendations that were not approved stay open. The baseline is what happens if nobody decides. Decisions already written up as ADRs await the owner too, with status Proposed in the [ADR index](adr/README.md): today 0009, 0010, 0011, 0012 and 0014, and 0007's amendment on the AI-assisted shares the MCP server sends.
 
 | # | Decision | Baseline (2026-10-07 plan) | Recommendation | Decide by | Evidence that settles it |
 |---|---|---|---|---|---|
@@ -146,14 +146,14 @@ Recommendations that were not approved stay open. The baseline is what happens i
 ## Non-goals (v1)
 
 - A composite score of a person, or use for performance or pay decisions.
-- AI-produced scores or AI-judged changes. Judging needs a hand-labelled evaluation set first.
+- AI-produced scores or AI-judged changes. Judging needs a hand-labelled evaluation set first. The model panel of [validation.md](validation.md#reference-validation-a-model-panel) labels public repositories' changes for a published reference number; none of its judgments reaches stillhere's outputs ([ADR 0014](adr/0014-labels-are-evidence-not-the-gate.md)).
 - Forges other than GitHub. The `ForgeSource` port leaves room for GitLab later.
 - Code-health or complexity scoring, real-time updates, IDE plugins, telemetry.
 - Sending source code anywhere by default.
 
 ## How we will know it works
 
-- **It measures what we mean.** A lead labels 50 recent changes as meaningful or routine. Durable and simplifying must separate the two with an AUC of at least 0.7 (0.5 is chance). If they do not, the definition changes, as a new metric version, before more UI is built on it. Canonical reading: Kaner and Bond, "Software Engineering Metrics: What Do They Measure and How Do We Know?" (METRICS 2004).
+- **It measures what we mean.** A lead labels at least 50 recent changes as meaningful, routine or noise (`stillhere label`, a blinded, stratified sample of the changes the ranked metrics score). Each ranked metric must separate meaningful from routine with an AUC of at least 0.7 (0.5 is chance) on at least 50 of its own scored labels (`stillhere validate`, which prints each AUC with its 95% interval). Only a lead's labels lift a metric's beta mark. Until a lead has labelled, a reference result on public repositories, labelled by a panel of model raters with the same rubric, is published beside the mark as "not yet a lead's labels": evidence, not the gate ([ADR 0014](adr/0014-labels-are-evidence-not-the-gate.md), [validation.md](validation.md)). If a metric fails a lead's check, the definition changes, as a new metric version, before more UI is built on it. Canonical reading: Kaner and Bond, "Software Engineering Metrics: What Do They Measure and How Do We Know?" (METRICS 2004).
 - **It gets used.** Leads open who-knows and highlights weekly. If ranked views go unused after M3, drop them and keep the highlights.
 - **It is reliable.** Fixture oracles pass on git 2.45 and on the latest git. Two runs with the same inputs are byte-identical once their wall-clock `timings` are removed. A cold scan of 100 repos and 50,000 files finishes in under 15 minutes on 8 cores.
 - **It spreads.** Homebrew installs, and 75 GitHub stars (the homebrew-core bar).

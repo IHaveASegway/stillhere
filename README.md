@@ -5,7 +5,7 @@ Change analytics for git and GitHub (what landed, what lasted, who knows it) for
 
 > stillhere measures specific properties of code changes: how long they lasted, how much they simplified, how much review they got. It does not measure a person's value, and it must not be the basis for performance or pay decisions.
 
-**Status:** pre-release. Built: the code of milestones M0 to M2, except M2's GitHub App (`sync github` uses your own GitHub token), and the MCP server of M4 ([product brief](docs/product.md#milestones)). Pending: the first release, so for now you install from source (see [Install](#install)), and M2's labelled-sample check, so no ranked metric has been validated yet.
+**Status:** pre-release. Built: the code of milestones M0 to M2, except M2's GitHub App (`sync github` uses your own GitHub token), and the MCP server of M4 ([product brief](docs/product.md#milestones)). Pending: the first release, so for now you install from source (see [Install](#install)), and the labelled-sample check: no ranked metric has been validated against a lead's labels yet, so every rank is marked beta, and `stillhere label` and `stillhere validate` run the check on your own code ([below](#check-the-ranks-on-your-own-code)).
 
 - [Product brief](docs/product.md): what it is, who it is for, milestones, open decisions
 - [Metric catalog](docs/metrics.md): every metric's definition, blind spots, and how it can be gamed
@@ -89,6 +89,17 @@ The image is published from the first release on. Until then, build it from a ch
 On macOS, git may report dubious ownership when containers with different `--user` values read one mount, because Docker Desktop does not always show a container a mounted file's owner as the Mac has it. Use one `--user` for every container that reads a mount, or use the binary.
 
 The commands that store facts (`scan` and `sync github`) keep them under `STILLHERE_HOME`, which is `/data` in the image, a directory only the image's own user may enter. When you pass `--user`, mount a directory that user owns there, such as `-v "$HOME/.stillhere:/data"`.
+
+## Check the ranks on your own code
+
+A rank says that some people's changes last longer, simplify more or get more review than others'. Whether that matches what matters in your code is something only you can judge, so stillhere asks you:
+
+```sh
+stillhere label        # 100 of the run's changes, one key each: m meaningful, r routine, n noise, s skip, q quit
+stillhere validate     # per ranked metric, the AUC: how often a meaningful change scores above a routine one
+```
+
+`label` shows each change without any metric value or author, appends every answer to `labels.csv` beside the facts database (outside your repositories: the labels judge colleagues' work), and resumes where you stopped. `label --sheet > sheet.csv` writes the same sample for a spreadsheet, which `validate --labels sheet.csv` reads back. An AUC of 0.5 is chance; a metric loses its beta mark at 0.7 or more on at least 50 labels. [docs/validation.md](docs/validation.md) has the rubric, worked examples from public repositories, and how each metric scores a change.
 
 ## Use it from an agent (MCP)
 

@@ -380,8 +380,8 @@ func NewMe(in *MeInput) *Me {
 
 // ValidityCaveats says how far the ranked metrics among ms are validated,
 // for an answer that shows their values, ranks or clusters: each one's
-// validity note (MetricInfo.Validity), such as durable@1's "unvalidated
-// until the labelled-sample check". A caveat goes where the number it
+// validity note (MetricInfo.Validity), such as durable@1's "Beta: not yet
+// checked against a lead's labels". A caveat goes where the number it
 // qualifies is (#48), so every answer that shows a ranked metric's number
 // carries its note, not its rank table alone (#69). Metrics that share a
 // note share one caveat, which names them; a metric that is not ranked, or

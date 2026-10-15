@@ -925,6 +925,37 @@ After the scan, a sync stores #3 again, updated 10-12 with one more review, hank
 
 **A run stored before #69.** A stillhere before #69 kept a login's case in the keys it stored. Had both pull requests said `Zoe`, its run would hold `@Zoe` 2 in its values and ranks, while its readers fold what they are handed and what they compute from its pull requests to `@zoe`. The readers fold the stored keys too, where they read the run ([run model](../../docs/spec/codebase.md#run-model)), so `explain reviews_given@1 --person @zoe` gives 2 in scope `all`, as for a run stored since; without the fold, `@zoe` has no value in that run. (This replica as such a stillhere stored it would hold `@zoe` 1 and `@Zoe` 1, one account split in two, with a row each in its rank tables; that run is read as stored, and the log says to scan again.)
 
+### validate over the same replica
+
+`stillhere validate` (#77) scores each ranked metric's measure of a labelled change at the metric's own grain ([metrics.md](../../docs/metrics.md#validity-checks)): `durable@1` and `simplifying@1` by the change's landings, `reviews_given@1` by its pull request, whose clusters are its reviewers in `[2026-07-09, 2026-10-07)`. A change of that window with no reviewer other than its author, in a repository with GitHub data, scores 0; one outside it is not scored by `reviews_given@1`. Derived by hand from the replica above and [Change facts per landing](#change-facts-per-landing-main-fixture):
+
+| Labels row | Change | Label | `durable@1` | `simplifying@1` | `reviews_given@1` |
+| --- | --- | --- | --- | --- | --- |
+| `#3` | row 8 (#3, Bob's merge) | meaningful | not scored (outside the cohort) | 0 (Cara's commits remove nothing) | 1 (bob) |
+| `pr:4` | row 9 (#4) | meaningful | not scored | 0 | 2 (cara, `@zoe`; frank's is before the window, the copilot reviewer a bot, bob the author) |
+| `acme/fixture#6` | row 12 (#6) | meaningful | not scored | 0 | 1 (`@zoe`) |
+| row 13's SHA | row 13, Frank's, no pull request | routine | not scored | 0 | 0 |
+| row 14's first 7 digits | row 14, Ada's, no pull request | routine | not scored | 0 | 0 |
+| row 11's SHA | row 11, Dana's | noise | in no AUC | | |
+| row 1's SHA | row 1, Ada's init | meaningful | 7 / 7 = 1 | not scored | not scored |
+| row 3's SHA | row 3, Bob's move | routine | 0 / 2 = 0 | not scored | not scored |
+| `#1` | row 5 (#1, Gina's) | meaningful | 2 / 2 = 1 | not scored | not scored |
+| row 7's SHA | row 7, Bob's | routine | 5 / 5 = 1 | not scored | not scored |
+| `#9` | no pull request 9 | meaningful | unmatched | | |
+| row 16's SHA | row 16 | skip | no label | | |
+
+So the file holds 11 labels (6 meaningful, 4 routine, 1 noise) from 1 labeller, 1 unmatched, and: `reviews_given@1` AUC 1 over 3 meaningful (1, 2, 1) and 2 routine (0, 0); `durable@1` AUC 0.75 over 2 and 2 (1 and 1 against 0 and 1: three pairs won or tied, 1 + 0.5 + 1 + 0.5 of 4); `simplifying@1` AUC 0.5 over 3 and 2, every one 0. Each is beta (fewer than 50 labels), and each interval holds its AUC. A file whose only lines are `# 3,meaningful` and `#pr 4,routine` holds 2 comments and no label: a usage error that counts them, since only `#` followed by digits names a pull request.
+
+Wrong implementations this catches:
+
+- **Labels matched to landings only** (#77 as found). `reviews_given@1` scores nothing, and `#3`, `pr:4`, `acme/fixture#6` and `#1` are unmatched.
+- **No 0 for an unreviewed change.** `reviews_given@1` has no routine change, so no AUC.
+- **`#950` read as a comment** (KB-19). The four pull request rows vanish, and the comment file gives "no labelled changes" with no count.
+
+### label over the same replica
+
+`stillhere label` draws from the changes a ranked metric scores, people's only. In `durable@1`'s cohort those are rows 1, 2, 3, 5 (#1), 6 (#2) and 7: row 4, the `git mv`, adds no line. In the 90-day window, where `simplifying@1` has a cluster for every person's landing and `reviews_given@1` scores every change in this synced repository, rows 8 (#3), 9 (#4), 11, 12 (#6), 13, 14, 15 and 16; row 10 is the bot's. The pool is 14 changes, 6 and 8. The windows take turns, so the first 4 of the sample are 2 from each; a sample of 20 is all 14, with a `small-sample` caveat, and a sample of 4 is its first 4. A labels file holding `#3,meaningful` marks row 8 labelled meaningful.
+
 ### Merge methods (`fixture.MergeMethods`)
 
 A pull request lands as its merge commit, and a rebase merge as the first-parent commits that share its committer second ([metrics.md](../../docs/metrics.md#who_knows1-per-path)): GitHub's `merge_commit_sha` is "the commit that the base branch was updated to", the last of the commits a rebase merge puts on the branch one by one, with new SHAs. The main fixture holds no two first-parent commits with one committer time, and adding them would move its oracles, so a repository of its own holds the cases (added in #38's review): `fixture.MergeMethods(t)`, a work tree named `merge-methods` on branch `main`. It is scanned alone, without a mailmap, with `--now 2026-10-07T00:00:00Z` and origin `https://git.example.test/acme/merge-methods.git`, and a replica written by hand as above. Every commit is at 12:00:00Z on the stated day, and `GitHub <noreply@github.com>` commits every merge, as its merge button does; each pull request's author wrote its commits. A file holds lines `<name>_<i> = <i>`, and the subject is `feat: add <file>`.
