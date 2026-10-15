@@ -17,7 +17,9 @@ import (
 // --line-porcelain, which Blame runs and which repeats a commit's author
 // lines in every record, and --porcelain, which prints them only the first
 // time the commit appears. It reads porcelain git printed, captured or
-// live, never porcelain written by hand.
+// live, never porcelain written by hand. On the main fixture the
+// --line-porcelain side is Blame itself, end to end, so the still-here
+// oracle is checked on the facts a scan stores.
 func TestBlamePorcelain(t *testing.T) {
 	t.Parallel()
 
@@ -80,19 +82,32 @@ func TestBlamePorcelain(t *testing.T) {
 			t.Fatal(err)
 		}
 		head := strings.TrimSpace(string(out))
-		b := &blamer{git: git, repo: domain.Repo{Path: dir, Head: head}, timeout: blameTimeout}
+		repo := domain.Repo{Key: "local:fixture", Name: "fixture", Path: dir, Branch: "main", Head: head}
 
+		// --line-porcelain end to end, as a scan blames: Blame resolves the
+		// repository's ignore-revs file (the main fixture has none) and reads
+		// the blamed commits' co-authors (none of them has any).
+		facts, err := Blame(ctx, git, repo, BlameOptions{Paths: blameMainProdPaths, Slots: NewBlameSlots(4)})
+		if err != nil {
+			t.Fatalf("Blame: %v", err)
+		}
+		if facts.Errors != nil || facts.Warnings != nil || !reflect.DeepEqual(facts.IgnoreRevs, domain.IgnoreRevs{}) {
+			t.Errorf("errors %v, warnings %v, ignore-revs %+v; want none", facts.Errors, facts.Warnings, facts.IgnoreRevs)
+		}
+		// Owners is sorted by Path, then Commit, so each path's list is in
+		// blameParse's order; CoAuthors stays nil, as blameParse leaves it.
+		owners := make(map[string][]domain.LineOwner)
 		lines := make(map[string]int) // prod non-blank lines per email
+		for _, o := range facts.Owners {
+			owners[o.Path] = append(owners[o.Path], o)
+			lines[o.Author.Email] += o.Lines
+		}
+
+		// --porcelain: the same blame, printed the other way.
+		b := &blamer{git: git, repo: repo}
 		for _, path := range blameMainProdPaths {
-			linePorcelain := b.file(ctx, path)
-			if linePorcelain.err != nil {
-				t.Fatalf("%s: --line-porcelain: %v", path, linePorcelain.err)
-			}
 			var porcelain []domain.LineOwner
-			err := git.Stream(ctx, domain.GitCmd{
-				Dir:  dir,
-				Args: []string{"blame", "-w", "-M", "--porcelain", "--no-ignore-revs-file", head, "--", path},
-			}, func(r io.Reader) error {
+			err := git.Stream(ctx, domain.GitCmd{Dir: dir, Args: b.args("--porcelain", path)}, func(r io.Reader) error {
 				var err error
 				porcelain, err = blameParse(r, path)
 				return err
@@ -100,16 +115,11 @@ func TestBlamePorcelain(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s: --porcelain: %v", path, err)
 			}
-			if !reflect.DeepEqual(linePorcelain.owners, porcelain) {
-				t.Errorf("%s: the forms disagree:\n--line-porcelain %+v\n     --porcelain %+v", path, linePorcelain.owners, porcelain)
-			}
-			for _, o := range linePorcelain.owners {
-				lines[o.Author.Email] += o.Lines
-			}
-			if path == "service.py" {
-				blameCheckService(t, linePorcelain.owners)
+			if !reflect.DeepEqual(owners[path], porcelain) {
+				t.Errorf("%s: the forms disagree:\n--line-porcelain %+v\n     --porcelain %+v", path, owners[path], porcelain)
 			}
 		}
+		blameCheckService(t, owners["service.py"])
 
 		// The still-here oracle: every prod file blamed by hand
 		// (testdata/fixture/SPEC.md#still-here-oracle-m1-teststillhereoracle).
