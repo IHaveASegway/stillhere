@@ -221,6 +221,40 @@ func (b *builder) forgeCaveats(members []*domain.RepoFacts, metric string, own b
 	return out
 }
 
+// forgeElsewhere is the caveat of a card's or an overview's metric that
+// counts a review in any repository of the run as activity: which of the
+// run's repositories outside the section, others, have an origin on a forge
+// and no GitHub data, or only part of it, so the reviews there that could
+// have kept someone here from looking gone are missing. A failed repository
+// is left out, as everywhere: it adds nothing. It is nil when there is
+// none, and in a run that read no GitHub data at all, the git-only case.
+func (b *builder) forgeElsewhere(others []*domain.RepoFacts, metric string) []Caveat {
+	f := b.in.Forge
+	if !f.readAny() {
+		return nil
+	}
+	var short []string
+	for _, rf := range others {
+		if _, onForge := domain.RemoteRepo(rf.Repo.Remote); rf.Status != domain.RepoStatusOK || !onForge {
+			continue
+		}
+		if !slices.ContainsFunc(f.Repos, func(s ForgeSync) bool { return s.Key == rf.Repo.Key && s.Synced != nil }) {
+			short = append(short, rf.Repo.Name)
+		}
+	}
+	if len(short) == 0 {
+		return nil
+	}
+	have := "have"
+	if len(short) == 1 {
+		have = "has"
+	}
+	return []Caveat{{Code: codeForgeNotSynced, Repos: sortedNames(short), Message: fmt.Sprintf(
+		"%s counts a review in any repository of the run as activity, and %s elsewhere in the run %s no GitHub data, "+
+			"or only part of it: someone who holds lines here and reviewed there can look gone.",
+		metric, plural(len(short), "repository", "repositories"), have)}}
+}
+
 // pullsNotListed is explain's caveat for a value whose changes are pull
 // requests, reviews_given@1's: explain lists landings, so it lists none of
 // them, although the run keeps them (ADR 0011).

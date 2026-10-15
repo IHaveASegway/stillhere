@@ -24,9 +24,10 @@
 -- run's deletion, by retention or as a crash's leftover, finds them by the
 -- primary key's prefix.
 --
--- A run stored before this migration kept no pull requests; its readers
--- report no GitHub data for it rather than compute over today's replica
--- (app.readForge).
+-- A run stored before this migration kept no pull requests: its pages date
+-- the GitHub numbers it stored by its watermarks, and who-knows, which
+-- computes reviewers from the pull requests, says nothing about GitHub for
+-- it rather than compute over today's replica (app.load).
 
 -- FactSet.Forge.Repos of a scan run: its forge repositories as the replica
 -- listed them when the run read it.

@@ -643,12 +643,24 @@ func (b *builder) provenance(repos []*domain.RepoFacts, metrics []string) Proven
 // forgeSectionCaveats says where the GitHub data behind the numbers of a
 // section that shows several metrics, a card or an overview, is missing:
 // for each metric among used that reads it (knowledge_loss@1), over the
-// section's repositories, members.
+// section's repositories, members, and then over the run's others. Such a
+// number counts a review in any repository of the run as activity, as it
+// counts a landing, so a review missing from another repository can make
+// someone who holds lines here look gone: the repositories behind it are
+// the run's, as on me and explain, and its caveats name them where the
+// number is.
 func (b *builder) forgeSectionCaveats(members []*domain.RepoFacts, used []string) []Caveat {
+	var others []*domain.RepoFacts
+	for _, rf := range b.repos {
+		if !slices.Contains(members, rf) {
+			others = append(others, rf)
+		}
+	}
 	var out []Caveat
 	for _, id := range slices.Compact(slices.Sorted(slices.Values(used))) {
 		if b.in.Forge.reads(id) {
 			out = append(out, b.forgeCaveats(members, id, false)...)
+			out = append(out, b.forgeElsewhere(others, id)...)
 		}
 	}
 	return out
