@@ -5,7 +5,7 @@ Change analytics for git and GitHub (what landed, what lasted, who knows it) for
 
 > stillhere measures specific properties of code changes: how long they lasted, how much they simplified, how much review they got. It does not measure a person's value, and it must not be the basis for performance or pay decisions.
 
-**Status:** pre-release. The MVP is built: milestones M0 to M2 and the MCP server of M4 ([product brief](docs/product.md#milestones)). No release is tagged yet, so build from source (see [Install](#install)).
+**Status:** pre-release. Built: the code of milestones M0 to M2, except M2's GitHub App (`sync github` uses your own GitHub token), and the MCP server of M4 ([product brief](docs/product.md#milestones)). Pending: the first release, so for now you install from source (see [Install](#install)), and M2's labelled-sample check, so no ranked metric has been validated yet.
 
 - [Product brief](docs/product.md): what it is, who it is for, milestones, open decisions
 - [Metric catalog](docs/metrics.md): every metric's definition, blind spots, and how it can be gamed
@@ -16,15 +16,24 @@ Change analytics for git and GitHub (what landed, what lasted, who knows it) for
 
 ## Install
 
-stillhere is one static binary for macOS, Linux and Windows. It runs the git on your `PATH`, which must be 2.45 or newer (`git version` tells you).
+stillhere is one static binary for macOS, Linux and Windows, on amd64 and arm64. CI runs the tests on Linux only: it builds the macOS and Windows binaries on every change, but does not test them. stillhere runs the git on your `PATH`, which must be 2.45 or newer (`git version` tells you).
 
-No release is tagged yet. Until the first one, build from a checkout with Go 1.27:
+No release is tagged yet. Until the first one, install from source with Go 1.27 or newer, either with `go install`, which needs no checkout:
+
+```sh
+go install github.com/IHaveASegway/stillhere/cmd/stillhere@latest   # the newest commit on main
+```
+
+`go install` puts the binary in `$(go env GOBIN)` when that is set, else in `$(go env GOPATH)/bin` (`~/go/bin` by default). Or build it from a checkout, which also stamps the commit and the build date into `stillhere version`:
 
 ```sh
 git clone https://github.com/IHaveASegway/stillhere.git
 cd stillhere
-make build            # writes bin/stillhere
+make build                                                # writes bin/stillhere
+mkdir -p ~/.local/bin && cp bin/stillhere ~/.local/bin/   # or any other directory on your PATH
 ```
+
+Either way, that directory must be on your `PATH`, or every command below fails with "command not found": `command -v stillhere` prints the binary's path when it is, and `stillhere --version` prints the version. Windows has no `make`; use `go install` there.
 
 From the first release on:
 
@@ -32,7 +41,7 @@ From the first release on:
 # Homebrew, macOS or Linux. The cask installs Homebrew's git, which meets the floor.
 brew install --cask ihaveasegway/tap/stillhere
 
-# Go 1.27 or newer
+# Go 1.27 or newer: @latest is then the newest release
 go install github.com/IHaveASegway/stillhere/cmd/stillhere@latest
 
 # Docker, linux/amd64 and linux/arm64, with git included
@@ -47,13 +56,13 @@ Each [release](https://github.com/IHaveASegway/stillhere/releases) also carries 
 stillhere week ~/src/acme                                  # the last 7 days, per person
 stillhere week ~/src/acme/api ~/src/acme/web --days 14     # two repositories, two weeks
 stillhere week ~/src/acme --format md > week.md            # Markdown, for a status note
-stillhere week ~/src/acme --now 2026-10-07 --format json   # same inputs, same bytes
+stillhere week ~/src/acme --now 2026-10-07 --format json   # same inputs, same bytes once timings is removed
 stillhere help week
 ```
 
 `week` prints what landed on each repository's default branch: one row per person with commits, lines added, and lines added to production code, with bots in a table of their own. Each `PATH` is a repository (a work tree or a bare mirror) or a group: a directory whose immediate children are repositories. `week` reads only what is already cloned and stores nothing; fetch first for fresh numbers.
 
-Two files in the current directory change the answer when present. `.mailmap` folds one person's addresses into one identity (`--mailmap FILE` names another). `stillhere.toml` replaces the packaged policy: which paths count as production code, which authors are bots (`--policy FILE` names another).
+Two files in the current directory change the answer when present. `.mailmap` folds one person's addresses into one identity (`--mailmap FILE` names another). `stillhere.toml` replaces the packaged policy as a whole: which paths count as production code, which authors are bots (`--policy FILE` names another). To start one, `stillhere policy > stillhere.toml` writes the packaged policy out as a complete file.
 
 To keep a history, scan instead: `scan` records a run in facts.db (history, blame, metrics and ranks), and the read commands answer from the latest run, or from `--run ID`, without touching the repositories again.
 
@@ -68,14 +77,16 @@ stillhere sync github --org acme                    # mirrors, pull requests and
 stillhere scan ~/.stillhere/mirrors/acme            # then scan the mirrors sync keeps
 ```
 
-In Docker, mount the repositories and run as the user who owns them, because git refuses to read a repository that belongs to someone else:
+In Docker, mount the repositories and run as the user who owns them, because git refuses to read a repository that belongs to someone else ("dubious ownership"):
 
 ```sh
 docker run --rm --user "$(id -u):$(id -g)" -v "$HOME/src:/work:ro" \
   ghcr.io/ihaveasegway/stillhere week /work/acme
 ```
 
-Docker Desktop on macOS presents mounted files as owned by root, so there either pass `--user 0:0` or use the Homebrew install.
+The image is published from the first release on. Until then, build it from a checkout with `go run github.com/goreleaser/goreleaser/v2@v2.18.3 release --snapshot --clean`, as the [Dockerfile](Dockerfile) says. That loads one image per platform into your Docker daemon, tagged with its platform, such as `ghcr.io/ihaveasegway/stillhere:latest-arm64`: run that name in place of `ghcr.io/ihaveasegway/stillhere`.
+
+On macOS, git may report dubious ownership when containers with different `--user` values read one mount, because Docker Desktop does not always show a container a mounted file's owner as the Mac has it. Use one `--user` for every container that reads a mount, or use the binary.
 
 The commands that store facts (`scan` and `sync github`) keep them under `STILLHERE_HOME`, which is `/data` in the image, a directory only the image's own user may enter. When you pass `--user`, mount a directory that user owns there, such as `-v "$HOME/.stillhere:/data"`.
 
@@ -83,14 +94,15 @@ The commands that store facts (`scan` and `sync github`) keep them under `STILLH
 
 `stillhere mcp` serves facts.db to your agent over the Model Context Protocol, on stdio: overview, person, who_knows, changes, explain, highlights, identity_candidates, metrics and diff. It reads the latest scan and cannot write to facts.db. Every answer carries its provenance (run, as-of time, HEAD SHAs, metric versions) and the caveats that could make it wrong. The contract is [docs/spec/mcp.md](docs/spec/mcp.md).
 
-Register it once with Claude Code, for every project (`--scope user`):
+Register it once with Claude Code, for every project (`--scope user`). Claude Code starts the server itself, with its own environment, whose `PATH` need not hold the directory you installed stillhere in, so register the binary's absolute path:
 
 ```sh
-stillhere scan ~/src/acme                     # the server reads the latest scan
-claude mcp add --scope user stillhere -- stillhere mcp --me you@example.com
+stillhere scan ~/src/acme      # the server reads the latest scan
+command -v stillhere           # the path to register; nothing printed means stillhere is not on your PATH
+claude mcp add --scope user stillhere -- "$(command -v stillhere)" mcp --me you@example.com
 ```
 
-Everything after `--` is the server's own command line; add `--db FILE` there for another facts.db. Answers go on to your agent's model provider, so by default the server withholds what the provider does not need:
+Everything after `--` is the server's own command line; add `--db FILE` there for another facts.db. With `--allow-source` the server also runs git: the first one on the `PATH` Claude Code starts it with, which must be 2.45 or newer. Answers go on to your agent's model provider, so by default the server withholds what the provider does not need:
 
 | Flag | Without it |
 | --- | --- |
