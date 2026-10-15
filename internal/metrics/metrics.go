@@ -42,9 +42,28 @@ type Definition struct {
 	// durable@1's are, so a report prints them as a percent with both
 	// parts, 1 of 1 included. It is the one declaration of it: a report
 	// reads it, never the unit's words, which can name other shares
-	// (surviving@1's counts carry a bot_share detail).
+	// (surviving@1's counts carry a bot_share detail), and a ranked
+	// metric's bootstrap follows from it (RankKind), so its rank table
+	// cannot print its estimates in another unit than its values.
 	Ratio                                             bool
 	Eligibility, BlindSpots, Gaming, Oracle, Validity string
+}
+
+// RankKind is how rank.Intervals bootstraps a ranked metric
+// (docs/metrics.md#ranking-rules), which follows from Ratio: a share
+// resamples each person's clusters (rank.Ratio), and any other value is a
+// total, which resamples the window's week blocks (rank.Sum). No metric
+// declares a kind of its own, so the kind its intervals are drawn by and
+// the unit its values and its rank table print in (RankSet.Percent, which
+// reads Ratio) agree by construction. A metric's Clusters still shapes its
+// data for its kind, Den for a share and Block and Options.Blocks for a
+// total, so flipping Ratio is a new metric version, as any definition
+// change is.
+func (d Definition) RankKind() rank.Kind {
+	if d.Ratio {
+		return rank.Ratio
+	}
+	return rank.Sum
 }
 
 // Input is what every metric computes over. Facts is required, with its
@@ -97,11 +116,11 @@ type Ranked interface {
 }
 
 // RankInput is everything rank.Intervals needs to rank one metric in one
-// scope:
+// scope, beside the kind its definition gives (Definition.RankKind):
 //
-//	rank.Intervals(m.Definition().ID, scope, ri.Window, ri.Kind, ri.Data, ri.Options)
+//	def := m.Definition()
+//	rank.Intervals(def.ID, scope, ri.Window, def.RankKind(), ri.Data, ri.Options)
 type RankInput struct {
-	Kind rank.Kind
 	// Window is the metric's own window for in.Facts.Now, such as
 	// durable@1's cohort [now-365d, now-90d). It seeds the bootstrap and
 	// is the Window of the matching MetricValues, which is how ranks join

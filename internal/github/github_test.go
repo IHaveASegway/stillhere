@@ -520,8 +520,10 @@ func reviewsGivenOracle(t *testing.T, repos []domain.ForgeRepo, pages []domain.F
 	// person's first counted review (domain.Window.Week): no review is at a
 	// week's boundary, where ⌊(Now − t) / 7 days⌋ would give one block more.
 	cluster := func(pr string, block int) rank.Cluster { return rank.Cluster{Change: pr, Num: 1, Block: block} }
+	if kind := m.Definition().RankKind(); kind != rank.Sum {
+		t.Errorf("reviews_given@1 ranks by kind %d, want rank.Sum: a count is a total, not a share", kind)
+	}
 	equal(t, "reviews_given@1 clusters", ri, metrics.RankInput{
-		Kind:    rank.Sum,
 		Window:  window,
 		Options: rank.Options{MinN: 10, Blocks: 13},
 		Data: map[domain.Subject][]rank.Cluster{

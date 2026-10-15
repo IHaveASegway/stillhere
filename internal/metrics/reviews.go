@@ -129,7 +129,6 @@ func (m reviewsGiven) Clusters(in *Input, scope domain.Scope) (RankInput, error)
 	}
 	window := reviewsGivenWindow(in.Facts.Now)
 	ri := RankInput{
-		Kind:    rank.Sum,
 		Window:  window,
 		Options: rank.Options{MinN: reviewsGivenMinN, Blocks: window.Weeks()},
 	}

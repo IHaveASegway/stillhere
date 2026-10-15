@@ -545,9 +545,11 @@ type Definition struct {
 	Question, Unit                                           string
 	Ranked                                                   bool
 	Forge                                                    bool // reads FactSet.Forge (#38): the one declaration the report dates and caveats GitHub numbers by
-	Ratio                                                    bool // its values are shares, Num of Den (durable@1, knowledge_loss@1, ai_assisted@1): the one declaration a report prints a percent by, never the unit's words
+	Ratio                                                    bool // its values are shares, Num of Den (durable@1, knowledge_loss@1, ai_assisted@1): the one declaration a report prints a percent by, never the unit's words,
+	                                                              // a rank table included (RankSet.Percent), and the one a ranked metric's bootstrap follows (RankKind)
 	Eligibility, BlindSpots, Gaming, Oracle, Validity        string
 }
+func (d Definition) RankKind() rank.Kind // ARCH-10: rank.Ratio for a share (Ratio), else rank.Sum; no metric declares a kind of its own, so ranks and values print in one unit
 type Input struct {
 	Facts  *domain.FactSet     // required, with Now
 	Policy *policy.Policy      // nil: no bot or AI patterns and no [week] days, so Days must be set
@@ -562,10 +564,10 @@ type Ranked interface {
 	Metric
 	Clusters(in *Input, scope domain.Scope) (RankInput, error)
 }
-// RankInput: the metric owns its window and eligibility (both are part of its versioned definition), so a
-// caller ranks with rank.Intervals(def.ID, scope, ri.Window, ri.Kind, ri.Data, ri.Options) and restates nothing.
+// RankInput: the metric owns its window and eligibility (both are part of its versioned definition), and its kind
+// follows from its definition, so a caller ranks with rank.Intervals(def.ID, scope, ri.Window, def.RankKind(), ri.Data,
+// ri.Options) and restates nothing.
 type RankInput struct {
-	Kind    rank.Kind
 	Window  domain.Window // the metric's window for Facts.Now (durable@1: [now-365d, now-90d)); joins ranks to MetricValue.Window
 	Options rank.Options  // MinN from the eligibility rule; Blocks for Sum; Replicates 0 = 1000
 	Data    map[domain.Subject][]rank.Cluster // each person's clusters, sorted by Change; bots left out; nil when empty
@@ -651,7 +653,7 @@ type ForgeSync struct {                    // a watermark as the run read it
 	Updated, Synced *time.Time // ForgeWatermark's, nil for its zero times
 }
 func OwnPageOnly(metric domain.MetricID) bool // a person's values only their own page shows: ai_assisted (ADR 0007); explain refuses them
-type RankSet struct { Metric MetricInfo; Scope domain.Scope; Window domain.Window; Percent bool; MinN int; Intervals []domain.RankInterval } // bots left out
+type RankSet struct { Metric MetricInfo; Scope domain.Scope; Window domain.Window; Percent bool; MinN int; Intervals []domain.RankInterval } // bots left out; Percent: metrics.Definition.Ratio
 func Build(in *Input) *Model
 // The read commands' answers live here too, so the renderers and the MCP server share one shape.
 // Each has Provenance (run id, as-of, policy, HEAD SHAs, metric@version, when the GitHub data was synced) and Caveats:

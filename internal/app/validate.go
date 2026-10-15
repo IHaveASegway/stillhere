@@ -96,7 +96,7 @@ func Validate(ctx context.Context, d Deps, r ValidateRequest) (*report.Validatio
 		if err != nil {
 			return nil, fmt.Errorf("scoring changes with %s: %w", m.def.ID, err)
 		}
-		score := changeScores(ri)
+		score := changeScores(ri, m.def.Ratio)
 		a := report.MetricAUC{Metric: m.def.ID.String()}
 		var pos, neg []float64
 		for _, j := range matched {
@@ -135,9 +135,10 @@ func Validate(ctx context.Context, d Deps, r ValidateRequest) (*report.Validatio
 }
 
 // changeScores is a ranked metric's value for each change: its clusters'
-// numerators over their denominators for a ratio, their sum for a sum.
-// A merge landing can be several clusters, one per person it credits.
-func changeScores(ri metrics.RankInput) map[string]float64 {
+// numerators over their denominators for a ratio (metrics.Definition.Ratio),
+// their sum for a sum. A merge landing can be several clusters, one per
+// person it credits.
+func changeScores(ri metrics.RankInput, ratio bool) map[string]float64 {
 	num, den := map[string]float64{}, map[string]float64{}
 	for _, cs := range ri.Data {
 		for _, c := range cs {
@@ -147,7 +148,7 @@ func changeScores(ri metrics.RankInput) map[string]float64 {
 	}
 	out := make(map[string]float64, len(num))
 	for change, n := range num {
-		if ri.Kind == rank.Ratio {
+		if ratio {
 			if den[change] == 0 {
 				continue
 			}

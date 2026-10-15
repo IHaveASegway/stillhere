@@ -154,11 +154,13 @@ func rankAll(in *metrics.Input, ms []rankedMetric, scopes []domain.Scope, stored
 				continue
 			}
 			if len(intervals) == 0 && len(data) > 0 {
-				intervals = rank.Intervals(m.def.ID, s, ri.Window, ri.Kind, data, ri.Options)
+				intervals = rank.Intervals(m.def.ID, s, ri.Window, m.def.RankKind(), data, ri.Options)
 			}
+			// Percent reads the one declaration of a share, as explain
+			// does, and so does the bootstrap's kind (RankKind).
 			sets = append(sets, report.RankSet{
 				Metric: metricInfo(m.def), Scope: s, Window: ri.Window,
-				Percent: ri.Kind == rank.Ratio, MinN: ri.Options.MinN, Intervals: intervals,
+				Percent: m.def.Ratio, MinN: ri.Options.MinN, Intervals: intervals,
 			})
 			all = append(all, intervals...)
 		}
