@@ -47,6 +47,6 @@ Two-way. facts.db is disposable and migration 4 is additive; the snapshot sits b
 
 ## Revisit if
 
-- The forge snapshots grow beyond a fifth of facts.db on a real organization, or past 1 GB: version the replica instead (above).
-- Reading the snapshot shows up in the latency of `report` or of MCP tool calls (over 0.5 s): cache it in the MCP server as it caches facts, or load it only for the use cases that compute from it.
+- The forge snapshots grow beyond a fifth of facts.db on a real organization, or past 1 GB: deduplicate the copies by pull request version first, which leaves sync and every reader as they are, and version the replica only if that is not enough (above).
+- Reading the snapshot shows up in the latency of `report` or of a command-line answer (over 0.5 s; the MCP server already caches it): load it only for the use cases that compute from it, `who-knows` and `explain`, once a newer metric version that reads GitHub data, which a report ranks from the run's own data, is handled there too.
 - A use case needs GitHub data the scan did not read, such as pull requests older than the history window: widen what a scan reads, rather than reading the replica from a stored run.
