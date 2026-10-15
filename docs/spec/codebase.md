@@ -573,6 +573,7 @@ type Me struct { Provenance Provenance; Person Subject; Values []Value; Ranks []
 type Validation struct { Provenance Provenance; Labels, Labellers, Meaningful, Routine, Noise, Unmatched int; Metrics []MetricAUC; Caveats []Caveat }
 type MetricAUC struct { Metric string; AUC *float64; N, Meaningful, Routine int; Beta bool } // AUC nil without both labels
 type Catalog struct { Metrics []MetricInfo }
+type Identities struct { Provenance Provenance; Caveats []Caveat } // #26 adds the candidates and their evidence; a Document, plus a mailmap rendering
 func NewExplain(in *ExplainInput) *Explain    // values, and a ranked metric's clusters per repository as changes
 func NewWhoKnows(in *WhoKnowsInput) *WhoKnows // who_knows@1's values under the path, as lists
 func NewMe(in *MeInput) *Me                   // the person's values and their row in each RankSet
@@ -632,6 +633,7 @@ type WhoKnowsRequest struct { RunID int64; Path, Repo string }
 type MeRequest struct { RunID int64; Email string }                                // Email required: the CLI resolves any default
 type ValidateRequest struct { RunID int64; Labels []byte; LabelsName string }      // the CLI reads the file; app opens none
 type SyncRequest struct { Org, Mirrors string; IncludeArchived, IncludeForks bool; Now time.Time } // Now: read once by cli; stamps the run and ForgeWatermark.Synced
+type IdentitiesRequest struct { RunID int64; Scope domain.Scope }                 // the zero Scope: every repository of the run; else a group or one repository
 func Week(ctx context.Context, d Deps, r WeekRequest) (*report.Model, error)
 func Scan(ctx context.Context, d Deps, r ScanRequest) (*report.Model, error)
 // The read side reads the latest complete or partial run unless a run id is given, with the run's own policy:
@@ -641,6 +643,7 @@ func WhoKnows(ctx context.Context, d Deps, r WhoKnowsRequest) (*report.WhoKnows,
 func Me(ctx context.Context, d Deps, r MeRequest) (*report.Me, error)
 func Validate(ctx context.Context, d Deps, r ValidateRequest) (*report.Validation, error)
 func Metrics() *report.Catalog // the registry's definitions: the metrics command and the MCP server's metrics()
+func Identities(ctx context.Context, d Deps, r IdentitiesRequest) (*report.Identities, error) // #26: suggested .mailmap merges with evidence, never applied; the identities command and the MCP server's identity_candidates()
 func Sync(ctx context.Context, d Deps, r SyncRequest) error // #14
 // Week and Scan return the model alongside domain.ErrNoFacts when no repository produced facts (a scan then
 // stores nothing). A cancellation, a *domain.UsageError from a collector, or a collector that is not built yet
@@ -701,6 +704,7 @@ Global flags: `--db` (default `$STILLHERE_HOME/facts.db`, where `STILLHERE_HOME`
 | `who-knows PATH [--repo KEY]` | facts.db | nothing | M1 |
 | `me --email E [--run ID]` | facts.db | nothing | M2 |
 | `metrics` | the registry | nothing | M1 |
+| `identities [--run ID] [--format mailmap\|text\|md\|json]` | facts.db | nothing | M2 (#26) |
 | `validate --labels FILE [--run ID]` | facts.db, a labels CSV | nothing | M2 |
 | `sync github --org ORG [--mirrors DIR]` | GitHub | mirrors, forge facts | M2 |
 | `mcp [--allow-source] [--allow-emails]` | facts.db | nothing | M4 |
@@ -747,7 +751,8 @@ Exit codes are in [report-json.md](report-json.md#exit-codes): 0 when any repo p
 Issues are built in parallel branches, so a shared package or file needs a rule that keeps two branches from colliding, or from compiling apart and failing only at merge.
 
 - **`collect` is shared by #4, #5, #6 and #7.** Each collector's unexported identifiers carry its prefix (`discover…`, `classify…`, `history…`, `blame…`). The readers every collector needs are in `scan.go` (`newScanner`, which allows long lines, `scanNUL` for `-z` output, and `nonBlank`, the one non-blank predicate that the history and blame collectors both count with), and the test helper in `collect_test.go` (`newRunner`, a real `gitcli.Runner`). The co-author reader `coAuthors` is in `coauthors.go`: #6 implements it, and #7 calls it for the commits blame attributes lines to, which can be older than any history window. The package has at most one `TestMain`, and it goes in `collect_test.go`.
-- **Files that belong to one issue.** #14: `domain/forge.go`, `internal/github`, `sqlite/forge.go`, `sqlite/migrations/0002_forge.sql`, `cli/forge.go`, `cli/sync.go`, `app/sync.go`, `metrics/reviews.go` (registered with one line in `metrics.All`). #15: `app/mcp.go`, `cli/mcp.go`, `internal/mcp`. #5: everything in `policy` but `types.go`, which is this file's contract. Where such a file shares a package with another issue's, its unexported identifiers carry a prefix, as in `collect`: `forge…` in `sqlite`, `reviews…` in `metrics`.
+- **Files that belong to one issue.** #14: `domain/forge.go`, `internal/github`, `sqlite/forge.go`, `sqlite/migrations/0002_forge.sql`, `cli/forge.go`, `cli/sync.go`, `app/sync.go`, `metrics/reviews.go` (registered with one line in `metrics.All`). #15: `app/mcp.go`, `cli/mcp.go`, `internal/mcp`. #26: `identity/candidates.go`, `app/identities.go`, `report/identities.go`, `cli/identities.go`. #5: everything in `policy` but `types.go`, which is this file's contract. Where such a file shares a package with another issue's, its unexported identifiers carry a prefix, as in `collect`: `forge…` in `sqlite`, `reviews…` in `metrics`.
+- **A stub another branch calls.** The MCP server's `identity_candidates()` (#15) calls `app.Identities`, which returns `domain.ErrNotImplemented` until #26 lands; both are built in parallel against its signature here, and `report.Identities` is a `Document` from the start, so the server serves whatever #26 puts in it. `TestMCPTools` skips that one tool's subtest (`t.Skip("#26")`) while the stub stands, and the integrator removes the skip when both merge (Consumer-Driven Contracts: Ian Robinson, "Consumer-Driven Contracts: A Service Evolution Pattern", 2006).
 - **Shared documents.** Each issue edits only the sections its scope names: in [metrics.md](../metrics.md), the entries of the metrics it builds or derives oracles for; in this file, the signatures it changes; in [report-json.md](report-json.md), the shape (#11). Where two branches still touch the same lines, #13 resolves them when it merges, as it does `go.mod` and `go.sum`.
 
 ## Tests
