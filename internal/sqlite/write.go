@@ -219,12 +219,12 @@ func putLandings(ctx context.Context, tx *sql.Tx, id int64, f *domain.RepoFacts)
 
 // putOwners writes the line owners with their commits' co-authors.
 func putOwners(ctx context.Context, tx *sql.Tx, id int64, f *domain.RepoFacts) error {
-	owners := newInserter(ctx, tx, "line_owners", "repo_id", "seq", "path", "commit_sha", "author_name",
+	owners := newInserter(ctx, tx, "line_owners", "repo_id", "seq", "path", "commit_sha", "orig_path", "author_name",
 		"author_email", "author_time", "lines")
 	coAuthors := newInserter(ctx, tx, "line_owner_coauthors", "repo_id", "owner_seq", "seq", "name", "email")
 	for i := range f.Owners {
 		o := &f.Owners[i]
-		owners.add(id, i, o.Path, o.Commit, o.Author.Name, o.Author.Email, owners.time(o.AuthorTime), o.Lines)
+		owners.add(id, i, o.Path, o.Commit, o.OrigPath, o.Author.Name, o.Author.Email, owners.time(o.AuthorTime), o.Lines)
 		for j, a := range o.CoAuthors {
 			coAuthors.add(id, i, j, a.Name, a.Email)
 		}

@@ -384,18 +384,21 @@ func TestAttributes(t *testing.T) {
 			row(head, "sub", "", 1, 0, 1),        // --ignore-submodules=none, --submodule=short
 		}
 		// Ann keeps g.py through Bob's rename (--attr-source,
-		// core.ignoreCase, core.bigFileThreshold, diff.default.binary) and
-		// both lines of slide.py (--indent-heuristic); Zoë's lines carry
-		// her co-author; the decomposed path is blamed
-		// (core.precomposeUnicode, on macOS); prose.go is blamed without its
-		// textconv driver (--no-textconv); and the repository's missing
-		// ignore-revs file fails nothing (--no-ignore-revs-file).
+		// core.ignoreCase, core.bigFileThreshold, diff.default.binary), from
+		// f.py, the path of her commit's row above; and both lines of
+		// slide.py (--indent-heuristic); Zoë's lines carry her co-author;
+		// the decomposed path is blamed (core.precomposeUnicode, on macOS);
+		// prose.go is blamed without its textconv driver (--no-textconv);
+		// and the repository's missing ignore-revs file fails nothing
+		// (--no-ignore-revs-file).
 		owner := func(path, commit string, who domain.Person, day int, coAuthors []domain.Person, lines int) domain.LineOwner {
 			return domain.LineOwner{Path: path, Commit: commit, Author: who, AuthorTime: authored(day), CoAuthors: coAuthors, Lines: lines}
 		}
+		kept := owner("g.py", ann2, ann, 2, nil, 10)
+		kept.OrigPath = "f.py"
 		wantOwners := []domain.LineOwner{
 			owner(cafe, zoes, zoe, 5, []domain.Person{cara}, 1),
-			owner("g.py", ann2, ann, 2, nil, 10),
+			kept,
 			owner("prose.go", added, ann, 1, nil, 3),
 			owner("slide.py", ann2, ann, 2, nil, 2),
 			owner("zoe.py", zoes, zoe, 5, []domain.Person{cara}, 2),

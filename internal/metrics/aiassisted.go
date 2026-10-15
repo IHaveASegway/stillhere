@@ -33,8 +33,9 @@ func (aiAssistedV1) Definition() Definition {
 		BlindSpots: "A lower bound: editor completions leave no trace, and only the policy's co-author emails and agent authors " +
 			"are recognised, so a tool with an unknown trailer (Cursor's is unverified) is missed. GitHub squash merges list human " +
 			"co-authors, who are never tagged.",
-		Gaming:   "Removing the trailer hides the tag; adding one to a commit no agent touched fakes it.",
-		Oracle:   "testdata/fixture/SPEC.md#ai-assisted-tags-and-credit (sibling) and the main fixture's 0 of 16",
+		Gaming: "Removing the trailer hides the tag; adding one to a commit no agent touched fakes it.",
+		Oracle: "testdata/fixture/SPEC.md#ai-assisted-tags-and-credit (sibling), the main fixture's 0 of 16, and " +
+			"testdata/fixture/SPEC.md#binary-files-fixturebinary (durable_other 8/10)",
 		Validity: "A tag, not a measurement of quality: exact for the trailers and authors the policy names, blind to the rest.",
 	}
 }

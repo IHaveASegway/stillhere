@@ -3,15 +3,17 @@ package collect
 import (
 	"bufio"
 	"bytes"
+	"errors"
 	"io"
+	"strings"
 )
 
 // This file holds what every collector (#4, #5, #6, #7) needs to read git's
 // output and count its lines, so the four do not each write their own, and
-// the attribute source the history and blame collectors share. A
-// collector's other unexported identifiers carry its prefix (discover,
-// classify, history, blame), so the four can be written in parallel
-// without colliding (docs/spec/codebase.md#working-in-parallel).
+// what the history and blame collectors share: the path unquoting and the
+// attribute source. A collector's other unexported identifiers carry its
+// prefix (discover, classify, history, blame), so the four can be written
+// in parallel without colliding (docs/spec/codebase.md#working-in-parallel).
 
 // maxToken bounds one line, or one NUL-terminated token, of git output.
 // Generated files have megabyte lines (docs/spec/codebase.md#concurrency);
@@ -40,6 +42,69 @@ func newScanner(r io.Reader, split bufio.SplitFunc) *bufio.Scanner {
 func nonBlank(line []byte) bool {
 	return len(bytes.TrimSpace(line)) > 0
 }
+
+// unquotePath undoes git's quote_c_style, with which a path that holds a
+// quote, a backslash, a control character or (unless core.quotePath is
+// false) a non-ASCII byte is printed where git writes paths one per line:
+// a patch's "---" and "+++" labels (historyLabel) and blame's porcelain
+// "filename" (blameParse). It removes the surrounding quotes and undoes
+// the escapes \a \b \t \n \v \f \r \" \\ and three-digit octal escapes,
+// which stand for single bytes, so a path that is not valid UTF-8 survives
+// byte for byte, as the -z output the collectors read elsewhere gives it.
+// Raw bytes pass through, which is how git prints non-ASCII when
+// core.quotePath is false.
+func unquotePath(s string) (string, error) {
+	if len(s) < 2 || s[0] != '"' || s[len(s)-1] != '"' {
+		return "", errors.New("malformed quoted path")
+	}
+	s = s[1 : len(s)-1]
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c == '"' {
+			return "", errors.New("malformed quoted path")
+		}
+		if c != '\\' {
+			b.WriteByte(c)
+			continue
+		}
+		i++
+		if i >= len(s) {
+			return "", errors.New("malformed quoted path")
+		}
+		switch e := s[i]; e {
+		case 'a':
+			b.WriteByte('\a')
+		case 'b':
+			b.WriteByte('\b')
+		case 't':
+			b.WriteByte('\t')
+		case 'n':
+			b.WriteByte('\n')
+		case 'v':
+			b.WriteByte('\v')
+		case 'f':
+			b.WriteByte('\f')
+		case 'r':
+			b.WriteByte('\r')
+		case '"', '\\':
+			b.WriteByte(e)
+		case '0', '1', '2', '3':
+			if i+2 >= len(s) || !isOctal(s[i+1]) || !isOctal(s[i+2]) {
+				return "", errors.New("malformed octal escape in quoted path")
+			}
+			b.WriteByte((e-'0')<<6 | (s[i+1]-'0')<<3 | (s[i+2] - '0'))
+			i += 2
+		default:
+			return "", errors.New("unknown escape in quoted path")
+		}
+	}
+	return b.String(), nil
+}
+
+// isOctal reports whether c is an octal digit.
+func isOctal(c byte) bool { return c >= '0' && c <= '7' }
 
 // The empty tree of each object format. git holds it as an object of every
 // repository, whether or not the repository stores it (verified on git

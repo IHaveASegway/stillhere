@@ -1,6 +1,6 @@
 # Blame collector
 
-Status: carried over from the 2026-10-07 plan, updated 2026-10-14 (per-repo ignore-revs, per-commit rows, goroutine pool; then, with #7, the ignore-revs lookup, the list resolved to commits, its warnings, per-commit author keys and shared blame slots; then by #13: no `.gitattributes` file read, `--no-textconv`, `--indent-heuristic`, `--encoding=UTF-8`) · becomes tests in M1
+Status: carried over from the 2026-10-07 plan, updated 2026-10-14 (per-repo ignore-revs, per-commit rows, goroutine pool; then, with #7, the ignore-revs lookup, the list resolved to commits, its warnings, per-commit author keys and shared blame slots; then by #13: no `.gitattributes` file read, `--no-textconv`, `--indent-heuristic`, `--encoding=UTF-8`; then 2026-10-15, by #54's review: the porcelain `filename`, kept per row as the path in the commit) · becomes tests in M1
 
 This collector answers one question: whose non-blank lines does `git blame` still attribute on the default branch?
 
@@ -65,15 +65,16 @@ Both forms are a sequence of records, one per line of the file: a header, key li
 
 - **Header.** `^([0-9a-f]{7,64}) (\d+) (\d+)( (\d+))?$`: remember the SHA and ignore the optional group size.
 - **Author lines.** `author `, `author-mail ` and `author-time ` give the record's commit its author. Keep them per commit: when a record omits them, use the values that commit's earlier record gave.
-- **Content.** A line starting with a tab is content. If the rest of the line is non-blank (it holds a character outside Unicode's White_Space, [metrics.md](../metrics.md#noise-applied-before-every-metric)), add **one** line to the record's (SHA, email). Blank content adds nothing. The test is `nonBlank` in `internal/collect/scan.go`, the function the history collector counts added and removed lines with (since #13 the same function, not a copy), so `durable@1` compares like with like.
-- **Everything else** (`filename`, `summary`, `previous`, `boundary`, and the `ignored` and `unblamable` marks a repo-local `blame.markIgnoredLines` and `blame.markUnblamableLines` add, verified) is ignored.
+- **Filename** (#54). `filename <path>` names the path the record's line had in its commit: git's blame origin, the (commit, path) pair blame passes lines along, which follows every rename back from HEAD whether or not the history collected the commit that made it. git quotes the path as it quotes paths everywhere (C-style, octal escapes for non-ASCII under the default `core.quotePath`; `unquotePath` in `scan.go`, shared with the history collector). Keep the last one per commit, as the author lines are kept: `--line-porcelain` prints it in every record, and `--porcelain` the first time the commit appears and again at the start of each of its groups when blame reached the commit through more than one path (git's `MORE_THAN_ONE_PATH`: a merge whose parents renamed two files into one, verified). A parser that carried the previous record's filename would give one commit's lines another's path.
+- **Content.** A line starting with a tab is content. If the rest of the line is non-blank (it holds a character outside Unicode's White_Space, [metrics.md](../metrics.md#noise-applied-before-every-metric)), add **one** line to the record's (SHA, path in the commit). Blank content adds nothing. The test is `nonBlank` in `internal/collect/scan.go`, the function the history collector counts added and removed lines with (since #13 the same function, not a copy), so `durable@1` compares like with like.
+- **Everything else** (`summary`, `previous`, `boundary`, and the `ignored` and `unblamable` marks a repo-local `blame.markIgnoredLines` and `blame.markUnblamableLines` add, verified) is ignored.
 - **Structure.** Every content line follows exactly one header. Output that breaks this is unreadable porcelain and a file failure, so an unrecognised header cannot hand its line to the previous record.
 
 `author-mail` is already mailmapped by git ([git-invocation.md](git-invocation.md#identity-mailmap-and-bots)). Strip the `<>` and lowercase it; never re-parse mailmap in Go. The measured porcelain for the fixture's `service.py` is in [../../testdata/fixture/SPEC.md](../../testdata/fixture/SPEC.md#measured-blame).
 
 ## Persisted facts
 
-One row per (repo, head SHA, path, commit SHA), with `author_email` and `nonblank_lines`. Rows are aggregated per commit rather than per line, but they must keep the commit SHA, because durability joins surviving lines back to the commits and landings that wrote them ([week-collector.md](week-collector.md#landing--commit-map)). Path role is not stored with these facts: it is a policy output, computed when reducing.
+One row per (repo, head SHA, path, commit SHA, path in the commit), with `author_email` and `nonblank_lines`. Rows are aggregated per commit rather than per line, but they must keep the commit SHA, because durability joins surviving lines back to the commits and landings that wrote them ([week-collector.md](week-collector.md#landing--commit-map)), and the path in the commit (`LineOwner.OrigPath`, `""` when it is the path at HEAD), because that pair is the one key the history's changes share whatever renames lie between: `durable@1` leaves a binary change's lines out of its sums by it ([metrics.md](../metrics.md#change-facts-shared-by-durable1-and-simplifying1)). A commit blame reached through one path, the usual case, has one row per path at HEAD. Path role is not stored with these facts: it is a policy output, computed when reducing.
 
 ## Reductions the fixture asserts
 

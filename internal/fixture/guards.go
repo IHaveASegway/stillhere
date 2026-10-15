@@ -90,11 +90,13 @@ func BuildMergedRevert(ctx context.Context, dir string) error {
 
 // Binary builds the binary-file guard of testdata/fixture/SPEC.md in a new
 // temporary directory and returns its absolute path: a work tree named
-// "binary", on branch main, where git takes some prod files for binary at
-// some commits, so those commits' added lines are unknown while blame still
-// attributes every line: a file added with a NUL byte beside a text file and
-// renamed later, and a file that is text, then binary, then text again. It
-// stops the test with t.Fatal if the build fails.
+// "binary", on branch main, where git takes some files for binary at some
+// commits, so those commits' added lines are unknown while blame still
+// attributes every line: a prod file added with a NUL byte beside a text
+// file and renamed later by a commit older than the scan window, a file
+// that is text, then binary, then text again, and a vendored binary file
+// moved onto a prod path. It stops the test with t.Fatal if the build
+// fails.
 func Binary(t testing.TB) string {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), binaryName)
@@ -224,20 +226,27 @@ func mergedRevertHistory(b *builder) {
 }
 
 // binaryHistory writes the Binary history table of SPEC: one row per commit,
-// in table order, each commented with its row ID. Every row is in durable@1's
-// cohort.
+// in table order, each commented with its row ID. Every row but R1 is in
+// durable@1's cohort.
 //
 // A NUL byte in a file's first 8,000 bytes makes git take it for binary in a
 // diff whose old or new side holds one: numstat prints "-" "-" and the own
 // patch has no hunks, so History gives the change no lines. Blame reads no
 // such check and attributes every line. B1 is #54's case: bin.py is binary
 // from its first commit, and R1 renames it, so its lines are blamed to B1
-// in moved.py at HEAD. flip.py is text at T1, binary at T2, which changes
-// two of its lines, and text again at T3, which takes the NUL byte out: at
-// HEAD it is text, and T1, T2 and T3 each hold one of its lines or more.
+// in moved.py at HEAD. R1 is committed on main with a committer date of
+// 2025-06-01, as git rebase --committer-date-is-author-date leaves a commit
+// written long ago: older than the scan window, so History never sees the
+// rename, while blame follows it and names bin.py as the path the lines
+// had in B1. flip.py is text at T1, binary at T2, which changes two of its
+// lines, and text again at T3, which takes the NUL byte out; T4 adds a line
+// to it as text: at HEAD it is text, and T1 to T4 each hold one of its
+// lines or more. V1 adds a binary file under vendor/, which the deny list
+// gives no role, and V2 moves it onto a prod path.
 func binaryHistory(b *builder) {
 	ann := person{"Ann Binary", "ann@example.com"}
 	flo := person{"Flo Flip", "flo@example.com"}
+	val := person{"Val Vendor", "val@example.com"}
 
 	b.initRepo()
 	b.git("config", "commit.gpgsign", "false")
@@ -260,7 +269,20 @@ func binaryHistory(b *builder) {
 	b.write("flip.py", lines("flip_1 = 1", "flip_2 = 20", "flip_3 = 3", "flip_4 = 40"))
 	b.commit("fix: take the NUL byte out of flip.py")
 
-	b.row(noon(2026, time.June, 1), ann) // R1: B1's binary file, renamed
+	b.row(noon(2026, time.May, 11), val) // V1: a binary file with no role, beside a text one
+	b.write("vendor/lib.py", lines("lib_1 = 1", "lib_2 = 2"+nul, "lib_3 = 3"))
+	b.write("val.py", numbered("val", 2))
+	b.commit("feat: add vendor/lib.py and val.py")
+
+	b.row(noon(2026, time.May, 18), val) // V2: the vendored file moved onto a prod path
+	b.git("mv", "vendor/lib.py", "lib.py")
+	b.commit("refactor: move vendor/lib.py to lib.py")
+
+	b.row(noon(2025, time.June, 1), ann) // R1: B1's binary file, renamed by a commit older than the window
 	b.git("mv", "bin.py", "moved.py")
 	b.commit("refactor: rename bin.py to moved.py")
+
+	b.row(noon(2026, time.June, 8), flo) // T4: flip.py gains a line as text
+	b.extend("flip.py", lines("flip_5 = 5"))
+	b.commit("feat: add flip_5 to flip.py")
 }

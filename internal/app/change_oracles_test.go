@@ -48,10 +48,11 @@ type cluster struct{ Num, Den float64 }
 // person and per landing, with their rank tables, on both fixtures; the
 // revert links and their effect; AI-assisted tags per landing and the
 // shares; knowledge_loss@1 and who_knows@1 on the main fixture; surviving@1
-// credit on the sibling; the two regression guards, a backdated
-// first-parent commit and a revert merged with --no-ff, on repositories of
-// their own; and the identity candidates of each fixture, without its
-// mailmap and with it. Every fixture is scanned alone.
+// credit on the sibling; the three regression guards (a backdated
+// first-parent commit, a revert merged with --no-ff, and changes git takes
+// for binary), on repositories of their own; and the identity candidates of
+// each fixture, without its mailmap and with it. Every fixture is scanned
+// alone.
 func TestChangeOracles(t *testing.T) {
 	t.Parallel()
 	t.Run("main fixture", func(t *testing.T) {
@@ -70,7 +71,7 @@ func TestChangeOracles(t *testing.T) {
 		t.Parallel()
 		mergedRevertGuard(t)
 	})
-	t.Run("binary files", binaryGuard)
+	t.Run("binary files", func(t *testing.T) { t.Parallel(); binaryGuard(t) })
 	t.Run("identity candidates", func(t *testing.T) {
 		t.Parallel()
 		identityOracles(t)
