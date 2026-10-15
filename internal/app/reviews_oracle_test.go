@@ -1,6 +1,7 @@
 package app_test
 
 import (
+	"database/sql"
 	"slices"
 	"strconv"
 	"strings"
@@ -114,6 +115,12 @@ func reviewOracles(t *testing.T) {
 		sameRows(t, table+", reviews_given@1 in scope all", got, map[string]float64{
 			"bob@example.com": 1, "cara@example.com": 1, "@zoe": 2, "@copilot-pull-request-reviewer[bot]": 1,
 		})
+		// The page names her as GitHub last showed her login: #6, updated
+		// last, says Zoe.
+		if w := s.whoKnows(t, "new_name.py"); len(w.Repos) != 1 || len(w.Repos[0].RecentReviewers) != 1 ||
+			w.Repos[0].RecentReviewers[0].Name != "@Zoe" {
+			t.Errorf("%s: new_name.py's reviewers %+v, want @zoe named @Zoe", table, w.Repos)
+		}
 	})
 
 	t.Run("a later sync changes nothing in the stored run", func(t *testing.T) {
@@ -151,6 +158,41 @@ func reviewOracles(t *testing.T) {
 			t.Fatalf("app.Report: %v", err)
 		}
 		checkShare(t, table+", knowledge_loss@1 after a later sync", onlyRepo(t, m).Card.KnowledgeLoss, 2, 34)
+	})
+
+	t.Run("a run stored before logins were folded", func(t *testing.T) {
+		// A stillhere before #69 kept a login's case in the keys it stored,
+		// so had both pull requests said Zoe, the run would hold @Zoe. Its
+		// readers fold the keys where they read the run, so @zoe finds her
+		// 2 reviews in it, as in a run stored since.
+		ctx := t.Context()
+		raw, err := sql.Open("sqlite", s.db+"?_busy_timeout=10000")
+		if err != nil {
+			t.Fatal(err)
+		}
+		changed := int64(0)
+		for _, rows := range []string{"metric_values", "rank_intervals"} {
+			res, err := raw.ExecContext(ctx, `UPDATE `+rows+` SET subject_key = '@Zoe' WHERE subject_key = '@zoe'`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			n, err := res.RowsAffected()
+			if err != nil {
+				t.Fatal(err)
+			}
+			changed += n
+		}
+		if err := raw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if changed == 0 {
+			t.Fatalf("%s: the run holds no @zoe to store as @Zoe, so this case checks nothing", table)
+		}
+		e := s.explain(t, reviewsGiven, person("@zoe"))
+		if i := slices.IndexFunc(e.Values, func(v report.Value) bool { return v.Scope.Kind == domain.ScopeAll }); i < 0 ||
+			e.Values[i].Value != 2 {
+			t.Errorf("%s: explain(reviews_given@1, @zoe) of a run that stored @Zoe gives %+v, want 2 in scope all", table, e.Values)
+		}
 	})
 }
 
@@ -290,9 +332,11 @@ func reviewPulls(commits map[string]string) []domain.PullRequest {
 			BaseBranch: "main", Created: reviewAt(time.May, 1, 9), Updated: reviewAt(time.May, 20, 10),
 			Commits: []domain.ForgeCommit{unlanded("5", "gina")},
 			Reviews: []domain.Review{review("PRR_5a", "gina", domain.ReviewCommented, reviewAt(time.May, 20, 10))}},
+		// zoe's login in another case, as a sync after she changed its case
+		// would copy it: one account to GitHub, so one subject, @zoe (#69).
 		merged(6, "erin", reviewAt(time.October, 4, 9), reviewAt(time.October, 6, 16), landed(reviewAt(time.October, 6, 16), "erin"),
 			[]domain.ForgeCommit{unlanded("6", "erin"), unlanded("7", "erin")},
-			review("PRR_6a", "zoe", domain.ReviewApproved, reviewAt(time.October, 5, 8))),
+			review("PRR_6a", "Zoe", domain.ReviewApproved, reviewAt(time.October, 5, 8))),
 	}
 }
 

@@ -24,6 +24,7 @@ func (survivingV1) Definition() Definition {
 			"lines there. Detail per person: repos, majority_files, lines_<role> for each role with lines, landings_365d. Per " +
 			"repository and group (subject repo or group): prod_lines, prod_files, people, bot_share, ai_assisted_share.",
 		Ranked:      false,
+		Subjects:    []string{domain.SubjectPerson, domain.SubjectRepo, domain.SubjectGroup},
 		Eligibility: "Not ranked: surviving lines reward tenure.",
 		BlindSpots: "Blame credits the last author of a line, so a reformat not listed in .git-blame-ignore-revs moves lines to its author. " +
 			"Moves across files credit the mover (no -C). A squash merge credits every line of a pull request to its author, and its " +

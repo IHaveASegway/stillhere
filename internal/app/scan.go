@@ -60,7 +60,7 @@ func Scan(ctx context.Context, d Deps, r ScanRequest) (*report.Model, error) {
 	}
 	// Resolve --rank before any git process starts: a typo should cost
 	// nothing.
-	ranked, err := resolveRanked(r.Rank)
+	ranked, err := resolveRanked(r.Rank, d.Commands)
 	if err != nil {
 		return nil, err
 	}

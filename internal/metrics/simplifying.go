@@ -24,6 +24,7 @@ func (simplifyingV1) Definition() Definition {
 			"Merge commits, ignore-revs commits and revert landings are excluded, and so is every commit of a reverted landing. " +
 			"Detail: simplifying_landings, the person's landings whose counted commits net Σ added - Σ removed <= -20.",
 		Ranked:      true,
+		Subjects:    []string{domain.SubjectPerson},
 		Eligibility: "At least 10 clusters in the window.",
 		BlindSpots: "Deleting a feature looks like simplifying (deleting its tests does not: only prod lines count). A move counts " +
 			"its lines as removed, though its net is 0, so it is never a simplifying landing by itself. Removed code that comes " +

@@ -37,6 +37,7 @@ func (whoKnowsV1) Definition() Definition {
 			"apart.",
 		Ranked:      false,
 		Forge:       true,
+		Subjects:    nil, // computed per query by WhoKnows, for any path: a scan stores no value of it
 		Eligibility: "Not ranked: it routes questions to people.",
 		BlindSpots: "Moves across files credit the mover. Someone who knows the code but has neither written its surviving lines, " +
 			"nor landed or reviewed a change under it recently, does not appear. Reviews count only in repositories whose " +

@@ -23,7 +23,6 @@ const (
 	codePartial       = "partial-clone"
 	codeShallowWindow = "shallow-window"
 	codeBlameErrors   = "blame-errors"
-	codeNumstat       = "numstat-rename"
 	codeNoIgnoreRevs  = "no-ignore-revs"
 	codeExcluded      = "excluded-repo"
 	codeDuplicate     = "duplicate-repo" // a repository's warning: another clone of its remote was skipped
@@ -51,7 +50,7 @@ const largeRepoLines = 10000
 // damaging; codes not listed follow, sorted.
 var caveatOrder = []string{
 	codeFailed, codeShallow, codePartial, codeShallowWindow,
-	codeBlameErrors, codeNumstat, codeNoIgnoreRevs,
+	codeBlameErrors, codeNoIgnoreRevs,
 }
 
 // summaries say what a repository caveat means when it concerns several
@@ -62,7 +61,6 @@ var summaries = map[string]string{
 	codePartial:       "Partial clones have no line facts (no numstat, no blame): only their landings and commits count, and where their blobs are absent, no path is skipped as too big or generated.",
 	codeShallowWindow: "A shallow boundary falls inside the history window, so earlier landings are missing.",
 	codeBlameErrors:   "Blame failed on some files, so their lines are missing.",
-	codeNumstat:       "Some numstat rows could not be read and count 0 lines.",
 	codeNoIgnoreRevs:  "Large repositories without a .git-blame-ignore-revs: a formatting commit would take the credit for every line it touched.",
 	codeDuplicate:     "Clones of the same remote as these repositories were skipped as duplicates: each repository is counted once (see their warnings).",
 	codeHeadAfterNow: "These repositories are read at the newest commit on their branch's first-parent chain committed before --now: " +
@@ -98,21 +96,15 @@ func repoCaveats(rf *domain.RepoFacts) []Caveat {
 		add(codePartial, "Partial clone: no line facts (no numstat, no blame), so only its landings and commits count; "+
 			"where its blobs are absent, path sizes and attributes are unknown, so no path is skipped as too big or generated.")
 	}
-	numstat := 0
 	for _, w := range rf.Warnings {
 		switch w.Code {
 		case codeShallow, codePartial:
 			// Said above, from the repository's own flags.
 		case codeShallowWindow:
 			add(codeShallowWindow, "The shallow boundary is inside the history window, so earlier landings are missing: "+w.Message)
-		case codeNumstat:
-			numstat++
 		default:
 			add(w.Code, w.Message)
 		}
-	}
-	if numstat > 0 {
-		add(codeNumstat, plural(numstat, "numstat row", "numstat rows")+" could not be read and count 0 lines.")
 	}
 	if n := len(rf.BlameErrors); n > 0 {
 		add(codeBlameErrors, "Blame failed on "+plural(n, "file", "files")+", so their lines are missing.")
@@ -262,17 +254,8 @@ func aiShown(m *Model) bool {
 	return false
 }
 
-// identitiesHint says where the .mailmap lines an unmerged-identities
-// caveat calls for come from: stillhere identities suggests them, with the
-// evidence for each, and applies none.
-const identitiesHint = "'stillhere identities' suggests the lines, with the evidence for each."
-
 // identityCaveat names the display names that more than one email shares
-// in a scope. git's mailmap is the only identity store, so stillhere never
-// merges people by name; it says where a .mailmap line may be missing. A
-// shared name that gives an address away is counted and not printed, as no
-// page prints it: it is withheld on every address that carries it
-// (personName), so the caveat and the tables agree.
+// in a scope: among the people with a value in it (sharedNames).
 func (b *builder) identityCaveat(scope domain.Scope, members []*domain.RepoFacts) (Caveat, bool) {
 	inScope := map[domain.Scope]bool{}
 	for _, rf := range members {
@@ -285,21 +268,43 @@ func (b *builder) identityCaveat(scope domain.Scope, members []*domain.RepoFacts
 			emails[v.Subject.Key] = true
 		}
 	}
-	byName := map[string][]string{} // a display name → the emails that carry it
+	return sharedNames(b.in.Who, emails, b.in.Commands)
+}
+
+// sharedNames is the unmerged-identities caveat about emails, the people a
+// section shows: the display names more than one of them carries, compared
+// as the identities command compares them (People.NameKey: case, spacing
+// and punctuation never tell two names apart, and a default name, a bot's
+// or a login's is no name to share), so the caveat names a name exactly
+// when identities compares it (#69). git's mailmap is the only identity
+// store, so stillhere never merges people by name; it says where a
+// .mailmap line may be missing. A shared name that gives an address away
+// is counted and not printed, as no page prints it: it is withheld on
+// every address that carries it (personName), so the caveat and the tables
+// agree. A name written two ways is printed the first way, in byte order.
+func sharedNames(who People, emails map[string]bool, cmds Commands) (Caveat, bool) {
+	if who == nil {
+		return Caveat{}, false
+	}
+	byKey := map[string][]string{} // a name's key → the emails whose display names have it
 	for e := range emails {
-		if n, ok := realName(b.in.Who, e); ok {
-			byName[n] = append(byName[n], e)
+		if k := who.NameKey(e); k != "" {
+			byKey[k] = append(byKey[k], e)
 		}
 	}
 	var shared []string
 	withheld := 0
-	for n, es := range byName {
+	for _, es := range byKey {
 		switch {
 		case len(es) < 2:
-		case slices.ContainsFunc(es, func(e string) bool { return nameWithheld(b.in.Who, e) }):
+		case slices.ContainsFunc(es, func(e string) bool { return nameWithheld(who, e) }):
 			withheld++
 		default:
-			shared = append(shared, strconv.Quote(n))
+			names := make([]string, len(es))
+			for i, e := range es {
+				names[i] = who.Name(e)
+			}
+			shared = append(shared, strconv.Quote(slices.Min(names)))
 		}
 	}
 	total := len(shared) + withheld
@@ -322,7 +327,7 @@ func (b *builder) identityCaveat(scope domain.Scope, members []*domain.RepoFacts
 	return Caveat{
 		Code: codeIdentities,
 		Message: msg + joinNames(named) + ". If the emails of a name are one person, a .mailmap line merges them: " +
-			identitiesHint,
+			identitiesHint(cmds),
 	}, true
 }
 

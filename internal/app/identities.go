@@ -14,6 +14,11 @@ import (
 type IdentitiesRequest struct {
 	RunID int64        // 0: the latest complete or partial scan run
 	Scope domain.Scope // the zero Scope: every repository of the run; else a group or one repository
+	// Mailmap adds each candidate's suggested .mailmap lines, which are
+	// made of emails: only for a reader that may see them (the MCP server
+	// with --allow-emails); the identities command prints them with
+	// --format mailmap instead.
+	Mailmap bool
 }
 
 // Identities suggests .mailmap merges for the people of a stored run, each
@@ -57,7 +62,7 @@ func Identities(ctx context.Context, d Deps, r IdentitiesRequest) (*report.Ident
 	survey := identity.Candidates(scoped, who)
 	d.Log.Debug("identity candidates", "run", run.ID, "addresses", survey.Addresses, "candidates", len(survey.Candidates))
 	return report.NewIdentities(&report.IdentitiesInput{Run: &run, Facts: scoped, Scope: scope, Survey: survey, Who: who,
-		Forge: forge}), nil
+		Forge: forge, Mailmap: r.Mailmap}), nil
 }
 
 // identitiesScope returns the facts of the repositories a scope names: every

@@ -47,7 +47,11 @@ type Directory struct {
 	botFragments []string          // [bots] fragments, lowercased, never empty
 	agentEmails  map[string]bool   // [ai] coauthor_emails, lowercased
 	agentAuthors []string          // [ai] agent_authors fragments, lowercased, never empty
-	logins       map[string]string // forge login → canonical email (reviewer.go); nil without GitHub data
+	logins       map[string]string // forge login, folded (foldLogin) → canonical email (reviewer.go); nil without GitHub data
+
+	// The run's GitHub logins as people and pages see them (reviewer.go).
+	linked map[string][]string // canonical email → the folded logins Reviewer links to it, sorted (Logins)
+	forms  map[string]string   // forge login, folded → the login as GitHub last reported it (Name, Logins)
 }
 
 // kind is an identity's classification under the policy.
@@ -61,7 +65,8 @@ type kind struct {
 // forge app account. The fact set's GitHub data (FactSet.Forge) links forge
 // logins to its people (Reviewer).
 func New(fs *domain.FactSet, p *policy.Policy) *Directory {
-	d := &Directory{names: displayNames(fs), logins: reviewerLogins(fs)}
+	d := &Directory{names: displayNames(fs), logins: reviewerLogins(fs), forms: loginForms(fs)}
+	d.linked = linkedLogins(d.logins)
 	if p != nil {
 		d.botFragments = fragments(p.Bots.Fragments)
 		d.agentAuthors = fragments(p.AI.AgentAuthors)
@@ -93,8 +98,16 @@ func New(fs *domain.FactSet, p *policy.Policy) *Directory {
 // that email, counting each commit once as its author and once as a
 // co-author; ties go to the newest committer time among the commits that
 // used the name, then to the name's UTF-8 bytes, ascending.
+//
+// A GitHub login's key (LoginKey) has no display name of its own: its name
+// is the login as GitHub last reported it ("@Zoe" for the key "@zoe",
+// reviewer.go), or "" when the run's GitHub data never named it.
 func (d *Directory) Name(email string) string {
-	return d.names[canonical(email)]
+	key := canonical(email)
+	if LoginKey(key) {
+		return d.loginName(key)
+	}
+	return d.names[key]
 }
 
 // Bot reports whether a canonical email belongs to a bot or an agent: a

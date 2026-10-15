@@ -268,15 +268,23 @@ func scopeOf(s domain.Scope) Scope { return Scope{Kind: s.Kind, Key: s.Key} }
 func intervalOf(w domain.Window) Interval { return Interval{Since: w.Since, Until: w.Until} }
 
 // People is what a report needs to know about the people in it: their
-// display names, whether they are bots, and whether a name gives an
-// address away. *identity.Directory implements it; the report depends on
-// these three questions only, not on how identity answers them.
+// display names, whether they are bots, whether a name gives an address
+// away, and which names are one name to the identities rules.
+// *identity.Directory implements it; the report depends on these four
+// questions only, not on how identity answers them.
 type People interface {
-	Name(email string) string // the display name for a canonical email
-	Bot(email string) bool    // whether the email is a bot's
+	// Name is the display name for a canonical email, or for a GitHub
+	// login's key ("@zoe") the login as GitHub shows it ("@Zoe").
+	Name(email string) string
+	Bot(email string) bool // whether the email is a bot's
 	// Withheld reports whether the email's display name gives away an
 	// address of the run, so that no page shows it (personName).
 	Withheld(email string) bool
+	// NameKey is the key the identities same-name rule compares for the
+	// email's display name, "" when it compares none
+	// (identity.Directory.NameKey): every caveat that says two emails share
+	// a name groups them by it, so it names what identities compares.
+	NameKey(email string) string
 }
 
 // OwnPageOnly reports whether a metric's values about a person are shown on

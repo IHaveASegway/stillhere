@@ -25,6 +25,7 @@ func (landedV1) Definition() Definition {
 			"or that commit's first human co-author when an agent wrote it. Detail: lines_added, the numstat insertions " +
 			"(blank lines included) on paths that received a role, and prod_lines_added, the prod subset.",
 		Ranked:      false,
+		Subjects:    []string{domain.SubjectPerson},
 		Eligibility: "Not ranked: volume rewards volume. In the proof run a dependency bot led every activity table.",
 		BlindSpots: "A merged branch counts for the person who landed it, with the branch's lines. " +
 			"Numstat counts blank lines and moves. Work that never lands on the default branch is invisible.",

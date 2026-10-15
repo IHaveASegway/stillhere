@@ -62,6 +62,7 @@ func TestDeterminism(t *testing.T) {
 	first := scan(t, mailmap, nil, req, seed)
 	checkGroupRun(t, first.model)
 	checkForgeRun(t, first)
+	checkSubjects(t, first)
 	second := scan(t, mailmap, nil, req, seed)
 	a, b := render(t, withoutTimings(first.model)), render(t, withoutTimings(second.model))
 	sameBytes(t, "the two scans' JSON without timings", a.json, b.json)
@@ -243,6 +244,32 @@ func checkGroupRun(t *testing.T, m *report.Model) {
 		t.Fatalf("the group scan has %d groups and %d repositories, want 1 and 2", len(m.Groups), len(m.Repos))
 	case !ranked:
 		t.Fatal("the group scan ranks nobody, so no bootstrap interval is compared")
+	}
+}
+
+// checkSubjects checks that every value a scan stored is about a kind of
+// subject its metric declares (metrics.Definition.Subjects): explain
+// refuses every other kind (#69), so a kind left out of the declaration
+// would hide stored values from it.
+func checkSubjects(t *testing.T, s *scanned) {
+	t.Helper()
+	values, _, err := s.store.LoadMetrics(t.Context(), s.run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var undeclared []string
+	for _, v := range values {
+		m, err := metrics.Lookup(v.Metric.String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Contains(m.Definition().Subjects, v.Subject.Kind) {
+			undeclared = append(undeclared, v.Metric.String()+": "+v.Subject.Kind)
+		}
+	}
+	slices.Sort(undeclared)
+	if undeclared = slices.Compact(undeclared); len(undeclared) > 0 {
+		t.Errorf("the scan stored values about kinds of subject their metrics do not declare (metric: kind): %v", undeclared)
 	}
 }
 

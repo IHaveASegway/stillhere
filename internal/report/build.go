@@ -29,6 +29,9 @@ type Input struct {
 	// Forge is the GitHub data a scan run read, which every section's
 	// provenance dates; nil for week, and when the reader cannot tell.
 	Forge *ForgeRead
+	// Commands is how the report's sentences name the commands they send
+	// the reader to; nil: the command line's.
+	Commands Commands
 }
 
 // Landed is how the landed@1 window was set: by the command line, or by the

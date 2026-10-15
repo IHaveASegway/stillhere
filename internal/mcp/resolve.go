@@ -70,10 +70,14 @@ func (r *resolver) named(p app.NamedPerson) string {
 
 // person resolves a person: a display name as the reports print it
 // (compared without case), an id from an earlier answer, an email, or a
-// login. A name that matches no one exactly may match one person by the
-// start of each of its words ("lena" for Lena Lead), which the caveat
-// says. Two people with one name are an error that lists both with their
-// ids.
+// GitHub login, without case, as GitHub compares logins: a reviewer the
+// run keys by login, or the person the run links the login to
+// (app.NamedPerson.Logins, the links every metric that reads reviews
+// counts by), so an agent that knows people by their GitHub handles can
+// name them (#69). A name that matches no one exactly may match one person
+// by the start of each of its words ("lena" for Lena Lead), which the
+// caveat says. Two people with one name are an error that lists both with
+// their ids and logins.
 func (r *resolver) person(query string) (app.NamedPerson, *report.Caveat, error) {
 	q := strings.TrimSpace(query)
 	run := r.names.Run.ID
@@ -92,13 +96,24 @@ func (r *resolver) person(query string) (app.NamedPerson, *report.Caveat, error)
 		return app.NamedPerson{}, nil, notFoundf("id %s names no one in run %d: ids are stable across runs, so this "+
 			"person is not in this one.", lower, run)
 	case strings.Contains(lower, "@") && !strings.ContainsAny(lower, " \t"):
+		// Every key is lowercased where it is made (an email by the
+		// collectors, a login by identity.Reviewer), so a lowercased query
+		// compares without case.
 		for _, p := range r.names.People {
 			if p.Key == lower {
 				return p, nil, nil
 			}
 		}
-		return app.NamedPerson{}, nil, notFoundf("%q is no one's email or login in run %d: people are keyed by their "+
-			"canonical email, after .mailmap. Pass a display name instead.", lower, run)
+		if login, ok := strings.CutPrefix(lower, "@"); ok && identity.LoginKey(lower) {
+			for _, p := range r.names.People {
+				if slices.ContainsFunc(p.Logins, func(l string) bool { return strings.EqualFold(l, login) }) {
+					return p, nil, nil
+				}
+			}
+		}
+		return app.NamedPerson{}, nil, notFoundf("%q is no one's email or GitHub login in run %d: people are keyed by "+
+			"their canonical email, after .mailmap, and a login names whoever the run's GitHub data links it to. Pass a "+
+			"display name instead.", lower, run)
 	}
 	want := norm(q)
 	var exact, partial []app.NamedPerson
@@ -206,8 +221,10 @@ func levenshtein(a, b string) int {
 }
 
 // listPeople describes candidates so an agent can tell them apart and
-// pick one: the name, the id to pass, and what they hold. Names come from
-// the repositories, so each is quoted: in the server's own sentence,
+// pick one: the name, the id to pass, the GitHub logins the run links to
+// them, which an agent may know them by, unless one gives an address away
+// (app.NamedPerson.ShownLogins), and what they hold. Names come from the
+// repositories, so each is quoted: in the server's own sentence,
 // repository text stays data (docs/spec/mcp.md#errors).
 func (r *resolver) listPeople(people []app.NamedPerson) string {
 	var parts []string
@@ -217,6 +234,9 @@ func (r *resolver) listPeople(people []app.NamedPerson) string {
 			break
 		}
 		about := []string{"id " + r.id(p)}
+		for _, l := range p.ShownLogins {
+			about = append(about, "login @"+l)
+		}
 		if p.Bot {
 			about = append(about, "a bot")
 		}

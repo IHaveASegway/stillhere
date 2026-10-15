@@ -32,6 +32,15 @@ type Definition struct {
 	ID             domain.MetricID
 	Question, Unit string
 	Ranked         bool
+	// Subjects are the kinds of subject (domain.SubjectPerson, SubjectRepo,
+	// SubjectArea, SubjectGroup, SubjectChange) of the values a scan stores,
+	// in the order the catalog entry names them: none for who_knows@1, which
+	// who-knows computes per query, and no person for ai_assisted@1, whose
+	// personal share only that person's page computes (PersonalAIShare). It
+	// is the one declaration of it, as Forge is of GitHub data: explain,
+	// which reads stored values, refuses a metric about any other kind of
+	// subject, whatever a run holds, rather than answer with nothing (#69).
+	Subjects []string
 	// Forge is true for a metric that reads the GitHub data a run read
 	// (FactSet.Forge): its numbers are as current as that data's sync, and
 	// a report dates them by it and says where it is missing. It is the one
@@ -164,7 +173,8 @@ func All() []Metric {
 // Lookup returns the metric with id, such as "durable@1", or the latest
 // version for a bare name such as "durable". An id that does not parse, or
 // that names no registered metric, is a *domain.UsageError, because ids come
-// from the command line and the MCP server.
+// from the command line and the MCP server. Its message names no command:
+// each of those readers has its own, which the use case adds (#69).
 func Lookup(id string) (Metric, error) {
 	want, err := domain.ParseMetricID(id)
 	if err != nil {
@@ -189,7 +199,7 @@ func Lookup(id string) (Metric, error) {
 		ids = append(ids, m.Definition().ID.String())
 	}
 	return nil, &domain.UsageError{Msg: fmt.Sprintf(
-		"unknown metric %q: the registry has %s (stillhere metrics describes each)", id, strings.Join(ids, ", "))}
+		"unknown metric %q: the registry has %s", id, strings.Join(ids, ", "))}
 }
 
 // Compute runs every metric over in and returns all values, sorted by

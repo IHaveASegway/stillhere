@@ -41,6 +41,7 @@ func (durableV1) Definition() Definition {
 			"are excluded; a reverted landing stays and scores what blame gives it. Detail: reverted_landings.",
 		Ratio:       true,
 		Ranked:      true,
+		Subjects:    []string{domain.SubjectPerson},
 		Eligibility: "At least 10 clusters in the cohort (open decision 5).",
 		BlindSpots: "A planned replacement of correct code looks not durable. Moves across files credit the mover; a move inside " +
 			"one file counts as the mover's added lines, which blame gives back to their first author, so the mover scores 0 on " +

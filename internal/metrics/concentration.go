@@ -24,6 +24,7 @@ func (knowledgeConcentrationV1) Definition() Definition {
 			"lines descending, email ascending, and walk until the running sum of majority_files is at least files_with_majority / 2. " +
 			"Detail: files_with_majority (each file once, even with two owners), bots_in_prefix, prod_files.",
 		Ranked:      false,
+		Subjects:    []string{domain.SubjectRepo, domain.SubjectArea, domain.SubjectGroup},
 		Eligibility: "Not ranked: it describes code, not people.",
 		BlindSpots: "Only majority-owned files count, so a codebase where nobody holds half of any file looks unconcentrated. " +
 			"It is not a truck factor: it ignores who could take over a file, and blame's blind spots apply.",

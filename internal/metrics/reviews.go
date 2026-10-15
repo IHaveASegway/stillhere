@@ -41,6 +41,7 @@ func (reviewsGiven) Definition() Definition {
 		Unit:     "merged pull requests reviewed, per person",
 		Ranked:   true,
 		Forge:    true,
+		Subjects: []string{domain.SubjectPerson},
 		Eligibility: "at least 10 reviewed pull requests in the window; " +
 			"bots (an app account, or a [bots] match) are listed and never ranked",
 		BlindSpots: "reviews of pull requests that were closed unmerged or are still open; dismissed reviews; " +
@@ -334,7 +335,10 @@ func reviewsByOthers(p *domain.PullRequest, w domain.Window, who *identity.Direc
 	author := who.Reviewer(p.Author)
 	for i := range p.Reviews {
 		r := &p.Reviews[i]
-		if !reviewsSubmitted(r) || r.Author.Login == "" || r.Author.Login == p.Author.Login || !w.Contains(r.Submitted) {
+		// Logins compare without case, as GitHub compares them
+		// (identity.Directory.Reviewer).
+		if !reviewsSubmitted(r) || r.Author.Login == "" || strings.EqualFold(r.Author.Login, p.Author.Login) ||
+			!w.Contains(r.Submitted) {
 			continue
 		}
 		s := who.Reviewer(r.Author)
@@ -428,7 +432,10 @@ func (v *view) reviews() *reviewsIndex {
 // still around, and a reply in a review thread of one's own pull request,
 // which GitHub records as a review, says they are. A reviewer the run
 // cannot link to an email ("@login") holds no line, so it is left out, and
-// so is an app account. It is nil without GitHub data.
+// so is an app account: identity.LoginKey tells them apart, the one rule
+// for what a login is, so a person whose canonical email has an empty
+// local part ("@example.com") is a person here too. It is nil without
+// GitHub data.
 func (x *reviewsIndex) active(w domain.Window) map[string]bool {
 	if x == nil {
 		return nil
@@ -444,7 +451,7 @@ func (x *reviewsIndex) active(w domain.Window) map[string]bool {
 			if !reviewsSubmitted(r) || r.Author.Login == "" || !w.Contains(r.Submitted) {
 				continue
 			}
-			if s := x.who.Reviewer(r.Author); !strings.HasPrefix(s.Key, "@") {
+			if s := x.who.Reviewer(r.Author); !identity.LoginKey(s.Key) {
 				if out == nil {
 					out = map[string]bool{}
 				}

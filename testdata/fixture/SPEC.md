@@ -858,9 +858,11 @@ The [main fixture](#history), scanned alone with its mailmap and `--now 2026-10-
 | 3 | cara | merged 10-06 12:00, merge commit | row 8, Bob's merge, login bob | `e08df80` and `feb652b`, login cara | bob approved 10-02 10:00 |
 | 4 | bob | created 06-01, merged 10-06 13:00, squash | row 9, delta, login bob | 2, not in the run | frank commented 06-15 10:00 · zoe commented 09-30 10:00 · copilot-pull-request-reviewer (an app) commented 10-05 09:00 · bob commented 10-05 10:00 · cara approved 10-05 11:00 |
 | 5 | gina | open since 05-01 | none | 1, not in the run | gina commented 05-20 10:00, on her own pull request |
-| 6 | erin | created 10-04, merged 10-06 16:00, squash | row 12, Erin's rename, login erin | 2, not in the run | zoe approved 10-05 08:00 |
+| 6 | erin | created 10-04, merged 10-06 16:00, squash | row 12, Erin's rename, login erin | 2, not in the run | Zoe approved 10-05 08:00 |
 
 **Who a login is** (`identity.Directory.Reviewer`, the rule `reviews_given@1` counts by): the run's mailmapped author of the commits GitHub attributes to the login. gina is `gina@example.com` (#1's merge commit), hank `hank@example.com` (#2's), cara `cara@example.com` (#3's two commits), bob `bob@example.com` (#3's and #4's merge commits) and erin `erin@example.com` (#6's). No commit of the replica is frank's or zoe's, so they are `@frank` and `@zoe`, although frank's own commit (row 13) is in the run: no pull request carries it. The copilot reviewer is an app account, `@copilot-pull-request-reviewer[bot]`, a bot.
+
+**One login in two cases** (#69). #6 names its reviewer `Zoe`, as a sync after zoe changed the case of her login would copy it: the replica keeps each pull request as the last sync that saw it updated, so #4 still says `zoe`. GitHub compares logins without case, so both are one account and one subject, `@zoe`, everywhere below; a page names her `@Zoe`, the form on #6, the pull request updated last. A login kept in its case would make two reviewers, `@zoe` (1: #4) and `@Zoe` (1: #6), in `reviews_given@1` and in `new_name.py`'s reviewers.
 
 ### knowledge_loss@1 with reviews
 
@@ -910,6 +912,7 @@ Wrong implementations this catches:
 - **Pull requests mapped by their own commits, not the merge commit.** #4's commits are not in the run: `service.py` has no reviewer.
 - **The merge commit's own patch only.** Row 8 has none of its own: `side.py` has no reviewer.
 - **Unlinked logins dropped.** `@zoe` is missing from `service.py`.
+- **A login's case kept.** `new_name.py`'s reviewer is `@Zoe`, not `@zoe`.
 - **Today's replica** (the later sync below): hank reviews `side.py`.
 
 ### A later sync changes nothing in the stored run
@@ -918,7 +921,9 @@ After the scan, a sync stores #3 again, updated 10-12 with one more review, hank
 
 ### reviews_given@1 over the same replica
 
-`[2026-07-09, 2026-10-07)`, merged pull requests only (scope `all`): `bob@example.com` 1 (#3), `cara@example.com` 1 (#4), `@zoe` 2 (#4, #6) and the bot `@copilot-pull-request-reviewer[bot]` 1 (#4); #1's review is outside the window, #5 is open, and bob's comment on #4 is the author's. The same logins name the same subjects as in `who_knows@1`: the three metrics read one rule.
+`[2026-07-09, 2026-10-07)`, merged pull requests only (scope `all`): `bob@example.com` 1 (#3), `cara@example.com` 1 (#4), `@zoe` 2 (#4, as `zoe`, and #6, as `Zoe`) and the bot `@copilot-pull-request-reviewer[bot]` 1 (#4); #1's review is outside the window, #5 is open, and bob's comment on #4 is the author's. The same logins name the same subjects as in `who_knows@1`: the three metrics read one rule. With a login's case kept, `@zoe` 1 and `@Zoe` 1.
+
+**A run stored before #69.** A stillhere before #69 kept a login's case in the keys it stored. Had both pull requests said `Zoe`, its run would hold `@Zoe` 2 in its values and ranks, while its readers fold what they are handed and what they compute from its pull requests to `@zoe`. The readers fold the stored keys too, where they read the run ([run model](../../docs/spec/codebase.md#run-model)), so `explain reviews_given@1 --person @zoe` gives 2 in scope `all`, as for a run stored since; without the fold, `@zoe` has no value in that run. (This replica as such a stillhere stored it would hold `@zoe` 1 and `@Zoe` 1, one account split in two, with a row each in its rank tables; that run is read as stored, and the log says to scan again.)
 
 ### Merge methods (`fixture.MergeMethods`)
 

@@ -27,7 +27,10 @@ import (
 //
 //   - an unlinked GitHub account's key (identity.LoginKey), "@login" or
 //     "@login[bot]", is shown as that login (ADR 0004): it has no display
-//     name, and a login is what GitHub itself shows of an account;
+//     name, and a login is what GitHub itself shows of an account. The key
+//     is the login lowercased, as GitHub compares logins; the name is the
+//     login in the account's own case when the run's GitHub data carries it
+//     (People.Name: "@Zoe" for the key "@zoe"), else the key;
 //   - a display name that gives an address of the run away
 //     (identity.Directory.Withheld: it holds an @, or it is the local part
 //     of a person's address in the run, as GitHub names a commit by the
@@ -44,6 +47,11 @@ import (
 func personName(who People, key string) (name string, withheld bool) {
 	switch {
 	case identity.LoginKey(key):
+		if who != nil {
+			if n := who.Name(key); n != "" {
+				return n, false
+			}
+		}
 		return key, false
 	case who == nil:
 		return "", false
@@ -58,18 +66,6 @@ func personName(who People, key string) (name string, withheld bool) {
 func nameWithheld(who People, key string) bool {
 	_, withheld := personName(who, key)
 	return withheld
-}
-
-// realName is the identity directory's display name for email, and whether
-// it has one. It is the name as git recorded it, whether or not a page may
-// show it: the identity caveats compare it, and print only what
-// personName would.
-func realName(who People, email string) (string, bool) {
-	if who == nil {
-		return "", false
-	}
-	n := who.Name(email)
-	return n, n != ""
 }
 
 // pageNames labels, on one page, the people it cannot name: a counter per
