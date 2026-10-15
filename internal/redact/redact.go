@@ -1,6 +1,7 @@
-// Package redact removes credentials from remote URLs and git messages
-// before anything is stored, logged or printed
-// (docs/spec/git-invocation.md#url-scrubbing).
+// Package redact keeps out of an output what must not reach it: it removes
+// credentials from remote URLs and git messages before anything is stored,
+// logged or printed (docs/spec/git-invocation.md#url-scrubbing), and finds
+// the email addresses that a page or an answer withholds (address.go).
 //
 // It is part of the functional core: pure functions over strings, with no
 // I/O. Clones that keep a token in their remote URL are a common way tokens

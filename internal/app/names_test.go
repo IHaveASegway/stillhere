@@ -23,28 +23,32 @@ import (
 // print as git recorded it (#52). git commit refuses an empty name, so the
 // repository is written with git fast-import, which records any.
 var namesHistory = []struct {
-	day    time.Time
-	author string // as a commit's author line holds it: "Name <email>", or "<email>" without a name
-	file   string
-	lines  int
+	day     time.Time
+	author  string // as a commit's author line holds it: "Name <email>", or "<email>" without a name
+	file    string
+	lines   int
+	subject string // "" for "feat: add <file>"
 }{
 	// A login used as a name, and the same name on another address,
 	// whose local part it is not.
-	{namesDay(time.March, 2), "jdoe <jdoe@corp.example>", "login.py", 6},
-	{namesDay(time.March, 3), "jdoe <john.doe@mail.example>", "cross.py", 5},
+	{namesDay(time.March, 2), "jdoe <jdoe@corp.example>", "login.py", 6, ""},
+	{namesDay(time.March, 3), "jdoe <john.doe@mail.example>", "cross.py", 5, ""},
 	// An address typed as a name.
-	{namesDay(time.March, 4), "mary.major@corp.example <mary.major@corp.example>", "typed.py", 4},
+	{namesDay(time.March, 4), "mary.major@corp.example <mary.major@corp.example>", "typed.py", 4, ""},
 	// Two people without a name, and a committer named like a label.
-	{namesDay(time.March, 5), "<anon@corp.example>", "anon.py", 3},
-	{namesDay(time.March, 6), "<ghost@corp.example>", "ghost.py", 2},
-	{namesDay(time.March, 9), "(no name 1) <tricky@corp.example>", "tricky.py", 2},
+	{namesDay(time.March, 5), "<anon@corp.example>", "anon.py", 3, ""},
+	{namesDay(time.March, 6), "<ghost@corp.example>", "ghost.py", 2, ""},
+	{namesDay(time.March, 9), "(no name 1) <tricky@corp.example>", "tricky.py", 2, ""},
 	// A name two addresses share, which is shown.
-	{namesDay(time.March, 10), "Sam Same <sam@corp.example>", "sam.py", 3},
-	{namesDay(time.March, 11), "Sam Same <sam@other.example>", "same.py", 2},
+	{namesDay(time.March, 10), "Sam Same <sam@corp.example>", "sam.py", 3, ""},
+	{namesDay(time.March, 11), "Sam Same <sam@other.example>", "same.py", 2, ""},
+	// A subject that names an address no one in the run has and one a
+	// person of the run has, which no page prints (SEC-3).
+	{namesDay(time.March, 12), "Sam Same <sam@corp.example>", "thanks.py", 2, "thanks dave.private@hidden.example, jdoe@corp.example"},
 	// A bot whose name is an address, and one whose name is its own
 	// noreply login, which is shown.
-	{namesDay(time.October, 2), "renovate@corp.example <renovate@corp.example>", "renovate.py", 1},
-	{namesDay(time.October, 5), "dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>", "deps.py", 1},
+	{namesDay(time.October, 2), "renovate@corp.example <renovate@corp.example>", "renovate.py", 1, ""},
+	{namesDay(time.October, 5), "dependabot[bot] <49699333+dependabot[bot]@users.noreply.github.com>", "deps.py", 1, ""},
 }
 
 // namesDay is noon UTC on a day of 2026, the fixtures' year.
@@ -89,11 +93,31 @@ func displayNames(t *testing.T) {
 	sameBytes(t, "the names repository's report text and its scan's", rep.text, a.text)
 	sameBytes(t, "the names repository's report Markdown and its scan's", rep.markdown, a.markdown)
 	who := render(t, first.whoKnows(t, ""))
+	// Sam's subject names a customer's address and jdoe's: explain prints
+	// it in every format, each address as the label, and JSON keeps an
+	// email only where a person's email goes, Sam's own in the subject's key.
+	sam, err := app.Explain(t.Context(), first.read, app.ExplainRequest{RunID: first.run, Metric: durable, Subject: person("sam@corp.example")})
+	if err != nil {
+		t.Fatalf("app.Explain(durable@1, sam@corp.example): %v", err)
+	}
+	explained := render(t, sam)
+	for _, page := range []struct {
+		name string
+		data []byte
+	}{{"text", explained.text}, {"Markdown", explained.markdown}, {"JSON", explained.json}} {
+		lower := bytes.ToLower(page.data)
+		if !bytes.Contains(page.data, []byte("thanks (address withheld), (address withheld)")) ||
+			bytes.Contains(lower, []byte("dave.private")) || bytes.Contains(lower, []byte("hidden.example")) ||
+			bytes.Contains(lower, []byte("jdoe")) {
+			t.Errorf("explain of Sam's durable@1 as %s does not print Sam's subject with both addresses withheld:\n%s", page.name, page.data)
+		}
+	}
 
 	for _, page := range []struct {
 		name string
 		data []byte
-	}{{"report text", a.text}, {"report Markdown", a.markdown}, {"who-knows text", who.text}, {"who-knows Markdown", who.markdown}} {
+	}{{"report text", a.text}, {"report Markdown", a.markdown}, {"who-knows text", who.text}, {"who-knows Markdown", who.markdown},
+		{"explain text", explained.text}, {"explain Markdown", explained.markdown}} {
 		lower := bytes.ToLower(page.data)
 		for _, s := range namesSecrets {
 			if i := bytes.Index(lower, []byte(s)); i >= 0 {
@@ -165,6 +189,9 @@ func buildNames(t *testing.T, dir string) {
 	for _, c := range namesHistory {
 		when := fmt.Sprintf("%d +0000", c.day.Unix())
 		msg := "feat: add " + c.file + "\n"
+		if c.subject != "" {
+			msg = c.subject + "\n"
+		}
 		var body strings.Builder
 		for i := 1; i <= c.lines; i++ {
 			fmt.Fprintf(&body, "%s_%d = %d\n", strings.TrimSuffix(c.file, ".py"), i, i)

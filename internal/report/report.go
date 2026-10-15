@@ -20,13 +20,13 @@
 // what a person reads or pastes. A display name that gives an address away
 // is withheld in every format, JSON included (name "" and name_withheld),
 // and a page labels the people it cannot name by their order on it
-// (names.go).
+// (names.go). An address that repository text holds, a commit subject's or
+// a git message's, is withheld in every format too (addresses.go).
 package report
 
 import (
 	"bytes"
 	"encoding/json/jsontext"
-	"encoding/json/v2"
 	"errors"
 	"fmt"
 	"io"
@@ -56,8 +56,13 @@ type Document interface {
 }
 
 // Text renders d as plain text for a terminal, readable at 100 columns.
-// Untrusted text is printed with control characters escaped.
+// Untrusted text is printed with control characters escaped, and each
+// email address in it as "(address withheld)" (addresses.go).
 func Text(w io.Writer, d Document) error {
+	d, err := page(d)
+	if err != nil {
+		return err
+	}
 	p := &printer{w: w}
 	d.writeText(p)
 	if p.err != nil {
@@ -67,8 +72,13 @@ func Text(w io.Writer, d Document) error {
 }
 
 // Markdown renders d as GitHub-flavoured Markdown, with untrusted text
-// escaped so it renders literally.
+// escaped so it renders literally, and email addresses withheld as Text
+// withholds them.
 func Markdown(w io.Writer, d Document) error {
+	d, err := page(d)
+	if err != nil {
+		return err
+	}
 	p := &printer{w: w}
 	d.writeMarkdown(p)
 	if p.err != nil {
@@ -86,20 +96,22 @@ func Markdown(w io.Writer, d Document) error {
 // UTF-8: a commit written without an encoding header (cvs2git, early
 // git-svn, JGit) keeps its Latin-1 bytes, and --encoding=UTF-8 leaves them
 // as they are. Invalid UTF-8 becomes U+FFFD, as encoding/json v1 did. A
-// number that is not finite (NaN, an infinity) becomes null. The document
-// is encoded in memory and written only once it is whole, so a failure
-// never leaves half a document on w.
+// number that is not finite (NaN, an infinity) becomes null. An email
+// address appears only in the fields the shape gives a person's email
+// (email, a person subject's key): anywhere else it is withheld, as text
+// and Markdown withhold it (addresses.go). The document is encoded in
+// memory and written only once it is whole, so a failure never leaves half
+// a document on w.
 func JSON(w io.Writer, d Document) error {
-	var buf bytes.Buffer
-	err := json.MarshalWrite(&buf, d,
-		json.Deterministic(true),
-		jsontext.WithIndent("  "),
-		jsontext.AllowInvalidUTF8(true),
-		json.WithMarshalers(json.MarshalToFunc(finiteOrNull)),
-	)
+	indent := jsontext.WithIndent("  ")
+	doc, err := encodeDocument(d, indent)
 	if err != nil {
 		return fmt.Errorf("report: encode JSON: %w", err)
 	}
+	if doc, _, err = withholdAddresses(doc, indent); err != nil {
+		return fmt.Errorf("report: withhold addresses: %w", err)
+	}
+	buf := bytes.NewBuffer(doc)
 	buf.WriteByte('\n')
 	if _, err := buf.WriteTo(w); err != nil {
 		return fmt.Errorf("report: write JSON: %w", err)
