@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -112,8 +113,11 @@ func TestDeterminism(t *testing.T) {
 		// scrubber did not match. The review of #13 found the same for a
 		// token in the query or the fragment. The token sits in each of the
 		// three parts of a URL that redact.URL removes: the userinfo, the
-		// query and the fragment. No PATH is a repository, so the run
-		// records each as a path-failed warning, scrubbed.
+		// query and the fragment. Discovery refuses a PATH that holds a
+		// credential where it enters (#93), before it looks for a
+		// directory, so the run records a path-failed warning that quotes
+		// it scrubbed; the three scrub to one path, so one warning names
+		// them.
 		var logs bytes.Buffer
 		log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 		planted := []string{
@@ -122,15 +126,16 @@ func TestDeterminism(t *testing.T) {
 			"https://example.com/acme/pay.git#" + fixture.DiscoveryToken,
 		}
 		s := scan(t, mailmap, log, scanRanked(append([]string{group}, planted...)...))
-		failed := 0
+		var failed []string
 		for _, w := range s.model.Warnings {
 			if w.Code == "path-failed" {
-				failed++
+				failed = append(failed, w.Message)
 			}
 		}
-		if s.model.Run.Status != string(domain.RunStatusPartial) || failed != len(planted) {
-			t.Fatalf("the planted PATHs gave run status %q and %d path-failed warnings, want a partial run with %d",
-				s.model.Run.Status, failed, len(planted))
+		if s.model.Run.Status != string(domain.RunStatusPartial) || len(failed) != 1 ||
+			!strings.Contains(failed[0], "https:/example.com/acme/pay.git: holds what looks like a credential") {
+			t.Fatalf("the planted PATHs gave run status %q and path-failed warnings %q, want a partial run with one, "+
+				"naming the scrubbed path as holding a credential", s.model.Run.Status, failed)
 		}
 		m, err := app.Report(t.Context(), s.read, app.ReportRequest{RunID: s.run})
 		if err != nil {

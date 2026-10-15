@@ -113,7 +113,7 @@ func reviewOracles(t *testing.T) {
 			}
 		}
 		sameRows(t, table+", reviews_given@1 in scope all", got, map[string]float64{
-			"bob@example.com": 1, "cara@example.com": 1, "@zoe": 2, "@copilot-pull-request-reviewer[bot]": 1,
+			"bob@example.com": 2, "cara@example.com": 1, "@zoe": 2, "@copilot-pull-request-reviewer[bot]": 2,
 		})
 		// The page names her as GitHub last showed her login: #6, updated
 		// last, says Zoe.
@@ -121,6 +121,16 @@ func reviewOracles(t *testing.T) {
 			w.Repos[0].RecentReviewers[0].Name != "@Zoe" {
 			t.Errorf("%s: new_name.py's reviewers %+v, want @zoe named @Zoe", table, w.Repos)
 		}
+	})
+
+	t.Run("review_coverage@1", func(t *testing.T) {
+		// Of rows 8 to 16, Copilot's row 10 is a bot's; #3, #4 and #6 had a
+		// review by someone else before they merged, #7 none, and rows 11,
+		// 13, 14 and 16 landed with no pull request.
+		want := reviewCoverageRow{Num: 3, Den: 8, Via: 4, Direct: 4, ApprovedOnly: 2, Bots: 1, Repos: 1}
+		reviewCheckCoverage(t, table+", review_coverage@1", s, map[string]reviewCoverageRow{
+			"repo:" + r.Key: want,
+		}, map[string]reviewCoverageRow{"all:": want})
 	})
 
 	t.Run("a later sync changes nothing in the stored run", func(t *testing.T) {
@@ -220,6 +230,36 @@ func reviewMergeMethods(t *testing.T) {
 	} {
 		reviewCheckReviewers(t, "SPEC merge methods, who_knows@1, "+c.path, s.whoKnows(t, c.path), r.Key, c.want)
 	}
+	// review_coverage@1: B0 landed with no pull request; R1 and R2 are #1's,
+	// S1 #2's and S2 #3's, each approved before it merged.
+	want := reviewCoverageRow{Num: 4, Den: 5, Via: 4, Direct: 1, ApprovedOnly: 4, Repos: 1}
+	reviewCheckCoverage(t, "SPEC merge methods, review_coverage@1", s,
+		map[string]reviewCoverageRow{"repo:" + r.Key: want}, map[string]reviewCoverageRow{"all:": want})
+}
+
+// reviewCoverageRow is one review_coverage@1 value: Num and Den, and Detail
+// via_pull_request, direct, approved_no_comment, bot_landings and repos.
+type reviewCoverageRow struct{ Num, Den, Via, Direct, ApprovedOnly, Bots, Repos int }
+
+// reviewCheckCoverage compares the run's review_coverage@1 values in its
+// one repository's scope and in scope all with SPEC's.
+func reviewCheckCoverage(t *testing.T, oracle string, s *scanned, inRepo, inAll map[string]reviewCoverageRow) {
+	t.Helper()
+	id := domain.MetricID{Name: "review_coverage", Version: 1}
+	rows := func(scope domain.Scope) map[string]reviewCoverageRow {
+		got := map[string]reviewCoverageRow{}
+		for key, v := range s.stored(t, id, scope) {
+			if v.Detail["reviewed"] != v.Num {
+				t.Errorf("%s: %s's Detail reviewed is %v, Num %v: want them equal", oracle, key, v.Detail["reviewed"], v.Num)
+			}
+			got[key] = reviewCoverageRow{int(v.Num), int(v.Den), int(v.Detail["via_pull_request"]), int(v.Detail["direct"]),
+				int(v.Detail["approved_no_comment"]), int(v.Detail["bot_landings"]), int(v.Detail["repos"])}
+		}
+		return got
+	}
+	r := onlyRepo(t, s.model)
+	sameRows(t, oracle+" in the repository", rows(domain.Scope{Kind: domain.ScopeRepo, Key: r.Key}), inRepo)
+	sameRows(t, oracle+" in the run", rows(domain.Scope{Kind: domain.ScopeAll}), inAll)
 }
 
 // reviewCheckReviewers compares an answer's recent reviewers in repository
@@ -291,7 +331,7 @@ func reviewLog(t *testing.T, repo, format string) map[string]string {
 	return log
 }
 
-// reviewPulls is SPEC's replica: the six pull requests of acme/fixture,
+// reviewPulls is SPEC's replica: the seven pull requests of acme/fixture,
 // with their merge commits found by the rows' committer times in commits.
 func reviewPulls(commits map[string]string) []domain.PullRequest {
 	user := func(login string) domain.ForgeUser { return domain.ForgeUser{Login: login} }
@@ -337,6 +377,14 @@ func reviewPulls(commits map[string]string) []domain.PullRequest {
 		merged(6, "erin", reviewAt(time.October, 4, 9), reviewAt(time.October, 6, 16), landed(reviewAt(time.October, 6, 16), "erin"),
 			[]domain.ForgeCommit{unlanded("6", "erin"), unlanded("7", "erin")},
 			review("PRR_6a", "Zoe", domain.ReviewApproved, reviewAt(time.October, 5, 8))),
+		// #107: reviewed only by its author, a bot and, after its merge,
+		// bob, so review_coverage@1 counts it unreviewed.
+		merged(7, "ivy", reviewAt(time.October, 5, 9), reviewAt(time.October, 6, 19), landed(reviewAt(time.October, 6, 19), "ivy"),
+			[]domain.ForgeCommit{unlanded("8", "ivy")},
+			domain.Review{ID: "PRR_7a", Author: domain.ForgeUser{Login: "copilot-pull-request-reviewer", Bot: true},
+				State: domain.ReviewApproved, Submitted: reviewAt(time.October, 6, 17)},
+			review("PRR_7b", "ivy", domain.ReviewCommented, reviewAt(time.October, 6, 18)),
+			review("PRR_7c", "bob", domain.ReviewApproved, reviewAt(time.October, 6, 20))),
 	}
 }
 

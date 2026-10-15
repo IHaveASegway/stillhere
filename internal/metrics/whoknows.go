@@ -123,9 +123,7 @@ func cleanPrefix(p string) string {
 // whoKnows answers for one repository, its reviewers from the view's
 // GitHub data, indexed once per query.
 func whoKnows(v *view, reviews *reviewsIndex, r *repoView, prefix string, w domain.Window) []domain.MetricValue {
-	under := func(p string) bool {
-		return prefix == "" || p == prefix || strings.HasPrefix(p, prefix+"/")
-	}
+	under := underPrefix(prefix)
 	type person struct {
 		email                              string
 		lines, majority, landings, reviews int

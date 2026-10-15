@@ -159,6 +159,29 @@ func (s *scanned) facts(t *testing.T) *domain.FactSet {
 	return fs
 }
 
+// stored returns the run's stored values of metric in scope, as every
+// reader loads them, keyed by subject: a person's email, else the
+// subject's kind and key ("repo:local:fixture", "all:").
+func (s *scanned) stored(t *testing.T, metric domain.MetricID, scope domain.Scope) map[string]domain.MetricValue {
+	t.Helper()
+	values, _, err := s.store.LoadMetrics(t.Context(), s.run)
+	if err != nil {
+		t.Fatalf("LoadMetrics(%d): %v", s.run, err)
+	}
+	out := map[string]domain.MetricValue{}
+	for _, v := range values {
+		if v.Metric != metric || v.Scope != scope {
+			continue
+		}
+		key := v.Subject.Key
+		if v.Subject.Kind != domain.SubjectPerson {
+			key = v.Subject.Kind + ":" + key
+		}
+		out[key] = v
+	}
+	return out
+}
+
 // explain runs app.Explain for subject, as the explain command does for a
 // person and the MCP server for any subject.
 func (s *scanned) explain(t *testing.T, metric domain.MetricID, subject domain.Subject) *report.Explain {

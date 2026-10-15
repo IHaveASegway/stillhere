@@ -136,12 +136,16 @@ Recommendations that were not approved stay open. The baseline is what happens i
 | # | Decision | Baseline (2026-10-07 plan) | Recommendation | Decide by | Evidence that settles it |
 |---|---|---|---|---|---|
 | 1 | Hotspot engine | code-maat 1.0.4 jar plus a Java runtime | Compute in Go; run code-maat once as a test oracle | Before M5 | Whether a Java dependency keeps Homebrew users from hotspots; code-maat has had no release since Feb 2023 |
-| 2 | Function-point weighting ("gearing") | Secondary column `geared_fp` | Cut it | Before the M1 schema | Whether it changes any ranking; in the proof run it did not change the top 10, and 21 of 28 language rows are estimates |
+| 2 | Function-point weighting ("gearing") | **Decided 2026-10-15: cut** ([Decided](#decided), [#21](https://github.com/IHaveASegway/stillhere/issues/21)) | | | |
 | 3 | Blame cache | Built alongside blame (M1) | Defer until measured | During M1 | Cold scan of a real org against the 15-minute budget; the proof run took 93 s for 80 repos |
 | 4 | Server refresh | Unspecified | The server only reads; a refresh builds a new run that readers see only once complete; refresh is scheduled inside the same container | Before M3 | Whether refresh should run in-process, as a separate job, or on demand from the UI |
 | 5 | Minimum sample and cohort window | None | At least 10 landings; durability cohort is changes 90–365 days old | M2, on real data | Interval widths on a real org |
 | 6 | Moved lines in "substantive" counts | Rename detection only | `durable@2` using blame at the landing commit | After M1 data | How often moved code inflates added lines |
 | 7 | AI-assisted shares in the local report | As built (the plan had no rule): the report's overviews and cards show every share, a repository's, a group's and the whole run's, however few people landed in it; the 3-person floor and the secondary rule apply only to what the MCP server sends ([ADR 0007's amendment](adr/0007-ai-assisted-attribution.md#amendment-the-shares-that-leave-the-machine)) | Keep the terminal as it is; apply the MCP server's one decision per run (`app.AIShares`) to every page the web server serves | Before M3 | Whether a report's readers can already read the clones it is built from: a terminal user can (every trailer is in `git log`), a lead on the web server may not, and a pasted report travels without them |
+
+### Decided
+
+- **2. Gearing: cut** (2026-10-15, the owner, [#21](https://github.com/IHaveASegway/stillhere/issues/21)). Function-point weighting (a `geared_fp` column: non-blank lines times a language weight, over a per-language "source lines per function point" table) is not built. The owner's rule, for this and every metric after it: keep what stillhere can get quickly, with the level of detail it needs to be meaningful. Gearing fails it on both counts: 21 of the table's 28 language rows are estimates rather than measurements, so the weighting adds a number nobody can check, and in the 2026-10-07 proof run it did not change the top 10 or move anyone, so it adds no meaning either. Stated as an architecture decision, it is a two-way door: gearing would be a new metric computed from facts every run already stores (lines per path, roles), so it can come back as `geared@1` without a schema change. What would show this decision wrong: a team for whom language mix decides who looks productive, measured as ranks that move when lines are weighted by language. No ADR, since nothing was built and nothing is hard to reverse.
 
 ## Non-goals (v1)
 

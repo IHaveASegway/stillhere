@@ -333,6 +333,30 @@ func BuildCloneHealth(ctx context.Context, dir, promisor string) (*CloneHealthRe
 	return r, nil
 }
 
+// Clone clones the repository src into <t.TempDir()>/<name> through
+// file://, as from a server, with options such as "--depth", "18" or
+// "--filter=blob:none" (which src's config then allows), sets the clone's
+// origin to remote, and returns its path: the shallow and partial clones
+// of a fixture whose numbers TestChangeOracles checks against the full
+// fixture's (#74). A partial clone keeps its origin as its promisor
+// remote, which is how discovery tells it is one; the Analysis profile
+// fetches nothing from it. It stops the test with t.Fatal if git fails.
+func Clone(t testing.TB, src, name, remote string, options ...string) string {
+	t.Helper()
+	dir := t.TempDir()
+	b, err := newBuilder(t.Context(), dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.git("-C", src, "config", "uploadpack.allowFilter", "true")
+	dst := filepath.Join(dir, name)
+	b.discoveryClone(discoveryFileURL(src), dst, remote, options...)
+	if b.err != nil {
+		t.Fatalf("fixture: clone %s: %v", src, b.err)
+	}
+	return dst
+}
+
 // discoveryUpstream builds the repository the discovery and clone-health
 // clones are cloned from: main with two commits, the second extending
 // app.py, so a blob-less clone lacks the first version of app.py; and trunk,

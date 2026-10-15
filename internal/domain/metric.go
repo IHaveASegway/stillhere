@@ -82,6 +82,11 @@ const (
 	SubjectRepo   = "repo"   // Repo.Key
 	SubjectGroup  = "group"  // Group.Name: a group's own numbers, such as its rollup of the concentration walk
 	SubjectChange = "change" // landing SHA, or pull request id from M2
+	// SubjectAll is the whole run's own numbers, in scope all, Key "": a
+	// total over every repository of the run, such as landed@2's and
+	// review_coverage@1's, which no group's value gives when the run's
+	// repositories are in several groups or in none.
+	SubjectAll = "all"
 )
 
 // Scope is the population a value or rank was computed within. Ranks never

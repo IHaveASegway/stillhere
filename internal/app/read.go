@@ -449,6 +449,8 @@ func explainKindOne(kind string) string {
 		return "an area"
 	case domain.SubjectChange:
 		return "a change"
+	case domain.SubjectAll:
+		return "the whole run"
 	}
 	return "a " + kind
 }
@@ -457,7 +459,7 @@ func explainKindOne(kind string) string {
 // "people", "repositories, areas and groups".
 func explainKindsMany(kinds []string) string {
 	plural := map[string]string{domain.SubjectPerson: "people", domain.SubjectRepo: "repositories",
-		domain.SubjectGroup: "groups", domain.SubjectArea: "areas", domain.SubjectChange: "changes"}
+		domain.SubjectGroup: "groups", domain.SubjectArea: "areas", domain.SubjectChange: "changes", domain.SubjectAll: "the whole run"}
 	var out []string
 	for _, k := range kinds {
 		out = append(out, cmp.Or(plural[k], k+"s"))

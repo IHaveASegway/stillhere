@@ -1,6 +1,6 @@
 # Fixture repository and oracles
 
-Status: carried over from the 2026-10-07 plan, change oracles and the sibling fixture added 2026-10-14, regression guards added 2026-10-14 (#13), the binary-file guard 2026-10-14 (#54), with a rename History does not collect, a vendored file and a later text change added by its review 2026-10-15, its text twins and the main fixture as it stood at an earlier `--now` added 2026-10-15 (#70) · the week, still-here and change oracles run as `go test` in `internal/app` (`TestWeekOracle`, `TestStillHereOracle`, `TestChangeOracles`, `TestDeterminism`, #13), web escaping in M3
+Status: carried over from the 2026-10-07 plan, change oracles and the sibling fixture added 2026-10-14, regression guards added 2026-10-14 (#13), the binary-file guard 2026-10-14 (#54), with a rename History does not collect, a vendored file and a later text change added by its review 2026-10-15, its text twins and the main fixture as it stood at an earlier `--now` added 2026-10-15 (#70), `landed@2`, knowledge under any path, `review_coverage@1` with a seventh pull request, the binary-changes caveat and the partial and shallow clones added 2026-10-15 (#108, #107, #64, #74) · the week, still-here and change oracles run as `go test` in `internal/app` (`TestWeekOracle`, `TestStillHereOracle`, `TestChangeOracles`, `TestDeterminism`, #13), web escaping in M3
 
 `internal/fixture` builds this repository (`fixture.Main`), the [sibling fixture](#sibling-fixture) (`fixture.Sibling`), the [regression guards](#regression-guards-testchangeoracles)' three repositories (`fixture.Backdated`, `fixture.MergedRevert`, `fixture.Binary`), the [merge-methods guard](#merge-methods-fixturemergemethods) (`fixture.MergeMethods`) and the [discovery fixture](#discovery-fixture-testdiscover)'s repositories in temporary directories for `go test`. Every number below is an oracle: a change that moves one fails CI. Each oracle exists so that one specific wrong implementation fails, and that implementation is named next to it.
 
@@ -331,6 +331,51 @@ Wrong implementations this catches:
 - **No window on landers.** Gina and Hank appear as recent landers of `split.py`.
 - **Crediting the merger, or patching with `log --first-parent -p`.** Bob replaces Cara as the recent lander of `side.py`: with `--first-parent`, git gives row 8 its first-parent diff, which adds `side.py` and `side_week.py` as Bob's.
 - **Commit time instead of landing time.** `side.py` has no recent lander, because `e08df80` was written in February.
+
+### landed@2 (main fixture)
+
+`landed@2` over the week, `[2026-09-30, 2026-10-07)`: rows 8 to 16 of [Change facts per landing](#change-facts-per-landing-main-fixture), each credited to the people who wrote its non-merge commits, with each commit's own numstat insertions on paths that received a role (blank lines included) and the `prod` subset. Derived by hand from the History table and [metrics.md](../../docs/metrics.md#landed2) before code computed it, then checked against `git rev-list L^1..L` and `git log --numstat` on git 2.50.1. Assert values in scope `repo` and scope `all` (the same here: the fixture is scanned alone).
+
+| Who | Landings | `commits` | `lines_added` | `prod_lines_added` | `merged` |
+| --- | --- | --- | --- | --- | --- |
+| Cara Dev | 1 (row 8) | 2: `e08df80` (`side.py` 2) and `feb652b` (`side_week.py` 7) | 9 | 9 | 0 |
+| Bob Builder | 1 (row 9) | 1 | 2 | 2 | 1 (row 8) |
+| Ivy Tester | 1 | 1 | 4 | 0 | 0 |
+| Frank & Sons | 1 | 1 | 3 | 3 | 0 |
+| Ada Example | 1 | 1 | 1 | 1 | 0 |
+| Dana Dev | 1 | 1 | 1 (`vendor/new.py` is denied) | 1 | 0 |
+| Erin Editor | 1 | 1 | 1 | 1 | 0 |
+| Jules Note | 1 | 1 | 0 | 0 | 0 |
+| GitHub Copilot (bot) | 1 | 1 | 3 | 3 | 0 |
+| **The repository and the run** (subject `repo`, and `all`) | 9 | 10 | 24 | 20 | 1 |
+
+No `landings_lines_unknown`: every landing's lines are known. Row 8's merge commit is credited to no one's lines: its first-parent diff, the 9 lines `landed@1` gives Bob, is Cara's two commits.
+
+Wrong implementations this catches:
+
+- **`landed@1`'s credit, the landing commit's author.** Bob has 2 landings and 11 lines, and Cara has no row.
+- **Merge commits counted as commits.** Bob has 2 landings, 2 commits; the totals have 11 commits.
+- **No `merged`.** Bob's row hides that he landed Cara's branch.
+- **Only first-parent commits (a week run without the landing map).** Cara has no row, and the totals have 8 commits and 15 lines: row 8 adds none.
+
+**Not covered.** A total made by summing the person rows would count a landing that holds two people's commits twice. No landing of any fixture holds two people's commits, so such a sum gives these totals too; the definition counts a scope's totals per landing, and adding a two-author branch to the main fixture would move its other oracles.
+
+### Knowledge under any path (main fixture)
+
+`metrics.PathKnowledge` computes `knowledge_loss@1` and `knowledge_concentration@1` for the code under any path prefix, as a scan computes them per repository and per top-level directory, with activity read over the whole run ([metrics.md](../../docs/metrics.md#units), "Area"). The main fixture has no `prod` file in a directory, so its root is its only area; the oracle asks about files:
+
+| Prefix | `knowledge_loss@1` | `people`, `people_inactive` | `knowledge_concentration@1` | `files_with_majority` |
+| --- | --- | --- | --- | --- |
+| `""` (the root) | the stored repository value, 4 / 34 | 8, 2 | the stored repository value, 2 | 10 |
+| `split.py` | 4 / 4: Gina 2 and Hank 2, both without a landing since January | 2, 2 | 1: Gina, the first of its two half owners by email | 1 |
+| `service.py` | 0 / 8: Ada 6 and Bob 2, both active | 2, 0 | 1: Ada | 1 |
+| `side` | none: a prefix matches whole segments, so neither `side.py` nor `side_week.py` | | none | |
+
+Wrong implementations this catches:
+
+- **A second implementation of either metric** that drifts from the stored one: the root's values differ from the repository's.
+- **Activity read over the asked repository alone**: the same here (one repository), and the reason the function reads every repository of the run.
+- **A substring prefix**: `side` gives `side.py` and `side_week.py`, Cara's 9 lines.
 
 ### AI-assisted tags and reverts (main fixture)
 
@@ -747,6 +792,21 @@ Wrong implementations this catches (each was run as a mutation of `internal/metr
 
 Holding binary changes on `prod` paths only fails nothing since #70: a binary change on a path with no `prod` role, such as V1's, leaves both sums by that role already. The rule holds every binary change only so that it stays one line.
 
+**The card's caveat (#64).** The repository's card carries one `binary-changes` caveat that counts the changes to `prod` files, by the path each change wrote, that git took for binary: 4, B1's `bin.py`, T2's and T3's `flip.py` and V2's `lib.py`. V1's `vendor/lib.py` has no role and is not counted. Leaving their lines out is complete-case analysis, so the reader is told how many were left out. Without the caveat the card says nothing, as before #64; counting by the role at HEAD would miss `bin.py`, which HEAD has only as `moved.py` (3).
+
+### Partial and shallow clones (#74)
+
+A repository whose facts are partial gives no number its facts cannot hold, rather than 0 ([metrics.md](../../docs/metrics.md#values-what-every-metric-returns), "Missing facts"). `fixture.Clone` makes the two clones through `file://`, as from a server.
+
+**A partial clone of the main fixture** (`--filter=blob:none`, origin `https://git.example.test/acme/partial.git`, which stays its promisor remote), scanned beside the main fixture with its mailmap. Its history has no numstat, so every landing's lines are unknown. In the partial clone's scope, `landed@1` has the week oracle's landings with no `lines_added` or `prod_lines_added` and `landings_lines_unknown` equal to them (Bob 2, everyone else 1), and `landed@2` has the [landed@2 rows](#landed2-main-fixture) without lines, with `landings_lines_unknown` 1 each and, for the repository, 9. In scope `all`, over both repositories, each person has twice their landings and commits, the main fixture's lines alone and `landings_lines_unknown` 1, and the run's total is 18 landings, 20 commits, 2 merged, 24 and 20 lines and `landings_lines_unknown` 9.
+
+- **Zeros for unknown lines** (`main` before #74): every partial row has `lines_added` 0, and the run's totals look complete at 24 lines over 18 landings.
+
+**A shallow clone of the sibling** (`--depth 18`, origin `https://git.example.test/acme/shallow.git`), scanned alone with the sibling's mailmap. Its 18 commits are W1 to W9's 17 landings and O10, its boundary, committed 2026-05-18: inside the 365 days the scan collects, so the history carries a `shallow-window` warning, and older than `simplifying@1`'s window, `[2026-07-09, 2026-10-07)`, whose landings bring in no commit behind it. So that window is inside the clone's history, and `simplifying@1` is [the sibling's](#simplifying1-sibling): Lena 23 over 10 clusters, ranked, with S1's 22 and W2's 1; Omar 21 over 2; Pia 0 over 1. `ai_assisted@1`'s 365 days start before the boundary, so it has no value, and the card no share.
+
+- **A shallow boundary covers no window** (`main` before #74): no `simplifying@1` value at all.
+- **Counting what the clone holds**: `ai_assisted@1` would give a share of the 17 landings after the boundary as the year's.
+
 ## Tests that are not extra commits in this history
 
 Ada's oracle stays stable only if these cases stay out of the fixture repo.
@@ -849,7 +909,7 @@ The [issue](https://github.com/IHaveASegway/stillhere/issues/26) adds no test of
 The [main fixture](#history), scanned alone with its mailmap and `--now 2026-10-07T00:00:00Z`, with an origin and a forge replica written by hand, as a sync stores one (`PutForgeRepos`, `PutForgePage`, `MarkForgeSynced`; the shapes are GitHub's, [testdata/github/README.md](../github/README.md)). The History table does not change, so every oracle above keeps its value in a scan without the replica, which `TestChangeOracles`' other subtests run. These values were derived by hand from the History table, the replica below and [metrics.md](../../docs/metrics.md#knowledge_loss1-per-area) as #38 amends it, before any code computed them. Times are UTC, 2026, and no review is within a day of a window's boundary (2026-04-10, 2026-07-09, 2026-10-07).
 
 - **Origin.** The fixture's local config gets `[remote "origin"] url = https://git.example.test/acme/fixture.git`, as `TestDeterminism` gives it one, so the repository's key is that URL, and the replica's forge repository `R_fixture` (`acme/fixture`, with that clone URL and default branch `main`) is the run's (`domain.ForgeJoin`).
-- **The replica.** One page holds the six pull requests below, with watermark 2026-10-06 16:00 (#6's update), and a sync that started 2026-10-06 22:00 brought it up to date. A merge commit is a landing of the run, named by its row in [Change facts per landing](#change-facts-per-landing-main-fixture), with the login of that row's author. A merged pull request lists its own commits as GitHub keeps them: #3, merged with a merge commit, has Cara's two commits, which are in the run; a squash merge's commits were never on `main`, so they carry SHAs that no run holds. Every review has a body of 0 characters and no inline comment.
+- **The replica.** One page holds the seven pull requests below, with watermark 2026-10-06 16:00 (#6's update), and a sync that started 2026-10-06 22:00 brought it up to date. A merge commit is a landing of the run, named by its row in [Change facts per landing](#change-facts-per-landing-main-fixture), with the login of that row's author. A merged pull request lists its own commits as GitHub keeps them: #3, merged with a merge commit, has Cara's two commits, which are in the run; a squash merge's commits were never on `main`, so they carry SHAs that no run holds. Every review has a body of 0 characters and no inline comment.
 
 | # | Author | State | Merge commit | Its commits | Reviews: login, state, submitted |
 | --- | --- | --- | --- | --- | --- |
@@ -859,8 +919,11 @@ The [main fixture](#history), scanned alone with its mailmap and `--now 2026-10-
 | 4 | bob | created 06-01, merged 10-06 13:00, squash | row 9, delta, login bob | 2, not in the run | frank commented 06-15 10:00 · zoe commented 09-30 10:00 · copilot-pull-request-reviewer (an app) commented 10-05 09:00 · bob commented 10-05 10:00 · cara approved 10-05 11:00 |
 | 5 | gina | open since 05-01 | none | 1, not in the run | gina commented 05-20 10:00, on her own pull request |
 | 6 | erin | created 10-04, merged 10-06 16:00, squash | row 12, Erin's rename, login erin | 2, not in the run | Zoe approved 10-05 08:00 |
+| 7 | ivy | created 10-05, merged 10-06 19:00, squash | row 15, Ivy's tests, login ivy | 1, not in the run | copilot-pull-request-reviewer (an app) approved 10-06 17:00 · ivy commented 10-06 18:00, on her own pull request · bob approved 10-06 20:00, after the merge |
 
-**Who a login is** (`identity.Directory.Reviewer`, the rule `reviews_given@1` counts by): the run's mailmapped author of the commits GitHub attributes to the login. gina is `gina@example.com` (#1's merge commit), hank `hank@example.com` (#2's), cara `cara@example.com` (#3's two commits), bob `bob@example.com` (#3's and #4's merge commits) and erin `erin@example.com` (#6's). No commit of the replica is frank's or zoe's, so they are `@frank` and `@zoe`, although frank's own commit (row 13) is in the run: no pull request carries it. The copilot reviewer is an app account, `@copilot-pull-request-reviewer[bot]`, a bot.
+#7 was added for `review_coverage@1` (#107): every review it has is one that metric must not count. It lands row 15, whose paths (`tests/test_service.py`, `test`, and `notes.csv`, no role) hold no `prod` line and no oracle path, so nothing above moves but `reviews_given@1`'s counts below.
+
+**Who a login is** (`identity.Directory.Reviewer`, the rule `reviews_given@1` counts by): the run's mailmapped author of the commits GitHub attributes to the login. gina is `gina@example.com` (#1's merge commit), hank `hank@example.com` (#2's), cara `cara@example.com` (#3's two commits), bob `bob@example.com` (#3's and #4's merge commits), erin `erin@example.com` (#6's) and ivy `ivy@example.com` (#7's). No commit of the replica is frank's or zoe's, so they are `@frank` and `@zoe`, although frank's own commit (row 13) is in the run: no pull request carries it. The copilot reviewer is an app account, `@copilot-pull-request-reviewer[bot]`, a bot.
 
 **One login in two cases** (#69). #6 names its reviewer `Zoe`, as a sync after zoe changed the case of her login would copy it: the replica keeps each pull request as the last sync that saw it updated, so #4 still says `zoe`. GitHub compares logins without case, so both are one account and one subject, `@zoe`, everywhere below; a page names her `@Zoe`, the form on #6, the pull request updated last. A login kept in its case would make two reviewers, `@zoe` (1: #4) and `@Zoe` (1: #6), in `reviews_given@1` and in `new_name.py`'s reviewers.
 
@@ -921,7 +984,36 @@ After the scan, a sync stores #3 again, updated 10-12 with one more review, hank
 
 ### reviews_given@1 over the same replica
 
-`[2026-07-09, 2026-10-07)`, merged pull requests only (scope `all`): `bob@example.com` 1 (#3), `cara@example.com` 1 (#4), `@zoe` 2 (#4, as `zoe`, and #6, as `Zoe`) and the bot `@copilot-pull-request-reviewer[bot]` 1 (#4); #1's review is outside the window, #5 is open, and bob's comment on #4 is the author's. The same logins name the same subjects as in `who_knows@1`: the three metrics read one rule. With a login's case kept, `@zoe` 1 and `@Zoe` 1.
+`[2026-07-09, 2026-10-07)`, merged pull requests only (scope `all`): `bob@example.com` 2 (#3, and #7, whose approval after its merge counts: `reviews_given@1` counts the review load), `cara@example.com` 1 (#4), `@zoe` 2 (#4, as `zoe`, and #6, as `Zoe`) and the bot `@copilot-pull-request-reviewer[bot]` 2 (#4 and #7); #1's review is outside the window, #5 is open, and bob's comment on #4 and ivy's on #7 are their authors'. The same logins name the same subjects as in `who_knows@1`: the three metrics read one rule. With a login's case kept, `@zoe` 1 and `@Zoe` 1.
+
+### review_coverage@1 with reviews
+
+`[2026-07-09, 2026-10-07)`: rows 8 to 16, each mapped to the pull request that landed it as `who_knows@1` maps them (#3 to row 8, #4 to row 9, #6 to row 12 and #7 to row 15; the rest landed with none). A landing's author is its pull request's author, else the person its landing commit is credited to; a review counts when it was submitted before its pull request merged, by a human other than the author. Every review has no text and no inline comment.
+
+| Row | Pull request, author | Counted reviews | |
+| --- | --- | --- | --- |
+| 8 | #3, cara | bob approved 10-02 | reviewed, by approvals only |
+| 9 | #4, bob | frank commented 06-15, zoe commented 09-30, cara approved 10-05 (bob's own comment and the app's are not counted) | reviewed |
+| 10 | none, GitHub Copilot | | a bot's: out of `Den` |
+| 11, 13, 14, 16 | none: Dana, Frank, Ada, Jules | | direct, unreviewed |
+| 12 | #6, erin | Zoe approved 10-05 | reviewed, by approvals only |
+| 15 | #7, ivy | none: the app's approval is a bot's, ivy's comment her own, bob's approval after the merge | unreviewed |
+
+| Value (subject `repo`, and `all`) | `Num` / `Den` | `via_pull_request` | `direct` | `approved_no_comment` | `bot_landings` | `repos` |
+| --- | --- | --- | --- | --- | --- | --- |
+| `review_coverage@1` | 3 / 8 = 0.375 | 4 | 4 | 2 | 1 | 1 |
+
+Wrong implementations this catches:
+
+- **A review after the merge counted**, or `reviews_given@1`'s 90-day review window in its place: bob reviews #7, 4 / 8.
+- **The author's own review counted**: ivy reviews #7, 4 / 8.
+- **A bot's review counted**: the app reviews #7, 4 / 8.
+- **Bot landings in `Den`**: 3 / 9.
+- **Direct landings left out**: 3 / 4.
+- **A comment taken for an approval with no comment**: `approved_no_comment` 3.
+- **Pull requests mapped by their own commits, not the merge commit**: #4, #6 and #7 have none in the run, so they are direct: 1 / 8.
+
+Without the replica, the main fixture has no `review_coverage@1` value: its coverage is unknown, not 0.
 
 **A run stored before #69.** A stillhere before #69 kept a login's case in the keys it stored. Had both pull requests said `Zoe`, its run would hold `@Zoe` 2 in its values and ranks, while its readers fold what they are handed and what they compute from its pull requests to `@zoe`. The readers fold the stored keys too, where they read the run ([run model](../../docs/spec/codebase.md#run-model)), so `explain reviews_given@1 --person @zoe` gives 2 in scope `all`, as for a run stored since; without the fold, `@zoe` has no value in that run. (This replica as such a stillhere stored it would hold `@zoe` 1 and `@Zoe` 1, one account split in two, with a row each in its rank tables; that run is read as stored, and the log says to scan again.)
 
@@ -955,9 +1047,11 @@ No commit of the replica is sam's, rita's or tess's, so they are `@sam`, `@rita`
 | `a.py` | `@rita` (1: #2) | `@tess`: #3 did not land S1 |
 | `b.py` | `@tess` (1: #3) | |
 
+`review_coverage@1` (#107), over the same landings, all in `[2026-07-09, 2026-10-07)`: B0 landed with no pull request, R1 and R2 are #1's, S1 #2's and S2 #3's, and each pull request was approved before it merged, by someone other than its author: 4 / 5, with `via_pull_request` 4, `direct` 1, `approved_no_comment` 4, `bot_landings` 0 and `repos` 1, in scope `repo` and `all`.
+
 Wrong implementations this catches:
 
-- **The merge commit alone**, with no walk back: `one.py` has no reviewer.
+- **The merge commit alone**, with no walk back: `one.py` has no reviewer, and R1 is direct, so `review_coverage@1` is 3 / 5.
 - **A walk that passes another pull request's merge commit** (#38's first version): #3 also lands as S1, so `@tess` reviews `a.py`.
 
 **Not covered.** A commit pushed straight to the branch, with no pull request, in the same second as a squash of several commits and just before it, is taken for that pull request's: nothing in the history or the replica tells the two apart. `who_knows@1`'s blind spots say so. GitHub's `Commit.associatedPullRequests`, read at sync time, would map every commit exactly (a follow-up).

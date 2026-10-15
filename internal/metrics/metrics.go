@@ -88,7 +88,7 @@ type Input struct {
 	// identity.New built over the same facts, FactSet.Forge included: the
 	// GitHub data is what links a login to a person (Reviewer).
 	Who  *identity.Directory
-	Days int // landed@1 window, at least 1; 0: the policy's [week] days
+	Days int // landed@1's and landed@2's window, at least 1; 0: the policy's [week] days
 }
 
 // weekDays returns landed@1's window in days: Days, else the policy's
@@ -161,7 +161,9 @@ type projected interface {
 func All() []Metric {
 	return []Metric{
 		landedV1{},
+		landedV2{},
 		survivingV1{},
+		reviewCoverageV1{},
 		majorityOwnerV1{},
 		knowledgeConcentrationV1{},
 		knowledgeLossV1{},

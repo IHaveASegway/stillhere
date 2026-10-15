@@ -23,6 +23,7 @@ const (
 	codePartial       = "partial-clone"
 	codeShallowWindow = "shallow-window"
 	codeBlameErrors   = "blame-errors"
+	codeBinary        = "binary-changes" // #64: prod changes git took for binary, whose lines no change metric counts
 	codeNoIgnoreRevs  = "no-ignore-revs"
 	codeExcluded      = "excluded-repo"
 	codeDuplicate     = "duplicate-repo" // a repository's warning: another clone of its remote was skipped
@@ -50,7 +51,7 @@ const largeRepoLines = 10000
 // damaging; codes not listed follow, sorted.
 var caveatOrder = []string{
 	codeFailed, codeShallow, codePartial, codeShallowWindow,
-	codeBlameErrors, codeNoIgnoreRevs,
+	codeBlameErrors, codeBinary, codeNoIgnoreRevs,
 }
 
 // summaries say what a repository caveat means when it concerns several
@@ -61,8 +62,10 @@ var summaries = map[string]string{
 	codePartial:       "Partial clones have no line facts (no numstat, no blame): only their landings and commits count, and where their blobs are absent, no path is skipped as too big or generated.",
 	codeShallowWindow: "A shallow boundary falls inside the history window, so earlier landings are missing.",
 	codeBlameErrors:   "Blame failed on some files, so their lines are missing.",
-	codeNoIgnoreRevs:  "Large repositories without a .git-blame-ignore-revs: a formatting commit would take the credit for every line it touched.",
-	codeDuplicate:     "Clones of the same remote as these repositories were skipped as duplicates: each repository is counted once (see their warnings).",
+	codeBinary: "git took some changes to prod files for binary, so their lines are unknown: durable@1 and simplifying@1 " +
+		"leave them out, and the lines landed do not count them.",
+	codeNoIgnoreRevs: "Large repositories without a .git-blame-ignore-revs: a formatting commit would take the credit for every line it touched.",
+	codeDuplicate:    "Clones of the same remote as these repositories were skipped as duplicates: each repository is counted once (see their warnings).",
 	codeHeadAfterNow: "These repositories are read at the newest commit on their branch's first-parent chain committed before --now: " +
 		"their branches have landings at or after it, which no number here counts (see their warnings for the commit read and how many).",
 	codeDatedAfterNow: "In these repositories, landings dated at or after --now lie below the commit read, as a backdated commit " +
@@ -120,11 +123,47 @@ func repoCaveats(rf *domain.RepoFacts) []Caveat {
 	if n := len(rf.BlameErrors); n > 0 {
 		add(codeBlameErrors, "Blame failed on "+plural(n, "file", "files")+", so their lines are missing.")
 	}
+	if n := binaryProdChanges(rf); n > 0 {
+		add(codeBinary, "git took "+plural(n, "change", "changes")+" to prod files for binary (a NUL byte in a file's first "+
+			"8,000 bytes, or -diff in .git/info/attributes), so their lines are unknown: durable@1 and simplifying@1 leave "+
+			"them out, and the lines landed do not count them.")
+	}
 	if lines := blamedProdLines(rf, nil); rf.LineFacts && rf.IgnoreRevs.Source == "" && lines >= largeRepoLines {
 		add(codeNoIgnoreRevs, "No .git-blame-ignore-revs in a repository with "+grouped(lines)+
 			" surviving prod lines: a formatting commit would take the credit for every line it touched.")
 	}
 	return out
+}
+
+// binaryProdChanges counts the changes of a scan's non-merge commits to
+// prod paths, by the path the change wrote, that git took for binary
+// (FileChange.Binary): their added and removed lines are unknown, so the
+// change metrics leave them out under their missing-facts rule (#64), and
+// numstat gives them none. Leaving them out is complete-case analysis,
+// unbiased only when whether a file is binary has nothing to do with how
+// long its code lasts, so the reader is told how many. A week run's
+// changes carry no patch counts (AddedNonBlank -1) and feed no change
+// metric, so it has none to count.
+func binaryProdChanges(rf *domain.RepoFacts) int {
+	prod := make(map[string]bool, len(rf.Paths))
+	for _, pc := range rf.Paths {
+		if pc.Role == domain.RoleProd {
+			prod[pc.Path] = true
+		}
+	}
+	merges := map[string]bool{}
+	for _, c := range rf.Commits {
+		if len(c.Parents) > 1 {
+			merges[c.SHA] = true
+		}
+	}
+	n := 0
+	for _, fc := range rf.Changes {
+		if fc.Binary && fc.AddedNonBlank >= 0 && prod[fc.Path] && !merges[fc.Commit] {
+			n++
+		}
+	}
+	return n
 }
 
 // stripRepos drops the repository names from a card's caveats: on a card

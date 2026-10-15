@@ -18,12 +18,12 @@ type HistoryMode int
 
 // The history modes.
 const (
-	// HistoryWeek collects the first-parent landings in the window with
-	// numstat: what week prints.
+	// HistoryWeek collects the first-parent landings in the window, the
+	// landing map and the commits each landing brought in, with numstat:
+	// what week prints, landed@2's credit of a merged branch included.
 	HistoryWeek HistoryMode = iota
-	// HistoryScan adds the landing map, the commits each landing brought
-	// in, every commit's own non-blank added and removed lines, reverts and
-	// the repository's first commit: what scan stores.
+	// HistoryScan adds every commit's own non-blank added and removed
+	// lines, reverts and the repository's first commit: what scan stores.
 	HistoryScan
 )
 
@@ -49,13 +49,13 @@ type HistoryFacts struct {
 	// zero when unknown, such as in a shallow clone, whose boundary
 	// commits are not roots, and in week runs, which do not need it.
 	FirstCommit time.Time
-	// Commits holds the landing commits and, in scan runs, every commit a
-	// landing brought in, sorted by SHA. Co-authors are canonicalised with
-	// git check-mailmap in both modes.
+	// Commits holds the landing commits and every commit a landing brought
+	// in, sorted by SHA. Co-authors are canonicalised with git
+	// check-mailmap in both modes.
 	Commits []domain.Commit
 	// Landings are the first-parent commits of Head whose committer time
-	// is in the window, sorted by SHA. Landing.Commits, the landing map,
-	// is collected in scan runs only and is nil in week runs.
+	// is in the window, sorted by SHA, each with its landing map
+	// (Landing.Commits) in both modes.
 	Landings []domain.Landing
 	// Changes holds one row per commit and path that the commit's diff
 	// touched, sorted by Commit, then Path. Added and Removed are numstat
@@ -97,13 +97,16 @@ type HistoryFacts struct {
 // so every path, including a rename's two paths, arrives exactly as
 // stored, however odd it is.
 //
-// In HistoryWeek it runs one first-parent log. HistoryScan adds:
+// Both modes run one first-parent log, then:
 //
 //   - the landing map (git rev-list L^1..L for every landing L), computed
 //     from one rev-list --parents walk for all landings rather than one
-//     process per merge;
+//     process per merge, and none when no landing is a merge;
 //   - the commits merge landings brought in, with their numstat, from one
-//     git log --no-walk --stdin;
+//     git log --no-walk --stdin.
+//
+// HistoryScan adds:
+//
 //   - every non-merge commit's own -U0 -w patch, from one git log
 //     --no-walk --stdin -p over the mapped commits, never --first-parent,
 //     under which git prints a merge's first-parent diff as the merger's;
@@ -189,13 +192,16 @@ func (h *historyRun) run(ctx context.Context) error {
 	if err := h.readLandings(ctx); err != nil {
 		return err
 	}
+	// Both modes map the landings and read the commits merges brought in:
+	// landed@2 credits a merged branch to the people who wrote it, in a
+	// week as in a scan (#108).
+	if err := h.mapLandings(ctx); err != nil {
+		return err
+	}
+	if err := h.readBroughtIn(ctx); err != nil {
+		return err
+	}
 	if h.scan {
-		if err := h.mapLandings(ctx); err != nil {
-			return err
-		}
-		if err := h.readBroughtIn(ctx); err != nil {
-			return err
-		}
 		if h.lines {
 			if err := h.readPatches(ctx); err != nil {
 				return err
@@ -295,7 +301,7 @@ func (h *historyRun) add(rec *historyRecord) error {
 		return fmt.Errorf("git printed commit %s twice", sha)
 	}
 	h.commits[sha] = &historyCommit{commit: rec.commit, coAuthors: rec.coAuthors}
-	if h.repo.Shallow && len(rec.commit.Parents) == 0 {
+	if h.repo.Boundary(&rec.commit) {
 		// The clone's boundary: its numstat is its whole tree, not its change.
 		h.cut = append(h.cut, sha)
 		return nil
@@ -474,7 +480,7 @@ func (h *historyRun) facts() *HistoryFacts {
 			SHA:     sha,
 			Time:    c.CommitTime,
 			Merge:   len(c.Parents) > 1,
-			Commits: h.maps[sha], // nil in week runs
+			Commits: h.maps[sha],
 		})
 	}
 	slices.SortFunc(f.Landings, func(a, b domain.Landing) int { return strings.Compare(a.SHA, b.SHA) })

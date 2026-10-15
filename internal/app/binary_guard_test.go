@@ -1,6 +1,7 @@
 package app_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
@@ -47,6 +48,17 @@ func binaryGuard(t *testing.T) {
 		"2026-05-11T12:00:00Z vendor/lib.py": true, // V1, on a path with no role
 		"2026-05-18T12:00:00Z lib.py":        true, // V2, the move onto a prod path
 	})
+	// #64: the card says how many of them were to prod files, by the path
+	// each change wrote: all but V1's, whose vendor/lib.py has no role.
+	var binaryCaveats []string
+	for _, c := range r.Card.Caveats {
+		if c.Code == "binary-changes" {
+			binaryCaveats = append(binaryCaveats, c.Message)
+		}
+	}
+	if len(binaryCaveats) != 1 || !strings.HasPrefix(binaryCaveats[0], "git took 4 changes to prod files for binary") {
+		t.Errorf("SPEC regression guards, binary files: the card's binary-changes caveats are %q, want one counting 4 changes", binaryCaveats)
+	}
 
 	checkDurable(t, s, r.Key, "SPEC regression guards, binary files, durable@1", map[string]durableRow{
 		"ann@example.com":  {"Ann Binary", 2, 2, 1, 0, false},

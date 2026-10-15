@@ -2,6 +2,7 @@ package collect
 
 import (
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -138,23 +139,32 @@ EOF
 
 `
 
+// historyLongLine is one line longer than the 64 MiB a scanner holds
+// (maxToken), as a minified bundle or one-line JSON can be: the rename
+// commit adds it as long.js (#73).
+var historyLongLine = "x='" + strings.Repeat("a", maxToken) + "'\n"
+
 // TestNumstatRename checks that every form in which git prints a path in
 // numstat reaches the facts as the destination path, the rename source,
 // and the lines the commit's own diff added, in week and scan runs alike
 // (docs/spec/week-collector.md#parsing). History reads numstat with -z, so
 // git prints each path exactly as stored; without -z it would print the
 // forms in the comments below, and each comment names the parser of that
-// form that this test catches.
+// form that this test catches. The same commit adds a line longer than any
+// buffer the collectors hold, which its own patch counts like any other
+// (#73): read whole, it failed the repository.
 func TestNumstatRename(t *testing.T) {
 	git := newRunner(t, "")
 	dir := t.TempDir()
+	stream := strings.TrimSuffix(historyRenameStream, "\n") +
+		"M 100644 inline long.js\ndata " + strconv.Itoa(len(historyLongLine)) + "\n" + historyLongLine + "\n"
 	for _, args := range [][]string{
 		{"init", "--quiet", "--template=", "--initial-branch=main", "--object-format=sha1"},
 		{"fast-import", "--quiet"},
 	} {
 		cmd := domain.GitCmd{Dir: dir, Args: args}
 		if args[0] == "fast-import" {
-			cmd.Stdin = strings.NewReader(historyRenameStream)
+			cmd.Stdin = strings.NewReader(stream)
 		}
 		if _, err := git.Run(t.Context(), cmd); err != nil {
 			t.Fatalf("git %s: %v", args[0], err)
@@ -204,6 +214,10 @@ func TestNumstatRename(t *testing.T) {
 		{"{x => y}.py", "", 1, 0, 1},
 		// "\"tab\\there.py\"": a quoted name that is not a rename.
 		{"tab\there.py", "", 1, 0, 1},
+		// One line of 64 MiB and more: a scanner that holds a line whole
+		// fails here with "token too long", and the whole repository with
+		// it (#73).
+		{"long.js", "", 1, 0, 1},
 	}
 	slices.SortFunc(want, func(a, b change) int { return strings.Compare(a.path, b.path) })
 

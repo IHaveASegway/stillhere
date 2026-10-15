@@ -195,6 +195,10 @@ func discoverSlots(paths []string) ([]discoverDir, []domain.FileError) {
 			failed = append(failed, discoverFailure(p, err))
 			continue
 		}
+		if f, ok := discoverCredential(a); ok {
+			failed = append(failed, f)
+			continue
+		}
 		abs = append(abs, a)
 	}
 	slices.Sort(abs)
@@ -464,6 +468,10 @@ func discoverMembers(dir string) ([]discoverCandidate, []domain.FileError, error
 		info, err := os.Stat(child)
 		if err != nil || !info.IsDir() {
 			continue // a link to a file, a dangling link, or a child removed since the listing
+		}
+		if f, ok := discoverCredential(child); ok {
+			failed = append(failed, f) // reported whether or not it looks like a repository: its name is what is wrong
+			continue
 		}
 		kind, err := discoverShape(child)
 		switch {
@@ -980,6 +988,25 @@ func discoverHealth(repos []domain.Repo) []domain.Warning {
 		}
 	}
 	return warnings
+}
+
+// discoverCredential refuses a directory whose absolute path holds what
+// redact.Scrub removes: a remote's userinfo or token, as a remote pasted
+// where a path belongs leaves it ("…/https:/x-access-token:TOKEN@github.com/
+// acme"), the query of such a URL, or a user:password@ segment (#93). It is
+// refused where the path enters a run, a PATH or a group's member, so
+// nothing of it is collected, stored, printed or sent: the failure quotes
+// the path scrubbed. Scrubbing the path instead would not do, because a
+// run's Repo.Path is where git runs and what the MCP server maps a path
+// to its repository by; a run cannot hold a path that is not the one on
+// disk.
+func discoverCredential(path string) (domain.FileError, bool) {
+	scrubbed := redact.Scrub(path)
+	if scrubbed == path {
+		return domain.FileError{}, false
+	}
+	return domain.FileError{Path: scrubbed, Message: "holds what looks like a credential, a remote's user, " +
+		"token or query, so it is not read: rename the directory, or pass a path without it"}, true
 }
 
 // discoverFailure records why path gave no repository. The message is
