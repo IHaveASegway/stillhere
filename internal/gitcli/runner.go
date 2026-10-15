@@ -210,9 +210,17 @@ func (r *Runner) env(p domain.Profile, credentials []string) []string {
 	}
 	if p == domain.Analysis {
 		hardening = append(hardening,
-			// Blocks promisor lazy fetch on git 2.44+: analysis never
-			// touches the network.
+			// Analysis never touches the network. GIT_NO_LAZY_FETCH (git
+			// 2.45+) makes a partial clone's missing blobs read as missing
+			// instead of fetched from its promisor remote.
 			"GIT_NO_LAZY_FETCH=1",
+			// Defence in depth: an allow list that names no real protocol
+			// refuses every transport (file, git, ssh, http, https, ext and
+			// remote helpers), whatever the repository's own config says
+			// (protocol.<name>.allow), on any git since 2.12. A command that
+			// would fetch, through a lazy fetch or anything git adds later,
+			// fails instead of connecting.
+			"GIT_ALLOW_PROTOCOL=none",
 			// GIT_TERMINAL_PROMPT=0 covers only the terminal. git asks
 			// GIT_ASKPASS, then core.askPass, then SSH_ASKPASS first; an
 			// empty GIT_ASKPASS ends that search, so no program prompts.

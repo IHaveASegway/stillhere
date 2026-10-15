@@ -310,8 +310,9 @@ func TestDiscover(t *testing.T) {
 // and partial clones are kept, flagged and warned about; a partial clone
 // still gives commit facts but no line facts; and nothing connects to its
 // promisor remote for the blobs it lacks, because the Analysis profile sets
-// GIT_NO_LAZY_FETCH=1. gitcli.New refuses git older than 2.44, the first to
-// honour that variable, so the assertion never needs SPEC's skip below 2.44.
+// GIT_NO_LAZY_FETCH=1, and GIT_ALLOW_PROTOCOL refuses every transport besides.
+// gitcli.New refuses git older than 2.45, the first to honour the first
+// variable, so the assertion is never skipped.
 func TestCloneHealth(t *testing.T) {
 	t.Parallel()
 	promisor, connections := discoverPromisor(t)

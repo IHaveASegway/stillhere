@@ -15,7 +15,7 @@ Security problems go to a private advisory, never an issue: see [SECURITY.md](SE
 You need:
 
 - **Go 1.27.** go.mod pins the toolchain (`toolchain go1.27.2`); any Go from 1.21 on downloads it by itself.
-- **git 2.44 or newer**, stillhere's version floor ([why](docs/spec/git-invocation.md#version-floors)). Tests run the git on your `PATH`.
+- **git 2.45 or newer**, stillhere's version floor ([why](docs/spec/git-invocation.md#version-floors)). Tests run the git on your `PATH`.
 - **make**.
 - **Docker**, only to dry-run a release.
 
@@ -29,13 +29,13 @@ You need:
 | `make fmt` | gofmt, and goimports with this module as the local prefix |
 | `make tidy` | `go mod tidy`, then `go mod verify` |
 
-While working on one package, `go test -race ./internal/<pkg>/...` is faster. On every pull request, CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs the lint, then build, vet and test on git 2.44.0 and on the latest git release, govulncheck, and a snapshot release that builds every archive and both images.
+While working on one package, `go test -race ./internal/<pkg>/...` is faster. On every pull request, CI ([.github/workflows/ci.yml](.github/workflows/ci.yml)) runs the lint, then build, vet and test on git 2.45.0 and on the latest git release, govulncheck, and a snapshot release that builds every archive and both images.
 
 To run the tests on the floor version yourself on Debian or Ubuntu, build it the way CI does:
 
 ```sh
-.github/scripts/git-from-source.sh build 2.44.0 "$HOME/.cache/git-from-source/2.44.0"
-PATH="$HOME/.cache/git-from-source/2.44.0/bin:$PATH" make test
+.github/scripts/git-from-source.sh build 2.45.0 "$HOME/.cache/git-from-source/2.45.0"
+PATH="$HOME/.cache/git-from-source/2.45.0/bin:$PATH" make test
 ```
 
 ## The dependency rule

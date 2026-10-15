@@ -41,7 +41,7 @@ body:
     id: git-version
     attributes:
       label: git version
-      description: The output of `git version`. stillhere needs 2.44 or newer.
+      description: The output of `git version`. stillhere needs 2.45 or newer.
     validations:
       required: true
   - type: dropdown

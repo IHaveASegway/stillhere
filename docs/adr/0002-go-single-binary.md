@@ -12,7 +12,7 @@ The work is mostly orchestrating git subprocesses and parsing their output. In t
 
 - **Go.** Shell out to git; no in-process git implementation.
 - **One static binary** for the CLI, the web server and the MCP server. SQLite through `modernc.org/sqlite`, which needs no CGO.
-- **GoReleaser** from M0: binaries, checksums, the Homebrew tap entry (`homebrew_casks`; the older `brews` key was deprecated in v2.16), and a Docker image containing the binary plus git 2.44 or newer, all from one config.
+- **GoReleaser** from M0: binaries, checksums, the Homebrew tap entry (`homebrew_casks`; the older `brews` key was deprecated in v2.16), and a Docker image containing the binary plus a git that meets the [version floor](../spec/git-invocation.md#version-floors), all from one config.
 
 ## Alternatives considered
 

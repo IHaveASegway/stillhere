@@ -123,7 +123,7 @@ release:
     go install github.com/IHaveASegway/stillhere/cmd/stillhere@{{ .Tag }}
     ```
 
-    stillhere needs git 2.44 or newer on PATH. Verify a download against `{{ .ProjectName }}_{{ .Version }}_checksums.txt`.
+    stillhere needs git 2.45 or newer on PATH. Verify a download against `{{ .ProjectName }}_{{ .Version }}_checksums.txt`.
 
 # A cask, not a formula: GoReleaser deprecated brews for prebuilt binaries,
 # because a Homebrew formula is expected to build from source.
@@ -141,7 +141,7 @@ homebrew_casks:
     description: "Change analytics for git and GitHub: what landed, what lasted, who knows it"
     # A pre-release never reaches brew users.
     skip_upload: auto
-    # Homebrew's git meets the 2.44 floor; the git in older Xcode command
+    # Homebrew's git meets the 2.45 floor; the git in older Xcode command
     # line tools does not.
     dependencies:
       - formula: git
@@ -169,7 +169,7 @@ homebrew_casks:
       zsh: completions/_stillhere
       fish: completions/stillhere.fish
     caveats: |
-      stillhere runs the first git on your PATH and needs git 2.44 or newer.
+      stillhere runs the first git on your PATH and needs git 2.45 or newer.
       Check with: git version
 
 dockers_v2:

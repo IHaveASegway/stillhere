@@ -554,7 +554,7 @@ Ada's oracle stays stable only if these cases stay out of the fixture repo.
 - **Clone health** (`TestCloneHealth`):
   - A `--depth 1` clone warns `shallow-clone` and has no blame facts.
   - A `--filter=blob:none` clone warns `partial-clone`, and has commit facts but no line facts.
-  - With a fake promisor URL, assert that nothing connects under `GIT_NO_LAZY_FETCH=1`. Skip that assertion below Git 2.44, but never unset the variable.
+  - With a fake promisor URL, assert that nothing connects under the Analysis profile (`GIT_NO_LAZY_FETCH=1` and `GIT_ALLOW_PROTOCOL=none`). The 2.45 floor means the assertion is never skipped, and neither variable is ever unset.
 - **Ignore-revs** (`TestIgnoreRevs`): a root `.git-blame-ignore-revs` at the scanned SHA is used and recorded; `--ignore-revs-file` on a multi-repo run exits 2.
 - **Prefix with odd M** (`TestConcentrationOddM`): three authors with `majority_files` 1 each, so M = 3 and half is 1.5, with equal lines on two of them. The walk stops at ≥ 1.5, and the email tie-break decides who the second author is.
 - **Display name** (`TestDisplayName`): one email, no mailmap name, two names with equal counts. The newer committer timestamp wins; equal timestamps fall through to UTF-8 bytes ascending.
