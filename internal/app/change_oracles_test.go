@@ -283,17 +283,7 @@ func siblingChangeOracles(t *testing.T) {
 	t.Run("surviving@1 credit", func(t *testing.T) {
 		// SPEC, "surviving@1 credit (sibling)": all 120 lines are people's,
 		// Copilot and Claude Dupont have none, and C1's 4 lines are Pia's.
-		got := map[string]int{}
-		if r.StillHere == nil {
-			t.Fatal("SPEC surviving@1 credit (sibling): the repository has no still-here table")
-		}
-		for _, row := range r.StillHere.Humans {
-			got[row.Email] = row.ProdNonblankLines
-		}
-		for _, row := range r.StillHere.Bots {
-			t.Errorf("SPEC surviving@1 credit (sibling): bot %s holds %d lines, want none", row.Email, row.ProdNonblankLines)
-		}
-		sameRows(t, "SPEC surviving@1 credit (sibling)", got, map[string]int{
+		checkSurviving(t, "SPEC surviving@1 credit (sibling)", r, map[string]int{
 			"lena@example.com":  37,
 			"omar@example.com":  36,
 			"quinn@example.com": 31,
@@ -309,12 +299,14 @@ func siblingChangeOracles(t *testing.T) {
 
 // backdatedGuard checks SPEC's backdated-commit guard: X, a first-parent
 // commit whose committer date is older than the scan window, hides none of
-// the landings below it, and its own commit counts for no landing.
+// the landings below it, and its own commit counts for no landing; A2, a
+// rebased commit whose author date is older than the window, lands by its
+// committer time and is credited to its author, not to its committer.
 func backdatedGuard(t *testing.T) {
 	s := scan(t, "", nil, scanRanked(fixture.Backdated(t)))
 	r := onlyRepo(t, s.model)
-	if got := r.Card.Landings.History; got != 3 {
-		t.Errorf("SPEC regression guards, backdated commit: %d landings in the history window, want 3 (B1, B2 and A1)", got)
+	if got := r.Card.Landings.History; got != 4 {
+		t.Errorf("SPEC regression guards, backdated commit: %d landings in the history window, want 4 (B1, B2, A1 and A2)", got)
 	}
 	checkDurable(t, s, r.Key, "SPEC regression guards, backdated commit, durable@1", map[string]durableRow{
 		"bea@example.com": {"Bea Below", 4, 4, 1, 0, false},
@@ -322,11 +314,12 @@ func backdatedGuard(t *testing.T) {
 		"bea@example.com": {"2026-02-02T12:00:00Z": {4, 4}}, // B1
 	})
 	checkSimplifying(t, s, r.Key, "SPEC regression guards, backdated commit, simplifying@1", map[string]simplifyingRow{
-		"cal@example.com": {"Cal Below", 0, 0, 2, false, false},
+		"cal@example.com": {"Cal Below", 0, 0, 3, false, false},
 	}, map[string]map[string]cluster{
 		"cal@example.com": {
 			"2026-08-03T12:00:00Z": {}, // B2
 			"2026-08-17T12:00:00Z": {}, // S1, landed by A1
+			"2026-08-24T12:00:00Z": {}, // A2, at its committer time, for its author; Bea committed it
 		},
 	})
 }
@@ -334,7 +327,8 @@ func backdatedGuard(t *testing.T) {
 // mergedRevertGuard checks SPEC's merged-revert guard: each revert sits on
 // a side branch that a --no-ff merge lands, under a message that names no
 // revert; the revert is linked to the merge landing, which neither change
-// metric counts, and the reverted landing leaves simplifying@1.
+// metric counts, and the reverted landing leaves simplifying@1; the lines a
+// revert restored still count in surviving@1, for whoever reverted.
 func mergedRevertGuard(t *testing.T) {
 	s := scan(t, "", nil, scanRanked(fixture.MergedRevert(t)))
 	r := onlyRepo(t, s.model)
@@ -357,6 +351,32 @@ func mergedRevertGuard(t *testing.T) {
 	}, map[string]map[string]cluster{
 		"nia@example.com": {"2026-08-24T12:00:00Z": {}}, // N2
 	})
+	// surviving@1 excludes no commit: blame gives R1's 4 restored lines to
+	// Rex, and Nia holds legacy_5 and legacy_6 from U0, nia.py's 3 and
+	// nia_w.py's 1.
+	checkSurviving(t, "SPEC regression guards, merged revert, surviving@1", r, map[string]int{
+		"rex@example.com": 4,
+		"nia@example.com": 6,
+	})
+}
+
+// checkSurviving compares surviving@1, a repository's still-here table, with
+// a SPEC table of the prod lines each person holds at HEAD, and requires
+// that no bot holds any.
+func checkSurviving(t *testing.T, table string, r *report.Repo, want map[string]int) {
+	t.Helper()
+	if r.StillHere == nil {
+		t.Errorf("%s: the repository has no still-here table", table)
+		return
+	}
+	got := map[string]int{}
+	for _, row := range r.StillHere.Humans {
+		got[row.Email] = row.ProdNonblankLines
+	}
+	for _, row := range r.StillHere.Bots {
+		t.Errorf("%s: bot %s holds %d lines, want none", table, row.Email, row.ProdNonblankLines)
+	}
+	sameRows(t, table, got, want)
 }
 
 // checkDurable compares durable@1 in repository key with a SPEC table: the

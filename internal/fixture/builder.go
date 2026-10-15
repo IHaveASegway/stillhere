@@ -78,14 +78,23 @@ func (b *builder) initRepo() {
 // row starts one row of a History table. Until the next row, every git
 // process runs as who, both author and committer, at when (recorded in UTC).
 func (b *builder) row(when time.Time, who person) {
-	date := strconv.FormatInt(when.Unix(), 10) + " +0000" // git's internal date format
+	b.rowAs(when, who, when, who)
+}
+
+// rowAs starts a row whose author and committer may differ: author wrote
+// the change at authored, and committer recorded it at committed (both in
+// UTC). Different ones make the commit git rebase and git cherry-pick leave,
+// and GitHub's rebase merge: the author and the author date are kept, and
+// whoever replays the commit is its committer, at the time of the replay.
+func (b *builder) rowAs(authored time.Time, author person, committed time.Time, committer person) {
+	date := func(t time.Time) string { return strconv.FormatInt(t.Unix(), 10) + " +0000" } // git's internal date format
 	b.who = []string{
-		"GIT_AUTHOR_NAME=" + who.name,
-		"GIT_AUTHOR_EMAIL=" + who.email,
-		"GIT_AUTHOR_DATE=" + date,
-		"GIT_COMMITTER_NAME=" + who.name,
-		"GIT_COMMITTER_EMAIL=" + who.email,
-		"GIT_COMMITTER_DATE=" + date,
+		"GIT_AUTHOR_NAME=" + author.name,
+		"GIT_AUTHOR_EMAIL=" + author.email,
+		"GIT_AUTHOR_DATE=" + date(authored),
+		"GIT_COMMITTER_NAME=" + committer.name,
+		"GIT_COMMITTER_EMAIL=" + committer.email,
+		"GIT_COMMITTER_DATE=" + date(committed),
 	}
 }
 

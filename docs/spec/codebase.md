@@ -670,7 +670,7 @@ func BuildContext(ctx context.Context, dir string) error        // the main fixt
 func BuildSibling(dir string) error                             // BuildSiblingContext with context.Background
 func BuildSiblingContext(ctx context.Context, dir string) error // the sibling in dir, which must be empty or absent
 // guards.go (#13): the regression guards' repositories, scanned without a mailmap
-func Backdated(t testing.TB) string                             // builds <t.TempDir()>/backdated: a first-parent commit older than the scan window, above landings in it
+func Backdated(t testing.TB) string                             // builds <t.TempDir()>/backdated: a first-parent commit older than the scan window, above landings in it, and on top a rebased one, authored before the window and committed in it by someone else
 func BuildBackdated(ctx context.Context, dir string) error      // the backdated guard in dir, which must be empty or absent
 func MergedRevert(t testing.TB) string                          // builds <t.TempDir()>/merged-revert: reverts on side branches that --no-ff merges land
 func BuildMergedRevert(ctx context.Context, dir string) error   // the merged-revert guard in dir, which must be empty or absent
@@ -766,9 +766,9 @@ Tests sit at stable boundaries, so a refactor does not rewrite them (Kent Beck, 
 
 | Test | Package | Asserts |
 | --- | --- | --- |
-| `TestWeekOracle` | `app` | the week table in the fixture spec, people and bots apart, and the `--days 1` window against `[week] days = 7`: `window.days` 1, `days_from` `cli`, `since` `2026-10-06T00:00:00Z` |
+| `TestWeekOracle` | `app` | the week table in the fixture spec, people and bots apart, and the `--days 1` window against `[week] days = 7`: `window.days` 1, `days_from` `cli`, `since` `2026-10-06T00:00:00Z`, and `history`, the window the run collected, equal to it |
 | `TestStillHereOracle` | `app` | the still-here table, people and bots apart, and the concentration walk |
-| `TestChangeOracles` | `app` | `durable@1` and `simplifying@1` per person and per landing, with their rank tables and eligibility, reverts and AI-assisted tags on both fixtures; `knowledge_loss@1` and `who_knows@1` on the main fixture; `surviving@1` credit on the sibling, where an agent's blamed lines go to its human co-author; and the regression guards: a backdated first-parent commit hides no landing below it, and a revert merged with `--no-ff` is linked to the merge landing, which neither change metric counts |
+| `TestChangeOracles` | `app` | `durable@1` and `simplifying@1` per person and per landing, with their rank tables and eligibility, reverts and AI-assisted tags on both fixtures; `knowledge_loss@1` and `who_knows@1` on the main fixture; `surviving@1` credit on the sibling, where an agent's blamed lines go to its human co-author; and the regression guards: a backdated first-parent commit hides no landing below it; a rebased one lands, and is dated, by its committer time, and is credited to its author; and a revert merged with `--no-ff` is linked to the merge landing, which neither change metric counts, while `surviving@1` keeps the lines the revert restored |
 | `TestDeterminism` | `app` | two scans of both fixtures as one group, into separate facts.db files, give byte-identical JSON without `timings`, and identical text and Markdown; `report` on the stored run reproduces the scan; a token planted in a URL given as a PATH, in its userinfo, query or fragment, is in no byte of facts.db or its `-wal` and `-shm`, no rendering and no log line |
 | `TestDiscover` | `collect` | duplicates, bare repos, scp vs HTTPS remotes; a planted token appears in no output |
 | `TestCloneHealth` | `collect` | shallow and partial clones warn and lose only the facts they should |

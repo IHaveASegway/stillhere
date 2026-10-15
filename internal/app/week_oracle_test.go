@@ -35,8 +35,8 @@ var (
 // app.Week on the main fixture at --now 2026-10-07 with the packaged policy:
 // the week table, people and bots apart, in the repository's table and in
 // the overview of every repository; and the --days 1 window against the
-// policy's [week] days = 7. SPEC asserts the set of rows: their display
-// order is not a rank.
+// policy's [week] days = 7, as the report states it and as the run collected
+// it. SPEC asserts the set of rows: their display order is not a rank.
 func TestWeekOracle(t *testing.T) {
 	t.Parallel()
 	repo := fixture.Main(t)
@@ -53,7 +53,7 @@ func TestWeekOracle(t *testing.T) {
 		}
 		// SPEC Setup: --now 2026-10-07T00:00:00Z, so the default week starts
 		// at 2026-09-30T00:00:00Z.
-		checkWindow(t, "SPEC Setup, the default week", m.Window, 7, "policy",
+		checkWindow(t, "SPEC Setup, the default week", m, 7, "policy",
 			window("2026-09-30T00:00:00Z", "2026-10-07T00:00:00Z"))
 		r := onlyRepo(t, m)
 		checkWeekTable(t, "repository "+r.Name, r.Week)
@@ -69,22 +69,31 @@ func TestWeekOracle(t *testing.T) {
 		if err != nil {
 			t.Fatalf("app.Week: %v", err)
 		}
-		checkWindow(t, "SPEC week oracle, --days 1 against [week] days = 7", m.Window, 1, "cli",
+		checkWindow(t, "SPEC week oracle, --days 1 against [week] days = 7", m, 1, "cli",
 			window("2026-10-06T00:00:00Z", "2026-10-07T00:00:00Z"))
 		// Every week landing is on 2026-10-06, so the rows do not move.
 		checkWeekTable(t, "repository "+onlyRepo(t, m).Name+", --days 1", onlyRepo(t, m).Week)
 	})
 }
 
-// checkWindow compares the landed window a report records with SPEC.
-func checkWindow(t *testing.T, oracle string, w report.Window, days int, from string, want report.Interval) {
+// checkWindow compares the landed window a week report records with SPEC,
+// and the window the run collected with it. report.Build derives the landed
+// window from the days and --now alone, so only history, which a week
+// report records as the window it collected and which equals its window
+// (docs/spec/report-json.md), shows that app.Week collected that window.
+func checkWindow(t *testing.T, oracle string, m *report.Model, days int, from string, want report.Interval) {
 	t.Helper()
+	w := m.Window
 	if w.Days != days || w.DaysFrom != from {
 		t.Errorf("%s: window days %d from %q, want %d from %q", oracle, w.Days, w.DaysFrom, days, from)
 	}
 	if got := (report.Interval{Since: w.Since, Until: w.Until}); !sameInterval(got, want) {
 		t.Errorf("%s: window [%s, %s), want [%s, %s)", oracle,
 			rfc3339(w.Since), rfc3339(w.Until), rfc3339(want.Since), rfc3339(want.Until))
+	}
+	if !sameInterval(m.History, want) {
+		t.Errorf("%s: history, the window the run collected, is [%s, %s), want [%s, %s): a week report's history equals its window",
+			oracle, rfc3339(m.History.Since), rfc3339(m.History.Until), rfc3339(want.Since), rfc3339(want.Until))
 	}
 }
 

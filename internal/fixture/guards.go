@@ -24,8 +24,10 @@ const (
 // Backdated builds the backdated-commit guard of testdata/fixture/SPEC.md in
 // a new temporary directory and returns its absolute path: a work tree named
 // "backdated", on branch main, whose first-parent chain holds a commit with a
-// committer date older than the scan window, above landings inside it. It
-// stops the test with t.Fatal if the build fails.
+// committer date older than the scan window, above landings inside it, and
+// on top a rebased landing, whose author date is older than the window and
+// whose committer is not its author. It stops the test with t.Fatal if the
+// build fails.
 func Backdated(t testing.TB) string {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), backdatedName)
@@ -85,9 +87,15 @@ func BuildMergedRevert(ctx context.Context, dir string) error {
 // X is committed on top of B2 with a committer date of 2025-06-01, as git
 // rebase --committer-date-is-author-date leaves a commit written long ago.
 // Plain --since stops a --first-parent walk at the first commit older than
-// the window, so it would print A1 and stop at X, hiding B2 and B1. A1 is a
-// merge, so the landing map is built in one walk through X, whose own claim
-// must be discarded rather than given to A1.
+// the window, so it would print A2 and A1 and stop at X, hiding B2 and B1.
+// A1 is a merge, so the landing map is built in one walk through X, whose
+// own claim must be discarded rather than given to A1.
+//
+// A2 is the other way round: Cal's commit of 2025-04-14, rebased onto main
+// by Bea on 2026-08-24, keeps its author and author date. It lands by its
+// committer time, inside the window, and is credited to its author, so a
+// collector that chooses or dates landings by author time, or credits the
+// committer, moves an oracle.
 func backdatedHistory(b *builder) {
 	bea := person{"Bea Below", "bea@example.com"}
 	cal := person{"Cal Below", "cal@example.com"}
@@ -116,6 +124,10 @@ func backdatedHistory(b *builder) {
 	b.row(noon(2026, time.August, 17), bea) // A1: a window landing above X
 	b.git("switch", "--quiet", "main")
 	b.git("merge", "--quiet", "--no-ff", "--no-edit", "--message", "Merge branch 'side'", "side")
+
+	b.rowAs(noon(2025, time.April, 14), cal, noon(2026, time.August, 24), bea) // A2: Cal's, rebased onto main by Bea
+	b.write("rebased.py", numbered("rebased", 2))
+	b.commit("feat: add rebased.py")
 }
 
 // mergedRevertHistory writes the Merged revert history table of SPEC: one
