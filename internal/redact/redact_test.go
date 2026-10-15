@@ -63,6 +63,12 @@ func TestRedact(t *testing.T) {
 			"fatal: user:TOKEN@host.example:o/r.git: not found",
 			"see https://host.example/o/r.git?access_token=TOKEN for details",
 			"\x1b[31mhttps://user:TOKEN@host.example/x\x1b[0m",
+			// A URL given where a path is expected, after filepath.Abs
+			// collapsed its "//": what a PATH argument becomes.
+			"/tmp/run/https:/x-access-token:TOKEN@github.com/o/r.git: does not exist",
+			"/tmp/run/https:/TOKEN@github.com/o/r.git: does not exist",
+			`C:\run\https:\user:TOKEN@github.com\o\r.git: does not exist`,
+			"stat /tmp/run/user:TOKEN@host.example:o/r.git: not a directory",
 		} {
 			for name, scrub := range map[string]func(string) string{"Scrub": redact.Scrub, "Message": redact.Message} {
 				if got := scrub(in); strings.Contains(got, "TOKEN") {
@@ -79,6 +85,9 @@ func TestRedact(t *testing.T) {
 			"refs/heads/*:refs/heads/*",
 			"git@github.com:o/r.git",
 			"\xff\xfe raw bytes in a path",
+			"/home/ada/go/pkg/mod/golang.org/x/sync@v0.8.0/errgroup",
+			"git@github.com:/o/r.git",
+			"C:/src/r and HEAD@{1}",
 		} {
 			if got := redact.Scrub(in); got != in {
 				t.Errorf("Scrub(%q) = %q, want it unchanged", in, got)

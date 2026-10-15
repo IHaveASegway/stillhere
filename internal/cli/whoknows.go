@@ -25,11 +25,7 @@ default the latest complete one.`,
 			}
 			req := app.WhoKnowsRequest{RunID: run, Path: args[0], Repo: repo}
 			return e.with(cmd.Context(), need{store: true}, func(d app.Deps) error {
-				res, err := app.WhoKnows(cmd.Context(), d, req)
-				if err != nil {
-					return err
-				}
-				return e.printJSON(res)
+				return e.printAnswer(app.WhoKnows(cmd.Context(), d, req))
 			})
 		},
 	}

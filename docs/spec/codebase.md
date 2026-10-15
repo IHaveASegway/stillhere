@@ -363,7 +363,7 @@ type ForgeStore interface { // the replica in facts.db (*sqlite.Store, sqlite/fo
 ```go
 // redact
 func URL(raw string) string     // userinfo, query and fragment removed; "<unparsed-remote>" when unparsable or a scheme-less string with an @ that is not user@host:path
-func Scrub(s string) string     // credentials removed from free text (URL() on every URL, user:pass@ prefixes); nothing else changes
+func Scrub(s string) string     // credentials removed from free text (URL() on every URL, user:pass@ prefixes, also on a path segment, and the userinfo of a URL a path cleaner collapsed, "/cwd/https:/user:TOKEN@host"); nothing else changes
 func Message(s string) string   // Scrub, then one line truncated to 180 characters
 
 // gitcli
@@ -540,17 +540,41 @@ func Intervals(id domain.MetricID, scope domain.Scope, w domain.Window, kind Kin
 func Seed(id domain.MetricID, scope domain.Scope, w domain.Window) uint64
 func AUC(pos, neg []float64) float64 // Mann-Whitney, a tie counting 1/2; 0.5 when pos or neg is empty: no pairs, not chance
 
-// report
-type Model struct{ /* stillhere.report/v1; see spec/report-json.md */ }
-func Text(w io.Writer, m *Model) error
-func Markdown(w io.Writer, m *Model) error
-func JSON(w io.Writer, m *Model) error
-// The read commands' answers live here too, so the renderers and the MCP server share one shape:
-type Explain struct { RunID int64; Metric domain.MetricID; Subject domain.Subject; Values []domain.MetricValue }
-type WhoKnows struct { RunID int64; Repo, Path string; Values []domain.MetricValue }
-type Me struct { RunID int64; Email string; Values []domain.MetricValue; Ranks []domain.RankInterval }
-type Validation struct { RunID int64; Labels int; Metrics []MetricAUC }
-type MetricAUC struct { Metric domain.MetricID; AUC float64; N int }
+// report: a view that computes no metric. values.go is the one place that maps each printed
+// number to the metric@version, subject, scope and Detail key it reads (spec/report-json.md#where-the-numbers-come-from).
+type Model struct{ /* stillhere.report/v1: overviews (per group; every repository with --scope all or without groups), repo cards, ranks, caveats and provenance on every section */ }
+type Document interface{ /* sealed: *Model, *Explain, *WhoKnows, *Me, *Validation, *Catalog */ }
+func Text(w io.Writer, d Document) error     // a terminal: 100 columns, untrusted text escaped, no emails
+func Markdown(w io.Writer, d Document) error // GitHub-flavoured: untrusted text escaped, mentions and references unlinked, no emails or repository paths
+func JSON(w io.Writer, d Document) error     // stable order; empty lists [] and maps {}, absent sections null; invalid UTF-8 as U+FFFD, NaN and ±Inf as null; written only when whole
+type People interface{ Name(email string) string; Bot(email string) bool } // *identity.Directory implements it
+type Input struct {
+	Kind, Tool string // KindWeek or KindScan; the binary's version
+	Run        *domain.Run // nil for week, and for a scan that stored nothing
+	Facts      *domain.FactSet
+	Policy     *policy.Policy
+	Who        People
+	Values     []domain.MetricValue
+	Ranks      []RankSet // one per metric named by --rank and scope
+	Landed     Landed    // landed@1's days and sort, and whether the command line set them
+	History    domain.Window
+	Timings    *Timings
+	Scope      string    // the scan's rank scope: domain.ScopeAll (or a run without groups) adds an overview of every repository
+}
+func OwnPageOnly(metric domain.MetricID) bool // a person's values only their own page shows: ai_assisted (ADR 0007); explain refuses them
+type RankSet struct { Metric MetricInfo; Scope domain.Scope; Window domain.Window; Percent bool; MinN int; Intervals []domain.RankInterval } // bots left out
+func Build(in *Input) *Model
+// The read commands' answers live here too, so the renderers and the MCP server share one shape.
+// Each has Provenance (run id, as-of, policy, HEAD SHAs, metric@version) and Caveats:
+type Explain struct { Provenance Provenance; Metric MetricInfo; Subject Subject; Values []Value; Changes []Change; Caveats []Caveat }
+type WhoKnows struct { Provenance Provenance; Path, Repo string; Repos []WhoKnowsRepo; Caveats []Caveat } // owners, top authors, recent landers, bots
+type Me struct { Provenance Provenance; Person Subject; Values []Value; Ranks []MeRank; Caveats []Caveat }
+type Validation struct { Provenance Provenance; Labels, Labellers, Meaningful, Routine, Noise, Unmatched int; Metrics []MetricAUC; Caveats []Caveat }
+type MetricAUC struct { Metric string; AUC *float64; N, Meaningful, Routine int; Beta bool } // AUC nil without both labels
+type Catalog struct { Metrics []MetricInfo }
+func NewExplain(in *ExplainInput) *Explain    // values, and a ranked metric's clusters per repository as changes
+func NewWhoKnows(in *WhoKnowsInput) *WhoKnows // who_knows@1's values under the path, as lists
+func NewMe(in *MeInput) *Me                   // the person's values and their row in each RankSet
 
 // sqlite
 func Open(ctx context.Context, path string) (*Store, error) // creates a missing dir 0700 and file 0600; migrated, then WAL (a newer facts database, or a file that is not one, SQLite or not, is a *domain.UsageError, refused unchanged and without waiting for a lock); deletes runs left running
@@ -615,9 +639,15 @@ func Explain(ctx context.Context, d Deps, r ExplainRequest) (*report.Explain, er
 func WhoKnows(ctx context.Context, d Deps, r WhoKnowsRequest) (*report.WhoKnows, error)
 func Me(ctx context.Context, d Deps, r MeRequest) (*report.Me, error)
 func Validate(ctx context.Context, d Deps, r ValidateRequest) (*report.Validation, error)
+func Metrics() *report.Catalog // the registry's definitions: the metrics command and the MCP server's metrics()
 func Sync(ctx context.Context, d Deps, r SyncRequest) error // #14
+// Week and Scan return the model alongside domain.ErrNoFacts when no repository produced facts (a scan then
+// stores nothing). A cancellation, a *domain.UsageError from a collector, or a collector that is not built yet
+// stops the run; any other failure is the repository's, recorded on its RepoFacts. Scan writes the run after
+// computing everything: BeginRun, PutRepoFacts in key order, PutRunFacts, PutMetrics, then FinishRun with complete
+// or partial (a failed repository or PATH), or failed if a write fails. Ranks leave bots out of rank.Intervals.
 // The MCP server's own use cases (overview, person, changes, highlights; ADR 0006) go in app/mcp.go, which #15
-// owns. They answer from #11's report model (the overview and repo cards), so #15 builds on #11's report types.
+// owns. They answer from #11's report model (the overviews and repo cards), so #15 builds on #11's report types.
 
 // cli
 type Build struct{ Version, Commit, Date string } // from -ldflags -X main.version, main.commit, main.date
@@ -738,7 +768,7 @@ Tests sit at stable boundaries, so a refactor does not rewrite them (Kent Beck, 
 | `TestPolicy` | `policy` | a missing table or key exits 2; `[week] days` is the file's, in its hash, and 1 to 36500 (the `--days` override itself is `TestWeekOracle`'s); an extension holds one dot; the hash covers the deny list, and the packaged files hold no CR; `FromSource(p.Source)` has `p.Ref()`; every deny line compiles and the file names RE2, Linguist (MIT) and the upstream commit; the deny prefilter never changes an answer |
 | `TestRankIntervals` | `rank` | reproducible intervals; ineligible subjects unranked; a sum's week blocks checked against its window |
 | `TestAUC` | `rank` | the validity check's statistic: a hand-counted example with ties, 1 and 0 for perfect separation, 0.5 when either class is empty, and the value counting every pair gives |
-| `TestRedact` | `redact` | no credential survives `URL`, `Scrub` or `Message` (userinfo, scp-like and malformed remotes, query strings, quotes, the 180-rune cut); text that holds none is unchanged |
+| `TestRedact` | `redact` | no credential survives `URL`, `Scrub` or `Message` (userinfo, scp-like and malformed remotes, a URL given as a path and made absolute, query strings, quotes, the 180-rune cut); text that holds none is unchanged |
 | `TestRunner` | `gitcli` | per-user and system attributes change neither numstat nor `check-attr`; no askpass, signature or external diff program runs; an inherited `GIT_DIR` changes nothing; a timeout or cancellation kills git's process group and is reported as such even when the reader fails first on the truncated output; a helper that left the group cannot hold `Stream` |
 | `TestStoreRoundTrip` | `sqlite` | `LoadFacts(PutRepoFacts(x)) == x`, a zero loading as +0; `Run(id)` returns the run as begun and finished, policy source included; readers never see a running or failed run (`ErrNotFound`) |
 | `TestStoreLifecycle` | `sqlite` | `Open` creates a missing directory 0700 and files 0600, in WAL mode; it refuses another program's SQLite file, a file that is not SQLite and a newer facts database with a `UsageError`, without waiting for a held lock and leaving the file byte for byte; first opens racing in separate processes all succeed; a run left running is deleted once its store has written nothing for a day, and not before; retention and `LatestRun` match a model of the run-model rule across gaps, year-long pauses, ties and backfills |

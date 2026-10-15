@@ -39,11 +39,7 @@ work, so keep the file outside the repository.`,
 			}
 			req := app.ValidateRequest{RunID: run, Labels: data, LabelsName: labels}
 			return e.with(cmd.Context(), need{store: true}, func(d app.Deps) error {
-				res, err := app.Validate(cmd.Context(), d, req)
-				if err != nil {
-					return err
-				}
-				return e.printJSON(res)
+				return e.printAnswer(app.Validate(cmd.Context(), d, req))
 			})
 		},
 	}

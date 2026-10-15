@@ -31,13 +31,6 @@ type SyncRequest struct {
 // adapter sends API requests one at a time whatever this is, as GitHub asks.
 const syncJobs = 4
 
-// finishTimeout bounds the FinishRun that records a sync's outcome, which
-// runs even after a cancellation. A store that waits for another process's
-// write lock would otherwise keep a stopped sync alive for minutes (until a
-// service manager kills it); a run left running is invisible to readers and
-// deleted once its lease lapses.
-const finishTimeout = 10 * time.Second
-
 // Sync lists the organization's repositories, keeps a bare mirror of each,
 // and copies the pull requests updated since the last sync into the forge
 // replica. Archived repositories and forks are left out unless asked for,
