@@ -80,10 +80,11 @@ func openStore(t *testing.T) (*sqlite.Store, string) {
 }
 
 // readDeps returns the Deps internal/cli builds for report, explain,
-// who-knows and me: the store alone. A read use case gets no git runner and
-// no policy, because it rebuilds the run's own policy from facts.db.
+// who-knows and me: the store, as both its ports, since facts.db holds the
+// forge replica too. A read use case gets no git runner and no policy,
+// because it rebuilds the run's own policy from facts.db.
 func readDeps(s *sqlite.Store, log *slog.Logger) app.Deps {
-	return app.Deps{Store: s, Log: log, Version: toolVersion}
+	return app.Deps{Store: s, ForgeStore: s, Log: log, Version: toolVersion}
 }
 
 // mailmapFile writes text to a new 0600 file and returns its path: the
@@ -108,12 +109,16 @@ type scanned struct {
 }
 
 // scan runs app.Scan with the Deps internal/cli builds for scan, into a new
-// facts.db, and fails the test unless it stored a run.
-func scan(t *testing.T, mailmap string, log *slog.Logger, req app.ScanRequest) *scanned {
+// facts.db whose forge replica each seed fills first, as a sync would, and
+// fails the test unless it stored a run.
+func scan(t *testing.T, mailmap string, log *slog.Logger, req app.ScanRequest, seed ...func(*sqlite.Store)) *scanned {
 	t.Helper()
 	d := writeDeps(t, mailmap, log)
 	s, db := openStore(t)
-	d.Store = s
+	for _, fill := range seed {
+		fill(s)
+	}
+	d.Store, d.ForgeStore = s, s
 	m, err := app.Scan(t.Context(), d, req)
 	if err != nil {
 		t.Fatalf("app.Scan: %v", err)
