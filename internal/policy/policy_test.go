@@ -179,7 +179,7 @@ func TestPolicy(t *testing.T) {
 			`version=1 headline={Metric:prod_nonblank_lines} week={Days:7 Sort:lines_added} blame={MaxBytes:400000}`,
 			`bots=["[bot]" "copilot" "dependabot" "renovate" "github-actions" "gpt-engineer"]`,
 			`ai=1 ["noreply@anthropic.com" "aider@aider.chat"] ["copilot"]`,
-			`names=map[Containerfile:iac Dockerfile:iac Makefile:iac]`,
+			`names=map[CMakeLists.txt:iac Containerfile:iac Dockerfile:iac Makefile:iac Procfile:iac]`,
 			"rule test (^|/)(tests|test|__tests__|spec|testing)(/|$) [prod sql markup iac]\n",
 			"rule migration (^|/)migrations(/|$) [prod]\n",
 			"rule seed (^|/)(seeders|factories|seeds|fixtures)(/|$) [prod sql]\n",
