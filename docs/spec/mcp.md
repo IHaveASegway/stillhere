@@ -87,6 +87,10 @@ All tools are read-only, idempotent and closed-world (`readOnlyHint`, `idempoten
 | `highlights` | Always on `highlights`: picks for recognition, not a ranking of people. |
 | `truncated` | `diff`: the patch was cut, or more than 1,000 files with a role were left out. |
 
+## The test
+
+`TestMCPTools` (codebase.md's only test for this package) drives the real server through the SDK's own client over its in-memory transport, on a facts.db holding one scan of both fixtures as one platform, made by `app.Scan` with the adapters `internal/cli` builds. It asserts the oracle numbers the answers show ([SPEC.md](../../testdata/fixture/SPEC.md): the still-here rows, knowledge loss 4/34, the concentration walk, the sibling's surviving@1 credit and bot share, Lena's durable@1 rank 1–1 at 26/30 with n 10, who-knows, S1 and S2's removals, the cohort's longest-lived change), paging and cursors, a name matched by its first word, an ambiguous one listing both candidates with their ids and a misspelt one suggesting the right one, no email without `--allow-emails`, no commit subject and a refused `diff` without `--allow-source`, `diff` and emails with both, the AI-assisted share on the `--me` person's page only, and every answer under the 25,000-token cap at 4 characters a token. `identity_candidates` is skipped (`t.Skip("#26")`) while `app.Identities` is a stub.
+
 ## Choices and their reasons
 
 - **Nine tools around questions, not tables** ([ADR 0006](../adr/0006-ai-mcp-and-narrated-highlights.md); Anthropic, "Writing effective tools for agents", 2025). A tool per table would make an agent stitch rows and ids together over many calls.
