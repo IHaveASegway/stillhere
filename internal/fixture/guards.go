@@ -95,8 +95,10 @@ func BuildMergedRevert(ctx context.Context, dir string) error {
 // attributes every line: a prod file added with a NUL byte beside a text
 // file and renamed later by a commit older than the scan window, a file
 // that is text, then binary, then text again, and a vendored binary file
-// moved onto a prod path. It stops the test with t.Fatal if the build
-// fails.
+// moved onto a prod path; and (#70) text files whose path changes role on
+// the way to HEAD: moved onto prod paths from vendor/, tests/ and a name
+// with no role, and off a prod path into tests/ and under vendor/. It stops
+// the test with t.Fatal if the build fails.
 func Binary(t testing.TB) string {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), binaryName)
@@ -243,10 +245,22 @@ func mergedRevertHistory(b *builder) {
 // to it as text: at HEAD it is text, and T1 to T4 each hold one of its
 // lines or more. V1 adds a binary file under vendor/, which the deny list
 // gives no role, and V2 moves it onto a prod path.
+//
+// U1 to M1 are V1 and V2's text twins (#70): text files added on paths
+// with no prod role, beside a prod file each, which M1 moves onto prod
+// paths (out of vendor/, out of tests/, and from a .txt name with no role),
+// and prod files M1 moves off them, into tests/, which blame still reads,
+// and under vendor/, which it does not.
 func binaryHistory(b *builder) {
 	ann := person{"Ann Binary", "ann@example.com"}
 	flo := person{"Flo Flip", "flo@example.com"}
 	val := person{"Val Vendor", "val@example.com"}
+	uma := person{"Uma Unvendor", "uma@example.com"}
+	tess := person{"Tess Tester", "tess@example.com"}
+	nate := person{"Nate Notes", "nate@example.com"}
+	kim := person{"Kim Kept", "kim@example.com"}
+	pat := person{"Pat Parked", "pat@example.com"}
+	mo := person{"Mo Mover", "mo@example.com"}
 
 	b.initRepo()
 	b.git("config", "commit.gpgsign", "false")
@@ -285,4 +299,35 @@ func binaryHistory(b *builder) {
 	b.row(noon(2026, time.June, 8), flo) // T4: flip.py gains a line as text
 	b.extend("flip.py", lines("flip_5 = 5"))
 	b.commit("feat: add flip_5 to flip.py")
+
+	b.row(noon(2026, time.June, 15), uma) // U1: a text file the deny list gives no role, beside a prod one
+	b.write("vendor/util.py", numbered("util", 3))
+	b.write("uma.py", numbered("uma", 2))
+	b.commit("feat: add vendor/util.py and uma.py")
+
+	b.row(noon(2026, time.June, 16), tess) // E1: a test file, beside a prod one
+	b.write("tests/helper.py", numbered("helper", 4))
+	b.write("tess.py", numbered("tess", 1))
+	b.commit("feat: add tests/helper.py and tess.py")
+
+	b.row(noon(2026, time.June, 17), nate) // N1: a file whose name gives it no role, beside a prod one
+	b.write("notes.txt", numbered("notes", 5))
+	b.write("nate.py", numbered("nate", 1))
+	b.commit("feat: add notes.txt and nate.py")
+
+	b.row(noon(2026, time.June, 18), kim) // K1: a prod file M1 moves into tests/
+	b.write("tool.py", numbered("tool", 3))
+	b.commit("feat: add tool.py")
+
+	b.row(noon(2026, time.June, 19), pat) // P1: a prod file M1 moves under vendor/
+	b.write("pat.py", numbered("pat", 4))
+	b.commit("feat: add pat.py")
+
+	b.row(noon(2026, time.June, 22), mo) // M1: five moves across roles, nothing else
+	b.git("mv", "vendor/util.py", "util.py")
+	b.git("mv", "tests/helper.py", "helper.py")
+	b.git("mv", "notes.txt", "notes.py")
+	b.git("mv", "tool.py", "tests/tool.py")
+	b.git("mv", "pat.py", "vendor/pat.py")
+	b.commit("refactor: move files across roles")
 }

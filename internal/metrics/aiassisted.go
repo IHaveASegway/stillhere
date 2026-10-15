@@ -36,7 +36,7 @@ func (aiAssistedV1) Definition() Definition {
 			"co-authors, who are never tagged.",
 		Gaming: "Removing the trailer hides the tag; adding one to a commit no agent touched fakes it.",
 		Oracle: "testdata/fixture/SPEC.md#ai-assisted-tags-and-credit (sibling), the main fixture's 0 of 16, and " +
-			"testdata/fixture/SPEC.md#binary-files-fixturebinary (durable_other 8/10)",
+			"testdata/fixture/SPEC.md#binary-files-fixturebinary (durable_other 15/21)",
 		Validity: "A tag, not a measurement of quality: exact for the trailers and authors the policy names, blind to the rest.",
 	}
 }

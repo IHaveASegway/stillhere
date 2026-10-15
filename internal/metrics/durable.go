@@ -9,13 +9,18 @@ import (
 // added in the cohort, the share that blame still attributes to those
 // commits at HEAD. It is a Ratio metric: the bootstrap resamples a person's
 // clusters (their counted commits in one landing), because lines inside one
-// change are not independent. Both sides of the ratio leave out the same
+// change are not independent. Both sides of the ratio classify a line by
+// the path it had in its commit, so a file moved onto a prod path keeps no
+// line its commit did not add as prod (#70), and both leave out the same
 // lines, those whose survival blame cannot tell (untracedLines), so a file
 // whose blame failed leaves the ratio instead of scoring its lines as lost,
 // and a change git took for binary, whose added lines are unknown, leaves it
-// instead of scoring its blamed lines as kept beyond what was added. Nothing
-// else bounds the ratio by 1: blame -M gives a copy inside one file to the
-// commit that wrote the block (#63).
+// instead of scoring its blamed lines as kept beyond what was added. That
+// keeps the two sums in step; it does not bound the ratio by 1, because
+// blame can still give a commit lines its own patch did not add: a copy
+// inside one file goes to the commit that wrote the block (#63), and a
+// reformat in the ignore-revs file that splits one line into several gives
+// every part to the commit that wrote the line.
 type durableV1 struct{}
 
 var durableID = domain.MetricID{Name: "durable", Version: 1}
@@ -27,24 +32,28 @@ func (durableV1) Definition() Definition {
 		Question: "Did the code a person wrote last?",
 		Unit: "Σ surviving / Σ added per person over their clusters in the cohort, landings in [now - 365d, now - 90d), per " +
 			"repository, group and all. added: non-blank prod lines of each counted commit's own -U0 -w patch; surviving: the " +
-			"non-blank prod lines blame -w -M (with the repository's ignore-revs file) attributes to it at HEAD. Lines whose " +
-			"survival blame cannot tell are in neither part, matched by the path they had in their commit (the history's change, " +
-			"blame's filename): those of a change git took for binary (its added lines are unknown), wherever HEAD holds them, and " +
-			"those of a file whose blame failed, or of a path the history renamed into one. A cluster is one person's counted " +
-			"commits in one landing and needs at least one added line in the ratio. Merge commits, ignore-revs commits and revert " +
-			"landings are excluded; a reverted landing stays and scores what blame gives it. Detail: reverted_landings.",
+			"non-blank lines blame -w -M (with the repository's ignore-revs file) attributes to it at HEAD whose path in that " +
+			"commit is prod, whatever their path's role at HEAD. Both parts classify a line by the path it had in its commit " +
+			"(the history's change, blame's filename), and lines whose survival blame cannot tell are in neither, matched by that " +
+			"path: those of a change git took for binary (its added lines are unknown), wherever HEAD holds them, and those of a " +
+			"file whose blame failed, or of a path the history renamed into one. A cluster is one person's counted commits in " +
+			"one landing and needs at least one added line in the ratio. Merge commits, ignore-revs commits and revert landings " +
+			"are excluded; a reverted landing stays and scores what blame gives it. Detail: reverted_landings.",
 		Ratio:       true,
 		Ranked:      true,
 		Eligibility: "At least 10 clusters in the cohort (open decision 5).",
 		BlindSpots: "A planned replacement of correct code looks not durable. Moves across files credit the mover; a move inside " +
 			"one file counts as the mover's added lines, which blame gives back to their first author, so the mover scores 0 on " +
-			"them (open decision 6). A copy inside one file credits its original author with more lines than they added, so a " +
-			"value can pass 1 (#63). A revert that restores deleted lines takes their blame from the original author. Changes " +
-			"younger than 90 days are not scored. Lines blamed to a merge commit (conflict resolutions) are left out in v1. A " +
-			"change git takes for binary scores none of its lines.",
+			"them (open decision 6). Blame can give a commit more lines than it added, so a value can pass 1: a copy inside one " +
+			"file credits the block's original author (#63), and a reformat in the ignore-revs file that splits a line into " +
+			"several gives every part to the line's author. A revert that restores deleted lines takes their blame from the " +
+			"original author. A prod file later moved to a path blame does not read, such as a denied one under vendor/, keeps " +
+			"its lines in added and none in surviving, so its author looks as if they kept nothing. Changes younger than 90 days " +
+			"are not scored. Lines blamed to a merge commit (conflict resolutions) are left out in v1. A change git takes for " +
+			"binary scores none of its lines.",
 		Gaming: "Writing in stable, low-traffic code and avoiding risky areas. Load-bearing (M5) is the counterweight.",
 		Oracle: "testdata/fixture/SPEC.md#change-oracles-m1-testchangeoracles (main fixture and sibling) and " +
-			"testdata/fixture/SPEC.md#binary-files-fixturebinary (binary files)",
+			"testdata/fixture/SPEC.md#binary-files-fixturebinary (binary files, and text files moved across roles)",
 		Validity: "Unvalidated until the M2 labelled-sample check (stillhere validate, AUC >= 0.7 on at least 50 labelled changes).",
 	}
 }
