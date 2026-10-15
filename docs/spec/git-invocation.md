@@ -1,6 +1,6 @@
 # Git invocation
 
-Status: carried over from the 2026-10-07 plan, updated 2026-10-14 (offline/sync split, credentials, `--source` floor) · analysis commands become tests in M0, sync commands in M2
+Status: carried over from the 2026-10-07 plan, updated 2026-10-14 (offline/sync split, credentials, `--source` floor; then by #13: the repository settings and attributes that changed facts, pinned in the prefix or where the command is built) · analysis commands become tests in M0, sync commands in M2
 
 Every git process goes through one adapter, `GitRunner.Run(ctx, repo, args, timeout)`. Call sites pass the git arguments themselves, so a reader and a test can see the exact command. A `GitRepository` type whose `Blame()`/`Log()` methods hide the flags is the weaker design: one method forgets the mailmap flag and nobody can see it.
 
@@ -13,6 +13,10 @@ git -C <repo> --no-optional-locks \
   -c core.attributesFile=/dev/null \
   -c diff.external= \
   -c log.showSignature=false \
+  -c core.bigFileThreshold=512m \
+  -c core.commentChar=# \
+  -c trailer.separators=: \
+  -c core.precomposeUnicode=false \
   [-c mailmap.file=<org-mailmap>] \
   <args>
 ```
@@ -24,6 +28,7 @@ Environment: `GIT_TERMINAL_PROMPT=0`, `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBA
 | `core.hooksPath=/dev/null`, `core.fsmonitor=` | A clone must not run its hooks or a filesystem monitor as a side effect of being measured. |
 | `diff.external=` | A repo-local external diff program must not run. The empty value does not switch external diff off: git tries to run an empty command and fails (verified on 2.50.1). `log` and `show` never run an external diff without `--ext-diff`, so the value matters only for `git diff`, which must pass `--no-ext-diff` (see call-site rules); one that forgets fails closed instead of running the repository's program. |
 | `log.showSignature=false` | A repo-local `log.showSignature=true` makes `log` and `show` run `gpg.program`, which the same config names, for every signed commit (verified). |
+| `core.bigFileThreshold=512m`, `core.commentChar=#`, `trailer.separators=:`, `core.precomposeUnicode=false` | Each is git's default, and a repository's own value changes facts that no subcommand option can pin: see [repository settings that change facts](#repository-settings-that-change-facts). |
 | `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBAL=/dev/null` | Reproducibility: a machine-wide mailmap or config would make two laptops emit different reports. Repo-local `.git/config` still applies, but it cannot override command-line `-c`. |
 | `core.attributesFile=/dev/null`, `GIT_ATTR_NOSYSTEM=1` | Reproducibility again: attributes are not config, so the two variables above leave the per-user file (`$XDG_CONFIG_HOME/git/attributes`, git's default `core.attributesFile`) and `/etc/gitattributes` in force. Either one can mark a path `-diff` (numstat then counts it as binary) or `linguist-generated` (verified). The repository's own `.gitattributes` and `info/attributes` still apply, in work trees and bare clones alike (verified). |
 | `GIT_NO_LAZY_FETCH=1` | Blocks promisor lazy fetch on Git 2.45+ (`git --no-lazy-fetch`, 2.45.0 release notes): a partial clone's missing blobs read as missing, so classification degrades as [classification.md](classification.md) says instead of failing. The promisor remote comes from the repo's own config, the same place a credential-bearing URL lives. Git 2.44.0 ignores the variable (CI saw two connections to a fake promisor on 2026-10-14), which is why the floor is 2.45. |
@@ -36,6 +41,8 @@ Environment: `GIT_TERMINAL_PROMPT=0`, `GIT_CONFIG_NOSYSTEM=1`, `GIT_CONFIG_GLOBA
 - `--no-color` on every `log -p`, `show`, `diff` and `grep` whose output is parsed. A repo-local `color.diff=always` or `color.grep=always` puts ANSI escapes in that output, and `-c color.ui=never` does not override the more specific keys (verified).
 - `--no-ext-diff` on every `git diff`.
 - `--no-ignore-revs-file` before any `--ignore-revs-file` on `blame`. A repo-local `blame.ignoreRevsFile` otherwise adds its list to stillhere's, and blame fails outright when that file is missing; `-c blame.ignoreRevsFile=` does not clear it (verified).
+- `--attr-source=<sha>^{tree}` ahead of every `log` that can print a diff and of `blame`, so `.gitattributes` is read at the scanned commit, as classification reads it (`check-attr --source`). It is not in the prefix because the commit is the repository's.
+- `--no-textconv` on every `log` that can print a diff and on `blame`; `--indent-heuristic` and `--encoding=UTF-8` on `blame`. The history logs' diff options are in [week-collector.md](week-collector.md#repository-config).
 
 Analysis never writes into a scanned repository: no fetch, no `gc`, no config writes, no index refresh. Temporary files, such as an extracted ignore-revs file, go in stillhere's own temp directory. Only sync writes, and only into the mirrors it owns.
 
@@ -44,7 +51,31 @@ Timeouts per command: blame 120 s per file, a repo's log 300 s. On timeout the c
 - **What is killed.** git runs in its own process group, and a timeout or a cancellation signals the whole group. Once git is reaped, whatever is left in the group is killed too, so a helper that ignored SIGTERM (Sync) does not outlive the command. A helper that left the group with `setsid` is out of reach; it cannot hold the command either, because the runner closes its end of stdout 5 s after the timeout.
 - **What is reported.** A timeout is reported as a timeout (`errors.Is(err, context.DeadlineExceeded)`), even when the reader fails first on the output the kill truncated. A cancellation is reported as one (`context.Canceled`), so a Ctrl-C stops the run while a repository's failure does not.
 
-**Residual risk, named rather than papered over.** A `diff.<driver>.textconv` or a smudge filter named by repo-local config or `.gitattributes` can still run during `log` and `blame`. They are not disabled, because blanking attributes would break the linguist checks. `gpg.program` from repo-local config still runs for any command that verifies signatures on purpose (`--show-signature`, the `%G?` placeholders); no collector does. This is defence in depth, not a sandbox: stillhere analyses clones its user already trusts, and never analyses repositories uploaded by other people.
+**Residual risk, named rather than papered over.** No collector runs a textconv or filter program that a repository names: every `log` that can print a diff and `blame` pass `--no-textconv`, and git runs clean and smudge filters only when it moves content between a work tree and its object store, which analysis never does. Verified on 2.50.1 with a committed `*.py diff=tc filter=f` whose textconv, clean and smudge programs recorded each run: History, Blame and ClassifyPaths ran none of them, where Blame without `--no-textconv` ran the textconv. Attributes stay on, because the linguist checks and `-diff` read them, so a repository's `diff.<driver>.binary` with a `diff=<driver>` attribute at the scanned commit still decides what is binary, as `-diff` does: a deliberate setting in a repository the user already trusts. `gpg.program` from repo-local config still runs for any command that verifies signatures on purpose (`--show-signature`, the `%G?` placeholders); no collector does. Replace refs still apply: a local `refs/replace/` entry made `log` and `blame` read a replacement's lines and author under the original commit's SHA (verified). A mirror never has them, because sync fetches `refs/heads/*` only; `GIT_NO_REPLACE_OBJECTS=1` would close this for work-tree clones too, a change to what every command reads that is left for its own issue. This is defence in depth, not a sandbox: stillhere analyses clones its user already trusts, and never analyses repositories uploaded by other people.
+
+### Repository settings that change facts
+
+A fact must not depend on where or how a repository is checked out, on the machine, or on its local config. Each row was checked on git 2.50.1 (macOS) by setting the value in the repository's own config, or making the checkout so, and comparing both collectors with and without the pin: on a scratch repository built to exercise it, and on both fixtures. "Changes" means a stored fact changed without the pin; with every pin, no row changes a fact of either collector, on the scratch repositories or the fixtures.
+
+| Setting or state | Without the pin (verified) | History logs | Blame | Pinned by |
+| --- | --- | --- | --- | --- |
+| `core.bigFileThreshold=10` | every blob above it is binary: numstat `-` `-`, and the patch says `Binary files ... differ` (every row of both fixtures) | changes | reads it, no change: rename detection has loaded the blob before it asks | prefix: `-c core.bigFileThreshold=512m` |
+| `core.commentChar=C` (also `core.commentString`) | git's trailer parser skips comment lines, so no `Co-authored-by:` line is read (the sibling's five trailers) | changes, and so does the co-author log blame uses | no change of its own | prefix: `-c core.commentChar=#` |
+| `trailer.separators=#` | without `:` no line is a trailer: as above | changes | no change of its own | prefix: `-c trailer.separators=:` |
+| `core.precomposeUnicode=true`, which git on macOS writes into every repository it creates or clones | a path argument stored decomposed (`e` + U+0301) is rewritten composed, so blame fails with `no such path`; git on Linux has no such step | no path arguments | changes: the file fails | prefix: `-c core.precomposeUnicode=false` |
+| `diff.renameLimit=1` | two renames that also edit their files, in one commit, become deletes plus adds | changes | not read (`git_blame_config` never reads it) | option: `-l1000` (`-l` means long revisions to blame) |
+| `diff.ignoreSubmodules=all`; `submodule.<name>.ignore=all` in the config or in the checked-out `.gitmodules` | the gitlink's numstat row and hunk disappear; `-c diff.ignoreSubmodules=none` does not undo the per-submodule setting | changes | not read: gitlinks are never blamed | option: `--ignore-submodules=none` |
+| `diff.submodule=log` | the gitlink's hunk becomes a summary line, so the patch counts 0 where numstat counts 1 and 1 | changes | not read | option: `--submodule=short` |
+| `diff.indentHeuristic=false` | which of two identical lines a deletion removes: in 3 of 400 random three-commit histories, blame gave a line to another author | no change: a slide changes which identical line is counted, never how many | changes | option: `--indent-heuristic` on blame |
+| `i18n.logOutputEncoding=ISO-8859-1` | names are printed in that encoding: `Zo\xeb`, not UTF-8 | already pinned | changes | option: `--encoding=UTF-8` on log and blame |
+| a `diff=<driver>` attribute with `diff.<driver>.textconv` | git runs the program and counts its output: a driver that turned blank lines into text kept 3 non-blank lines of a commit whose patch added 2 | already pinned | changes, and runs the program | option: `--no-textconv` on log and blame |
+| `.gitattributes` as checked out, uncommitted edits included; `attr.tree`; a bare clone, which reads HEAD's tree on git 2.43.0 to 2.45.2 (CI's 2.45.0 among them) and none from 2.45.3 and 2.46.0 on | the `diff` attribute decides what is binary: a `-diff` file gave numstat `-` `-` in a work tree and `1` `0` in a bare clone of one commit, and under an uncommitted `*.py -diff` blame stopped following a rename that also turned CRLF into LF, giving the renamer all 10 lines | changes | changes | option: `--attr-source=<sha>^{tree}` on every log that can print a diff and on blame |
+
+**Where a pin goes.** A setting that a subcommand option overrides is pinned by that option where the command is built: the option sits next to the output it shapes, and it also beats the more specific config a `-c` cannot reach (`submodule.<name>.ignore` beats `-c diff.ignoreSubmodules=none`, and `--ignore-submodules=none` beats both). A setting that no option overrides goes in the prefix as a `-c` with git's default, so every command gets it, including commands added later; none of the four changes the output of a command that does not read it (`git grep -a` ignores `core.bigFileThreshold`, verified). The attribute source names the repository's own commit, so it is an option at the call site. The three `-c` settings were per call until #13 (on the four logs that print a diff or trailers); the prefix keeps the co-author log and History's logs pinned alike by construction.
+
+**What changed nothing.** For blame, also checked and left unpinned: `diff.renames=false` and `diff.algorithm=patience` (blame reads neither), `diff.noprefix`, `log.showRoot`, `blame.markIgnoredLines` and `blame.markUnblamableLines` (the parser ignores their marks), `blame.showRoot`, `blame.blankBoundary`, `blame.showEmail`, `blame.date`, `blame.coloring`, `color.ui`, `color.diff`, `color.blame.repeatedLines`, `core.quotePath`, `core.ignoreCase`, `core.autocrlf` and `core.eol`. History's own list is in [week-collector.md](week-collector.md#repository-config). `$GIT_DIR/info/attributes` still applies under `--attr-source`: it belongs to the repository, not to a checkout, and is the same in a work tree and a bare clone.
+
+**What the attribute source costs.** git looks each `.gitattributes` up in the source anew, the cost that made git 2.45.3 and 2.46.0 revert 2.43's use of HEAD's tree in bare repositories ("severe performance implications", their release notes). Over a year of Homebrew's `brew` repository (2,459 landings, 3,696 non-merge commits, a bare clone, 2.50.1, best of three runs), the landing log took 1.49 s with no source, 2.28 s with the commit and 2.01 s with its tree, and the own-patch log 1.83 s, 2.79 s and 2.48 s. A whole history collection went from 5.3 s to 7.0 s, and blaming 300 of its files stayed at 13.2 s. Blame dominates a scan, so the price is paid; the source is the tree rather than the commit because that removes a third of it.
 
 ## Version floors
 
@@ -52,6 +83,7 @@ Timeouts per command: blame 120 s per file, a repo's log 300 s. On timeout the c
 | --- | --- |
 | 2.31 | `--diff-merges=first-parent`; `GIT_CONFIG_COUNT` (a sync credential candidate) |
 | 2.40 | `git check-attr --source=<rev>`, required for bare mirrors ([classification.md](classification.md#gitattributes)) |
+| 2.41 | `git --attr-source=<tree-ish>`, so the history logs and blame read attributes at the scanned commit ([repository settings](#repository-settings-that-change-facts)) |
 | 2.45 | `GIT_NO_LAZY_FETCH`, so a partial clone's missing blobs are never fetched |
 
 The 2026-10-07 plan let the tool run on 2.31–2.43 with a weaker guarantee. `--source` now makes 2.40 a hard floor, so the recommendation is one floor, below which stillhere exits 2. It was 2.44 until CI on git 2.44.0 showed that release does not read `GIT_NO_LAZY_FETCH` (the variable and `git --no-lazy-fetch` arrived in 2.45.0), so the floor is 2.45. The Homebrew cask depends on Homebrew's git, and the Docker image ships Alpine's, both well above it. CI runs the floor version and the latest.

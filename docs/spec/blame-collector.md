@@ -1,6 +1,6 @@
 # Blame collector
 
-Status: carried over from the 2026-10-07 plan, updated 2026-10-14 (per-repo ignore-revs, per-commit rows, goroutine pool; then, with #7, the ignore-revs lookup, the list resolved to commits, its warnings, per-commit author keys and shared blame slots) · becomes tests in M1
+Status: carried over from the 2026-10-07 plan, updated 2026-10-14 (per-repo ignore-revs, per-commit rows, goroutine pool; then, with #7, the ignore-revs lookup, the list resolved to commits, its warnings, per-commit author keys and shared blame slots; then by #13: attributes at the scanned commit, `--no-textconv`, `--indent-heuristic`, `--encoding=UTF-8`) · becomes tests in M1
 
 This collector answers one question: whose non-blank lines does `git blame` still attribute on the default branch?
 
@@ -13,13 +13,22 @@ git <common> ls-tree -r -l <sha>
 The porcelain format is `<mode> <type> <blob> <size>\t<path>`; only type `blob` is used. Classify every path ([classification.md](classification.md)), then blame each path that survives:
 
 ```
-git <common> blame -w -M --line-porcelain --no-ignore-revs-file [--ignore-revs-file <file>] <sha> -- <path>
+git <common> --attr-source=<sha>^{tree} blame -w -M --no-textconv --indent-heuristic --encoding=UTF-8 \
+  --line-porcelain --no-ignore-revs-file [--ignore-revs-file <file>] <sha> -- <path>
 ```
 
 - **Flags.** `-w -M` is the default, and matches git-fame's `--loc=surviving` benchmark. `-C`, which tracks copies across files, stays off: it is expensive, and the proof run did not use it.
 - **`-M` threshold.** `-M` credits a moved block to its original commit only when the block has at least 20 alphanumeric characters (`git-blame(1)` default). The fixture's blocks are 43 characters for that reason.
 - **Bare mirrors.** These work unchanged, because every command names `<sha>` explicitly (verified).
 - **`--no-ignore-revs-file`.** It clears a repo-local `blame.ignoreRevsFile`, which would otherwise add its list to the one stillhere records, and make blame fail when that file is missing ([git-invocation.md](git-invocation.md#analysis-commands-offline)).
+
+The other options pin what a checkout, a machine or a repository's config would change (added by #13; each verified on 2.50.1, and recorded with the settings that changed nothing in [git-invocation.md](git-invocation.md#repository-settings-that-change-facts)). Blame reads more config than its own `blame.*` keys: git's blame (`git_blame_config` in `builtin/blame.c`, 2.50.1) also reads the diff heuristic, every diff driver (`diff.<driver>.*`) and git's general settings, `core.*` and `i18n.*` among them.
+
+- **`--attr-source=<sha>^{tree}`.** Blame reads the `diff` attribute when it follows a rename: rename detection compares a file it takes for binary byte for byte, CRs included. Ann's `f.py` with CRLF line endings, renamed to `g.py` and turned to LF by Bob in one commit, kept its 10 lines with Ann in a bare clone, but under an uncommitted `*.py -diff` in a work tree of the same commit blame no longer followed the rename and gave all 10 to Bob. With the source, both read the scanned commit's attributes, as History and classification do ([week-collector.md](week-collector.md#attributes-at-the-scanned-commit)). It costs blame nothing measurable: blaming 300 files of Homebrew's `brew` took 13.2 s either way.
+- **`--no-textconv`.** By default blame runs the textconv program that a `diff=<driver>` attribute and the repository's `diff.<driver>.textconv` name, and counts its output. A driver that turned blank lines into text kept 3 non-blank lines of a commit whose own patch added 2, so `durable@1` would have seen more lines survive than were written; it also ran a program the repository names. History's logs already pass the option, so surviving and added lines are now counted on the same bytes.
+- **`--indent-heuristic`.** git's default, which a repository's `diff.indentHeuristic=false` turns off. The heuristic decides which of two identical lines a deletion removes, and so whose line survives: in 3 of 400 random three-commit histories, turning it off moved a line to another author. History needs no such pin: a slide changes which identical line is counted, never how many.
+- **`--encoding=UTF-8`.** Blame prints author names in `i18n.logOutputEncoding`: `ISO-8859-1` printed the `ë` of `Zoë` as the byte `0xEB`. The display name rule counts the names of blamed commits the history does not hold, so one person would have had two names, one of them not UTF-8. History's logs print UTF-8 the same way.
+- **Not pinned, because blame does not read them or its output does not change:** `diff.renameLimit` and `diff.algorithm` (blame reads neither, so `-l`, which means long revisions to blame, is not needed), and `core.bigFileThreshold` (read, but rename detection has loaded the blob before it asks whether it is binary). `core.precomposeUnicode`, which matters only to blame among the collectors because blame names a path in its arguments, is pinned in the prefix.
 
 ## Ignore-revs, per repository
 
@@ -56,7 +65,7 @@ Both forms are a sequence of records, one per line of the file: a header, key li
 
 - **Header.** `^([0-9a-f]{7,64}) (\d+) (\d+)( (\d+))?$`: remember the SHA and ignore the optional group size.
 - **Author lines.** `author `, `author-mail ` and `author-time ` give the record's commit its author. Keep them per commit: when a record omits them, use the values that commit's earlier record gave.
-- **Content.** A line starting with a tab is content. If the rest of the line is non-blank (it holds a character outside Unicode's White_Space, [metrics.md](../metrics.md#noise-applied-before-every-metric)), add **one** line to the record's (SHA, email). Blank content adds nothing. The test is `nonBlank` in `internal/collect/scan.go`, the predicate the history collector counts added lines with, so `durable@1` compares like with like.
+- **Content.** A line starting with a tab is content. If the rest of the line is non-blank (it holds a character outside Unicode's White_Space, [metrics.md](../metrics.md#noise-applied-before-every-metric)), add **one** line to the record's (SHA, email). Blank content adds nothing. The test is `nonBlank` in `internal/collect/scan.go`, the function the history collector counts added and removed lines with (since #13 the same function, not a copy), so `durable@1` compares like with like.
 - **Everything else** (`filename`, `summary`, `previous`, `boundary`, and the `ignored` and `unblamable` marks a repo-local `blame.markIgnoredLines` and `blame.markUnblamableLines` add, verified) is ignored.
 - **Structure.** Every content line follows exactly one header. Output that breaks this is unreadable porcelain and a file failure, so an unrecognised header cannot hand its line to the previous record.
 

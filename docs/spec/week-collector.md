@@ -1,13 +1,13 @@
 # Week collector
 
-Status: carried over from the 2026-10-07 plan, updated 2026-10-14 (trailers, subjects, reverts, landing map; then by #6: `-z` numstat, own patches, pinned diff options, clone health; then by #6's review: `--since-as-filter`, NUL-separated text fields, Unix times, reverts over the landing map, six more pinned settings) · becomes tests in M0 (M1 for reverts and the landing map)
+Status: carried over from the 2026-10-07 plan, updated 2026-10-14 (trailers, subjects, reverts, landing map; then by #6: `-z` numstat, own patches, pinned diff options, clone health; then by #6's review: `--since-as-filter`, NUL-separated text fields, Unix times, reverts over the landing map, six more pinned settings; then by #13: attributes read at the scanned commit, the `-c` settings moved into the runner's prefix, one non-blank predicate) · becomes tests in M0 (M1 for reverts and the landing map)
 
 This collector answers one question: what landed on the default branch in the window? It produces one row per landing commit, credited to that commit's author.
 
 ## The log
 
 ```
-git <common> -c core.bigFileThreshold=512m -c core.commentChar=# -c trailer.separators=: \
+git <common> --attr-source=<sha>^{tree} \
   log --first-parent --diff-merges=first-parent \
   --since-as-filter=<window start> --until=<window end> \
   -z --numstat -M -l1000 --root --diff-algorithm=myers --no-textconv \
@@ -17,7 +17,7 @@ git <common> -c core.bigFileThreshold=512m -c core.commentChar=# -c trailer.sepa
   <sha> --
 ```
 
-`<common>` is the analysis prefix in [git-invocation.md](git-invocation.md#analysis-commands-offline). Partial clones run the same command without `--numstat`, its diff options and `--diff-merges=first-parent` ([shallow and partial clones](#shallow-and-partial-clones)). `-z`, the pinned options and settings, `--since-as-filter` and the field layout were added by #6; [Parsing](#parsing) and [Repository config](#repository-config) say why.
+`<common>` is the analysis prefix in [git-invocation.md](git-invocation.md#analysis-commands-offline), which pins `core.bigFileThreshold`, `core.commentChar` and `trailer.separators` for every command. Partial clones run the same command without `--numstat`, its diff options and `--diff-merges=first-parent` ([shallow and partial clones](#shallow-and-partial-clones)); with no diff to print, git reads no attribute from the source. `-z`, the pinned options and settings, `--since-as-filter` and the field layout were added by #6, the attribute source by #13; [Parsing](#parsing), [Repository config](#repository-config) and [Attributes](#attributes-at-the-scanned-commit) say why.
 
 | Trap | Rule and reason |
 | --- | --- |
@@ -140,7 +140,7 @@ It then follows first parents from the newest landing down to the oldest; that c
 `FileChange.AddedNonBlank` and `RemovedNonBlank` feed `durable@1` and `simplifying@1` ([../metrics.md](../metrics.md#change-facts-shared-by-durable1-and-simplifying1)). They come from each commit's own patch, for every non-merge commit in a window landing's map, the landings included:
 
 ```
-git <common> -c core.bigFileThreshold=512m -c core.commentChar=# -c trailer.separators=: \
+git <common> --attr-source=<sha>^{tree} \
   log --no-walk --stdin --diff-merges=off -p -U0 -w \
   -M -l1000 --root --diff-algorithm=myers --no-textconv \
   --ignore-submodules=none --submodule=short \
@@ -149,7 +149,7 @@ git <common> -c core.bigFileThreshold=512m -c core.commentChar=# -c trailer.sepa
 
 - **Never `--first-parent`.** Under it, git prints a merge's first-parent diff, which credits the merged branch's lines to the person who merged it. With `--no-walk` each commit is diffed against its first parent, a root commit against the empty tree, and a merge prints nothing; merges are also left out of stdin.
 - **`-w`** drops whitespace-only changes: a re-indent adds and removes nothing, and a file whose only changes are whitespace prints no section at all (verified).
-- **Hunks are read by their counts.** With `-U0` a hunk is exactly the lines its `@@ -a,b +c,d @@` header counts, so an added line whose text is `++ b/x` (printed `+++ b/x`) is never read as a header. A line counts when anything is left after trimming whitespace; the blame collector must use the same predicate, so that added and surviving lines agree.
+- **Hunks are read by their counts.** With `-U0` a hunk is exactly the lines its `@@ -a,b +c,d @@` header counts, so an added line whose text is `++ b/x` (printed `+++ b/x`) is never read as a header. A line counts when anything is left after trimming whitespace. One function decides it for both collectors, `nonBlank` in `internal/collect/scan.go`, so `durable@1` divides the lines blame keeps by lines counted the same way (changed by #13: history had its own copy, `strings.TrimSpace` on a string where blame used `bytes.TrimSpace` on bytes; the two agreed on 2,000,000 random strings built from every Unicode space, invalid UTF-8 and zero-width characters, but nothing kept them agreeing).
 - **Paths come from the `---` and `+++` lines**, never from `diff --git a/a b/b => c`. Git quotes a path that holds a quote, a backslash, a control character or a non-ASCII byte (octal escapes), and ends the line with a tab when the path holds a space. A deletion is named by its `---` line. A typechange prints two files with one path, which are summed.
 - Each file with hunks is joined to its numstat row by (commit, destination path). Both commands pin the same rename detection, so a file with hunks and no row is a bug in how a path was read, and fails the repository rather than passing silently.
 
@@ -157,15 +157,15 @@ Numstat rows of the commits a merge brought in, which the first-parent log never
 
 ## Repository config
 
-Repository-local config is read on every command; only command-line options and `-c` settings beat it. These pin what a repository could otherwise change. Each was checked on 2.50.1 by setting the config and comparing the output with and without the option: in the repository's own config, except `diff.algorithm`, set with `git -c`. The `-c` settings go before the subcommand of every `log` that prints a diff or trailers (the landing, brought-in, own-patch and co-author logs), because no `log` option overrides them; each value is git's default.
+Repository-local config is read on every command; only command-line options and `-c` settings beat it. These pin what a repository could otherwise change. Each was checked on 2.50.1 by setting the config and comparing the output with and without the option: in the repository's own config, except `diff.algorithm`, set with `git -c`. The three `-c` settings are in the runner's common prefix, so every command gets them (changed by #13: they were per call, before the subcommand of the landing, brought-in, own-patch and co-author logs), because no `log` option overrides them; each value is git's default. The options stay where each log is built: an option also beats the more specific config a `-c` cannot reach, and [git-invocation.md](git-invocation.md#repository-settings-that-change-facts) records, setting by setting, what each one changed and why it is pinned where it is.
 
 | Option | Setting it overrides | Effect without it |
 | --- | --- | --- |
-| `-c core.bigFileThreshold=512m` | `core.bigFileThreshold` | every blob above it is binary: under `10`, every row became binary with 0 lines, and a typechange row got more non-blank lines from the patch than numstat counted |
-| `-c core.commentChar=#` | `core.commentChar`, and `core.commentString`, the same setting | git's trailer parser skips comment lines, so `C` hides every `Co-authored-by:` line, and with it AI-assisted tags and Copilot credit |
-| `-c trailer.separators=:` | `trailer.separators` | without `:` no line is a trailer: `#` hides every co-author |
+| `-c core.bigFileThreshold=512m` (prefix) | `core.bigFileThreshold` | every blob above it is binary: under `10`, every row became binary with 0 lines, and a typechange row got more non-blank lines from the patch than numstat counted |
+| `-c core.commentChar=#` (prefix) | `core.commentChar`, and `core.commentString`, the same setting | git's trailer parser skips comment lines, so `C` hides every `Co-authored-by:` line, and with it AI-assisted tags and Copilot credit |
+| `-c trailer.separators=:` (prefix) | `trailer.separators` | without `:` no line is a trailer: `#` hides every co-author |
 | `--submodule=short` | `diff.submodule` | `log` or `diff` prints a gitlink change as a summary line with no hunk, so the patch counts 0 lines where numstat counts 1 and 1 |
-| `--ignore-submodules=none` | `diff.ignoreSubmodules` | `all` hides every gitlink change from numstat and from the patch |
+| `--ignore-submodules=none` | `diff.ignoreSubmodules`, and `submodule.<name>.ignore` in the config or in the checked-out `.gitmodules` | `all` hides every gitlink change from numstat and from the patch; `-c diff.ignoreSubmodules=none` does not override the per-submodule setting, which the option does (verified) |
 | `-M` | `diff.renames=false` | a rename becomes a full delete plus add |
 | `-l1000` | `diff.renameLimit` | above the limit, git skips the inexact part of rename detection, so `1` made a full delete plus add of every rename that also edits the file. 1000 is git's default: 1000 such renames in one commit are detected and 1001 are not, with or without `-l1000` (verified) |
 | `--root` | `log.showRoot=false` | the root commit prints no diff; row 1 of the change oracles loses its 7 lines |
@@ -178,6 +178,18 @@ Repository-local config is read on every command; only command-line options and 
 `--no-textconv` also narrows the residual risk named in [git-invocation.md](git-invocation.md#analysis-commands-offline) for history: no `log` the collector runs starts a textconv program. These settings change nothing, checked on a history with ten renames in one commit, a copy, a gitlink, a typechange and co-author trailers (verified): `diff.interHunkContext`, `diff.suppressBlankEmpty`, `core.quotePath=false`, `diff.renames=copies`, `diff.mnemonicPrefix`, `diff.relative`, `diff.context`, `diff.indentHeuristic`, `diff.orderFile`, `diff.wordRegex`, `log.showSignature`, `log.follow` and `format.pretty`. `diff.ignoreSubmodules=all` and `diff.renameLimit=1` change nothing on a history without a gitlink or without a rename that also edits the file, which is how an earlier check missed them; both are pinned above.
 
 **Not pinned: trailer aliases.** A `trailer.<alias>.key` in the repository's config renames trailer keys before `%(trailers)` filters them, matching a key by prefix: `trailer.co-authored-by.key=Signed-off-by` hides every co-author, and `trailer.cab.key=Co-authored-by` makes co-authors of `cab:` lines and of `Co:` lines too (verified). A `-c` cannot remove an alias whose name it does not know, and pinning `trailer.co-authored-by.key=Co-authored-by` would add one: on its own it turned a `Co:` line into a co-author (verified). Like a textconv driver, an alias is a deliberate setting in a repository the user already trusts, so it is named here rather than papered over. `trailer.<alias>.cmd` and `.command` do not run during `log` (verified).
+
+## Attributes at the scanned commit
+
+Every `log` that can print a diff (the landing, brought-in and own-patch logs) starts with `--attr-source=<sha>^{tree}`, so it reads `.gitattributes` from the scanned commit's tree, as classification does with `check-attr --source` ([classification.md](classification.md#gitattributes)). Added by #13. The `diff` attribute decides whether a file is binary, and without a source git reads attributes from wherever it finds them: a work tree reads its checked-out files, uncommitted edits included; a bare clone reads HEAD's tree on git 2.43.0 to 2.45.2, CI's 2.45.0 among them, and none from 2.45.3 and 2.46.0 on; and a repository's `attr.tree` names any tree. Verified on 2.50.1 with a work tree and a bare clone of one repository holding a committed `blob.dat -diff` and, in the work tree only, an uncommitted `code.py -diff`:
+
+| | work tree | bare clone | both, with the source |
+| --- | --- | --- | --- |
+| `blob.dat` (committed `-diff`) | binary: `-` `-` | text: `1` `0` | binary |
+| `code.py` (uncommitted `-diff`) | binary | text | text |
+| `other.py` (`-diff` in `$GIT_DIR/info/attributes` of both) | binary | binary | binary |
+
+So History, in week and scan runs alike, gave the work tree and the bare clone different `FileChange` rows for one commit, and gives them the same rows with the source; blame's case is in [blame-collector.md](blame-collector.md#tree-and-command). `$GIT_DIR/info/attributes` still applies: it belongs to the repository, not to a checkout. Head's own `-diff` is honoured, so a file the scanned commit marks binary adds no lines, wherever it is checked out. git reads the source only when a command first asks for an attribute, so a partial clone's landing log, which prints no diff, reads nothing from it. The revert, root and co-author logs print no diff and take no source. The source is the tree, not the commit, because git looks each `.gitattributes` up in it anew, and from a commit it first reads the commit; the cost is in [git-invocation.md](git-invocation.md#repository-settings-that-change-facts).
 
 ## Shallow and partial clones
 
