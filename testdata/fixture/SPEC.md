@@ -198,11 +198,11 @@ The headline counts `prod` non-blank lines only.
   - `authors_in_prefix` = 2, `bots_in_prefix` = 0.
 - **Excluded files.** No headline lines come from `tests/test_service.py`, `go.sum`, `vendor/lib.py`, `vendor/new.py`, `gen_out.py`, `bootstrap/cache/config.php`, `notes.csv` or `extra.csv`.
   - A segment check that compares one path component to `bootstrap/cache` leaves the PHP file in `prod`, and Ada's 10 becomes 14.
-  - Dropping the mailmap splits Ada's January `ada@other.example` lines into a second person, which fails her 10.
+  - Dropping the mailmap splits the 3 lines Ada wrote as `ada@other.example` (gamma's 2 in January, `ada_week.py`'s 1 in October) into a second person, leaving 7 at `ada@example.com`, which fails her 10.
 
 ## Change oracles (M1, `TestChangeOracles`)
 
-These values were derived by hand from the History table and the definitions in [metrics.md](../../docs/metrics.md#change-facts-shared-by-durable1-and-simplifying1), then confirmed with plain git 2.50.1: `log -p -U0 -w`, `blame -w -M --line-porcelain`, `rev-list L^1..L` and `log --grep`. The commands and their output are in the pull request for issue #3. No stillhere code produced any of them.
+These values were derived by hand from the History table and the definitions in [metrics.md](../../docs/metrics.md#change-facts-shared-by-durable1-and-simplifying1), then confirmed with plain git 2.50.1: `log -p -U0 -w`, `blame -w -M --line-porcelain`, `rev-list L^1..L` and `log --grep`. The commands and their output are in the pull request for issue #3. No stillhere code produced any of them. An independent audit re-derived every value here and in the [sibling fixture](#sibling-fixture) from the definitions as amended on 2026-10-14, which credit blamed lines like commits, and re-ran the commands with plain git and through `gitcli.Runner`. It changed no number; its pull request holds the evidence.
 
 With `--now 2026-10-07T00:00:00Z`, every window is half-open and starts and ends at 00:00:00Z:
 
@@ -237,7 +237,7 @@ Assert values, not display order. Ratios are exact fractions; three decimals are
 | 15 | 2026-10-06 19:00 | `d0087c6` | itself, Ivy | 0 (`test` role, unclassified) | 0 | 0 |
 | 16 | 2026-10-06 20:00 | `4631a8b` | itself, Jules | 0 (unclassified) | 0 | 0 |
 
-Rows 1–7 are the `durable@1` cohort, and rows 8–16 are the 90-day window. Row 1's other paths add nothing: `tests/test_service.py` is `test`, and `go.sum`, `vendor/lib.py`, `gen_out.py` and `bootstrap/cache/config.php` (23 lines together) are denied. `app.py` and `old_name.py` are absent at HEAD, so path rules alone make them `prod`.
+Rows 1–7 are the `durable@1` cohort, and rows 8–16 are the 90-day window. Row 1's other paths add nothing: `tests/test_service.py` is `test`, and `go.sum`, `vendor/lib.py`, `gen_out.py` and `bootstrap/cache/config.php` (23 lines together) are denied. `app.py` and `old_name.py` are absent at HEAD, so each is classified at the newest commit that added lines to it (`632247d` for `app.py`, `5ea16a9` for `old_name.py`), without the header sniff ([metrics.md](../../docs/metrics.md#change-facts-shared-by-durable1-and-simplifying1)): both are `prod`.
 
 ### durable@1 (main fixture)
 
@@ -299,11 +299,11 @@ Per repository. The root is the only area that holds `prod` lines, so its value 
 | Surviving `prod` lines | Lines |
 | --- | --- |
 | Held by people: the still-here table without the bot | 34 |
-| Whose author has a landing in `[2026-04-10, 2026-10-07)`: Ada 10, Cara 9, Bob 7, Frank 2, Dana 1, Erin 1 | 30 |
-| Whose author has none: Gina 2 (last landing 2026-01-06), Hank 2 (2026-01-07) | 4 |
+| Whose credited person has a landing in `[2026-04-10, 2026-10-07)`: Ada 10, Cara 9, Bob 7, Frank 2, Dana 1, Erin 1 | 30 |
+| Whose credited person has none: Gina 2 (last landing 2026-01-06), Hank 2 (2026-01-07) | 4 |
 | **`knowledge_loss@1`** | **4 / 34 = 0.118** |
 
-GitHub Copilot's 3 lines belong to a bot and are in neither count.
+GitHub Copilot's 3 lines are credited to a bot, because its commit names no co-author, and are in neither count. No commit in the main fixture has a co-author, so here the credited person is always the blame author.
 
 - **Cara is active** through the landing map: row 8 landed her commits on 2026-10-06. She has no first-parent landing of her own.
 - **Ada is one person.** Her 2026-10-06 landing is authored as `ada@other.example`, and the mailmap folds it into the address that holds her 10 lines.
@@ -512,6 +512,26 @@ Wrong implementations this catches:
 - **Ignore-revs commits kept.** F adds 3 to Omar, and a cluster.
 - **N counts only landings that removed something.** Lena's N is 2, and she is not eligible.
 
+### surviving@1 credit (sibling)
+
+`surviving@1` has no window and excludes no commit. Every non-blank `prod` line at HEAD, blamed with `-w -M` and the repository's ignore-revs file, goes to the person credited for its blamed commit: `identity.Credit` over that commit's author and co-authors (`LineOwner.CoAuthors`), the [rule](../../docs/metrics.md#change-facts-shared-by-durable1-and-simplifying1) that `durable@1` applies to commits.
+
+| Who | surviving@1 | Blamed commits |
+| --- | --- | --- |
+| Lena Lead | 37 | L1 to L10 26 (as in `durable@1`), W1 to W9 9 (W2's 1 is in `lena_2.py`), S1 2 |
+| Omar Ops | 36 | O1 to O9 27 (O10's re-indent stays with O1), S2 5, R3 4 |
+| Quinn Squash | 31 | Q1 6, R2 25 |
+| Pia Pair | 9 | P1 3, P2 2, and C1 4: Copilot is C1's author, and Pia its first human co-author after `check-mailmap` |
+| Uma Legacy | 7 | U0: `legacy_a.py` 2, `legacy_b.py` 2, `legacy_c.py` 1, `legacy_d.py` 2 |
+
+All 120 lines are credited to people, so the bot share is 0 of 120, and Pia is the majority owner of `retry.py`. Copilot and Claude Dupont have no value. A revert's restored lines belong to whoever reverted (R2's 25 are Quinn's, R3's 4 are Omar's), the blind spot `durable@1` names.
+
+Wrong implementations this catches:
+
+- **Grouping by the blame author.** Blame names C1's git author, so `retry.py`'s 4 lines go to Copilot in the bot table: Pia has 5, the bot share is 4 of 120, and Copilot becomes the majority owner of `retry.py`. `durable@1` still credits C1 to Pia, so the two metrics disagree about who wrote the same commit.
+- **Co-authors not canonicalised.** The 4 lines go to `81234567+piapair@users.noreply.github.com`, a second person, and Pia has 5.
+- **Crediting the first co-author whoever the author is.** L3, O4 and P2 give their lines to the agents in their trailers, and Q1 gives its 6 to Claude Dupont: Lena 34, Omar 33, Pia 7, Quinn 25.
+
 ## Tests that are not extra commits in this history
 
 Ada's oracle stays stable only if these cases stay out of the fixture repo.
@@ -589,7 +609,7 @@ The token check runs `Discover` over every path above with git's debug log on: t
 ## What fails CI
 
 - **Oracles.** Any week or still-here oracle above changes. That includes Frank's 3 versus 2, Ivy's `prod_lines_added` 0, Jules's 0-line commit, Erin's rename insertion of 1, Ada's single mailmapped week row, and both Gina and Hank at `majority_files` 1.
-- **Change oracles.** Any value in the change-oracle tables of either fixture changes. That includes Bob's move keeping 0 of 2, Ada's `durable@1` N of 2, Cara's absence from `durable@1`, `knowledge_loss@1` at 4/34, Lena eligible at exactly 10 clusters in both metrics, Omar not eligible at 9, S1 simplifying at exactly −20, S2 not simplifying at −16, Q1 untagged, and M tagged through P2.
+- **Change oracles.** Any value in the change-oracle tables of either fixture changes. That includes Bob's move keeping 0 of 2, Ada's `durable@1` N of 2, Cara's absence from `durable@1`, `knowledge_loss@1` at 4/34, Lena eligible at exactly 10 clusters in both metrics, Omar not eligible at 9, S1 simplifying at exactly −20, S2 not simplifying at −16, Q1 untagged, M tagged through P2, and C1's 4 surviving lines credited to Pia (`surviving@1` 9), not to Copilot.
 - **Classification.** `tests/test_service.py` is classified `prod`, or `bootstrap/cache/config.php` is blamed.
 - **Discovery.** A duplicate remote is not skipped, a scrubbed URL contains userinfo, a bare repo is skipped, the SSH and HTTPS forms of one path are collapsed, or a work tree is measured at a local branch although its clone has upstream's.
 - **Isolation.** A repo whose git directory was removed makes a sibling repo disappear, or the run exits 1 when the sibling succeeded.
@@ -603,5 +623,5 @@ The token check runs `Discover` over every path above with git's debug log on: t
 
 Work out the expected values from the history above and write them into this file before writing the code that computes them. The implementation must never produce its own oracle.
 
-- **Done for M1 (issue #3):** `durable@1` per landing and per person, `simplifying@1`, revert detection, AI-assisted tagging, `knowledge_loss@1` and `who_knows@1`. They are in [Change oracles](#change-oracles-m1-testchangeoracles) and the [Sibling fixture](#sibling-fixture), which holds the revert and AI-assisted cases so that the main oracles don't move.
+- **Done for M1 (issue #3):** `durable@1` per landing and per person, `simplifying@1`, revert detection, AI-assisted tagging, `knowledge_loss@1` and `who_knows@1`. They are in [Change oracles](#change-oracles-m1-testchangeoracles) and the [Sibling fixture](#sibling-fixture), which holds the revert and AI-assisted cases so that the main oracles don't move. The oracle audit (2026-10-14) re-derived them and added [`surviving@1` credit](#surviving1-credit-sibling) on the sibling.
 - **GitHub sync contract tests**: done for the sync (#14) in [testdata/github/README.md](../github/README.md): recorded responses for repositories, pull requests, reviews (with their inline comments counted), labels and commits, with no live calls, and the expected facts and `reviews_given@1` derived by hand. Team membership and the viewer's verified emails belong to sign-in (M3, #17).
