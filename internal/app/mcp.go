@@ -96,11 +96,22 @@ type NamedRepo struct {
 // metric holds a value about, such as a reviewer the forge could not link
 // to an email.
 type NamedPerson struct {
-	Key   string   // the canonical email, or "@login" for a reviewer the forge could not link
-	Name  string   // as the reports' JSON gives it (report.SubjectOf): the display name, the "@login", or "" when none may be shown, so only an id or an email finds them
+	Key   string   // the canonical email, or "@login", lowercased, for a reviewer the forge could not link
+	Name  string   // as the reports' JSON gives it (report.SubjectOf): the display name, the login as GitHub shows it, or "" when none may be shown, so only an id or an email finds them
 	Bot   bool     // a bot or an agent: listed apart, never ranked
 	Repos []string // names of the repositories they wrote in or hold a value about, sorted
 	Lines int      // surviving@1: their surviving prod lines across the run; 0 without a value
+	// Logins are the GitHub logins the run links to the person
+	// (identity.Directory.Logins, the links every metric that reads
+	// reviews counts by), as GitHub shows them: an adapter resolves
+	// "@login" to the person by them, without case. nil for none, and for a
+	// reviewer keyed by login.
+	Logins []string
+	// ShownLogins are those of Logins an answer may print beside the
+	// person: none that gives an address of the run away
+	// (identity.Directory.LoginWithheld), as a display name that does is
+	// printed nowhere.
+	ShownLogins []string
 }
 
 // RunNames returns a stored run's vocabulary: its groups, repositories and
@@ -133,8 +144,12 @@ func RunNames(ctx context.Context, d Deps, r NamesRequest) (*Names, error) {
 		repos map[string]bool // repository names
 	}
 	people := map[string]*acc{}
+	// Keys are taken as the run stored them, never made canonical again
+	// here: every key is lowercased where it is made, an email by the
+	// collectors and a login by identity.Reviewer (#69), so a key this
+	// vocabulary hands an adapter always joins the run's values. Folding it
+	// again would hide a key stored in another case behind one no value has.
 	add := func(key string) *acc {
-		key = strings.ToLower(strings.TrimSpace(key))
 		if key == "" {
 			return nil
 		}
@@ -239,10 +254,18 @@ func mcpAIPeople(s *stored) map[string]map[string]bool {
 // mcpPersonNamed names one person of a stored run exactly as the reports
 // do (report.SubjectOf), which owns the rule: a reviewer the forge could
 // not link to an email by login, as reviews_given@1 keys them, and a
-// person whose name no page may show with "".
+// person whose name no page may show with "". It adds the GitHub logins the
+// run links to the person, read from the directory that links them for
+// every metric (identity.Directory.Logins), never linked again here.
 func mcpPersonNamed(key string, s *stored) NamedPerson {
 	sub := report.SubjectOf(domain.Subject{Kind: domain.SubjectPerson, Key: key}, s.who)
-	return NamedPerson{Key: key, Name: sub.Name, Bot: sub.Bot}
+	p := NamedPerson{Key: key, Name: sub.Name, Bot: sub.Bot, Logins: s.who.Logins(key)}
+	for _, l := range p.Logins {
+		if !s.who.LoginWithheld(l) {
+			p.ShownLogins = append(p.ShownLogins, l)
+		}
+	}
+	return p
 }
 
 // OverviewRequest asks for the platform view of one scope of a stored run.
@@ -483,8 +506,29 @@ func Changes(ctx context.Context, d Deps, r ChangesRequest) (*ChangesAnswer, err
 	scoped := mcpScopedFacts(s.facts, repos)
 	run := s.run
 	a.Provenance = report.AnswerProvenance(&run, scoped, s.forge, []string{mcpDurable, mcpSimplifying})
-	a.Caveats = append(report.AnswerCaveats(scoped), caveats...)
+	validity, err := mcpValidity(mcpDurable, mcpSimplifying)
+	if err != nil {
+		return nil, err
+	}
+	a.Caveats = append(append(report.AnswerCaveats(scoped), caveats...), validity...)
 	return a, nil
+}
+
+// mcpValidity is the validity caveats of the ranked metrics among ids
+// (report.ValidityCaveats), for an answer that shows their clusters or
+// ranks: a caveat goes where the number it qualifies is (#48), so the
+// changes and the highlights say how far their ranked numbers are
+// validated, as a rank table does (#69).
+func mcpValidity(ids ...string) ([]report.Caveat, error) {
+	var infos []report.MetricInfo
+	for _, id := range ids {
+		m, err := lookupMetric(id, nil)
+		if err != nil {
+			return nil, err
+		}
+		infos = append(infos, metricInfo(m.Definition()))
+	}
+	return report.ValidityCaveats(infos...), nil
 }
 
 // credits reports whether the change credits email: one of its commits is
@@ -515,7 +559,7 @@ func mcpChangeClusters(s *stored, repos []*domain.RepoFacts) (mcpClusters, error
 		id  string
 		out map[mcpClusterKey]rank.Cluster
 	}{{mcpDurable, ix.durable}, {mcpSimplifying, ix.simplifying}} {
-		found, err := lookupMetric(m.id)
+		found, err := lookupMetric(m.id, nil)
 		if err != nil {
 			return ix, err
 		}
@@ -857,6 +901,11 @@ func Highlights(ctx context.Context, d Deps, r HighlightsRequest) (*HighlightsAn
 		Message: "Highlights are rule-based picks for recognition, not a ranking of people: the top tier counts everyone " +
 			"whose 95% rank interval reaches first place and names them when they are a third of the table or fewer, and " +
 			"the change lists are single changes with their numbers."})
+	validity, err := mcpValidity(used...)
+	if err != nil {
+		return nil, err
+	}
+	a.Caveats = append(a.Caveats, validity...)
 	if len(wide) > 0 {
 		if len(wide) > mcpHighlightsTop {
 			wide = append(wide[:mcpHighlightsTop], fmt.Sprintf("and %d more tables", len(wide)-mcpHighlightsTop))

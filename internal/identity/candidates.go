@@ -459,6 +459,27 @@ func candFiles(fs *domain.FactSet, need map[string]*candAddress) {
 	}
 }
 
+// NameKey returns the key the same-name rule compares (candNameKey,
+// docs/spec/identities.md#rules) for email's display name: its words, runs
+// of letters, marks and digits, lowercased and joined by one space, so
+// case, spacing and punctuation never tell two names apart. It is "" when
+// the rule compares the email with nothing: it has no display name or a
+// default one ("Your Name", "John Doe"), it is a bot's or an agent's, which
+// no candidate holds, or it is a GitHub login's (LoginKey), whose name is
+// the account's own. The rule is identity's, and every page that says two
+// emails share a name asks it (#69), so a report's unmerged-identities
+// caveat names exactly the names Candidates compares, which the identities
+// command then suggests lines for, unless it leaves the addresses out as
+// several people's (Survey.Shared, Survey.Oversized).
+func (d *Directory) NameKey(email string) string {
+	email = canonical(email)
+	if email == "" || LoginKey(email) || d.Bot(email) {
+		return ""
+	}
+	key, _ := candNameKey(d.names[email])
+	return key
+}
+
 // candNameKey normalises a display name for the same-name rule: its words
 // (runs of letters, marks and digits) lowercased and joined by one space,
 // so case, spacing and punctuation never tell two names apart. A default

@@ -23,7 +23,9 @@ import (
 // docs/spec/git-invocation.md#identity-mailmap-and-bots).
 //
 // Emails appear only in fields named email, so a reader that must not show
-// them, such as the MCP server without --allow-emails, can drop them. A
+// them, such as the MCP server without --allow-emails, can drop them, and
+// in a candidate's mailmap lines, which only a reader that may show them
+// asks for (IdentitiesInput.Mailmap). A
 // display name that gives an address away (identity.Directory.Withheld: it
 // holds an @, or it is a local part of a person's address in the run, as
 // GitHub names a commit by a login) is withheld in every field, as on
@@ -55,6 +57,13 @@ type IdentityCandidate struct {
 	Name       string            `json:"name"`       // the display name suggested for the person; "" keeps each commit's own
 	Addresses  []IdentityAddress `json:"addresses"`  // by first activity; exactly one is canonical
 	Links      []IdentityLink    `json:"links"`      // each rule's evidence: which addresses it links
+	// Mailmap holds the candidate's suggested .mailmap lines exactly as
+	// the mailmap form writes them (MailmapLines), commented out unless
+	// the candidate is high. They are made of addresses, so only an answer
+	// that may show emails asks for them (IdentitiesInput.Mailmap: the MCP
+	// server with --allow-emails); otherwise it is nil, null in JSON: an
+	// absent section, never [], which would read as no lines.
+	Mailmap *[]string `json:"mailmap"`
 }
 
 // IdentityAddress is one address of a candidate and the evidence for it,
@@ -118,6 +127,10 @@ type IdentitiesInput struct {
 	// candidate's own addresses only (identity.RevealsAddress).
 	Who   People
 	Forge *ForgeRead // the GitHub data the run read, which dates its repositories; nil: the reader cannot tell
+	// Mailmap adds each candidate's suggested .mailmap lines
+	// (IdentityCandidate.Mailmap): only for a reader that may see emails,
+	// since the lines are made of them.
+	Mailmap bool
 }
 
 // identCodeMailmap is the caveat every identities answer carries: the
@@ -151,7 +164,12 @@ func NewIdentities(in *IdentitiesInput) *Identities {
 	if s := in.Survey; s != nil {
 		id.Addresses, id.Bots, id.Shared, id.Oversized = s.Addresses, s.Bots, s.Shared, s.Oversized
 		for i := range s.Candidates {
-			id.Candidates = append(id.Candidates, identCandidate(&s.Candidates[i], names, in.Who))
+			c := identCandidate(&s.Candidates[i], names, in.Who)
+			if in.Mailmap {
+				lines := MailmapLines(c)
+				c.Mailmap = &lines
+			}
+			id.Candidates = append(id.Candidates, c)
 		}
 	}
 	for _, def := range identity.Rules() {
@@ -651,18 +669,27 @@ func (id *Identities) writeMailmap(p *printer) {
 			p.wrapped("#   ", "#     ", identCommentedNote(c, true))
 		}
 		for _, line := range identLines(c) {
-			switch {
-			case !identSafe(line):
+			if !identSafe(line) {
 				p.wrapped("#   ", "#     ", "this line cannot be a .mailmap line: a name or an address in it holds "+
 					"< or >, a control character, or a name starts with #")
-				p.line("# " + clean(line.text()))
-			case c.Commented:
-				p.line("# " + line.text())
-			default:
-				p.line(line.text())
 			}
+			p.line(line.mailmap(c.Commented))
 		}
 	}
+}
+
+// MailmapLines returns a candidate's suggested .mailmap lines exactly as
+// the mailmap form writes them: as lines for a high candidate, commented
+// out ("# ") for every other one, and a line git could not read as the
+// mapping it means commented out and escaped. The mailmap form and an
+// answer that carries the lines (IdentityCandidate.Mailmap) both write
+// them through it, so the two cannot drift.
+func MailmapLines(c IdentityCandidate) []string {
+	var out []string
+	for _, line := range identLines(c) {
+		out = append(out, line.mailmap(c.Commented))
+	}
+	return out
 }
 
 // identLine is one .mailmap line: name and canonical replace a commit's
@@ -679,6 +706,19 @@ func (l identLine) text() string {
 		s += " <" + l.alias + ">"
 	}
 	return s
+}
+
+// mailmap is the line as the mailmap form writes it: commented out when its
+// candidate's lines are (commented), and, when git could not read it as
+// the mapping it means (identSafe), commented out with its text escaped.
+func (l identLine) mailmap(commented bool) string {
+	switch {
+	case !identSafe(l):
+		return "# " + clean(l.text())
+	case commented:
+		return "# " + l.text()
+	}
+	return l.text()
 }
 
 // identLines are a candidate's .mailmap lines: one per alias, after a line

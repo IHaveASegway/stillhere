@@ -27,33 +27,35 @@ type rankedMetric struct {
 
 // lookupMetric resolves a metric id from a request, such as "durable@1",
 // or "durable" for the latest version. An id the registry does not know is
-// a usage error: it came from the user.
-func lookupMetric(id string) (metrics.Metric, error) {
+// a usage error: it came from the user, so it says where the registry is,
+// in the reader's words (cmds: Deps.commands).
+func lookupMetric(id string, cmds report.Commands) (metrics.Metric, error) {
 	m, err := metrics.Lookup(id)
 	if err == nil {
 		return m, nil
 	}
 	var usage *domain.UsageError
 	if errors.As(err, &usage) {
-		return nil, err
+		return nil, &domain.UsageError{Msg: fmt.Sprintf("%s (%s describes each)", usage.Msg, report.CommandsOr(cmds).Metrics())}
 	}
-	return nil, &domain.UsageError{Msg: fmt.Sprintf("unknown metric %q (%v): 'stillhere metrics' lists them", id, err)}
+	return nil, &domain.UsageError{Msg: fmt.Sprintf("unknown metric %q (%v): %s lists them", id, err, report.CommandsOr(cmds).Metrics())}
 }
 
 // resolveRanked resolves the metrics named by --rank, in the order named,
-// once each.
-func resolveRanked(ids []domain.MetricID) ([]rankedMetric, error) {
+// once each; an error names the registry in the reader's words (cmds).
+func resolveRanked(ids []domain.MetricID, cmds report.Commands) ([]rankedMetric, error) {
 	var out []rankedMetric
 	seen := map[domain.MetricID]bool{}
 	for _, id := range ids {
-		m, err := lookupMetric(id.String())
+		m, err := lookupMetric(id.String(), cmds)
 		if err != nil {
 			return nil, err
 		}
 		r, ok := m.(metrics.Ranked)
 		if !ok {
 			return nil, &domain.UsageError{Msg: fmt.Sprintf(
-				"%s is context and never ranked: ranks are for %s ('stillhere metrics' lists them)", id, rankedNames())}
+				"%s is context and never ranked: ranks are for %s (%s lists them)", id, rankedNames(),
+				report.CommandsOr(cmds).Metrics())}
 		}
 		def := m.Definition()
 		if !seen[def.ID] {

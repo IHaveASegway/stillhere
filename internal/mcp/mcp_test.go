@@ -204,6 +204,12 @@ func TestMCPTools(t *testing.T) {
 		if !strings.Contains(text, `"platform"`) || !strings.Contains(text, `"sibling"`) {
 			t.Errorf("an unknown scope's error does not list the run's scopes, quoted: %s", text)
 		}
+		// A hint in a use case's error names this server's tools, never a
+		// command the agent cannot run (#69).
+		text = refused(t, "overview", map[string]any{"scope": "platform", "rank": "landed"})
+		if !strings.Contains(text, "(metrics() lists them)") || strings.Contains(text, "stillhere metrics") {
+			t.Errorf("overview(rank: landed) was refused with %q, want the metrics tool named, not the command", text)
+		}
 	})
 
 	t.Run("person", func(t *testing.T) {
@@ -225,6 +231,12 @@ func TestMCPTools(t *testing.T) {
 		if !slices.ContainsFunc(p.Values, func(v valueOut) bool { return v.Metric == "ai_assisted@1" }) {
 			t.Error("Lena's own page lacks her own AI-assisted share")
 		}
+		// Each caveat goes where its number is (#69): the page shows ranks of
+		// unvalidated metrics, and her own AI-assisted share.
+		if !hasCaveat(p.Caveats, "validity", "durable@1") || !hasCaveat(p.Caveats, "validity", "simplifying@1") ||
+			!hasCaveat(p.Caveats, "ai-lower-bound", "") {
+			t.Errorf("Lena's own page carries %v, want the validity of durable@1 and simplifying@1, and ai-lower-bound", p.Caveats)
+		}
 		// Someone else's answer never holds their share (ADR 0007), and a
 		// first name is enough when it is unique.
 		decode(t, ask(t, "person", map[string]any{"name": "omar", "response_format": "detailed"}), &p)
@@ -233,6 +245,9 @@ func TestMCPTools(t *testing.T) {
 		}
 		if slices.ContainsFunc(p.Values, func(v valueOut) bool { return v.Metric == "ai_assisted@1" }) {
 			t.Error("Omar's answer holds his AI-assisted share, which only his own page may show")
+		}
+		if !hasCaveat(p.Caveats, "validity", "simplifying@1") || hasCaveat(p.Caveats, "ai-lower-bound", "") {
+			t.Errorf("Omar's page carries %v, want simplifying@1's validity and no ai-lower-bound, as it shows no share", p.Caveats)
 		}
 		// Names from the repositories are quoted in the server's sentences.
 		if text := refused(t, "person", map[string]any{"name": "Split"}); !strings.Contains(text, `"Gina Split" (id p-`) ||
@@ -260,6 +275,8 @@ func TestMCPTools(t *testing.T) {
 		notAI := func(v valueOut) bool { return v.Metric != "ai_assisted@1" }
 		own.Values = slices.DeleteFunc(own.Values, func(v valueOut) bool { return !notAI(v) })
 		own.Provenance.Metrics = slices.DeleteFunc(own.Provenance.Metrics, func(m string) bool { return m == "ai_assisted@1" })
+		// The share's own caveat goes with it.
+		own.Caveats = slices.DeleteFunc(own.Caveats, func(c report.Caveat) bool { return c.Code == "ai-lower-bound" })
 		own.OwnPage, own.ValuesTotal, theirs.ValuesTotal = false, 0, 0
 		if !reflect.DeepEqual(own, theirs) {
 			t.Errorf("Lena's own page, without her AI-assisted share,\n%+v\ndiffers from a lead's view of her\n%+v", own, theirs)
@@ -293,12 +310,16 @@ func TestMCPTools(t *testing.T) {
 
 	t.Run("changes", func(t *testing.T) {
 		var c struct {
-			Changes []changeBrief `json:"changes"`
-			Page    page          `json:"page"`
+			Changes []changeBrief   `json:"changes"`
+			Page    page            `json:"page"`
+			Caveats []report.Caveat `json:"caveats"`
 		}
 		decode(t, ask(t, "changes", map[string]any{"scope": "sibling", "since": "2026-09-01"}), &c)
 		if len(c.Changes) != 3 {
 			t.Fatalf("sibling changes since 2026-09-01: %d, want W9, W8 and S1", len(c.Changes))
+		}
+		if !hasCaveat(c.Caveats, "validity", "durable@1 and simplifying@1") {
+			t.Errorf("changes carries %v, want the validity of the two metrics whose clusters it shows", c.Caveats)
 		}
 		s1 := c.Changes[2]
 		if len(s1.People) != 1 || s1.People[0].Name != "Lena Lead" || s1.People[0].Removed == nil ||
@@ -342,10 +363,25 @@ func TestMCPTools(t *testing.T) {
 		if len(e.Values) != 1 || e.Values[0].Num != 4 || e.Values[0].Den != 34 {
 			t.Errorf("explain(knowledge_loss, fixture) %+v, want 4 of 34", e.Values)
 		}
-		// A repository of many people shows its AI-assisted share.
+		// A repository of many people shows its AI-assisted share, a lower
+		// bound.
 		decode(t, ask(t, "explain", map[string]any{"metric": "ai_assisted", "subject": "sibling", "subject_kind": "repo"}), &e)
-		if len(e.Values) != 1 {
-			t.Errorf("explain(ai_assisted, sibling) %+v, want the sibling's share", e.Values)
+		if len(e.Values) != 1 || !hasCaveat(e.Caveats, "ai-lower-bound", "") {
+			t.Errorf("explain(ai_assisted, sibling) %+v with caveats %v, want the sibling's share, a lower bound", e.Values, e.Caveats)
+		}
+		// A metric about a kind of subject it holds no value about is no
+		// empty answer but a refusal that says which calls answer instead,
+		// as this server's tools (#69).
+		text := refused(t, "explain", map[string]any{"metric": "durable", "subject": "fixture", "subject_kind": "repo"})
+		for _, want := range []string{"durable@1 holds no value about a repository", "its values are about people",
+			"explain(metric: durable@1, subject_kind: person)", "overview(scope, rank: durable@1)"} {
+			if !strings.Contains(text, want) || strings.Contains(text, "stillhere") {
+				t.Errorf("explain(durable, fixture as a repository) was refused with %q, want %q and no command", text, want)
+			}
+		}
+		if text := refused(t, "explain", map[string]any{"metric": "durable@2", "subject": "Lena Lead"}); !strings.Contains(text, "(metrics() describes each)") ||
+			strings.Contains(text, "stillhere metrics") {
+			t.Errorf("explain(durable@2) was refused with %q, want the metrics tool named, not the command", text)
 		}
 	})
 
@@ -363,6 +399,9 @@ func TestMCPTools(t *testing.T) {
 		}
 		if !slices.ContainsFunc(h.Caveats, func(c report.Caveat) bool { return c.Code == "no-standout" }) {
 			t.Errorf("highlights caveats %v, want no-standout for tiers of everyone eligible", h.Caveats)
+		}
+		if !hasCaveat(h.Caveats, "validity", "durable@1 and simplifying@1") {
+			t.Errorf("highlights caveats %v, want the validity of the ranked metrics it picks from", h.Caveats)
 		}
 		if len(h.Removed) < 2 || h.Removed[0].Person.Name != "Lena Lead" || h.Removed[0].Num != 22 ||
 			h.Removed[1].Person.Name != "Omar Ops" || h.Removed[1].Num != 21 {
@@ -388,6 +427,11 @@ func TestMCPTools(t *testing.T) {
 		decode(t, text, &ids)
 		if ids.Provenance.RunID != 1 || !slices.Contains(ids.Withheld, "emails") {
 			t.Errorf("identity_candidates provenance %+v, withheld %v; want run 1 and emails withheld", ids.Provenance, ids.Withheld)
+		}
+		// The suggested lines are made of emails: without --allow-emails
+		// they are left out (null), not sent with ids in them.
+		if strings.Contains(text, `"mailmap":[`) || !strings.Contains(text, `"mailmap":null`) {
+			t.Errorf("identity_candidates without --allow-emails carries mailmap lines, or no null for them: %s", text)
 		}
 	})
 
@@ -464,6 +508,24 @@ func TestMCPTools(t *testing.T) {
 		if i < 0 || d.Files[i].Class != "prod" || !d.Files[i].InPatch || d.Files[i].Removed != 22 ||
 			!strings.Contains(d.Patch, "-legacy_a_1 = 1") || d.Truncated {
 			t.Errorf("diff of S1: files %+v, patch %q; want legacy_a.py (prod, 22 removed) in the patch", d.Files, d.Patch)
+		}
+		// With emails allowed, each candidate carries its suggested .mailmap
+		// lines, as 'stillhere identities --format mailmap' writes them:
+		// Gina → Hank is a guess, so its line is commented out (SPEC,
+		// identity candidates).
+		var ids struct {
+			Candidates []struct {
+				Mailmap []string `json:"mailmap"`
+			} `json:"candidates"`
+		}
+		text, isErr = callTool(t, ss, "identity_candidates", nil)
+		if isErr {
+			t.Fatalf("identity_candidates failed: %s", text)
+		}
+		decode(t, text, &ids)
+		if len(ids.Candidates) != 1 ||
+			!slices.Equal(ids.Candidates[0].Mailmap, []string{"# Hank Split <hank@example.com> <gina@example.com>"}) {
+			t.Errorf("identity_candidates with --allow-emails: %+v, want Gina → Hank's commented line", ids.Candidates)
 		}
 	})
 
@@ -562,11 +624,16 @@ func TestMCPTools(t *testing.T) {
 		// Every byte of it is escaped in JSON, so its patch is twice as long
 		// in an answer as in the file.
 		{"dev", "dev@build-box", "2026-09-10", "feat: quotes", "src/quotes.py", strings.Repeat(`q = "\"\"\"\"\"\"\"\"\"\"\"\""`+"\n", 1000)},
+		// One name on two addresses, written two ways, which no .mailmap
+		// merged: identities compares names without case or punctuation.
+		{"Max Mustermann", "max@corp.example", "2026-03-12", "feat: max", "src/max.py", numbered("max", 2)},
+		{"MAX MUSTERMANN.", "max@mail.example", "2026-03-13", "feat: max again", "src/max2.py", numbered("maxi", 2)},
 	})
 	buildRepo(t, solo, []testCommit{
 		{"Solo Dev", "solo@corp.example", "2026-05-02", "init", "main.py", numbered("solo", 10)},
 		{"Solo Dev", "solo@corp.example", "2026-08-02", "feat: more", "more.py", numbered("more", 10)},
 	})
+	seedSolo(t, git, db, solo)
 	scan(t, db, mailmap, platform)
 	emails = append(emails, runEmails(t, db, 2)...)
 	for _, e := range []string{"dev@build-box", "ip@[10.0.0.1]", "jürgen@firma.de", "root@localhost", "o'brien@corp.example"} {
@@ -660,6 +727,57 @@ func TestMCPTools(t *testing.T) {
 		}
 		if text := refused(t, "explain", map[string]any{"metric": "ai_assisted", "subject": "solo", "subject_kind": "repo"}); !strings.Contains(text, "withheld") {
 			t.Errorf("explain(ai_assisted, solo) was refused with %q, want the share withheld", text)
+		}
+
+		// GitHub logins (#69, seedSolo). Zed, whom no commit links to an
+		// email, is keyed by his login lowercased, as GitHub compares
+		// logins, and named as GitHub shows it, so every case of it finds
+		// him and his review; SoloDev, whose commit is Solo Dev's, finds
+		// Solo Dev in any case, and a candidate list shows the login.
+		for _, name := range []string{"@Zed", "@zed", "@ZED"} {
+			var z personOut
+			decode(t, ask(t, "person", map[string]any{"name": name}), &z)
+			if z.Person.Key != "@zed" || z.Person.Name != "@Zed" ||
+				!slices.ContainsFunc(z.Values, func(v valueOut) bool { return v.Metric == "reviews_given@1" && v.Value == 1 }) {
+				t.Errorf("person(%s) is %+v with values %+v, want @zed named @Zed, 1 pull request reviewed", name, z.Person, z.Values)
+			}
+		}
+		var ze explainOut
+		decode(t, ask(t, "explain", map[string]any{"metric": "reviews_given", "subject": "@Zed"}), &ze)
+		if len(ze.Values) == 0 || slices.ContainsFunc(ze.Values, func(v valueOut) bool { return v.Value != 1 }) {
+			t.Errorf("explain(reviews_given, @Zed) %+v, want 1 in every scope", ze.Values)
+		}
+		var sd personOut
+		decode(t, ask(t, "person", map[string]any{"name": "@soloDEV"}), &sd)
+		if sd.Person.Name != "Solo Dev" {
+			t.Errorf("person(@soloDEV) is %+v, want Solo Dev, whose commit GitHub attributes to SoloDev", sd.Person)
+		}
+		if text := refused(t, "person", map[string]any{"name": "Solo Deb"}); !strings.Contains(text, `"Solo Dev" (id p-`) ||
+			!strings.Contains(text, "login @SoloDev") {
+			t.Errorf("a misspelt name's suggestion %q does not show Solo Dev's login", text)
+		}
+		var sw whoKnowsOut
+		decode(t, ask(t, "who_knows", map[string]any{"path": "more.py", "repo": "solo"}), &sw)
+		if len(sw.Repos) != 1 || len(sw.Repos[0].RecentReviewers) != 1 || sw.Repos[0].RecentReviewers[0].Email != "@zed" ||
+			sw.Repos[0].RecentReviewers[0].Name != "@Zed" {
+			t.Errorf("who_knows(more.py in solo) %+v, want Zed as its recent reviewer, keyed @zed", sw.Repos)
+		}
+
+		// One name written two ways on two addresses is one name to the
+		// identities rules, and so to the caveats, which send the agent to
+		// the tool that suggests the line (#69): in the platform's overview
+		// and in a who_knows answer that lists both.
+		var g struct{ tail }
+		decode(t, ask(t, "overview", map[string]any{"scope": "platform"}), &g)
+		if !hasCaveat(g.Caveats, "unmerged-identities", `"MAX MUSTERMANN."`) ||
+			!hasCaveat(g.Caveats, "unmerged-identities", "identity_candidates(scope) suggests the lines") ||
+			hasCaveat(g.Caveats, "unmerged-identities", "stillhere") {
+			t.Errorf("overview(platform) caveats %v, want MAX MUSTERMANN. as unmerged, with identity_candidates", g.Caveats)
+		}
+		var mw whoKnowsOut
+		decode(t, ask(t, "who_knows", map[string]any{"path": "src", "repo": "odd"}), &mw)
+		if !hasCaveat(mw.Caveats, "unmerged-identities", `"MAX MUSTERMANN."`) {
+			t.Errorf("who_knows(src in odd) caveats %v, want the two Max Mustermanns it lists as unmerged", mw.Caveats)
 		}
 
 		// With source allowed and emails not: a subject keeps its version
@@ -796,7 +914,9 @@ func scan(t *testing.T, db, mailmap, platform string) *gitcli.Runner {
 		t.Fatal(err)
 	}
 	ranks := []domain.MetricID{{Name: "durable", Version: 1}, {Name: "simplifying", Version: 1}}
-	_, err = app.Scan(ctx, app.Deps{Git: git, Store: store, Policy: p, Version: "test"},
+	// The store is both ports, as internal/cli hands it over: the scan reads
+	// the GitHub data a sync left in the replica (seedSolo).
+	_, err = app.Scan(ctx, app.Deps{Git: git, Store: store, ForgeStore: store, Policy: p, Version: "test"},
 		app.ScanRequest{Paths: []string{platform}, Now: fixture.Now, Rank: ranks, Scope: domain.ScopeGroup})
 	if cerr := store.Close(); err == nil {
 		err = cerr
@@ -805,6 +925,57 @@ func scan(t *testing.T, db, mailmap, platform string) *gitcli.Runner {
 		t.Fatal(err)
 	}
 	return git
+}
+
+// seedSolo gives the solo repository an origin, by writing its local
+// config, and the replica in db its GitHub data, as a sync stores it: one
+// pull request by SoloDev, merged as solo's second commit, which links the
+// login SoloDev to Solo Dev, and approved by Zed, whom no commit of the
+// run links to an email.
+func seedSolo(t *testing.T, git *gitcli.Runner, db, solo string) {
+	t.Helper()
+	ctx := t.Context()
+	repo := domain.ForgeRepo{ID: "R_solo", Key: "https://git.example.test/acme/solo.git", Owner: "acme", Name: "solo",
+		DefaultBranch: "main"}
+	f, err := os.OpenFile(filepath.Join(solo, ".git", "config"), os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("[remote \"origin\"]\n\turl = " + repo.Key + "\n"); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	out, err := git.Run(ctx, domain.GitCmd{Dir: solo, Args: []string{"rev-parse", "HEAD"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	merged := time.Date(2026, time.August, 2, 12, 0, 0, 0, time.UTC) // the second commit's time
+	commit := domain.ForgeCommit{SHA: strings.TrimSpace(string(out)), AuthorEmail: "solo@corp.example", AuthorLogin: "SoloDev"}
+	page := domain.ForgePage{Repo: repo.ID, Updated: merged, PullRequests: []domain.PullRequest{{
+		ID: "PR_s1", Repo: repo.ID, Number: 1, Title: "more", Author: domain.ForgeUser{Login: "SoloDev"},
+		State: domain.PullMerged, BaseBranch: "main", Created: merged.Add(-48 * time.Hour), Updated: merged, Closed: merged,
+		Merged: merged, MergeCommit: commit, Commits: []domain.ForgeCommit{commit},
+		Reviews: []domain.Review{{ID: "PRR_s1", Author: domain.ForgeUser{Login: "Zed"}, State: domain.ReviewApproved,
+			Submitted: merged.Add(-3 * time.Hour)}},
+	}}}
+	st, err := sqlite.Open(ctx, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutForgeRepos(ctx, []domain.ForgeRepo{repo}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.PutForgePage(ctx, &page); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.MarkForgeSynced(ctx, repo.ID, time.Date(2026, time.October, 6, 22, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // runEmails returns every email one run of db knows, as app.RunNames
@@ -970,6 +1141,12 @@ func names(ks []report.Knower) string {
 		out = append(out, k.Name)
 	}
 	return strings.Join(out, ", ")
+}
+
+// hasCaveat reports whether an answer's caveats hold one with code whose
+// message holds text.
+func hasCaveat(cs []report.Caveat, code, text string) bool {
+	return slices.ContainsFunc(cs, func(c report.Caveat) bool { return c.Code == code && strings.Contains(c.Message, text) })
 }
 
 // withLines lists knowers by name and surviving lines under the path.

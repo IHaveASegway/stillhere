@@ -55,7 +55,7 @@ func Week(ctx context.Context, d Deps, r WeekRequest) (*report.Model, error) {
 	var values []domain.MetricValue
 	if produced(fs) {
 		start = time.Now()
-		m, err := lookupMetric(report.MetricLanded)
+		m, err := lookupMetric(report.MetricLanded, d.Commands)
 		if err != nil {
 			return nil, err
 		}

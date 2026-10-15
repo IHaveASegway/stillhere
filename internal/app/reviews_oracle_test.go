@@ -114,6 +114,12 @@ func reviewOracles(t *testing.T) {
 		sameRows(t, table+", reviews_given@1 in scope all", got, map[string]float64{
 			"bob@example.com": 1, "cara@example.com": 1, "@zoe": 2, "@copilot-pull-request-reviewer[bot]": 1,
 		})
+		// The page names her as GitHub last showed her login: #6, updated
+		// last, says Zoe.
+		if w := s.whoKnows(t, "new_name.py"); len(w.Repos) != 1 || len(w.Repos[0].RecentReviewers) != 1 ||
+			w.Repos[0].RecentReviewers[0].Name != "@Zoe" {
+			t.Errorf("%s: new_name.py's reviewers %+v, want @zoe named @Zoe", table, w.Repos)
+		}
 	})
 
 	t.Run("a later sync changes nothing in the stored run", func(t *testing.T) {
@@ -290,9 +296,11 @@ func reviewPulls(commits map[string]string) []domain.PullRequest {
 			BaseBranch: "main", Created: reviewAt(time.May, 1, 9), Updated: reviewAt(time.May, 20, 10),
 			Commits: []domain.ForgeCommit{unlanded("5", "gina")},
 			Reviews: []domain.Review{review("PRR_5a", "gina", domain.ReviewCommented, reviewAt(time.May, 20, 10))}},
+		// zoe's login in another case, as a sync after she changed its case
+		// would copy it: one account to GitHub, so one subject, @zoe (#69).
 		merged(6, "erin", reviewAt(time.October, 4, 9), reviewAt(time.October, 6, 16), landed(reviewAt(time.October, 6, 16), "erin"),
 			[]domain.ForgeCommit{unlanded("6", "erin"), unlanded("7", "erin")},
-			review("PRR_6a", "zoe", domain.ReviewApproved, reviewAt(time.October, 5, 8))),
+			review("PRR_6a", "Zoe", domain.ReviewApproved, reviewAt(time.October, 5, 8))),
 	}
 }
 

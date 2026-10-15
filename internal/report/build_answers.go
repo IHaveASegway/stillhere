@@ -24,6 +24,7 @@ type ExplainInput struct {
 	// repository's scope: the changes a ranked metric counted for them.
 	Clusters map[string][]rank.Cluster
 	Forge    *ForgeRead // the GitHub data the run read; nil when the reader cannot tell
+	Commands Commands   // how the answer names the commands it sends the reader to; nil: the command line's
 }
 
 // NewExplain builds the explain answer: the subject's values and, for a
@@ -81,9 +82,14 @@ func NewExplain(in *ExplainInput) *Explain {
 		e.Caveats = append(e.Caveats, pullsNotListed(in.Metric.ID))
 	}
 	if in.Subject.Kind == domain.SubjectPerson {
-		if c, ok := sameName(in.Facts, in.Who, in.Subject.Key); ok {
+		if c, ok := sameName(in.Facts, in.Who, in.Subject.Key, in.Commands); ok {
 			e.Caveats = append(e.Caveats, c)
 		}
+	}
+	if in.Metric.ID == MetricAIAssisted && len(e.Values) > 0 {
+		// A page that holds an AI-assisted share says it is a lower bound,
+		// where the share is (report-json.md, caveats).
+		e.Caveats = append(e.Caveats, aiLowerBound())
 	}
 	if in.Metric.Validity != "" {
 		e.Caveats = append(e.Caveats, Caveat{Code: codeValidity, Message: "Validity: " + in.Metric.Validity})
@@ -114,8 +120,9 @@ type WhoKnowsInput struct {
 	// Values are who_knows@1's values for the path, per repository: one
 	// about the path itself and one per person (MetricWhoKnows in
 	// values.go).
-	Values []domain.MetricValue
-	Forge  *ForgeRead // the GitHub data the run read; nil when the reader cannot tell
+	Values   []domain.MetricValue
+	Forge    *ForgeRead // the GitHub data the run read; nil when the reader cannot tell
+	Commands Commands   // how the answer names the commands it sends the reader to; nil: the command line's
 }
 
 // NewWhoKnows builds the who-knows answer: per repository, the majority
@@ -209,6 +216,20 @@ func NewWhoKnows(in *WhoKnowsInput) *WhoKnows {
 	if c, ok := whoKnowsMissing(in.Path, asked, ix); ok {
 		w.Caveats = append(w.Caveats, c)
 	}
+	// Two people the answer lists under one name may be one person whose
+	// ownership and landings are split between two addresses, which can
+	// hide a majority owner: say so, as the report, explain and me do (#69).
+	listed := map[string]bool{}
+	for _, r := range w.Repos {
+		for _, ks := range [][]Knower{r.MajorityOwners, r.TopAuthors, r.RecentLanders, r.RecentReviewers} {
+			for _, k := range ks {
+				listed[k.Email] = true
+			}
+		}
+	}
+	if c, ok := sharedNames(in.Who, listed, in.Commands); ok {
+		w.Caveats = append(w.Caveats, c)
+	}
 	if in.Forge.reads(MetricWhoKnows) {
 		// The reviewers of each repository the answer lists come from its
 		// GitHub data: say where that is missing, as for any number it
@@ -272,6 +293,11 @@ type MeInput struct {
 	Values []domain.MetricValue // the person's values
 	Ranks  []RankSet            // whole rank tables: the person's place is found in each
 	Forge  *ForgeRead           // the GitHub data the run read; nil when the reader cannot tell
+	// Metrics are the registry's definitions, at least of the page's
+	// metrics: the ranked ones among them carry their validity notes to
+	// the page (ValidityCaveats).
+	Metrics  []MetricInfo
+	Commands Commands // how the page names the commands it sends the reader to; nil: the command line's
 }
 
 // NewMe builds a person's own page: their values and their place in every
@@ -327,10 +353,49 @@ func NewMe(in *MeInput) *Me {
 	// A person's review numbers can come from any repository of the run, so
 	// each GitHub number the page shows is caveated over all of them.
 	m.Caveats = append(m.Caveats, ForgeCaveats(in.Run, in.Facts, in.Forge, ids)...)
-	if c, ok := sameName(in.Facts, in.Who, in.Email); ok {
+	if c, ok := sameName(in.Facts, in.Who, in.Email, in.Commands); ok {
 		m.Caveats = append(m.Caveats, c)
 	}
+	// Each caveat goes where the number it qualifies is (#48): a person's
+	// page shows their ranked values and ranks, so it says how far each
+	// ranked metric is validated, as its rank table does, and their own
+	// AI-assisted share, on their own page, is a lower bound (#69).
+	var shown []MetricInfo
+	for _, mi := range in.Metrics {
+		if metrics[mi.ID] {
+			shown = append(shown, mi)
+		}
+	}
+	m.Caveats = append(m.Caveats, ValidityCaveats(shown...)...)
+	if metrics[MetricAIAssisted] {
+		m.Caveats = append(m.Caveats, aiLowerBound())
+	}
 	return m
+}
+
+// ValidityCaveats says how far the ranked metrics among ms are validated,
+// for an answer that shows their values, ranks or clusters: each one's
+// validity note (MetricInfo.Validity), such as durable@1's "unvalidated
+// until the labelled-sample check". A caveat goes where the number it
+// qualifies is (#48), so every answer that shows a ranked metric's number
+// carries its note, not its rank table alone (#69). Metrics that share a
+// note share one caveat, which names them; a metric that is not ranked, or
+// has no note, gets none, and a section about one metric alone (its rank
+// table, explain) words its own.
+func ValidityCaveats(ms ...MetricInfo) []Caveat {
+	byNote := map[string][]string{} // a note → the ranked metrics that have it
+	for _, m := range ms {
+		if m.Ranked && m.Validity != "" && !slices.Contains(byNote[m.Validity], m.ID) {
+			byNote[m.Validity] = append(byNote[m.Validity], m.ID)
+		}
+	}
+	var out []Caveat
+	for note, ids := range byNote {
+		slices.Sort(ids)
+		out = append(out, Caveat{Code: codeValidity, Message: "Validity of " + joinNames(ids) + ": " + note})
+	}
+	slices.SortFunc(out, func(a, b Caveat) int { return cmp.Compare(a.Message, b.Message) })
+	return out
 }
 
 // AnswerProvenance says where an answer that covers every repository of fs
@@ -439,11 +504,14 @@ func reposWith(fs *domain.FactSet, keys map[string]bool) []*domain.RepoFacts {
 
 // sameName says when another email in the run has the person's display
 // name: if they are one person, their numbers are split between the two.
-// It compares the names as git recorded them, a withheld one included, and
-// prints none.
-func sameName(fs *domain.FactSet, who People, email string) (Caveat, bool) {
-	name, ok := realName(who, email)
-	if !ok {
+// It compares the names as the identities command does (People.NameKey),
+// a withheld one included, and prints none.
+func sameName(fs *domain.FactSet, who People, email string, cmds Commands) (Caveat, bool) {
+	if who == nil {
+		return Caveat{}, false
+	}
+	key := who.NameKey(email)
+	if key == "" {
 		return Caveat{}, false
 	}
 	seen := map[string]bool{email: true}
@@ -451,7 +519,7 @@ func sameName(fs *domain.FactSet, who People, email string) (Caveat, bool) {
 	check := func(e string) {
 		if !seen[e] {
 			seen[e] = true
-			if n, ok := realName(who, e); ok && n == name {
+			if who.NameKey(e) == key {
 				others++
 			}
 		}
@@ -473,6 +541,6 @@ func sameName(fs *domain.FactSet, who People, email string) (Caveat, bool) {
 	return Caveat{
 		Code: codeIdentities,
 		Message: "Another email in this run has the same display name and was not merged: if it is the same person, " +
-			"their numbers are split between the two, and a .mailmap line merges them. " + identitiesHint,
+			"their numbers are split between the two, and a .mailmap line merges them. " + identitiesHint(cmds),
 	}, true
 }

@@ -38,9 +38,13 @@ var namesHistory = []struct {
 	{namesDay(time.March, 5), "<anon@corp.example>", "anon.py", 3},
 	{namesDay(time.March, 6), "<ghost@corp.example>", "ghost.py", 2},
 	{namesDay(time.March, 9), "(no name 1) <tricky@corp.example>", "tricky.py", 2},
-	// A name two addresses share, which is shown.
+	// A name two addresses share, written two ways, which is shown, and
+	// which the identities rules read as one name (#69); and a default name
+	// two addresses share, which they read as no name at all.
 	{namesDay(time.March, 10), "Sam Same <sam@corp.example>", "sam.py", 3},
-	{namesDay(time.March, 11), "Sam Same <sam@other.example>", "same.py", 2},
+	{namesDay(time.March, 11), "SAM SAME. <sam@other.example>", "same.py", 2},
+	{namesDay(time.March, 12), "Your Name <you@corp.example>", "yours.py", 2},
+	{namesDay(time.March, 13), "Your Name <you@mail.example>", "yours2.py", 2},
 	// A bot whose name is an address, and one whose name is its own
 	// noreply login, which is shown.
 	{namesDay(time.October, 2), "renovate@corp.example <renovate@corp.example>", "renovate.py", 1},
@@ -135,17 +139,41 @@ func displayNames(t *testing.T) {
 		}
 	}
 	sameRows(t, "the names repository's still-here names", got, map[string]shown{
-		"jdoe@corp.example":                                 {"", true},
-		"john.doe@mail.example":                             {"", true},
-		"mary.major@corp.example":                           {"", true},
-		"anon@corp.example":                                 {"", false},
-		"ghost@corp.example":                                {"", false},
-		"tricky@corp.example":                               {"(no name 1)", false},
-		"sam@corp.example":                                  {"Sam Same", false},
-		"sam@other.example":                                 {"Sam Same", false},
-		"renovate@corp.example":                             {"", true},
+		"jdoe@corp.example":       {"", true},
+		"john.doe@mail.example":   {"", true},
+		"mary.major@corp.example": {"", true},
+		"anon@corp.example":       {"", false},
+		"ghost@corp.example":      {"", false},
+		"tricky@corp.example":     {"(no name 1)", false},
+		"sam@corp.example":        {"Sam Same", false},
+		"sam@other.example":       {"SAM SAME.", false},
+		"you@corp.example":        {"Your Name", false},
+		"you@mail.example":        {"Your Name", false},
+		"renovate@corp.example":   {"", true},
 		"49699333+dependabot[bot]@users.noreply.github.com": {"dependabot[bot]", false},
 	})
+
+	// The unmerged-identities caveat reads names as the identities command
+	// does (identity.Directory.NameKey, #69): Sam's two ways are one name,
+	// "Your Name" is a default and no name, and jdoe's, shared and withheld,
+	// is counted. who-knows, which lists both Sams as owners, says so too.
+	const unmerged = `2 display names belong to more than one email and were not merged: "SAM SAME." and 1 name withheld ` +
+		`because it gives an address away. If the emails of a name are one person, a .mailmap line merges them: ` +
+		`'stillhere identities' suggests the lines, with the evidence for each.`
+	for _, page := range []struct {
+		name    string
+		caveats []report.Caveat
+	}{{"report", first.model.Caveats}, {"who-knows", first.whoKnows(t, "").Caveats}} {
+		var got []string
+		for _, c := range page.caveats {
+			if c.Code == "unmerged-identities" {
+				got = append(got, c.Message)
+			}
+		}
+		if len(got) != 1 || got[0] != unmerged {
+			t.Errorf("the names repository's %s says %q of unmerged identities, want %q", page.name, got, unmerged)
+		}
+	}
 }
 
 // buildNames writes the names repository in dir with git fast-import,

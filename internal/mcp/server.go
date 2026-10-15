@@ -217,7 +217,7 @@ func (c *call) deps(ctx context.Context) (app.Deps, error) {
 		}
 		s.store = newCachedStore(st)
 	}
-	d := app.Deps{Store: s.store, Git: s.cfg.Git, Log: s.log, Version: s.cfg.Version}
+	d := app.Deps{Store: s.store, Git: s.cfg.Git, Log: s.log, Version: s.cfg.Version, Commands: toolCommands{}}
 	if fs, ok := s.store.FactStore.(domain.ForgeStore); ok {
 		// The forge replica in the same facts.db, as the command line
 		// hands it over: readers date a run's GitHub data by the

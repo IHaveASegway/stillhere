@@ -25,11 +25,13 @@ import (
 // identities answer all ask it instead of restating it.
 
 // LoginKey reports whether a person key is a GitHub account that no commit
-// of the run links to an email: "@" and the login, as reviews_given@1 keys
-// a reviewer it cannot link, or "@login[bot]" for an app (ADR 0004). A
-// login is letters, digits, hyphens and, for an enterprise's managed
-// users, underscores, so it holds no dot and no second @: an email with an
-// empty local part ("@example.com") is no login.
+// of the run links to an email: "@" and the login, lowercased, as
+// Reviewer keys a reviewer it cannot link, or "@login[bot]" for an app
+// (ADR 0004). A login is letters, digits, hyphens and, for an enterprise's
+// managed users, underscores, so it holds no dot and no second @: an email
+// with an empty local part ("@example.com") is no login. It is the one test
+// of what a login key is: every package that tells logins from emails asks
+// it, never the key's first character.
 func LoginKey(key string) bool {
 	login, ok := strings.CutPrefix(key, "@")
 	login = strings.TrimSuffix(login, appSuffix)

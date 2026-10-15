@@ -23,6 +23,7 @@ import (
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
 	"github.com/IHaveASegway/stillhere/internal/policy"
+	"github.com/IHaveASegway/stillhere/internal/report"
 )
 
 // finishTimeout bounds the FinishRun that records a run's outcome after its
@@ -51,7 +52,16 @@ type Deps struct {
 	Policy     *policy.Policy // week and scan only; a read use case rebuilds the run's own (policy.FromSource on Run.PolicySource)
 	Log        *slog.Logger   // progress and warnings, on stderr; nil discards them
 	Version    string         // the tool version recorded on every run
+	// Commands is how the answers and errors of the use cases name the
+	// commands they send their reader to: the inbound adapter's own
+	// vocabulary, as the MCP server names its tools (#69). nil: the
+	// command line's.
+	Commands report.Commands
 }
+
+// commands is the vocabulary the use cases' answers and errors name
+// commands in: Deps.Commands, or the command line's.
+func (d Deps) commands() report.Commands { return report.CommandsOr(d.Commands) }
 
 // ready returns d with a logger, after checking that it holds the ports op
 // needs: a missing port is the composition root's mistake, not the user's.

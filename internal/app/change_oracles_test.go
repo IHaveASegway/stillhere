@@ -1,6 +1,7 @@
 package app_test
 
 import (
+	"errors"
 	"fmt"
 	"slices"
 	"testing"
@@ -137,6 +138,19 @@ func mainChangeOracles(t *testing.T) {
 				t.Errorf("SPEC knowledge_loss@1 (main fixture): %s over [%s, %s), want 4 / 34 over the activity window [2026-04-10, 2026-10-07)",
 					describe(v), rfc3339(v.Window.Since), rfc3339(v.Window.Until))
 			}
+		}
+		// It describes code, never a person: explain about one refuses the
+		// question, with the command that answers instead, rather than
+		// answer it with nothing (#69). The fixture's files sit at its root
+		// and it is scanned alone, so its values are about the repository
+		// only: no area and no group.
+		_, err := app.Explain(t.Context(), s.read, app.ExplainRequest{RunID: s.run,
+			Metric: domain.MetricID{Name: "knowledge_loss", Version: 1}, Subject: person("ada@example.com")})
+		const refusal = "knowledge_loss@1 holds no value about a person in run 1: its values are about repositories. " +
+			"Ask instead: 'stillhere report'."
+		var usage *domain.UsageError
+		if !errors.As(err, &usage) || usage.Msg != refusal {
+			t.Errorf("explain(knowledge_loss, Ada) gave %v, want the usage error %q", err, refusal)
 		}
 	})
 

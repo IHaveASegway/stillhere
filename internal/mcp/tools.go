@@ -106,17 +106,19 @@ func (s *server) addTools(srv *sdk.Server) {
 		"What one person's changes did, from the latest scan: surviving prod lines and majority files (depth), the "+
 			"repositories they hold code in (breadth), landings and recent work, reviews given when GitHub was synced, and their "+
 			"place in each ranked metric's table as a 95% rank interval with its sample size. Pass name as the reports print it "+
-			"(case does not matter; a unique first name works), or an id (p-…) from an earlier answer; an empty name is the "+
-			"user the server runs for (--me), whose answer alone holds their own AI-assisted share. Two people with one name "+
-			"are an error listing both with their ids. This measures properties of changes, not a person's value: never use "+
-			"it for performance or pay decisions."+untrusted,
+			"(case does not matter; a unique first name works), an id (p-…) from an earlier answer, or a GitHub login (@name, "+
+			"any case): a reviewer's the run links to no email, or the person's whose commits GitHub attributes to that login; "+
+			"an empty name is the user the server runs for (--me), whose answer alone holds their own AI-assisted share. Two "+
+			"people with one name are an error listing both with their ids and logins. This measures properties of changes, "+
+			"not a person's value: never use it for performance or pay decisions."+untrusted,
 		schema(nil,
-			`"name": {"type": "string", "description": "The person's display name, an id (p-…) or email from an earlier answer, or a login (@name); empty for the user the server runs for."}`,
+			`"name": {"type": "string", "description": "The person's display name, an id (p-…) or email from an earlier answer, or a GitHub login (@name, any case); empty for the user the server runs for."}`,
 			propFormat),
 		s.person)
 	tool(srv, "who_knows", "Who knows this code",
 		"Who knows the code under a path, per repository: majority owners (people credited with at least half of a file's "+
-			"surviving lines), the top five authors of surviving prod lines, recent landers (the last 90 days) and bots apart. "+
+			"surviving lines), the top five authors of surviving prod lines, recent landers and recent reviewers (the last 90 "+
+			"days; reviewers only in repositories whose GitHub data the run read, an empty list elsewhere) and bots apart. "+
 			"A routing answer for who to ask or who should review, not a rank. path is repo-relative, any prefix down to one "+
 			"file, or absolute inside a clone the scan read; repo narrows it to one repository, and without it every "+
 			"repository with code under the path is listed, paged."+untrusted,
@@ -142,8 +144,10 @@ func (s *server) addTools(srv *sdk.Server) {
 			"metric about a person, each change it counted with its contribution, so a number can be traced to its commits. "+
 			"metric is an id such as durable@1, or a bare name for the latest version (metrics lists them). subject_kind is "+
 			"person (default), repo, group or area; for an area, subject is the repository and path its top-level directory. "+
-			"ai_assisted about a person is refused: a person's own share is on their own page (person, empty name). Changes "+
-			"are paged; commit subjects only with --allow-source."+untrusted,
+			"A metric about a kind of subject it holds no value about is refused with the calls that answer instead: the "+
+			"ranked metrics (durable, simplifying, reviews_given) are about people, and overview with rank gives a "+
+			"repository's or a group's table of them. ai_assisted about a person is refused: a person's own share is on their "+
+			"own page (person, empty name). Changes are paged; commit subjects only with --allow-source."+untrusted,
 		schema([]string{"metric"},
 			`"metric": {"type": "string", "description": "A metric id such as durable@1, or a name such as durable for its latest version."}`,
 			`"subject": {"type": "string", "description": "Who or what the number is about: a person's name or id, a repository, or a group; empty for the user the server runs for."}`,
@@ -162,10 +166,11 @@ func (s *server) addTools(srv *sdk.Server) {
 			propScope, propFormat),
 		s.highlights)
 	tool(srv, "identity_candidates", "Possible duplicate identities",
-		"Possible duplicate identities in the latest scan: emails that look like one person, each with its evidence and a "+
-			"suggested .mailmap line. stillhere never applies one: a person reviews and commits the .mailmap, which stays the "+
-			"only identity store. Without --allow-emails the emails are ids (p-…), so the user runs 'stillhere identities "+
-			"--format mailmap' locally for the lines themselves."+untrusted,
+		"Possible duplicate identities in the latest scan: emails that look like one person, each with its evidence (the "+
+			"rules that link them, a confidence, and how each rule can be wrong). stillhere never applies one: a person reviews "+
+			"and commits the .mailmap, which stays the only identity store. With --allow-emails each candidate carries its "+
+			"suggested .mailmap lines (mailmap), commented out unless the candidate is high; without it the emails are ids "+
+			"(p-…) and the lines are left out, so the user runs 'stillhere identities --format mailmap' locally for them."+untrusted,
 		schema(nil, propScope),
 		s.identities)
 	tool(srv, "metrics", "Metric definitions",
@@ -651,7 +656,9 @@ func (s *server) identities(ctx context.Context, in identitiesIn) *sdk.CallToolR
 		if err != nil {
 			return nil, err
 		}
-		ids, err := app.Identities(ctx, d, app.IdentitiesRequest{RunID: c.run(), Scope: sc})
+		// The suggested lines are made of emails: they leave only when the
+		// user lets emails leave.
+		ids, err := app.Identities(ctx, d, app.IdentitiesRequest{RunID: c.run(), Scope: sc, Mailmap: s.cfg.AllowEmails})
 		if err != nil {
 			return nil, err
 		}
@@ -720,4 +727,43 @@ func (s *server) diff(ctx context.Context, in diffIn) *sdk.CallToolResult {
 		}
 		return func(sh *shaper) (any, error) { return sh.diffAnswer(a), nil }, nil
 	})
+}
+
+// toolCommands is this server's vocabulary (report.Commands, #69): what its
+// answers and errors send an agent to are its tools, called as the skill
+// writes calls, never a command the agent cannot run. The use cases word
+// every such hint through it (app.Deps.Commands), so a caveat or an error
+// built in internal/app or internal/report names a tool here and a command
+// on the command line, with no sentence rewritten after it is built.
+type toolCommands struct{}
+
+func (toolCommands) Metrics() string    { return "metrics()" }
+func (toolCommands) Identities() string { return "identity_candidates(scope)" }
+func (toolCommands) Report() string     { return "overview(scope)" }
+func (toolCommands) Ranks(metric string) string {
+	return "overview(scope, rank: " + metric + ")"
+}
+
+// Explain is explain with the subject kinds it takes among kinds: person,
+// repo, group and area.
+func (toolCommands) Explain(metric string, kinds []string) string {
+	var take []string
+	for _, k := range kinds {
+		switch k {
+		case domain.SubjectPerson, domain.SubjectRepo, domain.SubjectGroup, domain.SubjectArea:
+			take = append(take, k)
+		}
+	}
+	switch len(take) {
+	case 0:
+		return ""
+	case 1:
+		return "explain(metric: " + metric + ", subject_kind: " + take[0] + ")"
+	}
+	return "explain(metric: " + metric + ", subject_kind: " + strings.Join(take[:len(take)-1], ", ") + " or " +
+		take[len(take)-1] + ")"
+}
+
+func (toolCommands) OwnPage() string {
+	return `person(name: "") for the user the server runs for (--me)`
 }

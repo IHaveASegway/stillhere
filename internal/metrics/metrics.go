@@ -145,7 +145,8 @@ func All() []Metric {
 // Lookup returns the metric with id, such as "durable@1", or the latest
 // version for a bare name such as "durable". An id that does not parse, or
 // that names no registered metric, is a *domain.UsageError, because ids come
-// from the command line and the MCP server.
+// from the command line and the MCP server. Its message names no command:
+// each of those readers has its own, which the use case adds (#69).
 func Lookup(id string) (Metric, error) {
 	want, err := domain.ParseMetricID(id)
 	if err != nil {
@@ -170,7 +171,7 @@ func Lookup(id string) (Metric, error) {
 		ids = append(ids, m.Definition().ID.String())
 	}
 	return nil, &domain.UsageError{Msg: fmt.Sprintf(
-		"unknown metric %q: the registry has %s (stillhere metrics describes each)", id, strings.Join(ids, ", "))}
+		"unknown metric %q: the registry has %s", id, strings.Join(ids, ", "))}
 }
 
 // Compute runs every metric over in and returns all values, sorted by

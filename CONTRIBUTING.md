@@ -66,6 +66,7 @@ Metrics are versioned definitions, like an API: reports cite `durable@1`, and a 
 3. **Derive the oracle by hand** in [testdata/fixture/SPEC.md](testdata/fixture/SPEC.md), with the wrong implementation it exists to catch. If the case needs new history, extend the sibling fixture rather than the main one, so no existing oracle moves.
 4. **Implement it** in `internal/metrics`: a type that implements `metrics.Metric` (and `metrics.Ranked` if people are ranked on it), whose `Definition()` mirrors the catalog entry, registered in `metrics.All()`.
 5. **Assert the oracle** in the named test that covers it (`TestChangeOracles` for change metrics).
+6. **Tell the agent.** An agent learns the metrics from the MCP server, not from this repository: update the skill ([plugins/stillhere/skills/stillhere/SKILL.md](plugins/stillhere/skills/stillhere/SKILL.md): its question table, stated limits and recipes) and the tool descriptions in `internal/mcp/tools.go` wherever the metric adds a question, a field an answer carries, or a limit, or changes one, and [docs/spec/mcp.md](docs/spec/mcp.md) with them. A stale description is a wrong answer the agent repeats to the user.
 
 **Versions.** Any change to a definition, its inputs or its defaults that can move any value is a new version: `durable@2` beside `durable@1`, never an edit. The old version stays computable over stored facts until a release removes it with a changelog entry.
 
