@@ -50,11 +50,21 @@ var (
 	// @ ends a user name that has no colon, so it carries no password.
 	scpRemote = regexp.MustCompile(`^[^@/:\s]+@[^@/:\s]+:[^@\s]*$`)
 
+	// collapsedUserinfo matches the scheme and userinfo of a URL whose "//"
+	// a path cleaner collapsed to one separator. That is what a URL given
+	// where a path is expected becomes: filepath.Abs turns
+	// "https://user:TOKEN@host/r.git" into "/cwd/https:/user:TOKEN@host/r.git"
+	// ("\" on Windows), which neither urlToken nor userinfo can see. Group 1
+	// is the scheme and its separator.
+	collapsedUserinfo = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*:[/\\])[^/\\?#\s]*@`)
+
 	// textPassword matches a "user:password@" prefix on a token without a
 	// scheme inside free text, such as an scp-like remote git quotes in
 	// "fatal: 'user:pw@host:o/r.git' does not appear to be a git
-	// repository". Group 1 is what precedes the token.
-	textPassword = regexp.MustCompile("(^|[\\s'\"<>`(\\[])[^@/:\\s'\"<>`]+:[^@/\\s'\"<>`]*@")
+	// repository", or one that starts a segment of a path, as an scp-like
+	// remote made absolute does: "/cwd/user:pw@host:o/r.git". Group 1 is
+	// what precedes the token.
+	textPassword = regexp.MustCompile("(^|[\\s'\"<>`(\\[/\\\\])[^@/\\\\:\\s'\"<>`]+:[^@/\\\\\\s'\"<>`]*@")
 )
 
 // URL returns raw with every credential removed, or Unparsed:
@@ -100,12 +110,14 @@ func URL(raw string) string {
 
 // Scrub removes credentials from free text and leaves everything else as it
 // was: URL is applied to every URL with a scheme, any remaining
-// "scheme://user:pass@" is stripped, and so is a "user:password@" prefix on
-// a token without a scheme. Use it where the text must otherwise stay
-// intact, such as the arguments of a domain.GitError; Message also
-// normalises and truncates.
+// "scheme://user:pass@" is stripped, and so is the userinfo of a URL whose
+// "//" a path cleaner collapsed ("/cwd/https:/user:pass@host"), and a
+// "user:password@" prefix on a token without a scheme or on a segment of a
+// path. Use it where the text must otherwise stay intact, such as the
+// arguments of a domain.GitError; Message also normalises and truncates.
 func Scrub(s string) string {
 	s = userinfo.ReplaceAllString(s, "$1")
+	s = collapsedUserinfo.ReplaceAllString(s, "$1")
 	s = urlToken.ReplaceAllStringFunc(s, URL)
 	return textPassword.ReplaceAllString(s, "$1")
 }

@@ -305,7 +305,7 @@ The forge ports exist now, empty, so the sync can be built without editing anoth
 ```go
 // redact
 func URL(raw string) string     // userinfo, query and fragment removed; "<unparsed-remote>" when unparsable or a scheme-less string with an @ that is not user@host:path
-func Scrub(s string) string     // credentials removed from free text (URL() on every URL, user:pass@ prefixes); nothing else changes
+func Scrub(s string) string     // credentials removed from free text (URL() on every URL, user:pass@ prefixes, also on a path segment, and the userinfo of a URL a path cleaner collapsed, "/cwd/https:/user:TOKEN@host"); nothing else changes
 func Message(s string) string   // Scrub, then one line truncated to 180 characters
 
 // gitcli
@@ -648,7 +648,7 @@ Tests sit at stable boundaries, so a refactor does not rewrite them (Kent Beck, 
 | `TestClassify` | `classify` | roles, role precedence, `too_big`, segment matching |
 | `TestPolicy` | `policy` | a missing table or key exits 2; `--days` overrides; the hash covers the deny list; `FromSource(p.Source)` has `p.Ref()` |
 | `TestRankIntervals` | `rank` | reproducible intervals; ineligible subjects unranked |
-| `TestRedact` | `redact` | no credential survives `URL`, `Scrub` or `Message` (userinfo, scp-like and malformed remotes, query strings, quotes, the 180-rune cut); text that holds none is unchanged |
+| `TestRedact` | `redact` | no credential survives `URL`, `Scrub` or `Message` (userinfo, scp-like and malformed remotes, a URL given as a path and made absolute, query strings, quotes, the 180-rune cut); text that holds none is unchanged |
 | `TestRunner` | `gitcli` | per-user and system attributes change neither numstat nor `check-attr`; no askpass, signature or external diff program runs; an inherited `GIT_DIR` changes nothing; a timeout or cancellation kills git's process group and is reported as such even when the reader fails first on the truncated output; a helper that left the group cannot hold `Stream` |
 | `TestStoreRoundTrip` | `sqlite` | `LoadFacts(PutRepoFacts(x)) == x`; `Run(id)` returns the run as begun and finished, policy source included; readers never see a running or failed run (`ErrNotFound`) |
 | `TestGitHubSync` | `github` | recorded responses become the expected facts; the token is never stored (M2) |
