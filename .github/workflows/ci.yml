@@ -13,7 +13,8 @@
 # Actions are pinned to full commit SHAs, because a tag can be moved to
 # other code; Dependabot (.github/dependabot.yml) proposes updates. Tools
 # run through "go run module@version", which the Go checksum database
-# verifies.
+# verifies. Those versions, and the images that the Docker actions run, are
+# pinned by hand.
 name: CI
 
 on:
@@ -40,8 +41,14 @@ defaults:
   run:
     shell: bash
 
+# The release job below dry-runs the release with the GoReleaser, QEMU and
+# BuildKit that release.yml publishes with, so these are release.yml's pins,
+# copied; the lint job fails if any copy differs (release.yml says why each
+# is pinned).
 env:
   GORELEASER: github.com/goreleaser/goreleaser/v2@v2.18.3
+  BINFMT_IMAGE: docker.io/tonistiigi/binfmt:qemu-v10.2.3-68@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+  BUILDKIT_IMAGE: docker.io/moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
 
 jobs:
   lint:
@@ -71,6 +78,28 @@ jobs:
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
       - name: shellcheck on the CI scripts
         run: shellcheck .github/scripts/*.sh
+      # GoReleaser, QEMU and BuildKit are each pinned in this file and in
+      # release.yml, and GoReleaser's version is also quoted in the docs. One
+      # version of each across the repository means a bump that misses a
+      # copy fails here, instead of releasing with a pin this file never
+      # tested. The images must also carry a digest.
+      - name: One pinned version of each release tool
+        run: |
+          # [:] matches a colon, but keeps each pattern from matching itself.
+          for pin in 'goreleaser/goreleaser/v2@v[0-9]+(\.[0-9]+)*' 'tonistiigi/binfmt[:][^ "]+' 'moby/buildkit[:][^ "]+'; do
+            found=$(git grep -h -o -E "$pin" | sort -u || true)
+            if [ "$(grep -c . <<<"$found")" != 1 ]; then
+              echo "::error::want one version matching $pin across the repository, found: $(tr '\n' ' ' <<<"${found:-none}")"
+              exit 1
+            fi
+            case $found in
+            goreleaser/* | *@sha256:*) ;;
+            *)
+              echo "::error::$found is not pinned by digest"
+              exit 1
+              ;;
+            esac
+          done
 
   test:
     name: test (git ${{ matrix.git }})
@@ -169,9 +198,17 @@ jobs:
             .goreleaser.yaml
             .github/workflows/ci.yml
       # The arm64 image runs apk in its build: emulate it on this amd64 runner.
+      # QEMU and the builder are release.yml's, pinned the same way, so a
+      # change to either is tested here before a release depends on it.
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
         with:
+          image: ${{ env.BINFMT_IMAGE }}
           platforms: arm64
+          cache-image: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver-opts: image=${{ env.BUILDKIT_IMAGE }}
+          cache-binary: false
       - name: goreleaser check
         run: go run "$GORELEASER" check
       - name: goreleaser release --snapshot (tags, uploads and pushes nothing)

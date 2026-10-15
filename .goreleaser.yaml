@@ -187,8 +187,16 @@ dockers_v2:
     platforms:
       - linux/amd64
       - linux/arm64
-    # OCI labels on each image. On a release, GoReleaser also attaches an
-    # SBOM attestation (dockers_v2 sbom defaults to true).
+    # A released image carries an SBOM attestation, made by a generator
+    # pinned to a version and digest like the builder in release.yml. With
+    # sbom left on, GoReleaser passes a bare --attest=type=sbom, and BuildKit
+    # runs its default generator from a moving tag. A snapshot builds no SBOM,
+    # just as GoReleaser adds its own flag only when it pushes. Updated by
+    # hand: Dependabot does not read this pin.
+    sbom: false
+    flags:
+      - "{{ if not .IsSnapshot }}--attest=type=sbom,generator=docker.io/docker/buildkit-syft-scanner:1.12.0@sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9{{ end }}"
+    # OCI labels on each image.
     labels:
       org.opencontainers.image.title: "{{ .ProjectName }}"
       org.opencontainers.image.description: "Change analytics for git and GitHub: what landed, what lasted, who knows it"
