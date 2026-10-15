@@ -15,17 +15,20 @@ import (
 	"github.com/IHaveASegway/stillhere/internal/domain"
 )
 
-// The version floor (docs/spec/git-invocation.md#version-floors). Git 2.44
-// brings GIT_NO_LAZY_FETCH, the no-network guarantee, and covers
-// check-attr --source (2.40) and --diff-merges (2.31).
+// The version floor (docs/spec/git-invocation.md#version-floors). Git 2.45
+// brings GIT_NO_LAZY_FETCH (git --no-lazy-fetch, 2.45.0 release notes), so
+// a partial clone's missing blobs read as missing instead of being fetched,
+// and covers check-attr --source (2.40) and --diff-merges (2.31). The floor
+// was 2.44 until CI on git 2.44.0 saw a partial clone reach its promisor
+// remote: that release does not read the variable.
 const (
 	floorMajor = 2
-	floorMinor = 44
-	floor      = "2.44"
+	floorMinor = 45
+	floor      = "2.45"
 )
 
 // New resolves the git binary once, runs git version, and returns a Runner.
-// A missing git, an unreadable version, or a git older than 2.44 is a
+// A missing git, an unreadable version, or a git older than 2.45 is a
 // *domain.UsageError that names the floor, because the user fixes it by
 // installing a newer git.
 func New(ctx context.Context, cfg Config) (*Runner, error) {

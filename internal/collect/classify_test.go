@@ -130,7 +130,11 @@ func TestAttributes(t *testing.T) {
 	touched := []PathAt{{Commit: added, Path: "vendor/gone.py"}, {Commit: added, Path: "plain.py"}}
 
 	bare := filepath.Join(t.TempDir(), "attributes.git")
-	run(filepath.Dir(bare), "clone", "--quiet", "--bare", "--no-local", work, bare)
+	// A clone needs a transport, which the Analysis profile refuses.
+	if _, err := git.Run(t.Context(), domain.GitCmd{Dir: filepath.Dir(bare), Profile: domain.Sync,
+		Args: []string{"clone", "--quiet", "--bare", "--no-local", work, bare}}); err != nil {
+		t.Fatalf("git clone: %v", err)
+	}
 	for _, dir := range []string{work, bare} {
 		run(dir, "config", "core.ignorecase", "true")
 	}

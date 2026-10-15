@@ -11,7 +11,7 @@
 #     install (.goreleaser.yaml says why);
 #   - a binary for this machine that prints its version;
 #   - an image per platform that holds the binary GoReleaser built and runs
-#     "stillhere version" as a non-root user, with git 2.44 or newer.
+#     "stillhere version" as a non-root user, with git 2.45 or newer.
 #
 # Every channel ships the same bytes: the binary in each archive and in each
 # image is compared with the one GoReleaser built.
@@ -144,6 +144,6 @@ for platform in linux/amd64 linux/arm64; do
 	[[ $uid != 0 ]] || fail "$image runs as root"
 	gitv=$(docker run --rm --platform "$platform" --entrypoint git "$image" version | awk '{ print $3 }')
 	awk -v v="$gitv" 'BEGIN { split(v, p, "."); exit !(p[1] > 2 || (p[1] == 2 && p[2] >= 44)) }' ||
-		fail "$image ships git $gitv, older than the 2.44 floor"
+		fail "$image ships git $gitv, older than the 2.45 floor"
 	ok "$image holds $built, prints 'stillhere $version', runs as uid $uid, ships git $gitv"
 done

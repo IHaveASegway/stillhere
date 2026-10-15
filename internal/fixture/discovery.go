@@ -198,7 +198,7 @@ func BuildDiscovery(ctx context.Context, dir string) (*DiscoveryRepos, error) {
 	b.git("-C", r.OriginMaster, "update-ref", "refs/remotes/origin/master", "refs/remotes/origin/trunk")
 	b.git("-C", r.OriginMaster, "update-ref", "-d", "refs/remotes/origin/main")
 	// The clone of an upstream that renamed master to main, fetched with
-	// --prune by a git that left origin/HEAD behind (2.44 to 2.47).
+	// --prune by a git that left origin/HEAD behind (2.47 and older).
 	b.discoveryClone(up, r.DanglingHead, "https://github.com/example/dangling-head.git")
 	b.git("-C", r.DanglingHead, "branch", "--move", "main", "master")
 	b.git("-C", r.DanglingHead, "symbolic-ref", "refs/remotes/origin/HEAD", "refs/remotes/origin/master")

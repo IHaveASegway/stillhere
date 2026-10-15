@@ -122,7 +122,7 @@ Each milestone ships and gets used before the next starts. Numbers come before U
 
 | | Scope | Done when |
 |---|---|---|
-| **M0** Walking skeleton | Go module; discovery; classification; `stillhere week`; CI on git 2.44 and latest; GoReleaser publishing to a Homebrew tap and a Docker image | `brew install` works; the fixture's week oracle passes |
+| **M0** Walking skeleton | Go module; discovery; classification; `stillhere week`; CI on git 2.45 (the version floor) and latest; GoReleaser publishing to a Homebrew tap and a Docker image | `brew install` works; the fixture's week oracle passes |
 | **M1** What lasted | Blame collector; ownership, knowledge concentration and loss; `durable@1`, `simplifying@1`; revert detection; AI-assisted tag; facts store (SQLite) and metric registry; `explain`; snapshots with cheap backfill | Fixture oracles for every metric; a real 80-repo scan inside the budget |
 | **M2** Reviews and ranks | GitHub App; `sync github` (pull requests, reviews, comments, labels, managed mirrors); `reviews_given@1`; per-metric ranks with intervals (`--rank`); `stillhere me`; validity check against hand labels | Contract tests on recorded API responses; rank intervals verified on the fixture; the labelled-sample check run once |
 | **M3** Team web | `stillhere serve` with Sign in with GitHub; leads team sees ranks; own pages; highlights; code-area views | Auth tests (state, sessions, escaping); one real deployment |
@@ -154,7 +154,7 @@ Recommendations that were not approved stay open. The baseline is what happens i
 
 - **It measures what we mean.** A lead labels 50 recent changes as meaningful or routine. Durable and simplifying must separate the two with an AUC of at least 0.7 (0.5 is chance). If they do not, the definition changes, as a new metric version, before more UI is built on it. Canonical reading: Kaner and Bond, "Software Engineering Metrics: What Do They Measure and How Do We Know?" (METRICS 2004).
 - **It gets used.** Leads open who-knows and highlights weekly. If ranked views go unused after M3, drop them and keep the highlights.
-- **It is reliable.** Fixture oracles pass on git 2.44 and on the latest git. Two runs with the same inputs are byte-identical. A cold scan of 100 repos and 50,000 files finishes in under 15 minutes on 8 cores.
+- **It is reliable.** Fixture oracles pass on git 2.45 and on the latest git. Two runs with the same inputs are byte-identical. A cold scan of 100 repos and 50,000 files finishes in under 15 minutes on 8 cores.
 - **It spreads.** Homebrew installs, and 75 GitHub stars (the homebrew-core bar).
 
 ## Glossary

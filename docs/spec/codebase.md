@@ -372,7 +372,7 @@ type Config struct {
 	MailmapFile string // org mailmap, passed as -c mailmap.file=; made absolute
 	Logger      *slog.Logger
 }
-func New(ctx context.Context, cfg Config) (*Runner, error) // git older than 2.44 → *domain.UsageError
+func New(ctx context.Context, cfg Config) (*Runner, error) // git older than 2.45 → *domain.UsageError
 func (r *Runner) Version() string                          // *Runner implements domain.GitRunner
 
 // policy: the model (types.go) is frozen; #5 implements the functions, and added only Paths' unexported prefilter.

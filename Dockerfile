@@ -1,4 +1,4 @@
-# The stillhere container image: the static stillhere binary, git 2.44 or
+# The stillhere container image: the static stillhere binary, git 2.45 or
 # newer (the version floor, docs/spec/git-invocation.md#version-floors) and
 # tini, running as an unprivileged user.
 #
@@ -43,7 +43,7 @@ SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 # starts with the same owner and mode.
 # hadolint ignore=DL3018
 RUN apk add --no-cache git tini \
- && git version | awk '{ split($3, v, "."); ok = v[1] > 2 || (v[1] == 2 && v[2] >= 44); seen = $3 } END { if (!ok) { print "git " seen " is older than the 2.44 floor"; exit 1 } }' \
+ && git version | awk '{ split($3, v, "."); ok = v[1] > 2 || (v[1] == 2 && v[2] >= 45); seen = $3 } END { if (!ok) { print "git " seen " is older than the 2.45 floor"; exit 1 } }' \
  && addgroup -S -g 10001 stillhere \
  && adduser -S -D -u 10001 -G stillhere -h /home/stillhere stillhere \
  && install -d -m 0700 -o 10001 -g 10001 /data \

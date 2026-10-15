@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # git-from-source.sh provides the git versions CI tests stillhere against:
-# the version floor, 2.44.0, and the latest release
+# the version floor, 2.45.0, and the latest release
 # (docs/spec/git-invocation.md#version-floors). Both are built from the
 # release tarball with the same recipe, so the version is the only thing
 # the two matrix jobs vary. ci.yml caches each install by version, runner

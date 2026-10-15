@@ -119,7 +119,7 @@ The core (classification, metrics, ranking) imports no adapter package: no `os/e
 - **Bulkheads**: one repo, or one repo's GitHub sync, failing is recorded on that repo and the run continues. A run with failures is marked `partial`, and pages say so.
 - **Idempotent, resumable sync**: upserts keyed by GitHub node ID, a watermark per repo, and resuming after a crash or a rate limit. GraphQL allows 5,000 points per hour; requests run with bounded concurrency to stay under GitHub's secondary limits.
 - **Determinism**: an explicit `--now`, seeded bootstrap, stable sort orders. A CI test runs the fixture twice and compares the bytes.
-- **One version floor, git 2.44**: it brings `GIT_NO_LAZY_FETCH` (the no-network guarantee) and also covers `check-attr --source` (2.40, needed to read attributes at the scanned revision and in bare mirrors) and `--diff-merges` (2.31). Older git exits with a usage error. See [spec/git-invocation.md](spec/git-invocation.md#version-floors).
+- **One version floor, git 2.45**: it brings `GIT_NO_LAZY_FETCH` (a partial clone's missing blobs read as missing, not fetched) and also covers `check-attr --source` (2.40, needed to read attributes at the scanned revision and in bare mirrors) and `--diff-merges` (2.31). Older git exits with a usage error. See [spec/git-invocation.md](spec/git-invocation.md#version-floors).
 - **Oracles**: synthetic fixture repos with hand-derived expected values for every metric version ([testdata/fixture/SPEC.md](../testdata/fixture/SPEC.md)), plus recorded GitHub API responses for sync.
 - **Budgets**: a cold scan of 100 repos and 50,000 files in under 15 minutes on 8 cores; `week` in under 60 seconds; web pages under 300 ms at p95.
 
@@ -141,7 +141,7 @@ GitHub App permissions (read-only): repository contents, pull requests and metad
 ## Deployment
 
 - **Laptop**: `brew install`, or download the binary. Point it at your clones or let `sync github` manage mirrors.
-- **Team server**: one container image (the stillhere binary plus git 2.44 or newer) with a volume for mirrors and `facts.db`, GitHub App credentials in the environment, and TLS terminated in front. How refresh is triggered is open decision 4 in [product.md](product.md#open-decisions).
+- **Team server**: one container image (the stillhere binary plus git 2.45 or newer) with a volume for mirrors and `facts.db`, GitHub App credentials in the environment, and TLS terminated in front. How refresh is triggered is open decision 4 in [product.md](product.md#open-decisions).
 - **Later**: a scheduled GitHub Action that runs `sync` and `scan` and uploads the run.
 
 ## Patterns and further reading

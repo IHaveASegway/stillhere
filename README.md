@@ -16,7 +16,7 @@ Change analytics for git and GitHub (what landed, what lasted, who knows it) for
 
 ## Install
 
-stillhere is one static binary for macOS, Linux and Windows. It runs the git on your `PATH`, which must be 2.44 or newer (`git version` tells you).
+stillhere is one static binary for macOS, Linux and Windows. It runs the git on your `PATH`, which must be 2.45 or newer (`git version` tells you).
 
 No release is tagged yet. Until the first one, build from a checkout with Go 1.27:
 

@@ -596,8 +596,8 @@ func discoverConfig(ctx context.Context, git domain.GitRunner, dir string) (orig
 		switch {
 		case key == "remote.origin.url":
 			// An empty value resets the list, as git reads it since 2.46.
-			// git 2.44 and 2.45 keep it as a URL of its own, which no fetch
-			// can use, so after one of those git would try the URL before it.
+			// git 2.45 keeps it as a URL of its own, which no fetch can use,
+			// so after one of those git would try the URL before it.
 			switch {
 			case value == "":
 				origin, haveOrigin = "", false
