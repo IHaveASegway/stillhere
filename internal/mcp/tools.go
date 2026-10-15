@@ -532,7 +532,8 @@ func (s *server) explain(ctx context.Context, in explainIn) *sdk.CallToolResult 
 				}
 				subject = domain.Subject{Kind: domain.SubjectArea, Key: rp.Key + ":" + dir + "/"}
 				area = fmt.Sprintf("%q %s/", rp.Name, dir)
-			} else if err := fewPeople(id, rp.AIPeople, fmt.Sprintf("repository %q", rp.Name)); err != nil {
+			} else if err := fewPeople(id, showsAI(c.names, report.Scope{Kind: domain.ScopeRepo, Key: rp.Key}),
+				fmt.Sprintf("repository %q", rp.Name)); err != nil {
 				return nil, err
 			}
 		case domain.SubjectGroup:
@@ -541,7 +542,7 @@ func (s *server) explain(ctx context.Context, in explainIn) *sdk.CallToolResult 
 				return nil, err
 			}
 			subject = domain.Subject{Kind: domain.SubjectGroup, Key: sc.Key}
-			if err := fewPeople(id, aiPeople(c.names, report.Scope{Kind: sc.Kind, Key: sc.Key}),
+			if err := fewPeople(id, showsAI(c.names, report.Scope{Kind: sc.Kind, Key: sc.Key}),
 				fmt.Sprintf("group %q", sc.Key)); err != nil {
 				return nil, err
 			}
@@ -573,16 +574,15 @@ func (s *server) explain(ctx context.Context, in explainIn) *sdk.CallToolResult 
 	})
 }
 
-// fewPeople refuses the AI-assisted share of a repository or a group whose
-// landings are those of fewer than minAIPeople people: it would be close to
-// one person's own share (ADR 0007).
-func fewPeople(id domain.MetricID, people int, scope string) error {
-	if !report.OwnPageOnly(id) || people >= minAIPeople {
+// fewPeople refuses the AI-assisted share of a repository or a group that
+// the run's decision withholds (app.AIShares). It says why, and points at
+// no other share: a group's, or the whole run's, less the shares shown
+// beside it is what the decision keeps from being worked out.
+func fewPeople(id domain.MetricID, shown bool, scope string) error {
+	if !report.OwnPageOnly(id) || shown {
 		return nil
 	}
-	return &domain.UsageError{Msg: fmt.Sprintf("the %s share of %s is withheld: fewer than %d people landed in its "+
-		"window, so it would be close to one person's own share, which only that person sees (ADR 0007). A group's or "+
-		"the whole run's share may answer instead (overview).", id.Name, scope, minAIPeople)}
+	return &domain.UsageError{Msg: fmt.Sprintf("the %s share of %s is withheld: %s.", id.Name, scope, withheldWhy())}
 }
 
 type highlightsIn struct {

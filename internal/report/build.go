@@ -91,7 +91,7 @@ func Build(in *Input) *Model {
 	// Overviews keep groups apart, as ranks do, unless the run was asked to
 	// look across everything or has no groups to keep apart
 	// (docs/metrics.md#ranking-rules).
-	if len(b.repos) > 0 && (in.Scope == domain.ScopeAll || len(b.groups) == 0) {
+	if len(b.repos) > 0 && WholeRun(in.Scope, len(b.groups)) {
 		m.Overviews = append(m.Overviews, b.overview(domain.Scope{Kind: domain.ScopeAll}, b.repos))
 	}
 	for _, g := range b.groups {
@@ -104,6 +104,14 @@ func Build(in *Input) *Model {
 	m.Metrics = b.metricIDs()
 	return m
 }
+
+// WholeRun reports whether a report of a run whose scan was given scope,
+// and that has groups groups, holds an overview of every repository: the
+// run was asked to look across everything (domain.ScopeAll), or has no
+// groups to keep apart. That overview is the only section that shows the
+// whole run's AI-assisted share, so the MCP server's decision about the
+// shares that leave the machine reads this rule too (app.AIShares).
+func WholeRun(scope string, groups int) bool { return scope == domain.ScopeAll || groups == 0 }
 
 // builder holds what every section of one report needs.
 type builder struct {
