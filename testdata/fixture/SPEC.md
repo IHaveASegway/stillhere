@@ -644,6 +644,72 @@ Ada's oracle stays stable only if these cases stay out of the fixture repo.
   - Option A: with the jar absent, `hotspots.status = skipped`, `reason = jar-not-found`, and still-here rows are unchanged. CSV fixtures under `testdata/maat_csv/` cover an ambiguous display name and a path that no longer exists, with `ownership` as a 0–1 ratio and `degree` as an integer percent.
   - Option B: the tables equal a one-time code-maat run on this fixture.
 
+## Identity candidates (M2, #26)
+
+`stillhere identities` over a stored scan of each fixture, scanned on its own: `identity.Candidates` through `app.Identities` with the zero scope, under the rules of [identities.md](../../docs/spec/identities.md). These values were derived by hand from the two History tables, those rules and the packaged policy's `[bots]` and `[ai]` tables before any code computed them, and derived again when the review of #26's pull request changed the rules: a local part made from the name is no second rule, and only a high candidate's lines are written uncommented. Times are author times, UTC. Every address is in one repository (`local:fixture` or `local:sibling`), and the run's as-of time is `--now`, so the hand-off rule's earlier address must have no commit on or after 2026-07-09.
+
+| Scan | Addresses (people) | Bots and agents left out | Candidates |
+| --- | --- | --- | --- |
+| main fixture, no `--mailmap` | 11 | 1: `copilot@bot.example` | Ada (medium); Gina → Hank (low, a guess) |
+| main fixture, `MailmapText` | 10 | 1 | Gina → Hank (low, a guess) |
+| sibling, no `--mailmap` | 7 | 3: `copilot@bot.example`, `noreply@anthropic.com`, `aider@aider.chat` | Pia (medium) |
+| sibling, `SiblingMailmapText` | 6 | 3 | none |
+
+The main fixture's people are Ada's two addresses (one with the mailmap), Bob, Cara, Dana, Erin, Frank, Gina, Hank, Ivy and Jules. The sibling's are Uma, whom only blame shows (U0 is older than the 365-day history), Lena, Omar, Pia, Quinn, and two addresses that only trailers name: Pia's GitHub noreply address (C1; `pia@example.com` with the mailmap) and Claude Dupont's (Q1). The agents in L3, O4 and P2's trailers are bots, as Copilot is.
+
+No address is shared and no group is left out as oversized, so `shared` and `oversized` are 0 in all four scans: every address's commits carry one author name, no local part is a role or default one, and no name is a default (the last words of Cara Dev, Dana Dev and Ivy Tester are generic, their first are not). `example.com` is the main domain of both fixtures: 10 of the main fixture's 11 people use it, and 5 of the sibling's 7, whose other two are GitHub noreply addresses.
+
+### Ada: medium (main fixture, no mailmap)
+
+Rules `same-name` ("Ada Example", both addresses) and `same-local-part` (`ada`, at `example.com` and at `other.example`). The local part is the name's first word, so it says no more than the name does: two people named Ada Example would both be `ada@` somewhere. The link's `from_name` is true, and the pair is medium, not high.
+
+| # | Address | Domain | Name | Commits | Co-authored | First | Last | Canonical |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 0 | `ada@example.com` | main | Ada Example | 2 (init, the `git mv`) | 0 | 2026-01-01 12:00 | 2026-01-05 12:00 | yes |
+| 1 | `ada@other.example` | other | Ada Example | 2 (gamma, `ada_week.py`) | 0 | 2026-01-02 12:00 | 2026-10-06 18:00 | |
+
+Neither address is a GitHub noreply address, and `example.com` is the domain of 10 of the run's 11 addresses, so `ada@example.com` is canonical. The suggested name is "Ada Example". A medium candidate is commented out, so `--format mailmap` prints the line `# Ada Example <ada@example.com> <ada@other.example>`: `# ` and `MailmapText`, byte for byte.
+
+### Gina → Hank: low, a guess (main fixture, with or without the mailmap)
+
+Rule `hand-off`. Gina's only commit, on 2026-01-06 at 12:00, is her last, and she has none after 2026-07-09. Hank's first (and only) commit came 24 hours later, in `split.py`, the one file both touched. Gina has no other successor in a shared file within 30 days (Cara began on 2026-02-01, in `side.py`), and Hank has no other predecessor: Bob, and with the mailmap Ada, were still committing in October, and without it `ada@example.com`, whose last commit was on 2026-01-05 in other files, is in Ada's candidate, while a hand-off compares only addresses no other rule links.
+
+| # | Address | Domain | Name | Commits | Co-authored | First = Last | Canonical |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 0 | `gina@example.com` | main | Gina Split | 1 | 0 | 2026-01-06 12:00 | |
+| 1 | `hank@example.com` | main | Hank Split | 1 | 0 | 2026-01-07 12:00 | yes |
+
+A hand-off suggests the newer address, so the name is "Hank Split", and the mailmap form prints the line commented out: `# Hank Split <hank@example.com> <gina@example.com>`. Gina and Hank are two people, the 2/2 split of `split.py` in the [still-here oracle](#still-here-oracle-m1-teststillhereoracle): this is the hand-off rule's false positive, which the fixture keeps so that it stays a commented-out guess.
+
+### Pia: medium (sibling, no mailmap)
+
+Rule `same-name` ("Pia Pair") alone: the local parts are `pia` and the noreply login `piapair`.
+
+| # | Address | Domain | Name | Commits | Co-authored | First | Last | Canonical |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 0 | `81234567+piapair@users.noreply.github.com` | noreply | Pia Pair | 0 | 1 (C1) | 2026-02-02 12:00 | 2026-02-02 12:00 | |
+| 1 | `pia@example.com` | main | Pia Pair | 3 (P1, P2, T1) | 0 | 2026-02-16 12:00 | 2026-07-29 12:00 | yes |
+
+The noreply address is never preferred, so `pia@example.com` is canonical. A name alone is medium, so the mailmap form prints the line commented out: `# Pia Pair <pia@example.com> <81234567+piapair@users.noreply.github.com>`, `# ` and `SiblingMailmapText` byte for byte.
+
+The sibling has no hand-off. The only addresses with no commit since 2026-07-09 are Uma (U0, 2025-09-15: the next address to begin, Lena, began 49 days later), Claude Dupont (Q1, 2026-03-09: no address began in the 30 days after it, and none stopped in the 30 days before it) and, without the mailmap, Pia's noreply address, which Pia's candidate holds.
+
+### Wrong implementations this catches
+
+- **Co-authors not read.** The two noreply addresses and the agents appear only in trailers: the sibling has 5 addresses and 1 bot, and Pia's candidate is gone.
+- **Blamed commits older than the history not read.** Uma disappears: the sibling has 6 addresses without its mailmap, 5 with it.
+- **Bots and agents kept.** The main fixture has 12 and 11 addresses, the sibling 10 and 9.
+- **A local part made from the name counted as a second rule.** Ada becomes high, and her line is written uncommented: one signal, the name, counted twice.
+- **A name alone written as a line** (a medium candidate not commented out). The printed mailmap maps `ada@other.example` to Ada and `81234567+piapair@users.noreply.github.com` to Pia unread, where the facts cannot tell either pair from two people of one name.
+- **The newest address as canonical** outside a hand-off. Ada's line becomes `# Ada Example <ada@other.example> <ada@example.com>`, not `MailmapText`.
+- **A hand-off suggested as certain** (medium or high, or its line uncommented). The printed mailmap maps `gina@example.com` to Hank Split and merges two people.
+- **A hand-off without the shared file.** Gina then has two successors within 30 days (Hank and Cara) and Cara two predecessors (Gina and Hank), so the ambiguity rule keeps none: Gina → Hank disappears.
+- **A hand-off without the quiet period.** With the mailmap, Ada, whose last commit is on 2026-10-06 at 18:00, hands off to Ivy, whose first is an hour later in `tests/test_service.py`, which Ada's init created: a person still at work, read as one who left.
+
+### The TestChangeOracles row (for the integrator, #13)
+
+The [issue](https://github.com/IHaveASegway/stillhere/issues/26) adds no test of its own; this is the row `TestChangeOracles` gains. Scan each fixture into a fresh facts.db, once without its mailmap and once with it, and call `app.Identities` with the zero scope. Assert `addresses` and `bots` from the first table, `shared` and `oversized` 0, and each candidate's confidence, guess and commented flags (`commented` is true for all three), rules, suggested name, canonical address and addresses (email, name, domain kind, commits, co-authored, first, last, repos) from the tables above; Ada's `same-local-part` link has `from_name` true; for Gina → Hank, a gap of 24 hours and one shared file, `split.py`. Then write `report.Mailmap`'s output for the scans without a mailmap to a file. It holds the three lines `# Ada Example <ada@example.com> <ada@other.example>`, `# Hank Split <hank@example.com> <gina@example.com>` and `# Pia Pair <pia@example.com> <81234567+piapair@users.noreply.github.com>`, and no line that is not a comment. Run `git check-mailmap` in each fixture through `gitcli.Runner` with that file as `Config.MailmapFile`: `<ada@other.example>`, `<81234567+piapair@users.noreply.github.com>` and `<gina@example.com>` all come back unchanged, since adding the output unread merges nobody. With the `# ` removed from those three lines, `<ada@other.example>` gives `Ada Example <ada@example.com>`, `<81234567+piapair@users.noreply.github.com>` gives `Pia Pair <pia@example.com>`, and `<gina@example.com>` gives `Hank Split <hank@example.com>`.
+
 ## Discovery fixture (`TestDiscover`)
 
 Two clones whose `origin` is `https://user:TOKENVALUE@github.com/example/widget.git`, plus a third clone with a different remote:
