@@ -2,8 +2,6 @@ package report
 
 import (
 	"cmp"
-	"crypto/sha256"
-	"encoding/hex"
 	"math"
 	"slices"
 	"strings"
@@ -211,8 +209,7 @@ func compareValues(a, b domain.MetricValue) int {
 
 // Values converts metric values to the form a report prints, sorted by
 // metric, scope, subject and window, with display names for people. who
-// may be nil, in which case a person gets the no-name placeholder
-// (displayName).
+// may be nil, in which case no person has a name (displayName).
 func Values(values []domain.MetricValue, who People) []Value {
 	var out []Value
 	for _, v := range values {
@@ -253,12 +250,14 @@ func valueOf(v domain.MetricValue, who People) Value {
 	}
 }
 
-// SubjectOf converts a subject, naming a person by display name. who may be
-// nil, in which case a person gets the no-name placeholder (displayName).
+// SubjectOf converts a subject, naming a person as every page does
+// (displayName): Name is "" when the person has no name a page may show,
+// and NameWithheld says when that is because it gives their address away.
+// who may be nil, in which case no person has a name.
 func SubjectOf(s domain.Subject, who People) Subject {
 	out := Subject{Kind: s.Kind, Key: s.Key}
 	if s.Kind == domain.SubjectPerson {
-		out.Name = displayName(who, s.Key)
+		out.Name, out.NameWithheld = shownName(who, s.Key)
 		out.Bot = isBot(who, s.Key)
 	}
 	return out
@@ -275,30 +274,6 @@ func intervalOf(w domain.Window) Interval { return Interval{Since: w.Since, Unti
 type People interface {
 	Name(email string) string // the display name for a canonical email
 	Bot(email string) bool    // whether the email is a bot's
-}
-
-// displayName is the name a person is shown by: the identity directory's
-// display name. A person the facts never show with a name (git allows an
-// empty author name) is shown as "(no name 1a2b3c)", with the start of the
-// email's SHA-256 so that two such people stay apart: text, Markdown and the
-// names an agent reads never carry an email, and JSON keeps it in its own
-// field.
-func displayName(who People, email string) string {
-	if n, ok := realName(who, email); ok {
-		return n
-	}
-	sum := sha256.Sum256([]byte(email))
-	return "(no name " + hex.EncodeToString(sum[:3]) + ")"
-}
-
-// realName is the identity directory's display name for email, and whether
-// it has one.
-func realName(who People, email string) (string, bool) {
-	if who == nil {
-		return "", false
-	}
-	n := who.Name(email)
-	return n, n != ""
 }
 
 // OwnPageOnly reports whether a metric's values about a person are shown on

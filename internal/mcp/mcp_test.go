@@ -591,7 +591,10 @@ func TestMCPTools(t *testing.T) {
 		}
 
 		// Every odd email is withheld (ask checks every answer), and each
-		// id is the one person resolves.
+		// id is the one person resolves. dev's and Root's names are their
+		// addresses' local parts, so they are withheld too: no answer names
+		// them, they are asked for by id, and their name matches no one.
+		dev, root := pseudonym("dev@build-box"), pseudonym("root@localhost")
 		var repo struct {
 			Repos []report.Repo `json:"repos"`
 		}
@@ -600,18 +603,24 @@ func TestMCPTools(t *testing.T) {
 			t.Fatalf("overview(odd) %+v, want its card", repo.Repos)
 		}
 		for _, a := range repo.Repos[0].Card.MadeOf {
+			if withheld := a.Email == dev || a.Email == root; a.NameWithheld != withheld || (a.Name == "") != withheld {
+				t.Errorf("overview(odd) names %s %q (withheld %v), want the name withheld exactly for dev and Root", a.Email, a.Name, a.NameWithheld)
+			}
 			var p personOut
 			decode(t, ask(t, "person", map[string]any{"name": a.Email}), &p)
 			if p.Person.Name != a.Name || p.Person.Key != a.Email {
 				t.Errorf("person(%s), the id overview gave %s, is %+v", a.Email, a.Name, p.Person)
 			}
 		}
+		if text := refused(t, "person", map[string]any{"name": "Root"}); strings.Contains(text, root) {
+			t.Errorf("person(Root) was refused with %q, which points at the person whose name is withheld", text)
+		}
 		for _, args := range []map[string]any{
 			{"scope": "odd", "response_format": "detailed"}, {"scope": "platform", "rank": "durable"},
 		} {
 			ask(t, "overview", args)
 		}
-		for _, name := range []string{"dev", "Ip Literal", "Jürgen Müller", "Root", "Pat O'Brien"} {
+		for _, name := range []string{dev, "Ip Literal", "Jürgen Müller", root, "Pat O'Brien"} {
 			ask(t, "person", map[string]any{"name": name, "response_format": "detailed"})
 			ask(t, "explain", map[string]any{"metric": "surviving", "subject": name, "response_format": "detailed"})
 		}

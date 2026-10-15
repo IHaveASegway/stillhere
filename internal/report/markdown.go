@@ -9,9 +9,9 @@ import (
 // text renderer in the same order, for pasting into an issue or a pull
 // request. Untrusted text goes through mdText, and paths, SHAs and remotes
 // through mdCode, so a name such as "<img src=x>" renders as text. A page
-// that gets pasted is shared, so it names people without their emails and
-// leaves out each repository's local path (a warning about a path still
-// names it).
+// that gets pasted is shared, so it names people without their emails, or a
+// name that gives one away (printer.person), and leaves out each
+// repository's local path (a warning about a path still names it).
 
 // mdTable prints a GitHub table; numbers are right-aligned.
 func (p *printer) mdTable(cols []column, rows [][]string) {
@@ -144,7 +144,8 @@ func mdPeople(p *printer, t *StillHere) {
 	cols := []column{{head: "Person"}, {head: "Prod lines", right: true}, {head: "Majority files", right: true},
 		{head: "Repos", right: true}, {head: "Landings 365d", right: true}}
 	row := func(r StillHereRow) []string {
-		return []string{mdText(r.Name), grouped(r.ProdNonblankLines), grouped(r.MajorityFiles), grouped(r.Repos), grouped(r.Landings365d)}
+		return []string{p.person(r.Email, r.Name, r.NameWithheld, mdText), grouped(r.ProdNonblankLines),
+			grouped(r.MajorityFiles), grouped(r.Repos), grouped(r.Landings365d)}
 	}
 	mdWithBots(p, cols, t.Humans, t.Bots, row)
 }
@@ -158,7 +159,8 @@ func mdStillHere(p *printer, t *StillHere) {
 	cols := []column{{head: "Person"}, {head: "Prod lines", right: true}, {head: "Majority files", right: true},
 		{head: "Other roles"}}
 	row := func(r StillHereRow) []string {
-		return []string{mdText(r.Name), grouped(r.ProdNonblankLines), grouped(r.MajorityFiles), mdText(otherRoles(r.LinesByRole))}
+		return []string{p.person(r.Email, r.Name, r.NameWithheld, mdText), grouped(r.ProdNonblankLines),
+			grouped(r.MajorityFiles), mdText(otherRoles(r.LinesByRole))}
 	}
 	mdWithBots(p, cols, t.Humans, t.Bots, row)
 }
@@ -178,7 +180,8 @@ func mdWeek(p *printer, level string, m *Model, t *WeekTable) {
 	cols := []column{{head: "Person"}, {head: "Commits", right: true}, {head: "Lines added", right: true},
 		{head: "Prod lines added", right: true}}
 	row := func(r WeekRow) []string {
-		return []string{mdText(r.Name), grouped(r.Commits), grouped(r.LinesAdded), grouped(r.ProdLinesAdded)}
+		return []string{p.person(r.Email, r.Name, r.NameWithheld, mdText), grouped(r.Commits), grouped(r.LinesAdded),
+			grouped(r.ProdLinesAdded)}
 	}
 	mdWithBots(p, cols, t.Humans, t.Bots, row)
 }
@@ -222,16 +225,17 @@ func mdRanks(p *printer, level string, t *RankTable) {
 	} else {
 		cols := []column{{head: "#"}, {head: "Person"}, {head: mdText(metricName(t.Metric)), right: true},
 			{head: "95% interval", right: true}, {head: "n", right: true}}
+		name := func(r RankRow) string { return p.person(r.Email, r.Name, r.NameWithheld, mdText) }
 		var rows [][]string
 		for _, r := range t.Ranked {
-			rows = append(rows, []string{rankText(r.RankLo, r.RankHi), mdText(r.Name), estimateText(r.Estimate, t.Percent),
+			rows = append(rows, []string{rankText(r.RankLo, r.RankHi), name(r), estimateText(r.Estimate, t.Percent),
 				intervalText(r.Lo, r.Hi, t.Percent), grouped(r.N)})
 		}
 		for _, r := range t.BelowMin {
-			rows = append(rows, []string{"—", mdText(r.Name), "", "", grouped(r.N)})
+			rows = append(rows, []string{"—", name(r), "", "", grouped(r.N)})
 		}
 		for _, r := range t.Bots {
-			rows = append(rows, []string{"bot", mdText(r.Name), estimateText(r.Estimate, t.Percent), "", grouped(r.N)})
+			rows = append(rows, []string{"bot", name(r), estimateText(r.Estimate, t.Percent), "", grouped(r.N)})
 		}
 		p.mdTable(cols, rows)
 	}
@@ -293,7 +297,8 @@ func mdCard(p *printer, m *Model, r *Repo) {
 	if len(c.MadeOf) > 0 {
 		var who []string
 		for _, a := range c.MadeOf {
-			who = append(who, fmt.Sprintf("%s %s (%s)", mdText(a.Name), grouped(a.ProdLines), percent(a.Share)))
+			who = append(who, fmt.Sprintf("%s %s (%s)", p.person(a.Email, a.Name, a.NameWithheld, mdText),
+				grouped(a.ProdLines), percent(a.Share)))
 		}
 		p.line("- Made of " + strings.Join(who, ", "))
 	}

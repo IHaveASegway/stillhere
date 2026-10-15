@@ -248,9 +248,16 @@ func aiShown(m *Model) bool {
 	return false
 }
 
+// identitiesHint says where the .mailmap lines an unmerged-identities
+// caveat calls for come from: stillhere identities suggests them, with the
+// evidence for each, and applies none.
+const identitiesHint = "'stillhere identities' suggests the lines, with the evidence for each."
+
 // identityCaveat names the display names that more than one email shares
 // in a scope. git's mailmap is the only identity store, so stillhere never
-// merges people by name; it says where a .mailmap line may be missing.
+// merges people by name; it says where a .mailmap line may be missing. A
+// shared name that gives one of its addresses away is counted and not
+// printed, as no page prints it (displayName).
 func (b *builder) identityCaveat(scope domain.Scope, members []*domain.RepoFacts) (Caveat, bool) {
 	inScope := map[domain.Scope]bool{}
 	for _, rf := range members {
@@ -263,19 +270,25 @@ func (b *builder) identityCaveat(scope domain.Scope, members []*domain.RepoFacts
 			emails[v.Subject.Key] = true
 		}
 	}
-	byName := map[string]int{}
+	byName := map[string][]string{} // a display name → the emails that carry it
 	for e := range emails {
 		if n, ok := realName(b.in.Who, e); ok {
-			byName[n]++
+			byName[n] = append(byName[n], e)
 		}
 	}
 	var shared []string
-	for n, k := range byName {
-		if k > 1 {
+	withheld := 0
+	for n, es := range byName {
+		switch {
+		case len(es) < 2:
+		case slices.ContainsFunc(es, func(e string) bool { return nameWithheld(b.in.Who, e) }):
+			withheld++
+		default:
 			shared = append(shared, strconv.Quote(n))
 		}
 	}
-	if len(shared) == 0 {
+	total := len(shared) + withheld
+	if total == 0 {
 		return Caveat{}, false
 	}
 	slices.Sort(shared)
@@ -283,14 +296,18 @@ func (b *builder) identityCaveat(scope domain.Scope, members []*domain.RepoFacts
 	if len(named) > 5 {
 		named = append(slices.Clone(named[:5]), fmt.Sprintf("%d more", len(shared)-5))
 	}
+	if withheld > 0 {
+		named = append(named, plural(withheld, "name withheld because it gives an address away",
+			"names withheld because they give an address away"))
+	}
 	msg := "1 display name belongs to more than one email and was not merged: "
-	if len(shared) > 1 {
-		msg = grouped(len(shared)) + " display names belong to more than one email and were not merged: "
+	if total > 1 {
+		msg = grouped(total) + " display names belong to more than one email and were not merged: "
 	}
 	return Caveat{
 		Code: codeIdentities,
-		Message: msg + joinNames(named) +
-			". If they are one person, a .mailmap line merges them (see --format json for the emails).",
+		Message: msg + joinNames(named) + ". If the emails of a name are one person, a .mailmap line merges them: " +
+			identitiesHint,
 	}, true
 }
 

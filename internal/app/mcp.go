@@ -97,7 +97,7 @@ type NamedRepo struct {
 // to an email.
 type NamedPerson struct {
 	Key   string   // the canonical email, or "@login" for a reviewer the forge could not link
-	Name  string   // the display name, as the reports print it
+	Name  string   // the display name, as the reports' JSON gives it: "" when none may be shown (report.SubjectOf), so only an id or an email finds them
 	Bot   bool     // a bot or an agent: listed apart, never ranked
 	Repos []string // names of the repositories they wrote in or hold a value about, sorted
 	Lines int      // surviving@1: their surviving prod lines across the run; 0 without a value
@@ -820,8 +820,8 @@ func Highlights(ctx context.Context, d Deps, r HighlightsRequest) (*HighlightsAn
 			t.Of++
 			if ri.RankLo == 1 {
 				sub := report.SubjectOf(ri.Subject, s.who)
-				t.People = append(t.People, report.RankRow{Email: sub.Key, Name: sub.Name, RankLo: ri.RankLo, RankHi: ri.RankHi,
-					Estimate: ri.Estimate, Lo: ri.Lo, Hi: ri.Hi, N: ri.N})
+				t.People = append(t.People, report.RankRow{Email: sub.Key, Name: sub.Name, NameWithheld: sub.NameWithheld,
+					RankLo: ri.RankLo, RankHi: ri.RankHi, Estimate: ri.Estimate, Lo: ri.Lo, Hi: ri.Hi, N: ri.N})
 			}
 		}
 		if len(t.People) == 0 {

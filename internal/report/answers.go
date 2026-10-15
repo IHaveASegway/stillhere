@@ -73,9 +73,11 @@ func windowText(w Interval) string {
 	return interval(w)
 }
 
-func subjectText(s Subject, esc func(string) string) string {
-	if s.Kind == "person" {
-		name := esc(s.Name)
+// subject names what an answer is about: a person as the page names them
+// (printer.person), anything else by its kind and key.
+func (p *printer) subject(s Subject, esc func(string) string) string {
+	if s.Kind == domain.SubjectPerson {
+		name := p.person(s.Key, s.Name, s.NameWithheld, esc)
 		if s.Bot {
 			name += " (bot)"
 		}
@@ -87,7 +89,7 @@ func subjectText(s Subject, esc func(string) string) string {
 // Explain.
 
 func (e *Explain) writeText(p *printer) {
-	p.wrapped("", "  ", "explain "+clean(e.Metric.ID)+" · "+subjectText(e.Subject, clean)+" · "+provenanceText(e.Provenance))
+	p.wrapped("", "  ", "explain "+clean(e.Metric.ID)+" · "+p.subject(e.Subject, clean)+" · "+provenanceText(e.Provenance))
 	if e.Metric.Question != "" {
 		p.wrapped("  ", "  ", clean(e.Metric.Question))
 	}
@@ -139,7 +141,7 @@ func textDefinition(p *printer, d MetricInfo) {
 }
 
 func (e *Explain) writeMarkdown(p *printer) {
-	p.line("# explain " + mdID(e.Metric.ID) + " · " + subjectText(e.Subject, mdText))
+	p.line("# explain " + mdID(e.Metric.ID) + " · " + p.subject(e.Subject, mdText))
 	p.blank()
 	p.line("- " + provenanceText(e.Provenance))
 	if e.Metric.Question != "" {
@@ -197,13 +199,15 @@ func mdDefinition(p *printer, level string, d MetricInfo) {
 
 // WhoKnows.
 
-func knowers(ks []Knower, esc func(string) string, what func(Knower) string) string {
+// knowers lists people who know a path, each as the page names them
+// (printer.person), followed by what what says about them.
+func (p *printer) knowers(ks []Knower, esc func(string) string, what func(Knower) string) string {
 	if len(ks) == 0 {
 		return "none"
 	}
 	var parts []string
 	for _, k := range ks {
-		parts = append(parts, esc(k.Name)+" "+what(k))
+		parts = append(parts, p.person(k.Email, k.Name, k.NameWithheld, esc)+" "+what(k))
 	}
 	return strings.Join(parts, " · ")
 }
@@ -247,11 +251,11 @@ func (w *WhoKnows) writeText(p *printer) {
 	for _, r := range w.Repos {
 		p.blank()
 		p.wrapped("", "  ", "Repository "+clean(r.Repo)+" · "+pathTotals(r))
-		p.wrapped("  majority owners  ", "                   ", knowers(r.MajorityOwners, clean, ownerCount))
-		p.wrapped("  top authors      ", "                   ", knowers(r.TopAuthors, clean, lineCount))
-		p.wrapped("  recent landers   ", "                   ", knowers(r.RecentLanders, clean, landingCount))
+		p.wrapped("  majority owners  ", "                   ", p.knowers(r.MajorityOwners, clean, ownerCount))
+		p.wrapped("  top authors      ", "                   ", p.knowers(r.TopAuthors, clean, lineCount))
+		p.wrapped("  recent landers   ", "                   ", p.knowers(r.RecentLanders, clean, landingCount))
 		if len(r.Bots) > 0 {
-			p.wrapped("  bots             ", "                   ", knowers(r.Bots, clean, lineCount))
+			p.wrapped("  bots             ", "                   ", p.knowers(r.Bots, clean, lineCount))
 		}
 	}
 	textCaveats(p, "", "What could make this wrong", w.Caveats, false)
@@ -279,11 +283,11 @@ func (w *WhoKnows) writeMarkdown(p *printer) {
 		p.line("## Repository " + mdText(r.Repo))
 		p.blank()
 		p.line("- " + pathTotals(r))
-		p.line("- Majority owners: " + knowers(r.MajorityOwners, mdText, ownerCount))
-		p.line("- Top authors: " + knowers(r.TopAuthors, mdText, lineCount))
-		p.line("- Recent landers: " + knowers(r.RecentLanders, mdText, landingCount))
+		p.line("- Majority owners: " + p.knowers(r.MajorityOwners, mdText, ownerCount))
+		p.line("- Top authors: " + p.knowers(r.TopAuthors, mdText, lineCount))
+		p.line("- Recent landers: " + p.knowers(r.RecentLanders, mdText, landingCount))
 		if len(r.Bots) > 0 {
-			p.line("- Bots: " + knowers(r.Bots, mdText, lineCount))
+			p.line("- Bots: " + p.knowers(r.Bots, mdText, lineCount))
 		}
 	}
 	mdCaveats(p, "##", w.Caveats, false)
@@ -331,7 +335,7 @@ func metricHeading(id string, esc func(string) string) string {
 }
 
 func (m *Me) writeText(p *printer) {
-	p.wrapped("", "  ", "me · "+subjectText(m.Person, clean)+" · "+provenanceText(m.Provenance))
+	p.wrapped("", "  ", "me · "+p.subject(m.Person, clean)+" · "+provenanceText(m.Provenance))
 	p.wrapped("  ", "  ", meIntro)
 	if len(m.Values) == 0 {
 		p.blank()
@@ -366,7 +370,7 @@ func (m *Me) writeText(p *printer) {
 }
 
 func (m *Me) writeMarkdown(p *printer) {
-	p.line("# " + subjectText(m.Person, mdText))
+	p.line("# " + p.subject(m.Person, mdText))
 	p.blank()
 	p.line("- " + provenanceText(m.Provenance))
 	p.line("- " + strings.ToUpper(meIntro[:1]) + meIntro[1:] + ".")

@@ -582,10 +582,15 @@ func AUC(pos, neg []float64) float64 // Mann-Whitney, a tie counting 1/2; 0.5 wh
 // number to the metric@version, subject, scope and Detail key it reads (spec/report-json.md#where-the-numbers-come-from).
 type Model struct{ /* stillhere.report/v1: overviews (per group; every repository with --scope all or without groups), repo cards, ranks, caveats and provenance on every section */ }
 type Document interface{ /* sealed: *Model, *Explain, *WhoKnows, *Me, *Validation, *Catalog, *Identities */ }
-func Text(w io.Writer, d Document) error     // a terminal: 100 columns, untrusted text escaped, no emails
-func Markdown(w io.Writer, d Document) error // GitHub-flavoured: untrusted text escaped, mentions and references unlinked, no emails or repository paths
+func Text(w io.Writer, d Document) error     // a terminal: 100 columns, untrusted text escaped, no emails and no name that gives one away
+func Markdown(w io.Writer, d Document) error // GitHub-flavoured: untrusted text escaped, mentions and references unlinked, no emails, names that give one away or repository paths
 func JSON(w io.Writer, d Document) error     // stable order; empty lists [] and maps {}, absent sections null; invalid UTF-8 as U+FFFD, NaN and ±Inf as null; written only when whole
 type People interface{ Name(email string) string; Bot(email string) bool } // *identity.Directory implements it
+// #52: every person row (still-here, week, rank, made_of, who-knows) and person Subject names the person one way in every
+// format (names.go, displayName): Name is the display name, "@login" for a GitHub account no commit links to an email
+// (ADR 0004), and "" when git recorded none or when it gives the address away (identity.RevealsAddress; NameWithheld,
+// json "name_withheld", true; a bot's or an agent's is always shown). Text and Markdown label such people per page,
+// "(no name 1)" and "(name withheld 1)", in the order the page first names them: a counter, never a hash of the email.
 type Input struct {
 	Kind, Tool string // KindWeek or KindScan; the binary's version
 	Run        *domain.Run // nil for week, and for a scan that stored nothing
