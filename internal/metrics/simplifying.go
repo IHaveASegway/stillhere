@@ -63,19 +63,21 @@ func (simplifyingV1) compute(v *view) ([]domain.MetricValue, error) {
 }
 
 // Clusters returns simplifying@1's rank input for one scope: each cluster's
-// removed lines, tagged with its week block.
+// removed lines, tagged with the window's week block its landing is in
+// (domain.Window.Week, the rule rank checks).
 func (simplifyingV1) Clusters(in *Input, scope domain.Scope) (RankInput, error) {
 	v, err := scopeView(in, scope)
 	if err != nil {
 		return RankInput{}, err
 	}
 	clusters, _ := simplifyingClusters(v)
+	w := v.window(recentDays, 0)
 	return RankInput{
 		Kind:    rank.Sum,
-		Window:  v.window(recentDays, 0),
-		Options: rank.Options{MinN: minClusters, Blocks: (recentDays + blockDays - 1) / blockDays},
+		Window:  w,
+		Options: rank.Options{MinN: minClusters, Blocks: w.Weeks()},
 		Data: rankData(v, clusters, func(k *cluster) rank.Cluster {
-			return rank.Cluster{Change: k.landing.sha, Num: float64(k.removed), Block: v.block(k.landing.time)}
+			return rank.Cluster{Change: k.landing.sha, Num: float64(k.removed), Block: w.Week(k.landing.time)}
 		}),
 	}, nil
 }

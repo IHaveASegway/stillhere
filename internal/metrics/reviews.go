@@ -21,7 +21,6 @@ import (
 const (
 	reviewsGivenDays = 90
 	reviewsGivenMinN = 10
-	reviewsWeek      = 7 * 24 * time.Hour
 )
 
 // reviewsGiven is reviews_given@1: per person, the distinct merged pull
@@ -112,17 +111,18 @@ func (m reviewsGiven) Compute(in *Input) ([]domain.MetricValue, error) {
 }
 
 // Clusters returns one cluster per person and pull request reviewed, with
-// Num 1, in the week (counted back from Now) of the person's first counted
-// review of it, for rank's week-block bootstrap. Bots get no clusters: they
-// are never ranked.
+// Num 1, in the window's week block (counted back from Now,
+// domain.Window.Week) of the person's first counted review of it, for
+// rank's week-block bootstrap. Bots get no clusters: they are never ranked.
 func (m reviewsGiven) Clusters(in *Input, scope domain.Scope) (RankInput, error) {
 	if in == nil || in.Facts == nil {
 		return RankInput{}, errors.New("reviews_given@1: no facts to rank")
 	}
+	window := reviewsGivenWindow(in.Facts.Now)
 	ri := RankInput{
 		Kind:    rank.Sum,
-		Window:  reviewsGivenWindow(in.Facts.Now),
-		Options: rank.Options{MinN: reviewsGivenMinN, Blocks: (reviewsGivenDays + 6) / 7},
+		Window:  window,
+		Options: rank.Options{MinN: reviewsGivenMinN, Blocks: window.Weeks()},
 	}
 	rv := newReviewsView(in)
 	if rv == nil {
@@ -138,7 +138,7 @@ func (m reviewsGiven) Clusters(in *Input, scope domain.Scope) (RankInput, error)
 		ri.Data[r.who] = append(ri.Data[r.who], rank.Cluster{
 			Change: r.pull,
 			Num:    1,
-			Block:  int(in.Facts.Now.Sub(r.first) / reviewsWeek),
+			Block:  window.Week(r.first),
 		})
 	}
 	for _, cs := range ri.Data {

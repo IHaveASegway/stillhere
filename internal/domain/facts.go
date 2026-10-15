@@ -151,6 +151,47 @@ func (w Window) Contains(t time.Time) bool {
 	return !t.Before(w.Since) && t.Before(w.Until)
 }
 
+// weekLength is the length of the blocks Weeks and Week count.
+const weekLength = 7 * 24 * time.Hour
+
+// Weeks returns how many 7-day blocks w holds, counted back from Until:
+// ⌈(Until − Since) / 7 days⌉, the oldest one short when w is not a whole
+// number of weeks (13 for 90 days), and 0 for an empty window. A Sum
+// metric's bootstrap resamples these blocks (docs/metrics.md#ranking-rules),
+// so this is rank.Options.Blocks for w.
+func (w Window) Weeks() int {
+	if !w.Until.After(w.Since) {
+		return 0
+	}
+	return ceilWeeks(w.Until.Sub(w.Since))
+}
+
+// Week returns the 7-day block of w that t falls in, counted back from Until
+// and half-open like w: block k holds [Until − 7(k+1) days, Until − 7k days),
+// so t is in block ⌈(Until − t) / 7 days⌉ − 1, 0 is the last 7 days, and a
+// change exactly k weeks before Until is in block k − 1. Every t in w is in
+// a block in [0, w.Weeks()), which is rank.Cluster.Block for a change at t.
+// Week does not check that t is in w: Until itself is in block −1, and a t
+// shortly before Since may share the oldest block's week.
+//
+// This is the one definition of a week block. A metric that computed
+// ⌊(Until − t) / 7 days⌋ instead would put a change exactly k weeks back in
+// block k, and a change at Since in block Weeks() when w is a whole number
+// of weeks, which rank.Intervals rejects.
+func (w Window) Week(t time.Time) int {
+	return ceilWeeks(w.Until.Sub(t)) - 1
+}
+
+// ceilWeeks is ⌈d / 7 days⌉, exact for a negative d too: integer division
+// truncates toward zero, which is the ceiling for a negative quotient.
+func ceilWeeks(d time.Duration) int {
+	q := d / weekLength
+	if d%weekLength > 0 {
+		q++
+	}
+	return int(q)
+}
+
 // RepoFacts is everything one run learned about one repository.
 type RepoFacts struct {
 	Repo        Repo

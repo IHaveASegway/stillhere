@@ -154,7 +154,7 @@ The replica after both passes, read as of the fixture's `Now`, 2026-10-07T00:00:
 | `bob@example.com` | 4 (#1, #4, #5, #9) | 5 | 4 | 3 | 3 | 1 |
 | `erin@example.com` | 1 (#7) | 1 | 0 | 1 | 0 | 0 |
 
-**Clusters** for scope `all`: one per person and pull request, Num 1, in week block `floor((Now − first counted review) / 7 days)`; 13 blocks, eligibility 10. The two bots have none: `@copilot-pull-request-reviewer[bot]` is an app account, and `@renovate-approver` matches the fragment `renovate`. That second exclusion is `identity.Directory.Bot`'s to decide, which is #9's: until #9 merges, the walking skeleton's stub matches nothing, and the test sets that one cluster aside with a log line.
+**Clusters** for scope `all`: one per person and pull request, Num 1, in week block `⌈(Now − first counted review) / 7 days⌉ − 1` (`domain.Window.Week`, the rule every Sum metric and `rank.Intervals` share: block 0 is `[Now − 7 days, Now)`); 13 blocks, eligibility 10. No review below is a whole number of weeks before `Now`, so `⌊(Now − t) / 7 days⌋`, which this table used before the rule had one home, gives the same blocks. The two bots have none: `@copilot-pull-request-reviewer[bot]` is an app account, and `@renovate-approver` matches the fragment `renovate`, which `identity.Directory.Bot` decides.
 
 | Subject | Pull request: first counted review → block |
 | --- | --- |

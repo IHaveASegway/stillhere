@@ -150,6 +150,10 @@ type IgnoreRevs struct {
 type FileError struct{ Path, Message string }
 
 type Window struct{ Since, Until time.Time } // [Since, Until)
+// The one definition of a Sum metric's week blocks (docs/metrics.md#ranking-rules), which simplifying@1,
+// reviews_given@1 and rank.Intervals' check all use (Information Expert: Larman, "Applying UML and Patterns", ch. 17):
+func (w Window) Weeks() int           // ⌈(Until − Since) / 7 days⌉, 0 when empty: rank.Options.Blocks over w (13 for 90 days)
+func (w Window) Week(t time.Time) int // ⌈(Until − t) / 7 days⌉ − 1, half-open: block 0 is [Until − 7 days, Until); rank.Cluster.Block
 
 // RepoFacts is everything one run learned about one repository.
 type RepoFacts struct {
@@ -525,14 +529,15 @@ type Cluster struct {
 	Change string  // landing SHA or PR id
 	Num    float64
 	Den    float64 // Ratio only
-	Block  int     // Sum only: the window's 7-day block the change landed in, counted back from w.Until (Now for every Sum
-	               // metric) and half-open like the window: block k holds [Until − 7(k+1) days, Until − 7k days), so a
-	               // landing at t is in block ⌈(Until − t) / 7 days⌉ − 1, and 0 is the last 7 days; in [0, Blocks)
+	Block  int     // Sum only: w.Week(t), the window's 7-day block the change landed in, counted back from w.Until (Now
+	               // for every Sum metric) and half-open like the window: block k holds [Until − 7(k+1) days,
+	               // Until − 7k days), so a landing at t is in block ⌈(Until − t) / 7 days⌉ − 1, and 0 is the last 7
+	               // days; in [0, Blocks)
 }
 type Options struct { // supplied by the ranked metric (metrics.RankInput)
 	Replicates int // B; 0 means 1000
 	MinN       int // eligibility: clusters per subject, from the metric's definition
-	Blocks     int // Sum only: the window's 7-day blocks, ⌈(Until − Since) / 7 days⌉, the oldest one short: 13 for 90 days
+	Blocks     int // Sum only: w.Weeks(), the window's 7-day blocks, ⌈(Until − Since) / 7 days⌉, the oldest one short: 13 for 90 days
 }
 // Intervals panics on what only a bug in the ranked metric produces, rather than publish plausible but wrong
 // intervals: a Kind other than Ratio and Sum and, for Sum, an empty window, a Blocks other than the window's, or a

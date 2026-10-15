@@ -41,7 +41,6 @@ const (
 	yearDays        = 365 // landings_365d, ai_assisted@1
 	minClusters     = 10  // eligibility of both ranked metrics
 	simplifyingNet  = -20 // a landing is simplifying when its net is at most this
-	blockDays       = 7   // simplifying@1's bootstrap blocks are weeks
 	maxTopAuthors   = 5   // who_knows@1 lists up to five top authors
 	majorityPercent = 50  // majority_owner@1: at least half of a file's lines
 )
@@ -394,12 +393,6 @@ func (v *view) window(from, to int) domain.Window {
 		Since: v.now.Add(-time.Duration(from) * day),
 		Until: v.now.Add(-time.Duration(to) * day),
 	}
-}
-
-// block returns the week, counted back from now, that t falls in: 0 for
-// [now-7d, now). simplifying@1's bootstrap resamples these blocks.
-func (v *view) block(t time.Time) int {
-	return int(v.now.Sub(t) / (blockDays * day))
 }
 
 // active returns the people credited with any commit, merge commits
