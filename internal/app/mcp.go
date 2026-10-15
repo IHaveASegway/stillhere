@@ -144,11 +144,11 @@ func RunNames(ctx context.Context, d Deps, r NamesRequest) (*Names, error) {
 		repos map[string]bool // repository names
 	}
 	people := map[string]*acc{}
-	// Keys are taken as the run stored them, never made canonical again
-	// here: every key is lowercased where it is made, an email by the
-	// collectors and a login by identity.Reviewer (#69), so a key this
-	// vocabulary hands an adapter always joins the run's values. Folding it
-	// again would hide a key stored in another case behind one no value has.
+	// Keys are taken as load hands them, never made canonical again here:
+	// every key is lowercased where it is made, an email by the collectors
+	// and a login by identity.Reviewer (#69), and load upcasts those of a
+	// run stored before (canonicalKeys), so a key this vocabulary hands an
+	// adapter always joins the run's values.
 	add := func(key string) *acc {
 		if key == "" {
 			return nil

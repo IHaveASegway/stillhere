@@ -818,7 +818,8 @@ type NamedRepo struct { Key, Name, Group, Path string; AIPeople int }
 // AIPeople: the humans behind a scope's AI-assisted share, credited with a non-merge commit of a landing in its
 // ai_assisted@1 value's window (0 without one): the MCP server sends the share only when they are three or more.
 type NamedPerson struct { Key, Name string; Bot bool; Repos []string; Lines int; Logins, ShownLogins []string } // Key: canonical email, or
-// "@login", as the run stored it (RunNames folds no key again: every key is canonical where it is made, #69). Logins (#69): the GitHub
+// "@login", as load hands it (RunNames folds no key again: every key is canonical where it is made, #69, and load upcasts those of a run
+// stored before). Logins (#69): the GitHub
 // logins the run links to the person (identity.Directory.Logins), which "@login" resolves by, without case; ShownLogins: those an answer
 // may print beside the person (not identity.Directory.LoginWithheld)
 type OverviewRequest struct { RunID int64; Scope domain.Scope; Rank []domain.MetricID } // zero Scope: the whole run
