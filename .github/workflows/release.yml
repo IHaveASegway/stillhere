@@ -60,22 +60,33 @@ jobs:
         with:
           go-version-file: go.mod
           cache: false
-      # Fail before anything is published if the cask cannot be: the token is
-      # missing or expired, or the tap does not exist or refuses pushes.
+      # Fail before anything is published if the cask cannot be, because
+      # GoReleaser pushes the images and the GitHub release before the cask.
+      # A dry-run push asks GitHub for the tap's write side (git-receive-pack)
+      # and sends nothing. GitHub serves that side only to a token that may
+      # push there, so a missing tap or an expired, read-only or wrongly
+      # scoped token all fail here. semantic-release checks push access the
+      # same way. The repository API's permissions field is no substitute:
+      # GitHub does not document it as what the token may do, and a GitHub
+      # App token never reports push there. gh's credential helper gives git
+      # the token from the environment, so it never appears in argv or a
+      # file.
       - name: The tap token can push to IHaveASegway/homebrew-tap
         env:
           GH_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          GIT_TERMINAL_PROMPT: "0"
         run: |
           if [ -z "$GH_TOKEN" ]; then
             echo "::error::the HOMEBREW_TAP_GITHUB_TOKEN secret is not set"
             exit 1
           fi
-          if ! push=$(gh api repos/IHaveASegway/homebrew-tap --jq .permissions.push); then
-            echo "::error::HOMEBREW_TAP_GITHUB_TOKEN cannot read IHaveASegway/homebrew-tap: create the tap or renew the token"
-            exit 1
-          fi
-          if [ "$push" != true ]; then
-            echo "::error::HOMEBREW_TAP_GITHUB_TOKEN cannot push to IHaveASegway/homebrew-tap"
+          probe=$(mktemp -d "$RUNNER_TEMP/tap-probe.XXXXXX")
+          git -C "$probe" init -q -b preflight
+          git -C "$probe" -c user.name=preflight -c user.email=preflight@example.com \
+            commit -q --allow-empty -m preflight
+          if ! git -C "$probe" -c credential.helper= -c 'credential.helper=!gh auth git-credential' \
+            push --dry-run https://github.com/IHaveASegway/homebrew-tap.git HEAD:refs/heads/goreleaser-preflight; then
+            echo "::error::HOMEBREW_TAP_GITHUB_TOKEN cannot push to IHaveASegway/homebrew-tap: create the tap, renew the token, or give it Contents read and write there"
             exit 1
           fi
       - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
