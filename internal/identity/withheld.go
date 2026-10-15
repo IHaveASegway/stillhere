@@ -32,7 +32,7 @@ import (
 // empty local part ("@example.com") is no login.
 func LoginKey(key string) bool {
 	login, ok := strings.CutPrefix(key, "@")
-	login = strings.TrimSuffix(login, "[bot]")
+	login = strings.TrimSuffix(login, appSuffix)
 	if !ok || login == "" {
 		return false
 	}

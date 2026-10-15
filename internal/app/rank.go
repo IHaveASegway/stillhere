@@ -195,7 +195,7 @@ func people(data map[domain.Subject][]rank.Cluster, who *identity.Directory) map
 // metricInfo is a metric's published definition as reports print it.
 func metricInfo(def metrics.Definition) report.MetricInfo {
 	return report.MetricInfo{
-		ID: def.ID.String(), Question: def.Question, Unit: def.Unit, Ranked: def.Ranked, Forge: def.Forge,
+		ID: def.ID.String(), Question: def.Question, Unit: def.Unit, Ranked: def.Ranked, Forge: def.Forge, Ratio: def.Ratio,
 		Eligibility: def.Eligibility, BlindSpots: def.BlindSpots, Gaming: def.Gaming,
 		Oracle: def.Oracle, Validity: def.Validity,
 	}

@@ -29,18 +29,6 @@ func provenanceText(pv Provenance) string {
 	return s
 }
 
-// ratioUnit reports whether a metric's unit names a ratio, which prints as
-// a percentage.
-func ratioUnit(unit string) bool {
-	u := strings.ToLower(unit)
-	for _, w := range []string{"share", "ratio", "fraction", "percent", "%"} {
-		if strings.Contains(u, w) {
-			return true
-		}
-	}
-	return false
-}
-
 // valueText prints a value: a ratio as "86.7% (26 of 30)", anything else as
 // its number.
 func valueText(v Value, ratio bool) string {
@@ -94,7 +82,7 @@ func (e *Explain) writeText(p *printer) {
 		p.wrapped("  ", "  ", clean(e.Metric.Question))
 	}
 	p.blank()
-	ratio := ratioUnit(e.Metric.Unit)
+	ratio := e.Metric.Ratio
 	if len(e.Values) == 0 {
 		p.line("  no value in this run")
 	} else {
@@ -148,7 +136,7 @@ func (e *Explain) writeMarkdown(p *printer) {
 		p.line("- " + mdText(e.Metric.Question))
 	}
 	p.blank()
-	ratio := ratioUnit(e.Metric.Unit)
+	ratio := e.Metric.Ratio
 	if len(e.Values) == 0 {
 		p.line("No value in this run.")
 	} else {

@@ -38,6 +38,7 @@ type MetricInfo struct {
 	Unit        string `json:"unit"`
 	Ranked      bool   `json:"ranked"`
 	Forge       bool   `json:"forge"` // reads the GitHub data a run read (metrics.Definition.Forge): dated by its sync
+	Ratio       bool   `json:"ratio"` // its values are shares, num of den (metrics.Definition.Ratio): printed as a percent
 	Eligibility string `json:"eligibility"`
 	BlindSpots  string `json:"blind_spots"`
 	Gaming      string `json:"gaming"`

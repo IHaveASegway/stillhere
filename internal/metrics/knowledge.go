@@ -24,6 +24,7 @@ func (knowledgeLossV1) Definition() Definition {
 			"the branch lands, or when they submitted a review (approved, changes requested or commented) in the window on any " +
 			"pull request of the scanned repositories, open, closed or merged, in the GitHub data the run read. Detail: people " +
 			"(humans holding lines), people_inactive.",
+		Ratio:       true,
 		Ranked:      false,
 		Forge:       true,
 		Eligibility: "Not ranked: it describes code, not people.",

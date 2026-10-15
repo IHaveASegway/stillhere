@@ -28,6 +28,7 @@ func (aiAssistedV1) Definition() Definition {
 			"person (repository, group and all), on request only (metrics.PersonalAIShare, for that person's own page; never " +
 			"computed by a scan): the share of their clusters, over non-merge commits, in which one of their own commits is " +
 			"AI-assisted.",
+		Ratio:       true,
 		Ranked:      false,
 		Eligibility: "Not ranked: AI-assisted work is a tag and a cohort comparison, never a ranked row (ADR 0007).",
 		BlindSpots: "A lower bound: editor completions leave no trace, and only the policy's co-author emails and agent authors " +

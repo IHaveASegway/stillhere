@@ -33,6 +33,7 @@ func (durableV1) Definition() Definition {
 			"those of a file whose blame failed, or of a path the history renamed into one. A cluster is one person's counted " +
 			"commits in one landing and needs at least one added line in the ratio. Merge commits, ignore-revs commits and revert " +
 			"landings are excluded; a reverted landing stays and scores what blame gives it. Detail: reverted_landings.",
+		Ratio:       true,
 		Ranked:      true,
 		Eligibility: "At least 10 clusters in the cohort (open decision 5).",
 		BlindSpots: "A planned replacement of correct code looks not durable. Moves across files credit the mover; a move inside " +

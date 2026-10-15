@@ -544,6 +544,7 @@ type Definition struct {
 	Question, Unit                                           string
 	Ranked                                                   bool
 	Forge                                                    bool // reads FactSet.Forge (#38): the one declaration the report dates and caveats GitHub numbers by
+	Ratio                                                    bool // its values are shares, Num of Den (durable@1, knowledge_loss@1, ai_assisted@1): the one declaration a report prints a percent by, never the unit's words
 	Eligibility, BlindSpots, Gaming, Oracle, Validity        string
 }
 type Input struct {

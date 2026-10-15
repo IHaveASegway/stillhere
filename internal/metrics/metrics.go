@@ -37,7 +37,13 @@ type Definition struct {
 	// a report dates them by it and says where it is missing. It is the one
 	// declaration of which metrics read GitHub data, so a new metric that
 	// reads reviews is dated and caveated with no second list to forget.
-	Forge                                             bool
+	Forge bool
+	// Ratio is true for a metric whose values are shares, Num of Den, as
+	// durable@1's are, so a report prints them as a percent with both
+	// parts, 1 of 1 included. It is the one declaration of it: a report
+	// reads it, never the unit's words, which can name other shares
+	// (surviving@1's counts carry a bot_share detail).
+	Ratio                                             bool
 	Eligibility, BlindSpots, Gaming, Oracle, Validity string
 }
 

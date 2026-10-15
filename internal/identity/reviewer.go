@@ -41,9 +41,10 @@ func (d *Directory) Reviewer(u domain.ForgeUser) domain.Subject {
 }
 
 // appAccount reports whether a subject key is an app account's, as Reviewer
-// names one.
+// names one: a login key (LoginKey, the one rule for what a login is) that
+// ends in the app suffix.
 func appAccount(key string) bool {
-	return strings.HasPrefix(key, "@") && strings.HasSuffix(key, appSuffix)
+	return strings.HasSuffix(key, appSuffix) && LoginKey(key)
 }
 
 // reviewerLogins links each login of the fact set's GitHub data to the

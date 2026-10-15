@@ -950,11 +950,12 @@ type metricBrief struct {
 	Question    string `json:"question"`
 	Unit        string `json:"unit,omitempty"`
 	Ranked      bool   `json:"ranked"`
+	Ratio       bool   `json:"ratio,omitempty"` // its values are shares, num of den
 	Eligibility string `json:"eligibility,omitempty"`
 }
 
 func briefOf(m report.MetricInfo, unit bool) metricBrief {
-	b := metricBrief{ID: m.ID, Question: m.Question, Ranked: m.Ranked}
+	b := metricBrief{ID: m.ID, Question: m.Question, Ranked: m.Ranked, Ratio: m.Ratio}
 	if unit {
 		b.Unit, b.Eligibility = m.Unit, m.Eligibility
 	}
