@@ -256,8 +256,9 @@ const identitiesHint = "'stillhere identities' suggests the lines, with the evid
 // identityCaveat names the display names that more than one email shares
 // in a scope. git's mailmap is the only identity store, so stillhere never
 // merges people by name; it says where a .mailmap line may be missing. A
-// shared name that gives one of its addresses away is counted and not
-// printed, as no page prints it (displayName).
+// shared name that gives an address away is counted and not printed, as no
+// page prints it: it is withheld on every address that carries it
+// (personName), so the caveat and the tables agree.
 func (b *builder) identityCaveat(scope domain.Scope, members []*domain.RepoFacts) (Caveat, bool) {
 	inScope := map[domain.Scope]bool{}
 	for _, rf := range members {

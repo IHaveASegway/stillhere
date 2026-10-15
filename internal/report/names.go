@@ -2,6 +2,7 @@ package report
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/IHaveASegway/stillhere/internal/identity"
@@ -9,90 +10,60 @@ import (
 
 // How a page names a person. Emails are the join key of the JSON and are
 // printed in no text or Markdown page (docs/spec/report-json.md, "Where
-// emails go"), and no page prints a part of one either: a display name that
-// gives the address away is withheld in every format, JSON included, so a
-// reader that drops the email fields, such as the MCP server without
-// --allow-emails, sends no address under another field's name. Whether a
-// name gives an address away is identity's rule (identity.RevealsAddress),
-// which the identities answer applies too: this file decides only how a
-// page shows the person instead.
+// emails go"), and no format prints a part of one outside the fields that
+// hold them: a display name that gives an address of the run away is
+// withheld in every format, JSON included, so a reader that drops the email
+// fields, such as the MCP server without --allow-emails, sends no address
+// under another field's name. Whether a name gives an address away is
+// identity's decision (identity.Directory.Withheld), made per name over
+// every person's address in the run, which the identities answer asks too:
+// this file decides only how a page shows the person instead.
 
-// displayName is the name every page shows a person by, the JSON's name
-// fields included:
+// personName is how every page names the person keyed key, as the two
+// fields every person row and subject carries, Name and NameWithheld. A
+// row sets both from this one call: a row that took its name some other
+// way would leave NameWithheld false and label a withheld person as one
+// git records without a name. The rule:
 //
-//   - an unlinked GitHub account's key, "@login" or "@login[bot]", is shown
-//     as that login (ADR 0004): it has no display name, and a login is what
-//     GitHub itself shows of an account;
-//   - a bot's or an agent's display name is shown whatever it is
-//     (dependabot[bot], Copilot): its address is no person's;
-//   - a person's display name is shown unless it gives their address away
-//     (identity.RevealsAddress: it holds an @, or it is the address's own
-//     local part, as GitHub names a commit by the login of an account
-//     without a profile name);
-//   - otherwise, and when git recorded no name, it is "".
+//   - an unlinked GitHub account's key (identity.LoginKey), "@login" or
+//     "@login[bot]", is shown as that login (ADR 0004): it has no display
+//     name, and a login is what GitHub itself shows of an account;
+//   - a display name that gives an address of the run away
+//     (identity.Directory.Withheld: it holds an @, or it is the local part
+//     of a person's address in the run, as GitHub names a commit by the
+//     login of an account without a profile name) is "", and withheld is
+//     true;
+//   - otherwise the display name is shown, and it is "" when git recorded
+//     none.
 //
 // A person shown with "" is told apart from others on a page by a label of
 // the page's own (printer.person), never by anything derived from the
 // email: an unkeyed hash of an address lets anyone who guesses the address
 // confirm it with one hash (ENISA, "Pseudonymisation techniques and best
-// practices", 2019, §7.2). nameWithheld says which of the two reasons
-// applies.
-func displayName(who People, key string) string {
-	name, _ := shownName(who, key)
-	return name
-}
-
-// nameWithheld reports whether displayName is "" because the person's
-// display name gives their address away.
-func nameWithheld(who People, key string) bool {
-	_, withheld := shownName(who, key)
-	return withheld
-}
-
-// shownName is displayName and nameWithheld at once.
-func shownName(who People, key string) (name string, withheld bool) {
-	if loginKey(key) {
-		return key, false
-	}
-	n, ok := realName(who, key)
+// practices", 2019, §7.2). who may be nil: then no person has a name.
+func personName(who People, key string) (name string, withheld bool) {
 	switch {
-	case !ok:
+	case identity.LoginKey(key):
+		return key, false
+	case who == nil:
 		return "", false
-	case !isBot(who, key) && identity.RevealsAddress(n, key):
+	case who.Withheld(key):
 		return "", true
 	}
-	return n, false
+	return who.Name(key), false
 }
 
-// loginKey reports whether a person's key is a GitHub account that no
-// commit of the run links to an email: "@" and the login, as the forge
-// metrics key a reviewer they cannot link, and "@login[bot]" for an app
-// (ADR 0004). A login is letters, digits, hyphens and, for an enterprise's
-// managed users, underscores, so it holds no dot and no second @: an email
-// with an empty local part ("@example.com") is not one.
-func loginKey(key string) bool {
-	login, ok := strings.CutPrefix(key, "@")
-	login = strings.TrimSuffix(login, "[bot]")
-	if !ok || login == "" {
-		return false
-	}
-	for _, r := range login {
-		if !loginRune(r) {
-			return false
-		}
-	}
-	return true
-}
-
-// loginRune reports whether r can be part of a GitHub login.
-func loginRune(r rune) bool {
-	return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '-' || r == '_'
+// nameWithheld is personName's withheld: whether a page names the person
+// with "" because their display name gives an address away.
+func nameWithheld(who People, key string) bool {
+	_, withheld := personName(who, key)
+	return withheld
 }
 
 // realName is the identity directory's display name for email, and whether
 // it has one. It is the name as git recorded it, whether or not a page may
 // show it: the identity caveats compare it, and print only what
-// displayName would.
+// personName would.
 func realName(who People, email string) (string, bool) {
 	if who == nil {
 		return "", false
@@ -111,22 +82,23 @@ func realName(who People, email string) (string, bool) {
 // Microsoft Presidio's instance-counter pseudonymisation, "<PERSON_0>", is
 // the same idea). Every renderer of one document holds one, through its
 // printer, and pages render in a fixed order, so the labels are as
-// deterministic as the rest of the output.
+// deterministic as the rest of the output. No name a page prints can be
+// read as a label (nameText).
 type pageNames struct {
 	labels   map[string]string // a person's key → their label on the page
 	unnamed  int               // labels given to people git records without a name
-	withheld int               // labels given to people whose name gives their address away
+	withheld int               // labels given to people whose name gives an address away
 }
 
-// person is how a page names a person: their display name, escaped by
-// esc, or, when the page may show none (displayName is ""), their label on
-// the page: "(no name 1)" for a person git records without a name, "(name
-// withheld 1)" for one whose name gives their address away, numbered in
-// the order the page first names them. A label is plain text that needs no
-// escaping.
+// person is how a page names a person: their display name, printed by
+// nameText, or, when the page may show none (personName's name is ""),
+// their label on the page: "(no name 1)" for a person git records without
+// a name, "(name withheld 1)" for one whose name gives an address away,
+// numbered in the order the page first names them. A label is plain text
+// that needs no escaping.
 func (p *printer) person(key, name string, withheld bool, esc func(string) string) string {
 	if name != "" {
-		return esc(name)
+		return nameText(name, esc)
 	}
 	if label, ok := p.names.labels[key]; ok {
 		return label
@@ -144,4 +116,47 @@ func (p *printer) person(key, name string, withheld bool, esc func(string) strin
 	}
 	p.names.labels[key] = label
 	return label
+}
+
+// nameText prints a name, escaped by esc. git records any name, so a
+// committer can be called "(no name 1)": a name that could be read as a
+// label a page gives a person it cannot name, or as a name quoted for that
+// reason (labelLike), is printed quoted, as Go quotes a string. A label
+// and a name then never print alike, and neither do two names unless the
+// names are alike, so two people stay apart on every page; JSON keeps the
+// name as it is.
+func nameText(name string, esc func(string) string) string {
+	if c := clean(name); labelLike(c) {
+		return esc(strconv.Quote(c))
+	}
+	return esc(name)
+}
+
+// labelLike reports whether a name, as clean prints it, starts with a
+// double quote, or has a label's shape in any case: "(no name)" or "(name
+// withheld)", alone or with a number, as the person rows and the
+// identities answer label people.
+func labelLike(s string) bool {
+	if strings.HasPrefix(s, `"`) {
+		return true
+	}
+	inner, ok := strings.CutPrefix(s, "(")
+	if !ok {
+		return false
+	}
+	if inner, ok = strings.CutSuffix(inner, ")"); !ok {
+		return false
+	}
+	for _, kind := range []string{"no name", "name withheld"} {
+		if len(inner) < len(kind) || !strings.EqualFold(inner[:len(kind)], kind) {
+			continue
+		}
+		rest := inner[len(kind):]
+		if rest == "" {
+			return true
+		}
+		n, ok := strings.CutPrefix(rest, " ")
+		return ok && n != "" && strings.Trim(n, "0123456789") == ""
+	}
+	return false
 }

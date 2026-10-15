@@ -276,8 +276,8 @@ type StillHere struct {
 // Landings365d are the breadth and activity a group's overview shows.
 type StillHereRow struct {
 	Email             string         `json:"email"`         // the canonical key; JSON only
-	Name              string         `json:"name"`          // the display name, "@login", or "" when there is none a page may show (displayName)
-	NameWithheld      bool           `json:"name_withheld"` // the name is "" because it gives the address away
+	Name              string         `json:"name"`          // the display name, "@login", or "" when there is none a page may show (personName)
+	NameWithheld      bool           `json:"name_withheld"` // the name is "" because it gives an address away
 	Bot               bool           `json:"bot"`
 	ProdNonblankLines int            `json:"prod_nonblank_lines"` // the headline: survival
 	MajorityFiles     int            `json:"majority_files"`      // depth: files where the person holds at least half the lines

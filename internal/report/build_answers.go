@@ -143,8 +143,9 @@ func NewWhoKnows(in *WhoKnowsInput) *WhoKnows {
 		top := map[string]int{} // the metric's own top-author places, 1 to 5
 		for _, v := range ix.people(MetricWhoKnows, scope) {
 			email := v.Subject.Key
+			name, withheld := personName(in.Who, email)
 			k := Knower{
-				Email: email, Name: displayName(in.Who, email), NameWithheld: nameWithheld(in.Who, email),
+				Email: email, Name: name, NameWithheld: withheld,
 				Lines:          count(v.Value),
 				MajorityFiles:  count(v.Detail[detailMajorityFiles]),
 				RecentLandings: count(v.Detail[detailRecentLandings]),

@@ -24,11 +24,12 @@ import (
 //
 // Emails appear only in fields named email, so a reader that must not show
 // them, such as the MCP server without --allow-emails, can drop them. A
-// display name that gives an address away (identity.RevealsAddress: it holds
-// an @, or it is one of the candidate's local parts, as GitHub names a
-// commit by a login) is withheld in every field: it is "", and an address's
-// name_withheld says so. So no other field holds a person's address or a
-// part of one. Text and Markdown print none either, as everywhere
+// display name that gives an address away (identity.Directory.Withheld: it
+// holds an @, or it is a local part of a person's address in the run, as
+// GitHub names a commit by a login) is withheld in every field, as on
+// every other page: it is "", and an address's name_withheld says so. So
+// no other field holds a person's address or a part of one. Text and
+// Markdown print none either, as everywhere
 // (docs/spec/report-json.md): an address is shown by its number and the kind
 // of its domain. Only Mailmap, whose output is made of addresses, prints
 // them.
@@ -62,7 +63,7 @@ type IdentityCandidate struct {
 type IdentityAddress struct {
 	Email        string    `json:"email"`         // the canonical email; JSON only
 	Name         string    `json:"name"`          // its display name; "" when withheld or when the facts show none
-	NameWithheld bool      `json:"name_withheld"` // the name gives an address away (identity.RevealsAddress), so it is not shown
+	NameWithheld bool      `json:"name_withheld"` // the name gives an address away (identity.Directory.Withheld), so it is not shown
 	DomainKind   string    `json:"domain_kind"`   // main, noreply, machine or other (identity.DomainKind): the domain without naming it
 	Canonical    bool      `json:"canonical"`
 	Commits      int       `json:"commits"`     // commits it authored
@@ -111,7 +112,12 @@ type IdentitiesInput struct {
 	Facts  *domain.FactSet  // the scope's facts: provenance, caveats and repository names
 	Scope  domain.Scope     // the zero Scope: every repository of the run
 	Survey *identity.Survey // identity.Candidates over Facts
-	Forge  *ForgeRead       // the GitHub data the run read, which dates its repositories; nil: the reader cannot tell
+	// Who is the run's directory, which Survey was found with: it withholds
+	// a name as every page does, over every person's address in the run
+	// (identity.Directory.Withheld). nil: a name is checked against the
+	// candidate's own addresses only (identity.RevealsAddress).
+	Who   People
+	Forge *ForgeRead // the GitHub data the run read, which dates its repositories; nil: the reader cannot tell
 }
 
 // identCodeMailmap is the caveat every identities answer carries: the
@@ -145,7 +151,7 @@ func NewIdentities(in *IdentitiesInput) *Identities {
 	if s := in.Survey; s != nil {
 		id.Addresses, id.Bots, id.Shared, id.Oversized = s.Addresses, s.Bots, s.Shared, s.Oversized
 		for i := range s.Candidates {
-			id.Candidates = append(id.Candidates, identCandidate(&s.Candidates[i], names))
+			id.Candidates = append(id.Candidates, identCandidate(&s.Candidates[i], names, in.Who))
 		}
 	}
 	for _, def := range identity.Rules() {
@@ -163,12 +169,9 @@ func NewIdentities(in *IdentitiesInput) *Identities {
 	return id
 }
 
-func identCandidate(c *identity.Candidate, names map[string]string) IdentityCandidate {
-	emails := make([]string, len(c.Addresses))
-	for i, a := range c.Addresses {
-		emails[i] = a.Email
-	}
-	name, _ := identShown(c.Name, emails)
+func identCandidate(c *identity.Candidate, names map[string]string, who People) IdentityCandidate {
+	shown := identShown(c, who)
+	name, _ := shown(c.Name)
 	out := IdentityCandidate{
 		Confidence: string(c.Confidence),
 		Guess:      c.Guess,
@@ -180,7 +183,7 @@ func identCandidate(c *identity.Candidate, names map[string]string) IdentityCand
 		out.Rules = append(out.Rules, string(r))
 	}
 	for _, a := range c.Addresses {
-		name, withheld := identShown(a.Name, emails)
+		name, withheld := shown(a.Name)
 		out.Addresses = append(out.Addresses, IdentityAddress{
 			Email: a.Email, Name: name, NameWithheld: withheld, DomainKind: string(a.Domain),
 			Canonical: a.Email == c.Canonical, Commits: a.Commits, CoAuthored: a.CoAuthored,
@@ -188,7 +191,7 @@ func identCandidate(c *identity.Candidate, names map[string]string) IdentityCand
 		})
 	}
 	for _, l := range c.Links {
-		name, _ := identShown(l.Name, emails)
+		name, _ := shown(l.Name)
 		link := IdentityLink{Rule: string(l.Rule), Addresses: slices.Clone(l.Addresses), Name: name, FromName: l.FromName}
 		if h := l.HandOff; h != nil {
 			ho := &IdentityHandOff{GapDays: h.Gap.Hours() / 24, SharedFiles: h.SharedFiles}
@@ -202,14 +205,34 @@ func identCandidate(c *identity.Candidate, names map[string]string) IdentityCand
 	return out
 }
 
-// identShown is a display name as the answer shows it: "" and true when it
-// gives away one of the candidate's addresses (identity.RevealsAddress), as
-// an address typed as a name or a login used as one does.
-func identShown(name string, emails []string) (string, bool) {
-	if slices.ContainsFunc(emails, func(e string) bool { return identity.RevealsAddress(name, e) }) {
-		return "", true
+// identShown returns how the answer shows a display name of the candidate:
+// "" and true when the name gives an address away, as an address typed as
+// a name or a login used as one does. Every name the answer prints is one
+// of its addresses' names, and who, the run's directory, decides each over
+// every person's address in the run, as every page does
+// (identity.Directory.Withheld), so the answer withholds exactly what the
+// tables withhold. Without a directory, or for a name no address carries,
+// the name is checked against the candidate's own addresses
+// (identity.RevealsAddress).
+func identShown(c *identity.Candidate, who People) func(name string) (string, bool) {
+	withheld := map[string]bool{}
+	if who != nil {
+		for _, a := range c.Addresses {
+			if a.Name != "" {
+				withheld[a.Name] = withheld[a.Name] || who.Withheld(a.Email)
+			}
+		}
 	}
-	return name, false
+	return func(name string) (string, bool) {
+		w, ok := withheld[name]
+		if !ok {
+			w = slices.ContainsFunc(c.Addresses, func(a identity.Address) bool { return identity.RevealsAddress(name, a.Email) })
+		}
+		if w {
+			return "", true
+		}
+		return name, false
+	}
 }
 
 // identIntro says what the page holds, and why it shows no address.
@@ -266,11 +289,13 @@ func identTitle(c IdentityCandidate, esc func(string) string) string {
 	return title + " · " + strings.Join(c.Rules, ", ")
 }
 
+// identPerson is a display name, or "(no name)"; a name that could be read
+// as that label is printed quoted (nameText).
 func identPerson(name string, esc func(string) string) string {
 	if name == "" {
 		return "(no name)"
 	}
-	return esc(name)
+	return nameText(name, esc)
 }
 
 // identAddressName is an address's display name, or what stands for it.

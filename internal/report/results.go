@@ -26,8 +26,8 @@ type Value struct {
 type Subject struct {
 	Kind         string `json:"kind"`          // person, area, repo or change
 	Key          string `json:"key"`           // a person's canonical email, or "@login" for an unlinked GitHub account; JSON only
-	Name         string `json:"name"`          // a person's display name, "@login", or "" when there is none a page may show (displayName); "" for other kinds
-	NameWithheld bool   `json:"name_withheld"` // a person's name is "" because it gives their address away
+	Name         string `json:"name"`          // a person's display name, "@login", or "" when there is none a page may show (personName); "" for other kinds
+	NameWithheld bool   `json:"name_withheld"` // a person's name is "" because it gives an address away
 	Bot          bool   `json:"bot"`
 }
 

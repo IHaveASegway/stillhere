@@ -209,7 +209,7 @@ func compareValues(a, b domain.MetricValue) int {
 
 // Values converts metric values to the form a report prints, sorted by
 // metric, scope, subject and window, with display names for people. who
-// may be nil, in which case no person has a name (displayName).
+// may be nil, in which case no person has a name (personName).
 func Values(values []domain.MetricValue, who People) []Value {
 	var out []Value
 	for _, v := range values {
@@ -251,13 +251,13 @@ func valueOf(v domain.MetricValue, who People) Value {
 }
 
 // SubjectOf converts a subject, naming a person as every page does
-// (displayName): Name is "" when the person has no name a page may show,
-// and NameWithheld says when that is because it gives their address away.
+// (personName): Name is "" when the person has no name a page may show,
+// and NameWithheld says when that is because it gives an address away.
 // who may be nil, in which case no person has a name.
 func SubjectOf(s domain.Subject, who People) Subject {
 	out := Subject{Kind: s.Kind, Key: s.Key}
 	if s.Kind == domain.SubjectPerson {
-		out.Name, out.NameWithheld = shownName(who, s.Key)
+		out.Name, out.NameWithheld = personName(who, s.Key)
 		out.Bot = isBot(who, s.Key)
 	}
 	return out
@@ -268,12 +268,15 @@ func scopeOf(s domain.Scope) Scope { return Scope{Kind: s.Kind, Key: s.Key} }
 func intervalOf(w domain.Window) Interval { return Interval{Since: w.Since, Until: w.Until} }
 
 // People is what a report needs to know about the people in it: their
-// display names and whether they are bots. *identity.Directory implements
-// it; the report depends on these two questions only, not on how identity
-// answers them.
+// display names, whether they are bots, and whether a name gives an
+// address away. *identity.Directory implements it; the report depends on
+// these three questions only, not on how identity answers them.
 type People interface {
 	Name(email string) string // the display name for a canonical email
 	Bot(email string) bool    // whether the email is a bot's
+	// Withheld reports whether the email's display name gives away an
+	// address of the run, so that no page shows it (personName).
+	Withheld(email string) bool
 }
 
 // OwnPageOnly reports whether a metric's values about a person are shown on

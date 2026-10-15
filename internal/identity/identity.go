@@ -39,6 +39,7 @@ import (
 type Directory struct {
 	names        map[string]string // canonical email → display name
 	kinds        map[string]kind   // canonical email → its classification, for every email in names
+	locals       map[string]bool   // the folded local-part forms of every person's address: the names Withheld withholds (withheld.go)
 	botFragments []string          // [bots] fragments, lowercased, never empty
 	agentEmails  map[string]bool   // [ai] coauthor_emails, lowercased
 	agentAuthors []string          // [ai] agent_authors fragments, lowercased, never empty
@@ -72,6 +73,7 @@ func New(fs *domain.FactSet, p *policy.Policy) *Directory {
 			d.kinds[email] = d.classify(email, name)
 		}
 	}
+	d.locals = personLocals(fs, d) // after kinds: a bot's address is no person's
 	return d
 }
 

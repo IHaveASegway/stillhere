@@ -512,6 +512,13 @@ type DomainKind string // DomainMain, DomainNoreply, DomainMachine, DomainOther:
 type RuleDefinition struct { Rule Rule; Matches, Confidence, Risk string }
 func Rules() []RuleDefinition // how each rule links and how it can be wrong; every identities answer carries them
 func RevealsAddress(name, email string) bool // the name holds an @, or is the address's local part (a login used as a name): a page that prints no address must not print it
+// identity/withheld.go (#52): which names a page may show, decided per name over every person's address in the run, so
+// no page prints on one row what it withholds on another (report-json.md, "Where emails go")
+func (d *Directory) Withheld(email string) bool // its display name holds an @, or is a local part (localForms: whole, before a +tag, a noreply
+                                                // login), ignoring case, of any human address the facts show; a bot's or an agent's address
+                                                // withholds no name, but a bot's name that holds an @ is withheld; false without a name and for a LoginKey
+func LoginKey(key string) bool                  // "@login" or "@login[bot]": a GitHub account no commit of the run links to an email (ADR 0004), the
+                                                // form reviews_given@1 mints; "@example.com" is an address. report and mcp parse keys with it alone
 
 // metrics
 type Definition struct {
@@ -585,12 +592,13 @@ type Document interface{ /* sealed: *Model, *Explain, *WhoKnows, *Me, *Validatio
 func Text(w io.Writer, d Document) error     // a terminal: 100 columns, untrusted text escaped, no emails and no name that gives one away
 func Markdown(w io.Writer, d Document) error // GitHub-flavoured: untrusted text escaped, mentions and references unlinked, no emails, names that give one away or repository paths
 func JSON(w io.Writer, d Document) error     // stable order; empty lists [] and maps {}, absent sections null; invalid UTF-8 as U+FFFD, NaN and ±Inf as null; written only when whole
-type People interface{ Name(email string) string; Bot(email string) bool } // *identity.Directory implements it
+type People interface{ Name(email string) string; Bot(email string) bool; Withheld(email string) bool } // *identity.Directory implements it
 // #52: every person row (still-here, week, rank, made_of, who-knows) and person Subject names the person one way in every
-// format (names.go, displayName): Name is the display name, "@login" for a GitHub account no commit links to an email
-// (ADR 0004), and "" when git recorded none or when it gives the address away (identity.RevealsAddress; NameWithheld,
-// json "name_withheld", true; a bot's or an agent's is always shown). Text and Markdown label such people per page,
-// "(no name 1)" and "(name withheld 1)", in the order the page first names them: a counter, never a hash of the email.
+// format, Name and NameWithheld from one call (names.go, personName): Name is the display name, "@login" for a GitHub
+// account no commit links to an email (identity.LoginKey, ADR 0004), and "" when git recorded none or when the name gives
+// an address of the run away (People.Withheld; NameWithheld, json "name_withheld", true). Text and Markdown label such
+// people per page, "(no name 1)" and "(name withheld 1)", in the order the page first names them: a counter, never a hash
+// of the email; a name shaped like a label, or starting with a double quote, is printed Go-quoted (nameText).
 type Input struct {
 	Kind, Tool string // KindWeek or KindScan; the binary's version
 	Run        *domain.Run // nil for week, and for a scan that stored nothing
@@ -626,13 +634,15 @@ type Me struct { Provenance Provenance; Person Subject; Values []Value; Ranks []
 type Validation struct { Provenance Provenance; Labels, Labellers, Meaningful, Routine, Noise, Unmatched int; Metrics []MetricAUC; Caveats []Caveat }
 type MetricAUC struct { Metric string; AUC *float64; N, Meaningful, Routine int; Beta bool } // AUC nil without both labels
 type Catalog struct { Metrics []MetricInfo }
-// #26 (spec/identities.md): emails only in fields named email, and a name that gives an address away (identity.RevealsAddress)
-// withheld as "", so the MCP server can drop emails by field; text and Markdown print no address and no part of one
+// #26 (spec/identities.md): emails only in fields named email, and a name that gives an address away withheld as "", by the
+// rule every page applies (Who.Withheld, #52), so the MCP server can drop emails by field; text and Markdown print no
+// address and no part of one
 type Identities struct { Provenance Provenance; Scope Scope; Addresses, Bots, Shared, Oversized int; Candidates []IdentityCandidate; Rules []IdentityRule; Caveats []Caveat }
 type IdentityCandidate struct { Confidence string; Guess, Commented, Chained bool; Rules []string; Name string; Addresses []IdentityAddress; Links []IdentityLink } // Commented: all but high
 type IdentityAddress struct { Email, Name string; NameWithheld bool; DomainKind string; Canonical bool; Commits, CoAuthored int; First, Last time.Time; Repos []string }
 type IdentityLink struct { Rule string; Addresses []int; Name string; FromName bool; HandOff *IdentityHandOff }
-type IdentitiesInput struct { Run *domain.Run; Facts *domain.FactSet; Scope domain.Scope; Survey *identity.Survey; Forge *ForgeRead } // Facts: the scope's
+type IdentitiesInput struct { Run *domain.Run; Facts *domain.FactSet; Scope domain.Scope; Survey *identity.Survey; Who People; Forge *ForgeRead } // Facts: the scope's;
+                                                                                                                                               // Who: the run's directory, which Survey was found with
 func NewIdentities(in *IdentitiesInput) *Identities // identity.Candidates' survey as an answer, with provenance (AnswerProvenance) and caveats (mailmap-at-scan)
 func Mailmap(w io.Writer, id *Identities) error    // the suggested .mailmap lines, evidence as # comments; every candidate's but a high one's commented out
 func NewExplain(in *ExplainInput) *Explain    // values, and a ranked metric's clusters per repository as changes
