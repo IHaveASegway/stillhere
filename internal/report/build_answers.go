@@ -66,7 +66,7 @@ func NewExplain(in *ExplainInput) *Explain {
 	}
 	sortChanges(e.Changes)
 	repos := reposWith(in.Facts, involved)
-	e.Provenance = answerProvenance(in.Run, in.Facts, in.Forge, repos, []string{in.Metric.ID})
+	e.Provenance = datedProvenance(in.Run, in.Facts, in.Forge, repos, []string{in.Metric.ID})
 	e.Caveats = answerCaveats(repos)
 	if forgeMetric(in.Metric.ID) {
 		// The pull requests behind the values are in the replica, which a run
@@ -192,7 +192,7 @@ func NewWhoKnows(in *WhoKnowsInput) *WhoKnows {
 		}
 	}
 	slices.SortFunc(w.Repos, func(a, b WhoKnowsRepo) int { return cmp.Or(cmp.Compare(a.Repo, b.Repo), cmp.Compare(a.Key, b.Key)) })
-	w.Provenance = answerProvenance(in.Run, in.Facts, in.Forge, asked, []string{MetricWhoKnows})
+	w.Provenance = datedProvenance(in.Run, in.Facts, in.Forge, asked, []string{MetricWhoKnows})
 	w.Caveats = answerCaveats(asked)
 	if c, ok := whoKnowsMissing(in.Path, asked, ix); ok {
 		w.Caveats = append(w.Caveats, c)
@@ -295,7 +295,7 @@ func NewMe(in *MeInput) *Me {
 		ids = append(ids, id)
 	}
 	repos := reposWith(in.Facts, involved)
-	m.Provenance = answerProvenance(in.Run, in.Facts, in.Forge, repos, ids)
+	m.Provenance = datedProvenance(in.Run, in.Facts, in.Forge, repos, ids)
 	m.Caveats = answerCaveats(repos)
 	// A person's review numbers can come from any repository of the run.
 	m.Caveats = append(m.Caveats, answerBuilder(in.Run, in.Facts, in.Forge).forgeCaveats(reposWith(in.Facts, nil))...)
@@ -313,10 +313,18 @@ func AnswerProvenance(run *domain.Run, fs *domain.FactSet, metrics []string) Pro
 	for i := range fs.Repos {
 		repos = append(repos, &fs.Repos[i])
 	}
-	return answerProvenance(run, fs, nil, repos, metrics)
+	return answerProvenance(run, fs, repos, metrics)
 }
 
-func answerProvenance(run *domain.Run, fs *domain.FactSet, forge *ForgeRead, repos []*domain.RepoFacts, metrics []string) Provenance {
+// answerProvenance is the provenance of an answer that shows no number
+// computed from GitHub data, so its Forge is nil.
+func answerProvenance(run *domain.Run, fs *domain.FactSet, repos []*domain.RepoFacts, metrics []string) Provenance {
+	return datedProvenance(run, fs, nil, repos, metrics)
+}
+
+// datedProvenance is the provenance of an answer that may show GitHub
+// numbers, which forge, the GitHub data the run read, dates over repos.
+func datedProvenance(run *domain.Run, fs *domain.FactSet, forge *ForgeRead, repos []*domain.RepoFacts, metrics []string) Provenance {
 	b := answerBuilder(run, fs, forge)
 	sorted := slices.Clone(repos)
 	slices.SortFunc(sorted, func(x, y *domain.RepoFacts) int {
