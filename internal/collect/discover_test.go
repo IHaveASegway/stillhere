@@ -366,7 +366,7 @@ func TestCloneHealth(t *testing.T) {
 		out, err := git.Run(ctx, domain.GitCmd{Dir: fx.Partial, Args: []string{"log", "--format=%H", main}})
 		commits := strings.Fields(string(out))
 		if err != nil || len(commits) != 2 {
-			t.Fatalf("git log on the partial clone: %d commits, %v; want both commits of main", len(commits), err)
+			t.Errorf("git log on the partial clone: %d commits, %v; want both commits of main", len(commits), err)
 		}
 		slices.Sort(commits) // the order History sorts commits and landings in
 
@@ -374,13 +374,16 @@ func TestCloneHealth(t *testing.T) {
 		// History gives every commit and landing but no FileChange, because
 		// numstat and patches need blobs the clone lacks, and in a scan the
 		// repository's age, which needs none. Classification lists the tree,
-		// and Blame with no paths only resolves the ignore-revs list.
+		// and Blame with no paths only resolves the ignore-revs list. A
+		// failure is reported and the subtest goes on, so the assertion that
+		// nothing connected always runs.
 		partial := wantRepos[0]
 		window := domain.Window{Since: fixture.Now.AddDate(0, 0, -365), Until: fixture.Now}
 		for _, mode := range []HistoryMode{HistoryWeek, HistoryScan} {
 			h, err := History(ctx, git, partial, HistoryOptions{Window: window, Mode: mode})
 			if err != nil {
-				t.Fatalf("mode %d: History on the partial clone: %v", mode, err)
+				t.Errorf("mode %d: History on the partial clone: %v", mode, err)
+				continue
 			}
 			var shas, landed []string
 			for _, c := range h.Commits {
@@ -402,11 +405,9 @@ func TestCloneHealth(t *testing.T) {
 				t.Errorf("mode %d: FirstCommit = %v, want %v", mode, h.FirstCommit, first)
 			}
 		}
-		p, err := policy.Default()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := ClassifyPaths(ctx, git, partial, p, nil); err != nil {
+		if p, err := policy.Default(); err != nil {
+			t.Errorf("policy.Default: %v", err)
+		} else if _, err := ClassifyPaths(ctx, git, partial, p, nil); err != nil {
 			t.Errorf("ClassifyPaths on the partial clone: %v", err)
 		}
 		bf, err := Blame(ctx, git, partial, BlameOptions{Slots: NewBlameSlots(1)})
