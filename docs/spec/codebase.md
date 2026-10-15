@@ -900,7 +900,7 @@ The policy is `--policy FILE`, else `./stillhere.toml`, else the packaged one, a
 | `metrics` | the registry | nothing | M1 |
 | `identities [--run ID] [--format mailmap\|text\|md\|json]` | facts.db | nothing, but an older facts.db is migrated | M2 (#26) |
 | `validate --labels FILE [--run ID]` | facts.db, a labels CSV | nothing, but an older facts.db is migrated | M2 |
-| `sync github --org ORG [--mirrors DIR]` | GitHub | mirrors, forge facts; facts.db as for scan, and `--org` checked with GitHub's name rule before the run begins (#71) | M2 (#71) |
+| `sync github --org ORG [--mirrors DIR]` | GitHub | mirrors, forge facts; facts.db as for scan, and `--org` checked with GitHub's name rule before the run begins (#71) | M2 |
 | `mcp [--run ID] [--me EMAIL] [--allow-source] [--allow-emails]` | facts.db, read-only; git for `diff` with `--allow-source` | nothing | M4 |
 | `policy` | `--policy`, `./stillhere.toml` or the packaged policy | nothing: it prints the policy week and scan would use as a complete file, the packaged deny list written out (`stillhere policy > stillhere.toml`; an empty `./stillhere.toml`, which that redirection makes before stillhere starts, counts as absent) (#71) | M2 (#71) |
 | `version` | | | M0 |
