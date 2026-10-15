@@ -809,9 +809,6 @@ func Backdated(t testing.TB) string                             // builds <t.Tem
 func BuildBackdated(ctx context.Context, dir string) error      // the backdated guard in dir, which must be empty or absent
 func MergedRevert(t testing.TB) string                          // builds <t.TempDir()>/merged-revert: reverts on side branches that --no-ff merges land
 func BuildMergedRevert(ctx context.Context, dir string) error   // the merged-revert guard in dir, which must be empty or absent
-// mergemethods.go (#38's review): how GitHub's merge methods land pull requests, for who_knows@1's reviewers
-func MergeMethods(t testing.TB) string                          // builds <t.TempDir()>/merge-methods: a rebase merge's two commits in one committer second, and two squashes in another
-func BuildMergeMethods(ctx context.Context, dir string) error   // the merge-methods guard in dir, which must be empty or absent
 // discovery.go (#4): the discovery and clone-health repositories, as structs of absolute paths
 const DiscoveryToken = "TOKENVALUE"                             // planted in remote URLs; TestDiscover asserts no output holds it
 const DiscoveryWidgetRemote = "https://user:" + DiscoveryToken + "@github.com/example/widget.git"
@@ -821,6 +818,9 @@ func Discovery(t testing.TB) *DiscoveryRepos                    // builds <t.Tem
 func BuildDiscovery(ctx context.Context, dir string) (*DiscoveryRepos, error)
 func CloneHealth(t testing.TB, promisor string) *CloneHealthRepos // the partial clone's origin is promisor
 func BuildCloneHealth(ctx context.Context, dir, promisor string) (*CloneHealthRepos, error)
+// mergemethods.go (#38's review): how GitHub's merge methods land pull requests, for who_knows@1's reviewers
+func MergeMethods(t testing.TB) string                          // builds <t.TempDir()>/merge-methods: a rebase merge's two commits in one committer second, and two squashes in another
+func BuildMergeMethods(ctx context.Context, dir string) error   // the merge-methods guard in dir, which must be empty or absent
 ```
 
 ## Run model
