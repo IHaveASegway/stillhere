@@ -4,7 +4,7 @@ Status: carried over from the 2026-10-07 plan, updated 2026-10-14 (per-repo igno
 
 This collector answers one question: whose non-blank lines does `git blame` still attribute on the default branch?
 
-`<sha>` below is the commit the run reads, the repository as it stood at `--now` (#70): the newest first-parent commit of the default branch whose committer time is before `--now`, which is the branch's head unless the head holds landings at or after `--now` ([run model](codebase.md#run-model)). Every activity window ends at `--now`, so blaming a newer head would credit lines written after `--now` to people whose landings no window holds yet. The repository's ignore-revs file is read at that commit too.
+`<sha>` below is the commit the run reads, the repository as it stood at `--now` (#70): the newest first-parent commit of the default branch whose committer time is before `--now`, which is the branch's head unless the head holds landings at or after `--now` ([run model](codebase.md#run-model)). Every activity window ends at `--now`, so blaming a newer head would credit lines written after `--now` to people whose landings no window holds yet. On a chain whose committer times are out of order, that commit can still sit above landings dated at or after `--now`, whose lines blame counts: the repository's `dated-after-now` warning counts those landings. The repository's ignore-revs file is read at that commit too.
 
 ## Tree and command
 

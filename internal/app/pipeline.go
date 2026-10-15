@@ -223,8 +223,11 @@ func collector(d Deps, opt collectOptions) func(context.Context, repoJob) (repoR
 // scan of a clone that has its blobs and its whole history, blame. HEAD in
 // every later step is that commit, which is the branch's head unless the
 // head holds landings at or after now; then the repository carries a
-// head-after-now warning, and its caveats say so. A repository whose branch
-// has no commit before now is left out of the run with a run-level warning.
+// head-after-now warning, and its caveats say so. When landings below that
+// commit are dated at or after now, a scan that blamed says so too
+// (dated-after-now): their lines count, their landings do not. A repository
+// whose branch has no commit before now is left out of the run with a
+// run-level warning.
 // A failure at any stage becomes the repository's error, and none of its
 // facts are kept: a repository is either collected or failed, never half.
 func collectRepo(ctx context.Context, d Deps, job repoJob, opt collectOptions) (repoResult, error) {
@@ -313,6 +316,11 @@ func collectRepo(ctx context.Context, d Deps, job repoJob, opt collectOptions) (
 		rf.LineFacts = lineFacts
 		rf.Owners, rf.IgnoreRevs, rf.BlameErrors = bf.Owners, bf.IgnoreRevs, bf.Errors
 		rf.Warnings = repoWarnings(repo, rf.Warnings, bf.Warnings)
+		if lineFacts && snap.Below > 0 {
+			rf.Warnings = repoWarnings(repo, rf.Warnings, []domain.Warning{snapshotDatedAfterNow(repo, opt.now, snap)})
+			d.Log.Info("landings dated at or after --now below the commit read", "repo", repo.Name,
+				"commit", snapshotShort(snap.Commit), "landings", snap.Below)
+		}
 		for i, e := range bf.Errors {
 			if i == 8 {
 				d.Log.Warn("more blame failures", "repo", repo.Name, "files", len(bf.Errors)-8)

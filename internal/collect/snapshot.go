@@ -30,25 +30,33 @@ type Snapshot struct {
 	// or after now that the run does not read: 0 when Commit is the head,
 	// and the whole chain when Commit is "".
 	After int
+	// Below counts the first-parent commits below Commit whose committer
+	// time is at or after now: landings the run reads, whose lines blame
+	// counts, but that no window holds, so their authors can look gone. A
+	// backdated commit above newer ones, or a clock that ran ahead, leaves
+	// such a chain; on a chain whose committer times grow toward the head
+	// it is 0.
+	Below int
 }
-
-// errSnapshotFound stops the first-parent walk once the snapshot is found:
-// the rest of the chain is older, and a large repository's chain is long.
-var errSnapshotFound = errors.New("collect: snapshot found")
 
 // SnapshotAt finds the commit a run with this now reads repo at, with one
 // git rev-list --first-parent --timestamp of repo.Head, read from the head
-// down until the first commit whose committer time is before now, and no
-// further. That is the newest commit on the branch's first-parent chain,
-// the chain windows count landings on, not the one with the latest
-// committer time: what lies below it is read with it, whatever its date, as
-// a wrong clock or a rebase that kept old committer dates can leave a
-// chain. A shallow clone's chain ends at its boundary, so its snapshot is
-// the newest commit before now that the clone holds.
+// down: the first commit whose committer time is before now. That is the
+// newest commit on the branch's first-parent chain, the chain windows count
+// landings on, not the one with the latest committer time: what lies below
+// it is read with it, whatever its date, as a wrong clock or a rebase that
+// kept old committer dates can leave a chain. The walk reads the chain to
+// its end, as the history's first-parent log does, to count the landings
+// below that commit dated at or after now (Snapshot.Below), which a reader
+// must be told of: on a chain of 200,000 commits it took 0.65 s without a
+// commit-graph and 0.17 s with one (git 2.50.1), where stopping at the
+// commit took 0.01 s. A shallow clone's chain ends at its boundary, so its
+// snapshot is the newest commit before now that the clone holds.
 //
 // git prints the raw committer timestamp, in whole seconds; the comparison
 // with now is Go's, the same as domain.Window.Contains, so the snapshot and
-// every window agree on a commit at exactly now: it is not read.
+// every window agree on a commit at exactly now: it is not read, and below
+// the snapshot it counts in Below.
 func SnapshotAt(ctx context.Context, git domain.GitRunner, repo domain.Repo, now time.Time) (Snapshot, error) {
 	if !historySHA(repo.Head) {
 		return Snapshot{}, errors.New("collect.SnapshotAt: repository head is not a full commit SHA")
@@ -63,15 +71,21 @@ func SnapshotAt(ctx context.Context, git domain.GitRunner, repo domain.Repo, now
 			if !ok || err != nil || !historySHA(sha) {
 				return fmt.Errorf("malformed rev-list --timestamp line %q", s.Text())
 			}
-			if t := time.Unix(secs, 0).UTC(); t.Before(now) {
-				snap.Commit, snap.Time = sha, t
-				return errSnapshotFound
+			before := time.Unix(secs, 0).Before(now)
+			switch {
+			case snap.Commit != "":
+				if !before {
+					snap.Below++
+				}
+			case before:
+				snap.Commit, snap.Time = sha, time.Unix(secs, 0).UTC()
+			default:
+				snap.After++
 			}
-			snap.After++
 		}
 		return s.Err()
 	})
-	if err != nil && !errors.Is(err, errSnapshotFound) {
+	if err != nil {
 		return Snapshot{}, fmt.Errorf("collect.SnapshotAt: %s: %w", repo.Name, err)
 	}
 	return snap, nil

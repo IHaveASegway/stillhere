@@ -23,6 +23,7 @@ var (
 // The warning codes of the snapshot step (#70), as report-json.md lists them.
 const (
 	codeHeadAfterNow      = "head-after-now"
+	codeDatedAfterNow     = "dated-after-now"
 	codeNoCommitBeforeNow = "no-commit-before-now"
 )
 
@@ -35,7 +36,8 @@ const (
 // repository with its branch reset to that commit gives the same report in
 // every format, apart from the head-after-now warning and caveats. At a
 // --now before the root commit the repository yields no facts and a
-// run-level warning that says why.
+// run-level warning that says why. On the backdated guard, whose commit
+// read sits above a landing dated after --now, the run says that too.
 func snapshotOracle(t *testing.T) {
 	dir := fixture.Main(t)
 	mailmap := fixture.Mailmap(t)
@@ -127,6 +129,50 @@ func snapshotOracle(t *testing.T) {
 	sameBytes(t, table+": the JSON of the fetched head and of the repository cut back", a.json, b.json)
 	sameBytes(t, table+": the text of the fetched head and of the repository cut back", a.text, b.text)
 	sameBytes(t, table+": the Markdown of the fetched head and of the repository cut back", a.markdown, b.markdown)
+
+	t.Run("landings dated after --now below the commit read", func(t *testing.T) {
+		const table = "SPEC, landings dated after --now below the commit read"
+		dir := fixture.Backdated(t)
+		req := scanRanked(dir)
+		req.Now = time.Date(2026, time.July, 1, 0, 0, 0, 0, time.UTC)
+		s := scan(t, "", nil, req)
+		rf := onlyFacts(t, s)
+		r := onlyRepo(t, s.model)
+		// X is main~2: A2's first parent is A1, and A1's is X.
+		out, err := writeDeps(t, "", nil).Git.Run(t.Context(), domain.GitCmd{Dir: dir, Args: []string{"rev-parse", "--verify", "main~2^{commit}"}})
+		if err != nil {
+			t.Fatalf("resolving X: %v", err)
+		}
+		x := strings.TrimSpace(string(out))
+		if rf.Repo.Head != x || r.Head != x {
+			t.Errorf("%s: the run read %s (report %s), want X, %s", table, rf.Repo.Head, r.Head, x)
+		}
+		says := map[string]func(string) bool{
+			codeHeadAfterNow: func(msg string) bool {
+				return strings.Contains(msg, "commit "+x[:12]) && strings.Contains(msg, "2 landings later")
+			},
+			codeDatedAfterNow: func(msg string) bool {
+				return strings.HasPrefix(msg, "1 landing on main's first-parent chain below commit "+x[:12]+",")
+			},
+		}
+		for code, ok := range says {
+			if !slices.ContainsFunc(r.Warnings, func(w report.Warning) bool { return w.Code == code && ok(w.Message) }) {
+				t.Errorf("%s: the repository's warnings %+v hold no %s warning as SPEC words it", table, r.Warnings, code)
+			}
+			for where, cs := range map[string][]report.Caveat{"the card": r.Card.Caveats, "the report": s.model.Caveats} {
+				if !slices.ContainsFunc(cs, func(c report.Caveat) bool { return c.Code == code && ok(c.Message) }) {
+					t.Errorf("%s: %s's caveats %+v hold no %s caveat as SPEC words it", table, where, cs, code)
+				}
+			}
+		}
+		// The numbers of the commit read, which the warnings explain: Cal's
+		// lines are B2's, dated after --now, so no window holds that landing.
+		checkShare(t, table+", knowledge_loss@1", r.Card.KnowledgeLoss, 3, 7)
+		e := s.explain(t, domain.MetricID{Name: "knowledge_loss", Version: 1}, domain.Subject{Kind: domain.SubjectRepo, Key: r.Key})
+		if v, ok := repoValue(t, table, e, r.Key); ok && (v.Detail["people"] != 3 || v.Detail["people_inactive"] != 2) {
+			t.Errorf("%s: %s, want people 3 and people_inactive 2", table, describe(v))
+		}
+	})
 }
 
 // withoutCode returns a copy of m without the warnings and caveats that

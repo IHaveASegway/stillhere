@@ -16,6 +16,13 @@ import (
 // after now to people whose landings no window holds yet, and
 // knowledge_loss@1 counts newcomers as gone. collect.SnapshotAt finds the
 // commit; this file words what the run says about it.
+//
+// The commit is the newest one on the branch's first-parent chain committed
+// before now, which is the repository as it stood then wherever committer
+// times grow toward the head. Where they do not, a backdated commit above
+// newer ones or a clock that ran ahead, the commit read holds landings dated
+// at or after now, and the run says that too (dated-after-now), rather than
+// claim a moment its code does not describe.
 
 // The warning codes of the snapshot step.
 const (
@@ -23,6 +30,10 @@ const (
 	// its numbers are: the run read an older commit than the branch's head,
 	// which has landings at or after now.
 	warnHeadAfterNow = "head-after-now"
+	// warnDatedAfterNow is a repository's warning, and its caveat wherever
+	// its numbers are: below the commit read, landings dated at or after now
+	// hold lines that blame counts and no window does.
+	warnDatedAfterNow = "dated-after-now"
 	// warnNoCommitBeforeNow is a run-level warning: the repository's branch
 	// has no commit before now, so the run has no facts of it.
 	warnNoCommitBeforeNow = "no-commit-before-now"
@@ -33,10 +44,27 @@ const (
 // landings the head holds after it, which no number counts.
 func snapshotHeadAfterNow(repo domain.Repo, now time.Time, snap collect.Snapshot) domain.Warning {
 	return domain.Warning{Code: warnHeadAfterNow, Repo: repo.Key, Message: fmt.Sprintf(
-		"Read as it stood at --now (%s): %s at commit %s, committed %s. Its head, %s, is %s later, at or after --now, "+
-			"and no number here counts them.",
-		snapshotTime(now), repo.Branch, snapshotShort(snap.Commit), snapshotTime(snap.Time),
+		"Read at commit %s of %s, committed %s, the newest on its first-parent chain committed before --now (%s). "+
+			"Its head, %s, is %s later, at or after --now, and no number here counts them.",
+		snapshotShort(snap.Commit), repo.Branch, snapshotTime(snap.Time), snapshotTime(now),
 		snapshotShort(repo.Head), snapshotLandings(snap.After))}
+}
+
+// snapshotDatedAfterNow is the warning of a repository whose commit read
+// sits above landings dated at or after now (collect.Snapshot.Below): blame
+// counts the lines they hold, while no window counts them, so their authors
+// can look gone. Only a run that blames says it: without line facts no
+// number reads those lines.
+func snapshotDatedAfterNow(repo domain.Repo, now time.Time, snap collect.Snapshot) domain.Warning {
+	verb, hold, them, whose := "are", "they hold", "them", "their authors"
+	if snap.Below == 1 {
+		verb, hold, them, whose = "is", "it holds", "it", "its author"
+	}
+	return domain.Warning{Code: warnDatedAfterNow, Repo: repo.Key, Message: fmt.Sprintf(
+		"%s on %s's first-parent chain below commit %s, the one read, %s dated at or after --now (%s), "+
+			"as a backdated commit or a clock that ran ahead leaves: blame counts the lines %s, but no window counts %s, "+
+			"so %s can look inactive.",
+		snapshotLandings(snap.Below), repo.Branch, snapshotShort(snap.Commit), verb, snapshotTime(now), hold, them, whose)}
 }
 
 // snapshotNoCommit is the run-level warning of a repository whose branch

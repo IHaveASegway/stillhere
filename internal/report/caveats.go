@@ -36,6 +36,10 @@ const (
 	// the commit the run read and the landings after --now, so it is that
 	// repository's caveat as it stands; summaries words it for several.
 	codeHeadAfterNow = "head-after-now"
+	// codeDatedAfterNow (#70) is a repository's warning, whose message
+	// counts the landings below the commit read that are dated at or after
+	// --now, so it is that repository's caveat as it stands.
+	codeDatedAfterNow = "dated-after-now"
 )
 
 // largeRepoLines is the size, in surviving prod lines, from which a
@@ -61,8 +65,11 @@ var summaries = map[string]string{
 	codeNumstat:       "Some numstat rows could not be read and count 0 lines.",
 	codeNoIgnoreRevs:  "Large repositories without a .git-blame-ignore-revs: a formatting commit would take the credit for every line it touched.",
 	codeDuplicate:     "Clones of the same remote as these repositories were skipped as duplicates: each repository is counted once (see their warnings).",
-	codeHeadAfterNow: "These repositories are read as they stood at --now: their branches have landings at or after it, " +
-		"which no number here counts (see their warnings for the commit read and how many).",
+	codeHeadAfterNow: "These repositories are read at the newest commit on their branch's first-parent chain committed before --now: " +
+		"their branches have landings at or after it, which no number here counts (see their warnings for the commit read and how many).",
+	codeDatedAfterNow: "In these repositories, landings dated at or after --now lie below the commit read, as a backdated commit " +
+		"or a clock that ran ahead leaves: blame counts the lines they hold, but no window counts them, so their authors can look inactive " +
+		"(see their warnings for how many).",
 }
 
 func notFetched() Caveat {

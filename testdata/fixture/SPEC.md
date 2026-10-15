@@ -357,7 +357,7 @@ At `3cc4421`, the `prod` files that hold lines are `service.py` (beta, alpha and
 | Gina Split | 2 | 1 |
 | Hank Split | 2 | 1 |
 
-`knowledge_loss@1` is **0 / 18**, with `people` 4 and `people_inactive` 0: each of the four landed in the activity window. The repository's head is `3cc4421`, and it carries one `head-after-now` warning, also a caveat wherever its numbers are: `main` at commit `3cc4421757f1`, committed 2026-03-01T12:00:00Z, with 9 landings (rows 8 to 16) at or after `--now`, which no number counts.
+`knowledge_loss@1` is **0 / 18**, with `people` 4 and `people_inactive` 0: each of the four landed in the activity window. The repository's head is `3cc4421`, and it carries one `head-after-now` warning, also a caveat wherever its numbers are: `main` at commit `3cc4421757f1`, committed 2026-03-01T12:00:00Z, with 9 landings (rows 8 to 16) at or after `--now`, which no number counts. Rows 6 to 1, below it, were all committed before `--now`, so no `dated-after-now` warning: the main fixture's committer times grow along its first-parent chain.
 
 The check is metamorphic, so it covers every number the report prints, not only those above: the same repository with `main` reset to `3cc4421`, scanned again with the same `--now`, gives the same report, byte for byte in JSON, text and Markdown, apart from the `head-after-now` warning and caveats, which only the first scan has. The two scans read the same commit at the same path, so even their provenance agrees.
 
@@ -367,6 +367,35 @@ Wrong implementations this catches:
 
 - **Reading the fetched head** (`main` before #70). Blame at `4631a8b` puts the lines of 2026-10-06 beside activity counted before 2026-03-15: `knowledge_loss@1` 13 / 34, `people` 8, `people_inactive` 4 (Cara 9, Frank 2, Dana 1 and Erin 1, whose landings no window holds yet), Cara with 9 surviving lines and `landings_365d` 0, a provenance head of `4631a8b` and no caveat. At `--now 2025-12-01` it stores a run of 34 / 34, everyone inactive, and exits 0.
 - **Reading the commit but not recording it.** The provenance head stays `4631a8b` and the card says nothing, so a reader cannot tell which code the numbers describe.
+
+#### Landings dated after `--now` below the commit read (`fixture.Backdated`)
+
+The rule follows the first-parent chain down from the head, not the committer times, so on a chain whose committer times are out of order the commit read can sit above landings dated at or after `--now` ([ADR 0012](../../docs/adr/0012-a-run-reads-each-repository-as-it-stood-at-now.md)). Blame then counts their lines while no window counts their landings, and the run must say so (#70's review).
+
+The [backdated guard](#backdated-first-parent-commit-fixturebackdated), scanned alone with `--now 2026-07-01T00:00:00Z`, no mailmap and the packaged policy. Its first-parent chain from HEAD is A2 (committed 2026-08-24), A1 (2026-08-17), X (2025-06-01), B2 (2026-08-03) and B1 (2026-02-02). The run reads X, the first commit on that chain committed before `--now`: A2 and A1 are above it, and B2, below it, is dated after `--now`.
+
+| Window at `--now 2026-07-01` | Interval | Landings in it |
+| --- | --- | --- |
+| The 365 days a scan collects | `[2025-07-01, 2026-07-01)` | B1 alone: X is older, B2 later |
+| `knowledge_loss@1` activity | `[2026-01-02, 2026-07-01)` | B1 |
+
+At X, three `prod` files hold lines, 7 in all: `bea.py` (B1), `cal.py` (B2) and `dot.py` (X).
+
+| Who | `surviving@1` (repository) | `landings_365d` |
+| --- | --- | --- |
+| Bea Below | 4 (`bea.py`) | 1 (B1) |
+| Cal Below | 2 (`cal.py`, written by B2 on 2026-08-03, after `--now`) | 0 |
+| Dot Dated | 1 (`dot.py`) | 0 |
+
+`knowledge_loss@1` is **3 / 7**, with `people` 3 and `people_inactive` 2. Cal holds 2 lines that no window has seen land, because their landing is dated after `--now`; Dot's 1 line is older than the activity window. These are the numbers of the code read, and the chain-order rule accepts them. What the run owes is to say so. The repository carries two warnings, each also a caveat wherever its numbers are:
+
+- `head-after-now`: the run read commit X (`d4fc72d177ce`), committed 2025-06-01T12:00:00Z, and its head is 2 landings later (A1 and A2).
+- `dated-after-now`: 1 landing on the first-parent chain below commit X (B2) is dated at or after `--now`. B1, also below it, is older and does not count.
+
+Wrong implementations this catches:
+
+- **Saying nothing** (#70 before its review). The numbers are the same, but the `head-after-now` caveat said the repository was read "as it stood at --now", and nothing said that Cal's 2 lines were written after it.
+- **Counting every commit below the one read.** That gives 2 (B2 and B1), where only B2 is dated at or after `--now`.
 
 ## Sibling fixture
 
