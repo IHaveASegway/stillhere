@@ -12,6 +12,7 @@ import (
 	"github.com/IHaveASegway/stillhere/internal/domain"
 	"github.com/IHaveASegway/stillhere/internal/identity"
 	"github.com/IHaveASegway/stillhere/internal/metrics"
+	"github.com/IHaveASegway/stillhere/internal/redact"
 	"github.com/IHaveASegway/stillhere/internal/report"
 )
 
@@ -111,7 +112,7 @@ func Scan(ctx context.Context, d Deps, r ScanRequest) (*report.Model, error) {
 	run := domain.Run{
 		Kind: domain.RunKindScan, Status: runStatus(fs), Now: r.Now, Started: started.UTC(),
 		ToolVersion: d.Version, Policy: d.Policy.Ref(), PolicySource: d.Policy.Source,
-		Options: scanOptions(r, d, jobs, scope, ranked),
+		Options: scanOptions(r, d, pl, jobs, scope, ranked),
 	}
 	id, err := storeRun(ctx, d.Store, run, fs, values, intervals)
 	timings.StoreMS = time.Since(start).Milliseconds()
@@ -145,14 +146,17 @@ func runStatus(fs *domain.FactSet) domain.RunStatus {
 }
 
 // scanOptions are the effective options a run records: enough to know how
-// it was made, and never a secret. The ranked metrics are recorded with the
-// versions they resolved to, so a later report ranks the same versions.
-func scanOptions(r ScanRequest, d Deps, jobs int, scope string, ranked []rankedMetric) map[string]string {
+// it was made, and never a secret. The paths are those discovery resolved
+// (plan.paths), not the arguments as typed, and every value is scrubbed, so
+// a token pasted into an argument reaches neither facts.db nor a report.
+// The ranked metrics are recorded with the versions they resolved to, so a
+// later report ranks the same versions.
+func scanOptions(r ScanRequest, d Deps, pl *plan, jobs int, scope string, ranked []rankedMetric) map[string]string {
 	opts := map[string]string{
 		"jobs":         strconv.Itoa(jobs),
 		"scope":        scope,
 		"history_days": strconv.Itoa(scanHistoryDays),
-		"paths":        strings.Join(r.Paths, "\n"),
+		"paths":        strings.Join(pl.paths, "\n"),
 		"policy":       d.Policy.Name,
 	}
 	if len(ranked) > 0 {
@@ -167,6 +171,9 @@ func scanOptions(r ScanRequest, d Deps, jobs int, scope string, ranked []rankedM
 	}
 	if r.IgnoreRevsFile != "" {
 		opts["ignore_revs_file"] = r.IgnoreRevsFile
+	}
+	for k, v := range opts {
+		opts[k] = redact.Scrub(v)
 	}
 	return opts
 }

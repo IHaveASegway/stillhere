@@ -31,6 +31,7 @@ import (
 	"github.com/IHaveASegway/stillhere/internal/domain"
 	"github.com/IHaveASegway/stillhere/internal/gitcli"
 	"github.com/IHaveASegway/stillhere/internal/policy"
+	"github.com/IHaveASegway/stillhere/internal/redact"
 	"github.com/IHaveASegway/stillhere/internal/report"
 	"github.com/IHaveASegway/stillhere/internal/sqlite"
 )
@@ -546,11 +547,12 @@ func subcommandRequired(cmd *cobra.Command, args []string) error {
 
 // errorLine is the one line printed for a failed command. Each line of the
 // message, such as each error errors.Join collected, becomes one clause,
-// and the clauses are joined with "; ".
+// and the clauses are joined with "; ". An error can quote an argument, and
+// an argument can be a URL with a token in it, so every clause is scrubbed.
 func errorLine(cmd *cobra.Command, err error) string {
 	var clauses []string
 	for _, line := range strings.Split(err.Error(), "\n") {
-		if line = terminalSafe(line); line != "" {
+		if line = terminalSafe(redact.Scrub(line)); line != "" {
 			clauses = append(clauses, line)
 		}
 	}

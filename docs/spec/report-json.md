@@ -132,7 +132,7 @@ Changes from the 2026-10-07 draft:
 
 | Object | Fields | Notes |
 | --- | --- | --- |
-| `run` | `id`, `status`, `tool_version`, `options` | `status` is `complete` or `partial` (a repository failed, or a PATH gave no repository). `options` are the effective scan options: `jobs`, `scope`, `rank` (comma-separated), `exclude_repo` and `paths` (newline-separated), `ignore_revs_file`, `history_days`, `policy` (the file read). Never a secret. |
+| `run` | `id`, `status`, `tool_version`, `options` | `status` is `complete` or `partial` (a repository failed, or a path gave no repository). `options` are the effective scan options: `jobs`, `scope`, `rank` (comma-separated), `exclude_repo` and `paths` (newline-separated), `ignore_revs_file`, `history_days`, `policy` (the file read). `paths` are the PATH arguments as discovery resolved them, absolute: each group's directory and each repository named directly, never the argument as typed, which may be a URL with a token in it; a PATH that gave no repository is a `path-failed` warning instead. Every value is scrubbed ([git-invocation.md](git-invocation.md#url-scrubbing)): never a secret. |
 | `window` | `days`, `days_from`, `sort`, `sort_from`, `since`, `until`, `date_field`, `walk`, `diff` | The landed@1 window: what "landed" means. `*_from` is `cli` or `policy`. |
 | `history` | `since`, `until` | The landing window the history covers: 365 days for a scan, the window for a week run. |
 | `provenance` | `run_id`, `as_of`, `policy`, `heads[]`, `metrics[]` | On every overview, card, rank table and answer, so each reads on its own. `run_id` is 0 for a week report. `heads` are `{repo, key, branch, sha}`. |

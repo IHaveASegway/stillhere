@@ -51,6 +51,12 @@ type plan struct {
 	jobs     []repoJob
 	groups   []domain.Group   // members limited to the repositories kept
 	warnings []domain.Warning // run-level: excluded repositories, failed paths, discovery's own
+	// paths are the PATH arguments as discovery resolved them: each group's
+	// directory and each repository named directly, absolute and sorted. A
+	// run records these rather than the arguments as typed, which depend on
+	// the directory the command ran in and may be a URL with a token in it;
+	// a PATH that gave no repository is a path-failed warning instead.
+	paths []string
 }
 
 // repoJob is one repository to collect, with the warnings discovery
@@ -82,16 +88,23 @@ func discover(ctx context.Context, d Deps, paths, exclude []string) (*plan, erro
 // found, records each one it leaves out as a run-level warning, and routes
 // discovery's warnings to the repositories they concern: a warning about a
 // repository the run leaves out goes with it.
+//
+// Every message it composes is scrubbed (redact.Message, redact.Scrub): a
+// failed path is the argument as discovery made it absolute, and a URL
+// given as a PATH, token included, becomes "/cwd/https:/user:TOKEN@host".
 func planRun(disc *collect.Discovery, exclude []string) *plan {
 	pl := &plan{}
 	kept := map[string]bool{}
 	excluded := map[string]bool{}
 	for _, r := range disc.Repos {
+		if r.Group == "" {
+			pl.paths = append(pl.paths, r.Path)
+		}
 		if glob, ok := matchGlob(exclude, r.Name); ok {
 			excluded[r.Key] = true
 			pl.warnings = append(pl.warnings, domain.Warning{
 				Code:    warnExcluded,
-				Message: fmt.Sprintf("left out %s (%s): its name matches --exclude-repo %q", r.Name, r.Path, glob),
+				Message: redact.Scrub(fmt.Sprintf("left out %s (%s): its name matches --exclude-repo %q", r.Name, r.Path, glob)),
 			})
 			continue
 		}
@@ -121,6 +134,7 @@ func planRun(disc *collect.Discovery, exclude []string) *plan {
 		})
 	}
 	for _, g := range disc.Groups {
+		pl.paths = append(pl.paths, g.Path)
 		var keys []string
 		for _, k := range g.Repos {
 			if kept[k] {
@@ -130,6 +144,8 @@ func planRun(disc *collect.Discovery, exclude []string) *plan {
 		g.Repos = keys
 		pl.groups = append(pl.groups, g)
 	}
+	slices.Sort(pl.paths)
+	pl.paths = slices.Compact(pl.paths)
 	sortWarnings(pl.warnings)
 	return pl
 }
