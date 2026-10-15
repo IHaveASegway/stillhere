@@ -11,6 +11,7 @@ import (
 	"golang.org/x/sync/errgroup"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
+	"github.com/IHaveASegway/stillhere/internal/redact"
 )
 
 // SyncRequest asks to bring an organization's mirrors and forge facts up to
@@ -71,32 +72,43 @@ func Sync(ctx context.Context, d Deps, r SyncRequest) error {
 }
 
 // options are the effective options a sync run records. They hold no
-// secret: the token never reaches the use case.
+// secret: the token never reaches the use case, and every value is
+// scrubbed (redact.Scrub), as a scan's are, so a token pasted into --org or
+// --mirrors, such as a remote URL given where a name or a directory
+// belongs, reaches neither facts.db nor a report (#71).
 func (r SyncRequest) options() map[string]string {
-	return map[string]string{
+	opts := map[string]string{
 		"org":              r.Org,
 		"mirrors":          r.Mirrors,
 		"include_archived": strconv.FormatBool(r.IncludeArchived),
 		"include_forks":    strconv.FormatBool(r.IncludeForks),
 	}
+	for k, v := range opts {
+		opts[k] = redact.Scrub(v)
+	}
+	return opts
 }
 
-// syncOrg syncs every selected repository and returns the run's status.
+// syncOrg syncs every selected repository and returns the run's status. Its
+// messages and log lines quote the organization and the mirror paths
+// scrubbed: the command line refuses an organization that is no GitHub
+// name, but the mirrors directory may be any path the user typed.
 func syncOrg(ctx context.Context, d Deps, r SyncRequest, log *slog.Logger) (domain.RunStatus, error) {
+	org := redact.Scrub(r.Org)
 	listed, err := d.Forge.Repos(ctx, r.Org)
 	if err != nil {
-		return domain.RunStatusFailed, fmt.Errorf("listing the repositories of %s: %w", r.Org, err)
+		return domain.RunStatusFailed, fmt.Errorf("listing the repositories of %s: %w", org, err)
 	}
 	repos, skipped := selectRepos(listed, r)
-	log.Info("sync github", "org", r.Org, "listed", len(listed), "syncing", len(repos),
+	log.Info("sync github", "org", org, "listed", len(listed), "syncing", len(repos),
 		"skipped_archived", skipped.archived, "skipped_forks", skipped.forks, "skipped_empty", skipped.empty)
 	if len(repos) == 0 {
 		return domain.RunStatusFailed, fmt.Errorf(
 			"%s has no repository to sync (%d archived, %d forks, %d empty; see --include-archived and --include-forks): %w",
-			r.Org, skipped.archived, skipped.forks, skipped.empty, domain.ErrNoFacts)
+			org, skipped.archived, skipped.forks, skipped.empty, domain.ErrNoFacts)
 	}
 	if err := d.ForgeStore.PutForgeRepos(ctx, repos); err != nil {
-		return domain.RunStatusFailed, fmt.Errorf("storing the repositories of %s: %w", r.Org, err)
+		return domain.RunStatusFailed, fmt.Errorf("storing the repositories of %s: %w", org, err)
 	}
 	unmirrored := reconcileMirrors(ctx, d, r, listed, log)
 
@@ -105,7 +117,8 @@ func syncOrg(ctx context.Context, d Deps, r SyncRequest, log *slog.Logger) (doma
 	g.SetLimit(syncJobs)
 	for i, repo := range repos {
 		g.Go(func() error {
-			errs[i] = syncRepo(ctx, d, r, repo, unmirrored[repo.ID], log)
+			at := syncPlace{repo: repoName(repo), of: fmt.Sprintf("%d of %d", i+1, len(repos))}
+			errs[i] = syncRepo(ctx, d, r, repo, unmirrored[repo.ID], at, log)
 			return nil // a bulkhead: one repository's failure stops no other
 		})
 	}
@@ -118,19 +131,29 @@ func syncOrg(ctx context.Context, d Deps, r SyncRequest, log *slog.Logger) (doma
 	for i, err := range errs {
 		if err != nil {
 			failed++
-			log.Warn("sync failed", "repo", repoName(repos[i]), "error", err)
+			log.Warn("sync failed", "repo", repoName(repos[i]), "error", redact.Scrub(err.Error()))
 		}
 	}
 	switch {
 	case failed == 0:
 		return domain.RunStatusComplete, nil
 	case failed < len(repos):
-		log.Warn("sync partial", "org", r.Org, "failed", failed, "synced", len(repos)-failed)
+		log.Warn("sync partial", "org", org, "failed", failed, "synced", len(repos)-failed)
 		return domain.RunStatusPartial, nil
 	default:
-		return domain.RunStatusFailed, fmt.Errorf("no repository of %s synced: %w", r.Org, domain.ErrNoFacts)
+		return domain.RunStatusFailed, fmt.Errorf("no repository of %s synced: %w", org, domain.ErrNoFacts)
 	}
 }
+
+// syncPlace names a repository in a sync's progress lines: "acme/widget",
+// and where it stands in the sync's order of repositories, "3 of 80".
+type syncPlace struct{ repo, of string }
+
+// syncProgressEvery is how many stored pull requests a progress line
+// stands for: two pages of the adapter's 50, a few seconds of GitHub's
+// pace, so a first sync of a large repository shows it is moving while a
+// later sync, which reads a page or less, logs only its "synced" line.
+const syncProgressEvery = 100
 
 // skips counts the repositories a sync leaves out, by reason.
 type skips struct{ archived, forks, empty int }
@@ -174,19 +197,20 @@ func reconcileMirrors(ctx context.Context, d Deps, r SyncRequest, listed []domai
 	}
 	var unmirrored map[string]error
 	for _, m := range moves {
-		attrs := []any{"reason", m.Reason, "from", m.From, "to", m.To}
+		from, to := redact.Scrub(m.From), redact.Scrub(m.To)
+		attrs := []any{"reason", m.Reason, "from", from, "to", to}
 		switch {
 		case m.Err == "" && (m.Reason == domain.MirrorRenamed || m.Reason == domain.MirrorRestored):
 			log.Info("mirror moved", attrs...)
 		case m.Err == "":
 			log.Warn("mirror moved out of scan's way", attrs...)
 		default:
-			log.Warn("mirror not moved", append(attrs, "error", m.Err)...)
+			log.Warn("mirror not moved", append(attrs, "error", redact.Scrub(m.Err))...)
 			if m.Reason == domain.MirrorRenamed || m.Reason == domain.MirrorRestored {
 				if unmirrored == nil {
 					unmirrored = map[string]error{}
 				}
-				unmirrored[m.Repo] = fmt.Errorf("its mirror at %s could not move to %s: %s", m.From, m.To, m.Err)
+				unmirrored[m.Repo] = fmt.Errorf("its mirror at %s could not move to %s: %s", from, to, redact.Scrub(m.Err))
 			}
 		}
 	}
@@ -197,7 +221,7 @@ func reconcileMirrors(ctx context.Context, d Deps, r SyncRequest, listed []domai
 // two are independent: a mirror that fails to fetch, or that unmirrored
 // says to leave alone, does not stop the pull requests, and the other way
 // round.
-func syncRepo(ctx context.Context, d Deps, r SyncRequest, repo domain.ForgeRepo, unmirrored error, log *slog.Logger) error {
+func syncRepo(ctx context.Context, d Deps, r SyncRequest, repo domain.ForgeRepo, unmirrored error, at syncPlace, log *slog.Logger) error {
 	started := time.Now()
 	var errs []error
 	path := ""
@@ -211,12 +235,12 @@ func syncRepo(ctx context.Context, d Deps, r SyncRequest, repo domain.ForgeRepo,
 	if ctx.Err() != nil {
 		return errors.Join(append(errs, ctx.Err())...)
 	}
-	pulls, err := syncPullRequests(ctx, d, r, repo)
+	pulls, err := syncPullRequests(ctx, d, r, repo, at, log)
 	if err != nil {
 		errs = append(errs, fmt.Errorf("pull requests: %w", err))
 	}
 	if len(errs) == 0 {
-		log.Info("synced", "repo", repoName(repo), "mirror", path, "pull_requests", pulls,
+		log.Info("synced", "repo", at.repo, "repos", at.of, "mirror", redact.Scrub(path), "pull_requests", pulls,
 			"took", time.Since(started).Round(time.Millisecond))
 	}
 	return errors.Join(errs...)
@@ -224,16 +248,26 @@ func syncRepo(ctx context.Context, d Deps, r SyncRequest, repo domain.ForgeRepo,
 
 // syncPullRequests copies the repository's pull requests updated since its
 // watermark, one stored page at a time, and returns how many it stored. A
-// sync that stops halfway resumes from the last page stored.
-func syncPullRequests(ctx context.Context, d Deps, r SyncRequest, repo domain.ForgeRepo) (int, error) {
+// sync that stops halfway resumes from the last page stored. Every
+// syncProgressEvery pull requests stored, it logs how many so far, with the
+// repository and its place in the sync, since a first sync of a large
+// repository takes minutes at GitHub's pace, and four run at once.
+func syncPullRequests(ctx context.Context, d Deps, r SyncRequest, repo domain.ForgeRepo, at syncPlace, log *slog.Logger) (int, error) {
 	wm, err := d.ForgeStore.ForgeWatermark(ctx, repo.ID)
 	if err != nil {
 		return 0, err
 	}
 	n := 0
 	err = d.Forge.PullRequests(ctx, repo, wm.Updated, func(p *domain.ForgePage) error {
+		before := n
 		n += len(p.PullRequests)
-		return d.ForgeStore.PutForgePage(ctx, p)
+		if err := d.ForgeStore.PutForgePage(ctx, p); err != nil {
+			return err
+		}
+		if n/syncProgressEvery > before/syncProgressEvery {
+			log.Info("storing pull requests", "repo", at.repo, "repos", at.of, "stored", n)
+		}
+		return nil
 	})
 	if err != nil {
 		return n, err

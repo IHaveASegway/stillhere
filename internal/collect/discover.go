@@ -27,7 +27,7 @@ type Discovery struct {
 	Repos    []domain.Repo      // health-checked, duplicates removed, sorted by Key
 	Groups   []domain.Group     // sorted by Name
 	Warnings []domain.Warning   // duplicate-repo, shallow-clone, partial-clone; sorted by Repo, Code, Message
-	Failed   []domain.FileError // paths that gave no repository, each once, sorted by Path: a PATH slot that is neither a repo nor a group, or a repo git cannot read or whose default branch has no commit; the use cases report each as a run-level path-failed warning and mark the run partial
+	Failed   []domain.FileError // paths that gave no repository, each once, sorted by Path: a PATH slot that is neither a repo nor a group (a directory with no repository among its immediate children is none, and its message says what to pass instead), or a repo git cannot read or whose default branch has no commit; each Message is one line, scrubbed, and cut where it quotes git; the use cases report each as a run-level path-failed warning and mark the run partial
 }
 
 // The warning codes discovery emits (docs/spec/report-json.md).
@@ -128,8 +128,15 @@ func Discover(ctx context.Context, git domain.GitRunner, paths []string) (*Disco
 			named = append(named, discoverCandidate{discoverDir: slot, kind: kind})
 		}
 	}
-	groups, members, memberFailed := discoverGroups(groupDirs)
+	groups, members, empty, memberFailed := discoverGroups(groupDirs)
 	failed = append(failed, memberFailed...)
+	for _, dir := range empty {
+		f, err := discoverEmpty(ctx, git, dir)
+		if err != nil {
+			return nil, fmt.Errorf("discover: %w", err)
+		}
+		failed = append(failed, f)
+	}
 	// Members come first, in path order, so a repository that is also named
 	// on its own stays in its group (rule 5).
 	slices.SortFunc(members, func(a, b discoverCandidate) int { return cmp.Compare(a.path, b.path) })
@@ -279,14 +286,18 @@ func discoverExists(path string, dir bool) (bool, error) {
 // immediate children that look like repositories, with no deeper walk. A
 // child that is not a directory, or a directory that is not a repository,
 // is not a member and is not reported. A group that cannot be listed fails
-// and takes no name, so it cannot push another group to a suffix.
-func discoverGroups(dirs []discoverDir) ([]domain.Group, []discoverCandidate, []domain.FileError) {
+// and takes no name, so it cannot push another group to a suffix. Neither
+// does a directory none of whose children looks like a repository: it is
+// returned in empty, for discoverEmpty to say why it holds none, since a
+// group of nothing would pass for one that was read and found empty.
+func discoverGroups(dirs []discoverDir) ([]domain.Group, []discoverCandidate, []string, []domain.FileError) {
 	type listed struct {
 		dir     string
 		members []discoverCandidate
 	}
 	var (
 		ok     []listed
+		empty  []string
 		failed []domain.FileError
 	)
 	for _, d := range dirs {
@@ -295,8 +306,12 @@ func discoverGroups(dirs []discoverDir) ([]domain.Group, []discoverCandidate, []
 			failed = append(failed, discoverFailure(d.path, err))
 			continue
 		}
-		ok = append(ok, listed{d.path, members})
 		failed = append(failed, memberFailed...)
+		if len(members) == 0 && len(memberFailed) == 0 {
+			empty = append(empty, d.path)
+			continue
+		}
+		ok = append(ok, listed{d.path, members})
 	}
 	listedDirs := make([]string, len(ok))
 	for i, l := range ok {
@@ -314,7 +329,115 @@ func discoverGroups(dirs []discoverDir) ([]domain.Group, []discoverCandidate, []
 			cands = append(cands, m)
 		}
 	}
-	return groups, cands, failed
+	return groups, cands, empty, failed
+}
+
+// discoverDeeperNames is how many subdirectories that hold repositories
+// discoverEmpty names.
+const discoverDeeperNames = 2
+
+// discoverEmpty says why dir, a PATH that is no repository and has none
+// among its immediate children, gave no repository (rules 3 and 4). That is
+// usually a near miss, and the failure names the path to pass instead,
+// asking the more specific question first:
+//
+//   - its subdirectories hold repositories one level deeper, as a mirrors
+//     root holds an owner's directory of mirrors, or a parent holds group
+//     directories: groups are one level deep, so it names up to two of
+//     them, hidden ones left out;
+//   - dir is inside a work tree, as "stillhere week ." is in a
+//     repository's subdirectory: git, which looks upward, names the top
+//     of the innermost work tree, which is the repository to pass;
+//   - otherwise it holds no repository that discovery can reach.
+//
+// The order matters where both hold: a directory of groups inside an
+// enclosing work tree, such as a home directory or a workspace kept in
+// git, would otherwise be sent to that enclosing repository rather than to
+// the groups the user meant (#71).
+//
+// Only a cancellation is an error; git failing for any other reason
+// leaves the answer to the filesystem.
+func discoverEmpty(ctx context.Context, git domain.GitRunner, dir string) (domain.FileError, error) {
+	if deeper := discoverDeeper(dir); len(deeper) > 0 {
+		for i, name := range deeper {
+			deeper[i] = redact.Message(name)
+		}
+		return domain.FileError{Path: dir, Message: "no repository among its immediate children, and groups are one level deep: " +
+			"pass a subdirectory that holds repositories, such as " + strings.Join(deeper, " or ")}, nil
+	}
+	// git dies, with exit 128, outside any work tree (and in a bare
+	// repository): an answer here, not a failure to ask.
+	out, err := discoverGit(ctx, git, dir, []int{128}, "rev-parse", "--show-toplevel")
+	if err != nil && ctx.Err() != nil {
+		return domain.FileError{}, context.Cause(ctx)
+	}
+	// Each name is one stored line on its own (redact.Message), so the
+	// message, which names a path twice, is never cut before the second.
+	if top := strings.TrimSuffix(string(out), "\n"); err == nil && top != "" {
+		top = redact.Message(top)
+		return domain.FileError{Path: dir, Message: fmt.Sprintf("inside repository %s: pass %s", top, top)}, nil
+	}
+	return domain.FileError{Path: dir, Message: "no repository among its immediate children, so neither a repository nor a group"}, nil
+}
+
+// discoverDeeper returns the names of up to discoverDeeperNames immediate
+// subdirectories of dir, in name order, with a child that looks like a
+// repository (discoverShape); a hidden one, such as a mirrors root's .stale,
+// is not suggested. It reads each subdirectory only until it finds such a
+// child, and a subdirectory it cannot read holds none, as for a group.
+func discoverDeeper(dir string) []string {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil
+	}
+	var names []string
+	for _, e := range entries {
+		if len(names) == discoverDeeperNames {
+			break
+		}
+		if strings.HasPrefix(e.Name(), ".") || (!e.IsDir() && e.Type()&fs.ModeSymlink == 0) {
+			continue
+		}
+		if discoverHolds(filepath.Join(dir, e.Name())) {
+			names = append(names, e.Name())
+		}
+	}
+	return names
+}
+
+// discoverHolds reports whether dir is a directory with a child that looks
+// like a repository, reading its entries a batch at a time so that a large
+// directory is read only up to the first one. It looks before it opens, as
+// discoverMembers does: dir may be a symbolic link to anything, and opening
+// a FIFO blocks in open(2) until a writer appears, which no context and no
+// single Ctrl-C can end (#71).
+func discoverHolds(dir string) bool {
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		return false
+	}
+	f, err := os.Open(dir)
+	if err != nil {
+		return false
+	}
+	defer func() { _ = f.Close() }()
+	for {
+		entries, err := f.ReadDir(256)
+		for _, e := range entries {
+			if !e.IsDir() && e.Type()&fs.ModeSymlink == 0 {
+				continue
+			}
+			child := filepath.Join(dir, e.Name())
+			if info, err := os.Stat(child); err != nil || !info.IsDir() {
+				continue
+			}
+			if kind, err := discoverShape(child); err == nil && kind != discoverOther {
+				return true
+			}
+		}
+		if err != nil {
+			return false // io.EOF: read to the end
+		}
+	}
 }
 
 // discoverMembers returns the immediate children of the group directory dir

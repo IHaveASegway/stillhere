@@ -6,6 +6,8 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/IHaveASegway/stillhere/internal/app"
+	"github.com/IHaveASegway/stillhere/internal/github"
+	"github.com/IHaveASegway/stillhere/internal/redact"
 )
 
 func (e *env) syncCommand() *cobra.Command {
@@ -40,6 +42,18 @@ remote URL, config, log or report.`,
 			if req.Org == "" {
 				return usagef("sync github needs --org ORG (see '%s --help')", cmd.CommandPath())
 			}
+			// GitHub's own name rule, the adapter's, before a run is begun:
+			// the run records its options, and a URL pasted as an
+			// organization carries a token as often as not (#71).
+			if !github.ValidName(req.Org) {
+				return usagef("invalid --org %q: want the login of a GitHub organization or user, such as acme",
+					redact.Scrub(req.Org))
+			}
+			// The mirrors are cloned under --mirrors, and a scan stores
+			// their paths: a URL there would put its token in both (#71).
+			if err := localPath("--mirrors", req.Mirrors); err != nil {
+				return err
+			}
 			if req.Mirrors == "" {
 				home, err := stillhereHome()
 				if err != nil {
@@ -55,7 +69,7 @@ remote URL, config, log or report.`,
 			req.Now = e.now
 			// The forge adapter runs the mirror commands with a git runner
 			// of its own, so the use case needs no git runner.
-			return e.with(cmd.Context(), need{store: true, forge: true}, func(d app.Deps) error {
+			return e.with(cmd.Context(), need{store: true, write: true, forge: true}, func(d app.Deps) error {
 				return app.Sync(cmd.Context(), d, req)
 			})
 		},

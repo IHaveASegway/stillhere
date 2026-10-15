@@ -46,14 +46,18 @@ func (b Build) resolved() Build {
 	return b
 }
 
+// versionLine is the first line of 'stillhere version', and all that
+// 'stillhere --version' prints: one function, so the two cannot drift.
+func versionLine(b Build) string { return "stillhere " + b.Version }
+
 func (e *env) versionCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
 		Short: "Print the version, commit, build date and Go version",
 		Args:  usageArgs(cobra.NoArgs),
 		RunE: func(*cobra.Command, []string) error {
-			_, err := fmt.Fprintf(e.stdout, "stillhere %s\ncommit    %s\nbuilt     %s\ngo        %s %s/%s\n",
-				e.build.Version, e.build.Commit, e.build.Date,
+			_, err := fmt.Fprintf(e.stdout, "%s\ncommit    %s\nbuilt     %s\ngo        %s %s/%s\n",
+				versionLine(e.build), e.build.Commit, e.build.Date,
 				runtime.Version(), runtime.GOOS, runtime.GOARCH)
 			return err
 		},

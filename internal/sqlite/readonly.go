@@ -32,8 +32,8 @@ import (
 // Nothing is created, migrated or cleaned up. A missing path, a directory,
 // another program's file, and a facts database whose schema is older or
 // newer than this binary's are each a *domain.UsageError that says what to
-// run instead: an older database is migrated by any command that opens it
-// for writing, such as stillhere report.
+// run instead: an older database is migrated by any other command that
+// opens it, such as stillhere report (OpenExisting).
 //
 // The Store reads exactly as Open's does, one consistent snapshot per read
 // while another process writes a run, and only complete and partial runs
@@ -109,5 +109,5 @@ func (s *Store) readOnlyOpen(ctx context.Context) error {
 // the file is opened read-only, a missing file is SQLITE_CANTOPEN instead of
 // a new empty database, and every write is SQLITE_READONLY.
 func readOnlyDSN(path string) string {
-	return dsn(path, true) + "&mode=ro"
+	return dsn(path, true, "ro")
 }

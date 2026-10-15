@@ -460,6 +460,49 @@ func TestPolicy(t *testing.T) {
 		}
 	})
 
+	t.Run("File writes a policy out as a file that reads back to the same rules", func(t *testing.T) {
+		// What 'stillhere policy' prints (#71): the packaged policy, with
+		// every deny pattern written out, so that a file started from it
+		// is complete and its hash covers every pattern.
+		packaged, err := policy.Default()
+		if err != nil {
+			t.Fatal(err)
+		}
+		file, err := packaged.File()
+		if err != nil {
+			t.Fatalf("File: %v", err)
+		}
+		p, err := policy.Parse("stillhere.toml", file)
+		if err != nil {
+			t.Fatalf("the packaged policy written out does not parse: %v", err)
+		}
+		want := strings.Replace(summary(packaged), "paths=package:generated_paths.txt\n", "paths=policy\n", 1)
+		if got := summary(p); got != want {
+			t.Errorf("the packaged policy written out reads back as\n%s\nwant\n%s", got, want)
+		}
+		if string(p.Source) != string(source(string(file), "")) {
+			t.Errorf("the file's hash does not cover the file alone, its patterns included")
+		}
+		// Linguist's license travels with the patterns translated from it.
+		for _, w := range []string{"Copyright (c) 2017 GitHub, Inc.", "Permission is hereby granted", "stillhere policy", packaged.SHA256} {
+			if !strings.Contains(string(file), w) {
+				t.Errorf("the packaged policy written out lacks %q", w)
+			}
+		}
+		// A user's file is written out as it was read, and a stored run's
+		// packaged policy as today's is, from its own source.
+		if again, err := p.File(); err != nil || string(again) != string(file) {
+			t.Errorf("a user file written out again = %v, want the file as it was read", err)
+		}
+		stored, err := policy.FromSource("run 12", packaged.Source)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if again, err := stored.File(); err != nil || string(again) != string(file) {
+			t.Errorf("a stored packaged policy written out = %v, want what the packaged policy writes", err)
+		}
+	})
+
 	t.Run("a corrupt source is not a usage error", func(t *testing.T) {
 		toml := userTOML("")
 		for _, src := range [][]byte{

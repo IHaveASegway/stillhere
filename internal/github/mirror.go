@@ -124,7 +124,7 @@ func (s *Source) Mirror(ctx context.Context, repo domain.ForgeRepo, root string)
 	if s.git == nil {
 		return "", errors.New("github: Mirror needs Config.Git")
 	}
-	if !validName(repo.Owner) || !validName(repo.Name) {
+	if !ValidName(repo.Owner) || !ValidName(repo.Name) {
 		return "", fmt.Errorf("github: cannot mirror %q/%q: not a valid repository name", repo.Owner, repo.Name)
 	}
 	if !validID(repo.ID) {
@@ -219,7 +219,7 @@ func (s *Source) removeLeftovers(tmpRoot string, now time.Time) {
 		}
 		path := filepath.Join(tmpRoot, e.Name())
 		if err := os.RemoveAll(path); err != nil {
-			s.log.Warn("mirror: cannot remove a crashed clone's leftover", "path", path, "error", err)
+			s.log.Warn("mirror: cannot remove a crashed clone's leftover", "path", redact.Scrub(path), "error", redact.Scrub(err.Error()))
 		}
 	}
 }
@@ -253,7 +253,7 @@ func (s *Source) checkMirror(ctx context.Context, dir string, repo domain.ForgeR
 		if _, err := s.local(ctx, dir, "config", "remote.origin.url", url); err != nil {
 			return err
 		}
-		s.log.Info("mirror: following the repository's new URL", "mirror", dir, "url", url)
+		s.log.Info("mirror: following the repository's new URL", "mirror", redact.Scrub(dir), "url", url)
 	case id == "" && origin == url:
 		if _, err := s.local(ctx, dir, "config", forgeIDKey, repo.ID); err != nil {
 			return err

@@ -160,12 +160,14 @@ func readForgeMarks(ctx context.Context, d Deps, run domain.Run) (*report.ForgeR
 }
 
 // resolveRun finds the run a request names: its id, or the latest complete
-// or partial scan for 0.
+// or partial scan for 0. Its not-found errors say what to do in their own
+// words, which the command line prints alone, after the database's path
+// (the chain of store operations below them goes to its debug log).
 func resolveRun(ctx context.Context, s domain.FactStore, id int64) (domain.Run, error) {
 	if id == 0 {
 		run, err := s.LatestRun(ctx, domain.RunKindScan)
 		if errors.Is(err, domain.ErrNotFound) {
-			return run, fmt.Errorf("no complete scan in facts.db yet: run 'stillhere scan PATH...' first: %w", err)
+			return run, fmt.Errorf("no complete scan in this facts database yet: run 'stillhere scan PATH...' first: %w", err)
 		}
 		if err != nil {
 			return run, fmt.Errorf("finding the latest scan: %w", err)
@@ -174,7 +176,10 @@ func resolveRun(ctx context.Context, s domain.FactStore, id int64) (domain.Run, 
 	}
 	run, err := s.Run(ctx, id)
 	if errors.Is(err, domain.ErrNotFound) {
-		return run, fmt.Errorf("run %d: no complete or partial run has that id: %w", id, err)
+		// The retention rule is the store's to state (codebase.md#run-model):
+		// the sentence says only that it may be why.
+		return run, fmt.Errorf("run %d: no complete or partial run has that id: it may have failed, or retention "+
+			"may have deleted it; leave the run out to read the latest scan: %w", id, err)
 	}
 	if err != nil {
 		return run, fmt.Errorf("reading run %d: %w", id, err)
@@ -354,7 +359,10 @@ func WhoKnows(ctx context.Context, d Deps, r WhoKnowsRequest) (*report.WhoKnows,
 				"--repo %q is not a repository of run %d: it takes a repository key, as 'stillhere report --format json' lists them", repo, s.run.ID)}
 		}
 	}
-	prefix := cleanPrefix(r.Path)
+	// The path is echoed in the answer, its header and its caveats, and a
+	// URL pasted as PATH can carry a token: it is scrubbed once, here, and
+	// the scrubbed form is the one asked about (#71).
+	prefix := redact.Scrub(cleanPrefix(r.Path))
 	// who_knows@1 is answered per query, for any prefix down to one file,
 	// and never stored: a value for every directory of every repository
 	// would outnumber the facts.
@@ -370,10 +378,119 @@ func WhoKnows(ctx context.Context, d Deps, r WhoKnowsRequest) (*report.WhoKnows,
 		forge = nil
 	}
 	run := s.run
-	return report.NewWhoKnows(&report.WhoKnowsInput{
+	w := report.NewWhoKnows(&report.WhoKnowsInput{
 		Run: &run, Facts: underPrefix(s.facts, prefix, repo), Who: s.who, Path: prefix, Repo: repo, Values: values,
 		Forge: forge,
-	}), nil
+	})
+	if c, ok := whoKnowsNoPath(s.facts, prefix, repo, run.ID); ok {
+		w.Caveats = append(w.Caveats, c)
+	}
+	return w, nil
+}
+
+// caveatNoValues is report's code for a section whose emptiness is not a
+// real zero or a real "nobody" (docs/spec/report-json.md#caveats): the
+// renderers then say "no answer" rather than "nobody".
+const caveatNoValues = "no-values"
+
+// whoKnowsNoPathNames is how many repositories that hold the path a
+// whoKnowsNoPath caveat names before it counts the rest.
+const whoKnowsNoPathNames = 3
+
+// whoKnowsNoPath is the caveat of a who-knows answer about a path that no
+// collected repository asked about has (repo, or every one for ""): none
+// classified at its HEAD, blamed under the path or changed there by its
+// history (holdsPath). The answer is then empty because the path names
+// nothing there, and "nobody" would read as code no one knows (#71). It
+// keeps exit 0: the question had an answer, and this is it.
+//
+// The caveat states what the run holds, and so suits every reader, who
+// passes the path in their own form (the command line takes it relative to
+// a repository's root, the MCP server an absolute path in a clone too): the
+// repositories asked about lack it; when --repo or repo named one, the
+// run's other repositories that have it, since then the choice of
+// repository, not the form of the path, is what missed; and otherwise that
+// the run knows each path relative to its repository's root, the usual miss
+// being a path from the filesystem. A run none of whose repositories asked
+// about was collected says so with its failed caveats instead, and the
+// whole repository (prefix "") is never missing.
+func whoKnowsNoPath(fs *domain.FactSet, prefix, repo string, runID int64) (report.Caveat, bool) {
+	if prefix == "" {
+		return report.Caveat{}, false
+	}
+	var asked, holding []string // collected repositories asked about, and others of the run that hold the path
+	collected := 0
+	for i := range fs.Repos {
+		rf := &fs.Repos[i]
+		if rf.Status != domain.RepoStatusOK {
+			continue
+		}
+		collected++
+		has := holdsPath(rf, prefix)
+		switch {
+		case repo == "" || rf.Repo.Key == repo:
+			if has {
+				return report.Caveat{}, false
+			}
+			asked = append(asked, rf.Repo.Name)
+		case has:
+			holding = append(holding, rf.Repo.Name)
+		}
+	}
+	if len(asked) == 0 {
+		return report.Caveat{}, false
+	}
+	const missing = ", so this answer is missing, not a real \"nobody\": "
+	if len(holding) > 0 {
+		return report.Caveat{Code: caveatNoValues, Message: fmt.Sprintf("Repository %s of run %d has no path under %q",
+			asked[0], runID, prefix) + missing + whoKnowsHolding(holding) + "."}, true
+	}
+	lead := fmt.Sprintf("No repository of run %d has a path under %q", runID, prefix)
+	if collected == 1 {
+		lead = fmt.Sprintf("Repository %s of run %d has no path under %q", asked[0], runID, prefix)
+	}
+	return report.Caveat{Code: caveatNoValues, Message: lead + missing +
+		"the run knows each path relative to its repository's root, such as src or src/pay.go."}, true
+}
+
+// whoKnowsHolding names the repositories that hold a path another
+// repository lacks, in the run's order, and counts those past
+// whoKnowsNoPathNames when there are two or more of them: "repository
+// fixture has one", "repositories a, b and c have one", "repositories a,
+// b, c and 2 others have one".
+func whoKnowsHolding(names []string) string {
+	switch n := len(names); {
+	case n == 1:
+		return "repository " + names[0] + " has one"
+	case n > whoKnowsNoPathNames+1:
+		return fmt.Sprintf("repositories %s and %d others have one",
+			strings.Join(names[:whoKnowsNoPathNames], ", "), n-whoKnowsNoPathNames)
+	default:
+		return "repositories " + strings.Join(names[:n-1], ", ") + " and " + names[n-1] + " have one"
+	}
+}
+
+// holdsPath reports whether a repository's facts have a path under prefix:
+// one classified at its HEAD, a line blamed under it, or a change its
+// history made there, a rename's old path included. These are the facts
+// underPrefix keeps.
+func holdsPath(rf *domain.RepoFacts, prefix string) bool {
+	for _, pc := range rf.Paths {
+		if under(pc.Path, prefix) {
+			return true
+		}
+	}
+	for _, o := range rf.Owners {
+		if under(o.Path, prefix) {
+			return true
+		}
+	}
+	for _, ch := range rf.Changes {
+		if under(ch.Path, prefix) || (ch.OldPath != "" && under(ch.OldPath, prefix)) {
+			return true
+		}
+	}
+	return false
 }
 
 func hasRepo(fs *domain.FactSet, key string) bool {

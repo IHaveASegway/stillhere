@@ -2,8 +2,10 @@ package app_test
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -13,11 +15,13 @@ import (
 	"time"
 
 	"github.com/IHaveASegway/stillhere/internal/app"
+	"github.com/IHaveASegway/stillhere/internal/cli"
 	"github.com/IHaveASegway/stillhere/internal/domain"
 	"github.com/IHaveASegway/stillhere/internal/fixture"
 	"github.com/IHaveASegway/stillhere/internal/metrics"
 	"github.com/IHaveASegway/stillhere/internal/policy"
 	"github.com/IHaveASegway/stillhere/internal/rank"
+	"github.com/IHaveASegway/stillhere/internal/redact"
 	"github.com/IHaveASegway/stillhere/internal/report"
 	"github.com/IHaveASegway/stillhere/internal/sqlite"
 )
@@ -122,15 +126,61 @@ func TestDeterminism(t *testing.T) {
 		if err != nil {
 			t.Fatalf("app.Report: %v", err)
 		}
-		for _, d := range []struct {
+		type named struct {
 			name string
 			doc  report.Document
-		}{{"scan", s.model}, {"report", m}} {
+		}
+		docs := []named{{"scan", s.model}, {"report", m}}
+		// who-knows quotes its PATH in its answer, header and caveats: one
+		// pasted with a token is answered, and printed, scrubbed (#71).
+		for _, p := range planted {
+			w, err := app.WhoKnows(t.Context(), s.read, app.WhoKnowsRequest{RunID: s.run, Path: p})
+			if err != nil {
+				t.Fatalf("app.WhoKnows(a planted PATH): %v", err)
+			}
+			docs = append(docs, named{"who-knows of a planted PATH", w})
+		}
+		for _, d := range docs {
 			r := render(t, d.doc)
 			noToken(t, d.name+" as JSON", r.json)
 			noToken(t, d.name+" as text", r.text)
 			noToken(t, d.name+" as Markdown", r.markdown)
 		}
+
+		// The review of the MVP found a token pasted into sync github's
+		// --org or --mirrors in facts.db (#71). The command line refuses
+		// each before a run begins, and --db, a URL where a local path
+		// belongs, with an error line that holds no token and says why. A
+		// sync run records its options scrubbed, as a scan does, here one
+		// that GitHub's stand-in refuses after the run began. --db names a
+		// directory in the sync rows, which no open accepts: a check gone
+		// missing ends there, before GitHub could be asked anything, and
+		// only the reason tells it apart.
+		org := "https://x-access-token:" + fixture.DiscoveryToken + "@github.com/acme"
+		mirrors := filepath.Join(t.TempDir(), "https:", "x-access-token:"+fixture.DiscoveryToken+"@github.com", "mirrors")
+		noDB := t.TempDir()
+		for _, c := range []struct {
+			args []string
+			why  string
+		}{
+			{[]string{"--db", noDB, "sync", "github", "--org", org, "--mirrors", t.TempDir()}, "invalid --org"},
+			{[]string{"--db", noDB, "sync", "github", "--org", "acme", "--mirrors", mirrors},
+				fmt.Sprintf("--mirrors %q: want a local path", redact.Scrub(mirrors))},
+			{[]string{"--db", org + "/facts.db", "report"}, fmt.Sprintf("--db %q: want a local path", redact.Scrub(org+"/facts.db"))},
+		} {
+			var stderr bytes.Buffer
+			code := cli.Execute(t.Context(), c.args, io.Discard, &stderr, cli.Build{})
+			if code != 2 || !bytes.Contains(stderr.Bytes(), []byte(c.why)) {
+				t.Errorf("stillhere %s exits %d: %s; want 2 and %q", c.args[2], code, stderr.Bytes(), c.why)
+			}
+			noToken(t, "the error line of stillhere "+c.args[2], stderr.Bytes())
+		}
+		syncErr := app.Sync(t.Context(), app.Deps{Forge: refusingForge{}, ForgeStore: s.store, Store: s.store, Log: log},
+			app.SyncRequest{Org: org, Mirrors: mirrors, Now: fixture.Now})
+		if syncErr == nil {
+			t.Fatal("a sync GitHub refused succeeded")
+		}
+		noToken(t, "the refused sync's error", []byte(syncErr.Error()))
 		// While the store is open its writes sit in the write-ahead log,
 		// which must exist then; once it is closed they are checkpointed
 		// into facts.db.
@@ -151,11 +201,33 @@ func TestDeterminism(t *testing.T) {
 			t.Fatalf("closing the store: %v", err)
 		}
 		files("after the store closed", s.db)
+		if !bytes.Contains(readDB(t, s.db), []byte(redact.Scrub(mirrors))) {
+			t.Error("facts.db holds no sync run options with the scrubbed --mirrors, so the check above proves nothing for sync")
+		}
 		if logs.Len() == 0 {
 			t.Fatal("the scan and the report logged nothing at debug level, so the log check is empty")
 		}
 		noToken(t, "the debug log of the scan and the report", logs.Bytes())
 	})
+}
+
+// refusingForge stands in for GitHub answering that it has no such
+// organization: a sync through it begins its run, records its options and
+// fails, and nothing else of it is called.
+type refusingForge struct{ domain.ForgeSource }
+
+func (refusingForge) Repos(context.Context, string) ([]domain.ForgeRepo, error) {
+	return nil, &domain.UsageError{Msg: "GitHub has no such organization"}
+}
+
+// readDB reads a facts database file whole.
+func readDB(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return data
 }
 
 // checkGroupRun checks that a determinism scan covers what it is meant to

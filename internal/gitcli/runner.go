@@ -408,9 +408,11 @@ func (r *Runner) debug(ctx context.Context, inv invocation, started time.Time, e
 		return
 	}
 	// Arguments and timing only: the environment may hold credentials and
-	// stdin may hold paths in bulk, so neither is ever logged.
+	// stdin may hold paths in bulk, so neither is ever logged. The directory
+	// is a PATH the user typed, or a mirror under one, scrubbed like the
+	// arguments (#71).
 	r.log.LogAttrs(ctx, slog.LevelDebug, "git",
-		slog.String("dir", inv.dir),
+		slog.String("dir", redact.Scrub(inv.dir)),
 		slog.Any("args", inv.args),
 		slog.Duration("took", time.Since(started)),
 		slog.Int("exit", exit),

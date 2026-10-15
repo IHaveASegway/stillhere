@@ -60,7 +60,7 @@ that was, which every report of it shows.`,
 					return err
 				}
 			}
-			return e.with(cmd.Context(), need{git: true, policy: true, store: true}, func(d app.Deps) error {
+			return e.with(cmd.Context(), need{git: true, policy: true, store: true, write: true}, func(d app.Deps) error {
 				return e.printReport(app.Scan(cmd.Context(), d, req))
 			})
 		},

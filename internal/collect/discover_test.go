@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"slices"
@@ -153,14 +154,79 @@ func TestDiscover(t *testing.T) {
 		discoverCheck(t, got, &Discovery{
 			Repos: []domain.Repo{
 				{Key: "local:one", Name: "one", Group: "src", Path: filepath.Join(fx.SrcA, "one"), Branch: "main", Head: main},
+				{Key: "local:three", Name: "three", Group: "src-2", Path: filepath.Join(fx.SrcC, "three"), Branch: "main", Head: main},
 				{Key: "local:two", Name: "two", Group: "src-3", Path: filepath.Join(fx.SrcB, "two"), Branch: "main", Head: main},
 			},
 			Groups: []domain.Group{
 				{Name: "src", Path: fx.SrcA, Repos: []string{"local:one"}},
-				{Name: "src-2", Path: fx.SrcC}, // its own basename, which b/src cannot take
+				{Name: "src-2", Path: fx.SrcC, Repos: []string{"local:three"}}, // its own basename, which b/src cannot take
 				{Name: "src-3", Path: fx.SrcB, Repos: []string{"local:two"}},
 			},
 		})
+	})
+
+	t.Run("a directory with no repository among its immediate children fails, and says what to pass", func(t *testing.T) {
+		t.Parallel()
+		// git names the top of a work tree as it resolves it, symbolic
+		// links and all (the temporary directory is one on macOS).
+		top, err := filepath.EvalSymlinks(fx.Outer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stale := filepath.Join(fx.Mirrors, ".stale")
+		got := discoverRun(t, git, fx.Inside, fx.Mirrors, stale, fx.Workspace)
+		discoverCheck(t, got, &Discovery{
+			// No group: a directory of nothing would read as a group that
+			// was read and found empty, and it takes no name. Groups one
+			// level down are named before the work tree a directory is
+			// inside, which would send outer/src to outer.
+			Failed: []domain.FileError{
+				{Path: fx.Mirrors, Message: "no repository among its immediate children, and groups are one level deep: " +
+					"pass a subdirectory that holds repositories, such as acme or oss"},
+				{Path: stale, Message: "no repository among its immediate children, so neither a repository nor a group"},
+				{Path: fx.Inside, Message: "inside repository " + top + ": pass " + top},
+				{Path: fx.Workspace, Message: "no repository among its immediate children, and groups are one level deep: " +
+					"pass a subdirectory that holds repositories, such as acme"},
+			},
+		})
+	})
+
+	t.Run("a symbolic link to a FIFO is never opened", func(t *testing.T) {
+		t.Parallel()
+		// A directory with no repository among its children is read one
+		// level deeper for groups (rule 3), where a link may point at
+		// anything. Opening a FIFO blocks in open(2) until a writer comes,
+		// which no context ends: discovery must look before it opens. It
+		// hung here once (#71). On a hang the open stays blocked until the
+		// test binary exits; the test fails rather than waits for it.
+		dir := t.TempDir()
+		pipe := filepath.Join(dir, "pipe")
+		if err := exec.CommandContext(t.Context(), "mkfifo", pipe).Run(); err != nil {
+			t.Skipf("cannot make a FIFO here: %v", err)
+		}
+		if err := os.Symlink("pipe", filepath.Join(dir, "link")); err != nil {
+			t.Fatal(err)
+		}
+		type result struct {
+			d   *Discovery
+			err error
+		}
+		ctx, done := t.Context(), make(chan result, 1)
+		go func() {
+			d, err := Discover(ctx, git, []string{dir})
+			done <- result{d, err}
+		}()
+		select {
+		case r := <-done:
+			if r.err != nil {
+				t.Fatalf("Discover: %v", r.err)
+			}
+			discoverCheck(t, r.d, &Discovery{Failed: []domain.FileError{
+				{Path: dir, Message: "no repository among its immediate children, so neither a repository nor a group"},
+			}})
+		case <-time.After(30 * time.Second):
+			t.Fatal("Discover still runs after 30 s: it opened the link to a FIFO")
+		}
 	})
 
 	t.Run("a repository reached twice is one repository, and keeps its group; a failing one fails once", func(t *testing.T) {
@@ -282,7 +348,7 @@ func TestDiscover(t *testing.T) {
 		}
 		got, err := Discover(t.Context(), logged, []string{
 			fx.WidgetA, fx.WidgetB, fx.WidgetLink, fx.Other, fx.Mirror, fx.SCP, fx.HTTPS, fx.UnparsedA, fx.UnparsedB, fx.Reset,
-			fx.Bare, fx.Group, fx.Outer, fx.Project, fx.SrcA, fx.SrcB, fx.SrcC, fx.Lab,
+			fx.Bare, fx.Group, fx.Outer, fx.Project, fx.SrcA, fx.SrcB, fx.SrcC, fx.Lab, fx.Inside, fx.Mirrors,
 			fx.Tracking, fx.NoOriginHead, fx.OriginMaster, fx.DanglingHead, fx.MainFirst, fx.MasterOnly, fx.Current, fx.Detached,
 			fx.Empty, fx.Broken, fx.Stray, fx.StrayBare, fx.StrayTree, fx.Headless, fx.Unfinished, fx.File, fx.Missing,
 		})

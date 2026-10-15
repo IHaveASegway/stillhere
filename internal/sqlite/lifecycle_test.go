@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -68,6 +69,7 @@ func openHelper(path string) int {
 func TestStoreLifecycle(t *testing.T) {
 	t.Run("Open creates the directory 0700 and the files 0600, in WAL mode", testOpenCreates)
 	t.Run("Open refuses a file it does not own, without waiting, and leaves it as it was", testOpenRefuses)
+	t.Run("OpenExisting creates nothing, refuses what Open refuses, and migrates a file it reads", testOpenExisting)
 	t.Run("first opens racing in separate processes all succeed", testRacingOpens)
 	t.Run("a run left running is deleted once the store that began it has been silent for a day", testLease)
 	t.Run("retention and LatestRun follow the rule", testRetention)
@@ -162,6 +164,111 @@ func testOpenRefuses(t *testing.T) {
 	var usage *domain.UsageError
 	if _, err := sqlite.Open(ctx, dir); !errors.As(err, &usage) {
 		t.Errorf("Open(a directory) = %v, want a *domain.UsageError", err)
+	}
+
+	// A file, or the directory of one, that this process cannot write:
+	// refused at Open, naming it, rather than at the first write, which a
+	// scan makes after collecting every repository (#71). The superuser
+	// writes anything, and Windows has no such modes.
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		return
+	}
+	home := filepath.Join(t.TempDir(), "home")
+	db := filepath.Join(home, "facts.db")
+	if err := openStore(t, db).Close(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(home, 0o700); _ = os.Chmod(db, 0o600) })
+	for _, c := range []struct{ chmod, unwritable string }{{db, db}, {home, home}} {
+		if err := os.Chmod(c.chmod, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		before := readFile(t, db)
+		s, err := sqlite.Open(ctx, db)
+		if err == nil {
+			_ = s.Close()
+		}
+		if !errors.As(err, &usage) || !strings.Contains(usage.Msg, "cannot write "+c.unwritable+" ") {
+			t.Errorf("Open with %s read-only = %v, want a *domain.UsageError that names it", c.chmod, err)
+		}
+		if !bytes.Equal(before, readFile(t, db)) {
+			t.Errorf("Open with %s read-only changed facts.db", c.chmod)
+		}
+		if err := os.Chmod(c.chmod, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func testOpenExisting(t *testing.T) {
+	ctx := t.Context()
+	dir := t.TempDir()
+	var usage *domain.UsageError
+
+	// A mistyped --db: a usage error naming the path, and no directory or
+	// file made there, where Open would make an empty database (#71).
+	missing := filepath.Join(dir, "typo", "fact.db")
+	if s, err := sqlite.OpenExisting(ctx, missing); !errors.As(err, &usage) || !strings.Contains(usage.Msg, missing) {
+		if err == nil {
+			_ = s.Close()
+		}
+		t.Errorf("OpenExisting(a missing file) = %v, want a *domain.UsageError that names it", err)
+	}
+	if _, err := os.Stat(filepath.Dir(missing)); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("OpenExisting(a missing file) left %s (%v)", filepath.Dir(missing), err)
+	}
+	if _, err := sqlite.OpenExisting(ctx, dir); !errors.As(err, &usage) {
+		t.Errorf("OpenExisting(a directory) = %v, want a *domain.UsageError", err)
+	}
+	foreign := filepath.Join(dir, "other.db")
+	execRaw(t, openRaw(t, foreign), `CREATE TABLE notes (body TEXT)`)
+	if _, err := sqlite.OpenExisting(ctx, foreign); !errors.As(err, &usage) {
+		t.Errorf("OpenExisting(another program's database) = %v, want a *domain.UsageError", err)
+	}
+
+	// A database a writer made reads back. A run a crash left running is
+	// the next writer's to delete, not a reader's.
+	path := filepath.Join(dir, "facts.db")
+	w := openStore(t, path)
+	id, err := w.BeginRun(ctx, domain.Run{Kind: domain.RunKindScan})
+	if err == nil {
+		err = w.FinishRun(ctx, id, domain.RunStatusComplete)
+	}
+	if err == nil {
+		err = w.Close()
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	abandoned := abandonRun(t, path)
+	setLease(t, openRaw(t, path), abandoned, time.Now().Add(-48*time.Hour))
+	r, err := sqlite.OpenExisting(ctx, path)
+	if err != nil {
+		t.Fatalf("OpenExisting(a facts database) = %v", err)
+	}
+	t.Cleanup(func() { _ = r.Close() })
+	if run, err := r.LatestRun(ctx, domain.RunKindScan); err != nil || run.ID != id {
+		t.Errorf("LatestRun = %d, %v; want run %d", run.ID, err, id)
+	}
+	if got := storedRuns(t, openRaw(t, path)); !slices.ContainsFunc(got, func(s string) bool {
+		return strings.HasPrefix(s, strconv.FormatInt(abandoned, 10)+" ")
+	}) {
+		t.Errorf("OpenExisting deleted the abandoned run %d: runs %v", abandoned, got)
+	}
+
+	// An empty file is a facts database before its first migration, as an
+	// older one is before its later ones: the reader migrates it.
+	empty := filepath.Join(dir, "empty.db")
+	if err := os.WriteFile(empty, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e, err := sqlite.OpenExisting(ctx, empty)
+	if err != nil {
+		t.Fatalf("OpenExisting(an empty file) = %v", err)
+	}
+	t.Cleanup(func() { _ = e.Close() })
+	if _, err := e.LatestRun(ctx, domain.RunKindScan); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("LatestRun on the migrated empty file = %v, want domain.ErrNotFound", err)
 	}
 }
 

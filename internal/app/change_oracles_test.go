@@ -155,6 +155,34 @@ func mainChangeOracles(t *testing.T) {
 		}
 	})
 
+	t.Run("who-knows of a path no repository has", func(t *testing.T) {
+		// A filesystem path, such as the fixture's path from its group, names
+		// nothing in a repository: the answer is missing, with a no-values
+		// caveat that says so and how the run knows its paths, never
+		// "nobody" (#71). The caveat states what the run holds, not one
+		// reader's advice: the MCP server's who_knows takes an absolute
+		// path that the command line does not. notes.csv is a path the run
+		// knows, which no one holds lines of or landed lately: that one is
+		// a real "nobody".
+		noPath := fmt.Sprintf("Repository %s of run %d has no path under %q, so this answer is missing, not a real \"nobody\": "+
+			"the run knows each path relative to its repository's root, such as src or src/pay.go.", r.Name, s.run, "fixture/service.py")
+		for _, c := range []struct{ path, caveat string }{{"fixture/service.py", noPath}, {"notes.csv", ""}} {
+			w := s.whoKnows(t, c.path)
+			var noValues, want []string
+			for _, cv := range w.Caveats {
+				if cv.Code == "no-values" {
+					noValues = append(noValues, cv.Message)
+				}
+			}
+			if c.caveat != "" {
+				want = []string{c.caveat}
+			}
+			if len(w.Repos) != 0 || !slices.Equal(noValues, want) {
+				t.Errorf("who-knows %s: %d repositories, no-values caveats %q; want none, and %q", c.path, len(w.Repos), noValues, want)
+			}
+		}
+	})
+
 	t.Run("AI-assisted tags and reverts", func(t *testing.T) {
 		// SPEC, "AI-assisted tags and reverts (main fixture)": no landing is
 		// AI-assisted, and the revert query returns nothing.

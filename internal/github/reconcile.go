@@ -69,11 +69,11 @@ func (s *Source) ReconcileMirrors(ctx context.Context, owner string, listed []do
 	}
 	want := map[string]string{} // node id → the path its mirror belongs at
 	owners := map[string]bool{} // the owner directories this listing speaks for, lowercased
-	if validName(owner) {
+	if ValidName(owner) {
 		owners[strings.ToLower(owner)] = true
 	}
 	for _, r := range listed {
-		if validName(r.Owner) && validName(r.Name) && validID(r.ID) {
+		if ValidName(r.Owner) && ValidName(r.Name) && validID(r.ID) {
 			want[r.ID] = filepath.Join(root, r.Owner, r.Name+".git")
 			owners[strings.ToLower(r.Owner)] = true
 		}
@@ -108,7 +108,7 @@ func (s *Source) inventory(ctx context.Context, root string) ([]mirrorAt, error)
 	add := func(dir, owner string, stale bool) {
 		entries, err := os.ReadDir(dir)
 		if err != nil {
-			s.log.Warn("mirrors: cannot list a directory", "path", dir, "error", err)
+			s.log.Warn("mirrors: cannot list a directory", "path", redact.Scrub(dir), "error", redact.Scrub(err.Error()))
 			return
 		}
 		for _, e := range entries {
@@ -183,7 +183,7 @@ func (s *Source) forgeID(ctx context.Context, dir string) string {
 		Profile: domain.Sync,
 	})
 	if err != nil {
-		s.log.Debug("mirrors: cannot read a node id", "path", dir, "error", err)
+		s.log.Debug("mirrors: cannot read a node id", "path", redact.Scrub(dir), "error", redact.Scrub(err.Error()))
 		return ""
 	}
 	if id := strings.TrimSpace(string(out)); validID(id) {
