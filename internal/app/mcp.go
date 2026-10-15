@@ -117,18 +117,13 @@ func RunNames(ctx context.Context, d Deps, r NamesRequest) (*Names, error) {
 		return nil, err
 	}
 	n := &Names{Run: s.run}
-	for _, g := range s.facts.Groups {
-		n.Groups = append(n.Groups, NamedGroup{Name: g.Name, Repos: slices.Sorted(slices.Values(g.Repos))})
-	}
-	slices.SortFunc(n.Groups, func(a, b NamedGroup) int { return cmp.Compare(a.Name, b.Name) })
+	repos := make([]domain.Repo, 0, len(s.facts.Repos))
 	repoName := make(map[string]string, len(s.facts.Repos))
 	for _, rf := range s.facts.Repos {
-		n.Repos = append(n.Repos, NamedRepo{Key: rf.Repo.Key, Name: rf.Repo.Name, Group: rf.Repo.Group, Path: rf.Repo.Path})
+		repos = append(repos, rf.Repo)
 		repoName[rf.Repo.Key] = rf.Repo.Name
 	}
-	slices.SortFunc(n.Repos, func(a, b NamedRepo) int {
-		return cmp.Or(cmp.Compare(a.Group, b.Group), cmp.Compare(a.Name, b.Name), cmp.Compare(a.Key, b.Key))
-	})
+	n.Groups, n.Repos = mcpNamedScopes(s.facts.Groups, repos)
 
 	type acc struct {
 		p     NamedPerson
@@ -185,6 +180,55 @@ func RunNames(ctx context.Context, d Deps, r NamesRequest) (*Names, error) {
 
 	n.AIShares = aiShares(s)
 	return n, nil
+}
+
+// mcpNamedScopes is a run's groups and repositories as an adapter names
+// them, sorted as Names lists them.
+func mcpNamedScopes(groups []domain.Group, repos []domain.Repo) ([]NamedGroup, []NamedRepo) {
+	var ng []NamedGroup
+	for _, g := range groups {
+		ng = append(ng, NamedGroup{Name: g.Name, Repos: slices.Sorted(slices.Values(g.Repos))})
+	}
+	slices.SortFunc(ng, func(a, b NamedGroup) int { return cmp.Compare(a.Name, b.Name) })
+	var nr []NamedRepo
+	for _, r := range repos {
+		nr = append(nr, NamedRepo{Key: r.Key, Name: r.Name, Group: r.Group, Path: r.Path})
+	}
+	slices.SortFunc(nr, func(a, b NamedRepo) int {
+		return cmp.Or(cmp.Compare(a.Group, b.Group), cmp.Compare(a.Name, b.Name), cmp.Compare(a.Key, b.Key))
+	})
+	return ng, nr
+}
+
+// StoredRun is one stored scan run as an adapter names its scopes: its
+// groups and repositories, without its people or facts.
+type StoredRun struct {
+	Run    domain.Run
+	Groups []NamedGroup // as Names lists them
+	Repos  []NamedRepo  // as Names lists them
+}
+
+// StoredRuns returns every complete or partial scan run that facts.db
+// holds, newest first, by its scopes (MC-17): so an adapter whose agent
+// names a group or a repository that the run it reads does not hold can
+// say which run does, and how the user serves it. It reads no facts, so it
+// costs a few rows per run, which retention bounds (about 20 runs).
+func StoredRuns(ctx context.Context, d Deps) ([]StoredRun, error) {
+	d, err := d.ready("app.StoredRuns", false, false, true)
+	if err != nil {
+		return nil, err
+	}
+	runs, err := d.Store.Runs(ctx, domain.RunKindScan)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]StoredRun, 0, len(runs))
+	for _, r := range runs {
+		sr := StoredRun{Run: r.Run}
+		sr.Groups, sr.Repos = mcpNamedScopes(r.Groups, r.Repos)
+		out = append(out, sr)
+	}
+	return out, nil
 }
 
 // mcpAIPeople returns, per repository with an ai_assisted@1 value, the
@@ -277,10 +321,14 @@ type OverviewAnswer struct {
 	// the report has (every repository, with --scope all or without groups,
 	// then one per group); for one repository, none: its card is the view.
 	Overviews []report.Overview
-	Repos     []report.Repo      // the repositories in the scope, in report order
-	Ranks     []report.RankTable // the tables of the metrics asked, in the rank scopes that hold the asked scope
-	Warnings  []report.Warning   // the run's own: repositories --exclude-repo left out, paths that gave no repository
-	Caveats   []report.Caveat    // what could make the scope's numbers wrong
+	Repos     []report.Repo // the repositories in the scope, in report order
+	// Areas holds one repository's top-level directories with their stored
+	// knowledge numbers, largest first (report.Areas, #106); nil for any
+	// other scope.
+	Areas    []report.Area
+	Ranks    []report.RankTable // the tables of the metrics asked, in the rank scopes that hold the asked scope
+	Warnings []report.Warning   // the run's own: repositories --exclude-repo left out, paths that gave no repository
+	Caveats  []report.Caveat    // what could make the scope's numbers wrong
 }
 
 // Overview returns the platform view of a scope of a stored run, built by
@@ -331,6 +379,7 @@ func Overview(ctx context.Context, d Deps, r OverviewRequest) (*OverviewAnswer, 
 		rp := m.Repos[i]
 		a.Repos = []report.Repo{rp}
 		a.Provenance, a.Caveats = rp.Card.Provenance, rp.Card.Caveats
+		a.Areas = report.Areas(s.values, rp.Key)
 		group = rp.Group
 	default:
 		return nil, fmt.Errorf("app.Overview: unknown scope kind %q", r.Scope.Kind)
@@ -356,6 +405,14 @@ func Overview(ctx context.Context, d Deps, r OverviewRequest) (*OverviewAnswer, 
 	}
 	for _, t := range a.Ranks {
 		metrics = append(metrics, t.Metric)
+	}
+	for _, ar := range a.Areas {
+		if ar.KnowledgeLoss != nil {
+			metrics = append(metrics, report.MetricKnowledgeLoss)
+		}
+		if ar.Concentration != nil {
+			metrics = append(metrics, report.MetricConcentration)
+		}
 	}
 	slices.Sort(metrics)
 	a.Provenance.Metrics = slices.Compact(metrics)
@@ -757,7 +814,8 @@ type HighlightsAnswer struct {
 	// rank interval reaches first place: everyone who could be first.
 	// Their intervals overlap, so they are not ordered among themselves,
 	// and a tier that holds more than a third of a table's eligible people
-	// singles no one out: it is not listed, and a caveat says so.
+	// singles no one out, unless the intervals set it above everyone else:
+	// otherwise it is not listed, and a caveat says so.
 	TopTier []TopTier `json:"top_tier"`
 	// Lasted holds durable@1's cohort clusters that kept the most lines:
 	// changes 90 to 365 days old whose lines blame still attributes to
@@ -784,8 +842,11 @@ type TopTier struct {
 	// PeopleTotal counts the eligible people whose 95% rank interval
 	// reaches first place.
 	PeopleTotal int `json:"people_total"`
-	// People lists them by name, unless they are more than a third of Of:
-	// then no one stands out, People is empty and a caveat says so.
+	// People lists them by name, unless they are more than a third of Of
+	// and someone else's interval reaches a place one of theirs reaches:
+	// then no one stands out, People is empty and a caveat says so. A tier
+	// whose intervals lie above everyone else's stands out in a table of
+	// any size, such as one person at 1-1 of two.
 	People []report.RankRow `json:"people"`
 }
 
@@ -854,22 +915,34 @@ func Highlights(ctx context.Context, d Deps, r HighlightsRequest) (*HighlightsAn
 			Metric: set.Metric.ID, Question: set.Metric.Question, Scope: report.Scope{Kind: set.Scope.Kind, Key: set.Scope.Key},
 			Window: report.Interval{Since: set.Window.Since, Until: set.Window.Until}, Percent: set.Percent, MinN: set.MinN,
 		}
+		tierHi, restLo := 0, 0 // the tier's lowest place, and the best place anyone else could take; 0: none
 		for _, ri := range set.Intervals {
 			if !ri.Eligible || ri.Subject.Kind != domain.SubjectPerson || s.who.Bot(ri.Subject.Key) {
 				continue
 			}
 			t.Of++
-			if ri.RankLo == 1 {
-				sub := report.SubjectOf(ri.Subject, s.who)
-				t.People = append(t.People, report.RankRow{Email: sub.Key, Name: sub.Name, NameWithheld: sub.NameWithheld,
-					RankLo: ri.RankLo, RankHi: ri.RankHi, Estimate: ri.Estimate, Lo: ri.Lo, Hi: ri.Hi, N: ri.N})
+			if ri.RankLo != 1 {
+				if restLo == 0 || ri.RankLo < restLo {
+					restLo = ri.RankLo
+				}
+				continue
 			}
+			tierHi = max(tierHi, ri.RankHi)
+			sub := report.SubjectOf(ri.Subject, s.who)
+			t.People = append(t.People, report.RankRow{Email: sub.Key, Name: sub.Name, NameWithheld: sub.NameWithheld,
+				RankLo: ri.RankLo, RankHi: ri.RankHi, Estimate: ri.Estimate, Lo: ri.Lo, Hi: ri.Hi, N: ri.N})
 		}
 		if len(t.People) == 0 {
 			continue
 		}
 		t.PeopleTotal = len(t.People)
-		if mcpTierShare*t.PeopleTotal > t.Of {
+		// The tier stands apart when no one else could take a place its
+		// people's intervals reach: then the intervals order it above the
+		// rest, however small the table (MC-16: 1-1 against 2-2 of two).
+		// Each interval is the person's own, so the check reads both sides
+		// rather than trust them to agree.
+		apart := restLo > tierHi
+		if mcpTierShare*t.PeopleTotal > t.Of && !apart {
 			// When most of the table could be first, listing them would
 			// read as a podium the intervals do not support (ADR 0001).
 			t.People = nil
@@ -899,8 +972,8 @@ func Highlights(ctx context.Context, d Deps, r HighlightsRequest) (*HighlightsAn
 	a.Caveats = append(report.AnswerCaveats(scoped), report.ForgeCaveats(&run, scoped, s.forge, used)...)
 	a.Caveats = append(a.Caveats, report.Caveat{Code: "highlights",
 		Message: "Highlights are rule-based picks for recognition, not a ranking of people: the top tier counts everyone " +
-			"whose 95% rank interval reaches first place and names them when they are a third of the table or fewer, and " +
-			"the change lists are single changes with their numbers."})
+			"whose 95% rank interval reaches first place and names them when they are a third of the table or fewer, or " +
+			"when their intervals lie above everyone else's, and the change lists are single changes with their numbers."})
 	validity, err := mcpValidity(used...)
 	if err != nil {
 		return nil, err
@@ -911,8 +984,9 @@ func Highlights(ctx context.Context, d Deps, r HighlightsRequest) (*HighlightsAn
 			wide = append(wide[:mcpHighlightsTop], fmt.Sprintf("and %d more tables", len(wide)-mcpHighlightsTop))
 		}
 		a.Caveats = append(a.Caveats, report.Caveat{Code: "no-standout", Message: "No one stands out where more than a " +
-			"third of a table's eligible people have a 95% rank interval that reaches first place, so these top tiers are " +
-			"not listed (could be first, of eligible): " + strings.Join(wide, "; ") + "."})
+			"third of a table's eligible people have a 95% rank interval that reaches first place and the intervals do not " +
+			"set them above everyone else, so these top tiers are not listed (could be first, of eligible): " +
+			strings.Join(wide, "; ") + "."})
 	}
 	return a, nil
 }
@@ -1063,6 +1137,16 @@ func Diff(ctx context.Context, d Deps, r DiffRequest) (*DiffAnswer, error) {
 			}
 		}
 	}
+	if a.Base == "" && rf.Repo.Shallow {
+		// In a shallow clone a parentless commit is where the clone's
+		// history ends, as the history collector reads it (collect.History:
+		// its boundary gets no change rows). Its parent is not in the
+		// clone, so its diff against nothing would be its whole tree, not
+		// its change (RB-5).
+		return nil, &domain.UsageError{Msg: fmt.Sprintf("landing %s is where %q's shallow clone ends: the clone does not "+
+			"hold its parent, so its diff would be its whole tree, not its change. Its change shows once the user deepens "+
+			"the clone (git fetch --unshallow) and scans again.", mcpShort(l.SHA), rf.Repo.Name)}
+	}
 	// The two-tree form diffs the landing against its first parent, a
 	// merge included, on every git the floor admits; a root commit has no
 	// parent and is diffed as all added.
@@ -1077,8 +1161,11 @@ func Diff(ctx context.Context, d Deps, r DiffRequest) (*DiffAnswer, error) {
 	args := append(append([]string{"diff-tree", "-r", "-M", "--no-commit-id", "--numstat", "-z"}, trees...), spec...)
 	out, err := d.Git.Run(ctx, domain.GitCmd{Dir: rf.Repo.Path, Args: args, Timeout: mcpDiffTimeout, Profile: domain.Analysis})
 	if err != nil {
-		if mcpGitTimedOut(ctx, err) {
+		switch {
+		case mcpGitTimedOut(ctx, err):
 			return nil, mcpDiffTooSlow(l, rf)
+		case rf.Repo.Partial:
+			return nil, mcpDiffPartial(l, rf)
 		}
 		return nil, fmt.Errorf("git could not read landing %s in %q, which run %d scanned: the clone may have moved or "+
 			"rewritten its history since; scan again: %w", mcpShort(l.SHA), rf.Repo.Name, s.run.ID, err)
@@ -1145,6 +1232,8 @@ func Diff(ctx context.Context, d Deps, r DiffRequest) (*DiffAnswer, error) {
 		case err == nil, errors.Is(err, errMCPPatchFull):
 		case mcpGitTimedOut(ctx, err):
 			return nil, mcpDiffTooSlow(l, rf)
+		case rf.Repo.Partial:
+			return nil, mcpDiffPartial(l, rf)
 		default:
 			return nil, fmt.Errorf("git could not diff landing %s in %q: %w", mcpShort(l.SHA), rf.Repo.Name, err)
 		}
@@ -1179,6 +1268,15 @@ func mcpDiffTooSlow(l domain.Landing, rf *domain.RepoFacts) error {
 		"under the change, or a smaller max_chars", int(mcpDiffTimeout/time.Second), mcpShort(l.SHA), rf.Repo.Name)}
 }
 
+// mcpDiffPartial is the error of a diff git could not read in a partial
+// clone (RB-8): its file contents were never fetched, and analysis fetches
+// nothing, so no rescan helps until the clone has them.
+func mcpDiffPartial(l domain.Landing, rf *domain.RepoFacts) error {
+	return &domain.UsageError{Msg: fmt.Sprintf("git could not read landing %s in %q, a partial clone (made with --filter): "+
+		"the clone lacks the file contents the diff needs, and stillhere never fetches. The diff works once the user "+
+		"fetches them (git fetch --refetch, without a filter) or clones the repository whole.", mcpShort(l.SHA), rf.Repo.Name)}
+}
+
 // mcpFindLanding finds the landing a change id names: one of the run's
 // landings, in repo when it is not "", whose SHA starts with change.
 func mcpFindLanding(s *stored, repo, change string) (*domain.RepoFacts, domain.Landing, error) {
@@ -1186,18 +1284,22 @@ func mcpFindLanding(s *stored, repo, change string) (*domain.RepoFacts, domain.L
 		rf *domain.RepoFacts
 		l  domain.Landing
 	}
-	var found []match
-	for i := range s.facts.Repos {
-		rf := &s.facts.Repos[i]
-		if repo != "" && rf.Repo.Key != repo {
-			continue
-		}
-		for _, l := range rf.Landings {
-			if strings.HasPrefix(l.SHA, change) {
-				found = append(found, match{rf, l})
+	find := func(repo string) []match {
+		var found []match
+		for i := range s.facts.Repos {
+			rf := &s.facts.Repos[i]
+			if repo != "" && rf.Repo.Key != repo {
+				continue
+			}
+			for _, l := range rf.Landings {
+				if strings.HasPrefix(l.SHA, change) {
+					found = append(found, match{rf, l})
+				}
 			}
 		}
+		return found
 	}
+	found := find(repo)
 	switch len(found) {
 	case 1:
 		if found[0].rf.Status != domain.RepoStatusOK {
@@ -1206,6 +1308,23 @@ func mcpFindLanding(s *stored, repo, change string) (*domain.RepoFacts, domain.L
 		}
 		return found[0].rf, found[0].l, nil
 	case 0:
+		if repo != "" {
+			// The landing may be another repository's (MC-15): say whose.
+			var others []string
+			for _, m := range find("") {
+				others = append(others, strconv.Quote(m.rf.Repo.Name))
+			}
+			if len(others) > 0 {
+				slices.Sort(others)
+				name := repo
+				if rfs, err := mcpScopeRepos(s, domain.Scope{Kind: domain.ScopeRepo, Key: repo}); err == nil {
+					name = rfs[0].Repo.Name
+				}
+				return nil, domain.Landing{}, &domain.UsageError{Msg: fmt.Sprintf("no landing of %q starts with %s, but "+
+					"a landing of %s does: pass that repository, or no repository", name, change,
+					strings.Join(slices.Compact(others), ", "))}
+			}
+		}
 		return nil, domain.Landing{}, fmt.Errorf("no landing of run %d starts with %s: a change is a first-parent commit "+
 			"of a default branch in the run's 365-day history, as changes lists them: %w", s.run.ID, change, domain.ErrNotFound)
 	}

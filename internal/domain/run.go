@@ -24,6 +24,14 @@ const (
 	RunStatusFailed   RunStatus = "failed"
 )
 
+// RunScopes is a stored run's scopes, read without its facts
+// (FactStore.Runs).
+type RunScopes struct {
+	Run    Run
+	Groups []Group // as LoadFacts returns them
+	Repos  []Repo  // each RepoFacts.Repo LoadFacts returns, by Key
+}
+
 // Run is one snapshot of facts at one set of HEADs, under one policy and one
 // mailmap, with the metric values computed from them.
 type Run struct {

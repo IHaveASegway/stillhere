@@ -475,6 +475,12 @@ func (b *builder) concentration(scope domain.Scope) *Concentration {
 	if !ok {
 		return nil
 	}
+	return concentrationOf(v)
+}
+
+// concentrationOf reads one knowledge_concentration@1 value: a scope's or an
+// area's.
+func concentrationOf(v domain.MetricValue) *Concentration {
 	return &Concentration{
 		Metric:            MetricConcentration,
 		FilesWithMajority: count(v.Detail[detailFilesWithMajority]),

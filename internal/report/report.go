@@ -326,6 +326,21 @@ type Concentration struct {
 	Label             string `json:"label"` // always ConcentrationLabel
 }
 
+// Area is one top-level directory of a repository with the knowledge
+// numbers a scan stores about it, subject area (#106): where in a large
+// repository the knowledge has gone quiet or rests with few people.
+type Area struct {
+	Path string `json:"path"` // the directory, with its trailing slash
+	// Lines is knowledge_loss@1's Den: the surviving prod lines people hold
+	// there; 0 without its value (only bots hold lines there).
+	Lines          int            `json:"lines"`
+	KnowledgeLoss  *Share         `json:"knowledge_loss"`  // nil without its value
+	People         *int           `json:"people"`          // knowledge_loss@1: humans holding lines there
+	PeopleInactive *int           `json:"people_inactive"` // of them, those gone quiet
+	Concentration  *Concentration `json:"concentration"`   // nil without its value
+	ProdFiles      *int           `json:"prod_files"`      // knowledge_concentration@1: prod files there
+}
+
 // Share is a ratio with its parts, so a reader can see what it is a share
 // of.
 type Share struct {

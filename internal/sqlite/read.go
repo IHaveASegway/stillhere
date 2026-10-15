@@ -53,6 +53,51 @@ func (s *Store) LatestRun(ctx context.Context, kind domain.RunKind) (domain.Run,
 	return r, nil
 }
 
+// Runs returns the complete and partial runs of the kind, newest first (by
+// id, as LatestRun orders them), each with its groups and repositories as
+// LoadFacts reads them and none of their other facts, in one read
+// transaction: a few rows per run (MC-17).
+func (s *Store) Runs(ctx context.Context, kind domain.RunKind) ([]domain.RunScopes, error) {
+	var out []domain.RunScopes
+	err := s.read(ctx, func(tx *sql.Tx) error {
+		var ids []int64
+		err := each(ctx, tx, `SELECT id FROM runs WHERE kind = ? AND `+published+` ORDER BY id DESC`, []any{string(kind)},
+			func(rows *sql.Rows) error {
+				var id int64
+				if err := rows.Scan(&id); err != nil {
+					return err
+				}
+				ids = append(ids, id)
+				return nil
+			})
+		if err != nil {
+			return fmt.Errorf("reading runs: %w", err)
+		}
+		for _, id := range ids {
+			r, err := readRun(ctx, tx, `WHERE id = ?`, id)
+			if err != nil {
+				return err
+			}
+			l := &loader{ctx: ctx, tx: tx, runID: id, set: &domain.FactSet{}}
+			for _, step := range []func() error{l.groups, l.groupRepos, l.repoRows} {
+				if err := step(); err != nil {
+					return fmt.Errorf("run %d: %w", id, err)
+				}
+			}
+			rs := domain.RunScopes{Run: r, Groups: l.set.Groups}
+			for _, f := range l.set.Repos {
+				rs.Repos = append(rs.Repos, f.Repo)
+			}
+			out = append(out, rs)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("sqlite.Runs: %s: %w", kind, err)
+	}
+	return out, nil
+}
+
 // readRun reads the one run that the clause selects, with its options, or
 // returns domain.ErrNotFound.
 func readRun(ctx context.Context, tx *sql.Tx, clause string, args ...any) (domain.Run, error) {

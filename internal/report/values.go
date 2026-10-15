@@ -44,8 +44,9 @@ const (
 	detailRecentLandings    = "recent_landings"
 	detailTopAuthor         = "top_author" // a top author's place, 1 to 5
 	detailProdFiles         = "prod_files"
-	detailPeople            = "people"    // surviving@1 about a repository or group: humans with surviving prod lines
+	detailPeople            = "people"    // surviving@1 about a repository or group: humans with surviving prod lines; knowledge_loss@1: humans holding lines
 	detailBotShare          = "bot_share" // surviving@1 about a repository or group: bot-held lines over prod lines
+	detailPeopleInactive    = "people_inactive"
 )
 
 // population is surviving@1's value about a repository's or a group's code
@@ -320,6 +321,80 @@ func AIShareIn(v Value) (whole bool, key string) {
 		return false, detailAIAssistedShare
 	}
 	return false, ""
+}
+
+// Areas reads the area values of one repository (subject area, key
+// "<repo key>:<dir>/") of knowledge_loss@1 and knowledge_concentration@1,
+// the metrics a scan stores per top-level directory, as one row per area:
+// the largest first, by the lines people hold there, then by the lines
+// held by people gone quiet, then by path (#106). It is the one mapping of
+// those values for any page that lists areas; nil for none.
+func Areas(values []domain.MetricValue, repo string) []Area {
+	byPath := map[string]*Area{}
+	row := func(v domain.MetricValue) *Area {
+		path, ok := strings.CutPrefix(v.Subject.Key, repo+":")
+		if v.Subject.Kind != domain.SubjectArea || v.Scope.Kind != domain.ScopeRepo || v.Scope.Key != repo || !ok {
+			return nil
+		}
+		a := byPath[path]
+		if a == nil {
+			a = &Area{Path: path}
+			byPath[path] = a
+		}
+		return a
+	}
+	for _, v := range values {
+		switch v.Metric.String() {
+		case MetricKnowledgeLoss:
+			if a := row(v); a != nil {
+				a.Lines = count(v.Den)
+				a.KnowledgeLoss = &Share{Metric: MetricKnowledgeLoss, Num: v.Num, Den: v.Den, Value: v.Value}
+				people, inactive := count(v.Detail[detailPeople]), count(v.Detail[detailPeopleInactive])
+				a.People, a.PeopleInactive = &people, &inactive
+			}
+		case MetricConcentration:
+			if a := row(v); a != nil {
+				a.Concentration = concentrationOf(v)
+				files := count(v.Detail[detailProdFiles])
+				a.ProdFiles = &files
+			}
+		}
+	}
+	var out []Area
+	for _, a := range byPath {
+		out = append(out, *a)
+	}
+	gone := func(a Area) float64 {
+		if a.KnowledgeLoss == nil {
+			return 0
+		}
+		return a.KnowledgeLoss.Num
+	}
+	slices.SortFunc(out, func(x, y Area) int {
+		return cmp.Or(cmp.Compare(y.Lines, x.Lines), cmp.Compare(gone(y), gone(x)), cmp.Compare(x.Path, y.Path))
+	})
+	return out
+}
+
+// detailAICohorts are ai_assisted@1's cohort comparisons about a repository
+// or a group (docs/metrics.md#ai_assisted1): durable@1 over the tagged and
+// the untagged landings' clusters, their counts, and the reverted landings
+// among each.
+var detailAICohorts = []string{"durable_ai", "durable_other", "durable_ai_n", "durable_other_n", "reverted_ai", "reverted_other"}
+
+// AICohortIn names the Detail keys in which a value carries ai_assisted's
+// cohort comparisons, whether or not its Detail holds them; nil for a value
+// of another metric. They count narrower populations than the share they
+// sit beside (clusters of changes 90 to 365 days old; reverted landings),
+// which can be one or two people's even when the share covers more, and
+// they add up over the scopes as the share does. So the MCP server sends
+// none of them (#87, ADR 0007's amendment), while the local pages keep
+// them; this is the one place that names them.
+func AICohortIn(v Value) []string {
+	if id, err := domain.ParseMetricID(v.Metric); err == nil && OwnPageOnly(id) {
+		return detailAICohorts
+	}
+	return nil
 }
 
 func isBot(who People, email string) bool {

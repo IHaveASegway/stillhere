@@ -283,12 +283,18 @@ func showsAI(names *app.Names, sc report.Scope) bool {
 
 type overviewOut struct {
 	head
-	Scope     scopeOut         `json:"scope"`
-	Run       runOut           `json:"run"`
-	Overviews []overviewItem   `json:"overviews"`
-	Repos     any              `json:"repos"` // concise: []repoSummary; detailed: []report.Repo
-	Ranks     []rankTableOut   `json:"ranks"`
-	Warnings  []report.Warning `json:"warnings"`
+	Scope     scopeOut       `json:"scope"`
+	Run       runOut         `json:"run"`
+	Overviews []overviewItem `json:"overviews"`
+	Repos     any            `json:"repos"` // concise: []repoSummary; detailed: []repoOut
+	// Areas holds, for one repository only, its top-level directories with
+	// their knowledge numbers, largest first (report.Areas, #106), the
+	// first rows of them; AreasTotal counts them all. Both are absent for
+	// any other scope.
+	Areas      []report.Area    `json:"areas,omitzero"`
+	AreasTotal *int             `json:"areas_total,omitzero"`
+	Ranks      []rankTableOut   `json:"ranks"`
+	Warnings   []report.Warning `json:"warnings"`
 	// WarningsTotal counts the run's warnings, of which warnings holds the
 	// first rows.
 	WarningsTotal int `json:"warnings_total"`
@@ -305,7 +311,10 @@ type runOut struct {
 
 // overviewItem is one overview: a group's, or every repository's.
 type overviewItem struct {
-	Scope         report.Scope          `json:"scope"`
+	Scope report.Scope `json:"scope"`
+	// ScopeArg is the exact string to pass as scope for this group
+	// (resolver.scopeArg); absent for the whole run.
+	ScopeArg      string                `json:"scope_arg,omitempty"`
 	Provenance    *provenanceOut        `json:"provenance,omitzero"` // detailed only: the answer's covers it
 	Totals        report.Totals         `json:"totals"`
 	People        *stillHereOut         `json:"people"`
@@ -360,7 +369,8 @@ func weekOf(t *report.WeekTable, rows int) *weekOut {
 type shaper struct {
 	f          format
 	names      *app.Names
-	aiWithheld []string // the scopes whose AI-assisted share was withheld
+	w          *withholder // the egress filter the answer will pass; nil when emails may leave
+	aiWithheld []string    // the scopes whose AI-assisted share was withheld
 }
 
 // share returns a scope's AI-assisted share as it may leave: nil, its num
@@ -388,7 +398,7 @@ func scopeName(sc report.Scope, repoName string) string {
 func (s *shaper) overview(o report.Overview, n named) overviewItem {
 	f := s.f
 	item := overviewItem{
-		Scope: o.Scope, Totals: o.Totals,
+		Scope: o.Scope, ScopeArg: s.scopeArg(o.Scope), Totals: o.Totals,
 		People: stillHereOf(o.People, f.rows), Week: weekOf(o.Week, f.rows),
 		Concentration: o.Concentration, KnowledgeLoss: o.KnowledgeLoss, BotShare: o.BotShare,
 		AIAssisted: s.share(o.AIAssisted, o.Scope, scopeName(o.Scope, "")),
@@ -402,9 +412,13 @@ func (s *shaper) overview(o report.Overview, n named) overviewItem {
 
 // repoSummary is one repository in a list: its card's numbers on one row.
 type repoSummary struct {
-	Name          string          `json:"name"`
-	Key           string          `json:"key"`
-	Group         string          `json:"group"`
+	Name  string `json:"name"`
+	Key   string `json:"key"`
+	Group string `json:"group"`
+	// ScopeArg is the exact string to pass as scope or repo for this
+	// repository: its name unless a group or another repository shares it
+	// (resolver.scopeArg).
+	ScopeArg      string          `json:"scope_arg"`
 	Status        string          `json:"status"`          // ok, or error when the repository failed
 	Error         string          `json:"error,omitempty"` // why it failed
 	LineFacts     bool            `json:"line_facts"`      // blame ran: false for shallow and partial clones
@@ -432,7 +446,8 @@ func (s *shaper) summary(r report.Repo) repoSummary {
 	c := r.Card
 	sc := report.Scope{Kind: domain.ScopeRepo, Key: r.Key}
 	out := repoSummary{
-		Name: r.Name, Key: r.Key, Group: r.Group, Status: r.Status, Error: r.Error, LineFacts: r.LineFacts,
+		Name: r.Name, Key: r.Key, Group: r.Group, ScopeArg: s.scopeArg(report.Scope{Kind: domain.ScopeRepo, Key: r.Key}),
+		Status: r.Status, Error: r.Error, LineFacts: r.LineFacts,
 		Size: c.Size, People: c.People, Bots: c.Bots,
 		KnowledgeLoss: c.KnowledgeLoss, AIAssisted: s.share(c.AIAssisted, sc, scopeName(sc, r.Name)), BotShare: c.BotShare,
 		Landings: c.Landings,
@@ -455,6 +470,22 @@ func (s *shaper) summary(r report.Repo) repoSummary {
 		}
 	}
 	return out
+}
+
+// scopeArg is the exact string an agent passes to name a scope of the
+// answer's run (resolver.scopeArg).
+func (s *shaper) scopeArg(sc report.Scope) string {
+	if s.names == nil {
+		return ""
+	}
+	return (&resolver{names: s.names}).scopeArg(domain.Scope{Kind: sc.Kind, Key: sc.Key})
+}
+
+// repoOut is one repository whole in an answer: the report's, and the
+// string that names it as a scope.
+type repoOut struct {
+	ScopeArg string `json:"scope_arg"`
+	report.Repo
 }
 
 // repoDetail is one repository whole, as the report has it, with its
@@ -567,6 +598,12 @@ func (s *shaper) overviewAnswer(a *app.OverviewAnswer, sc scopeOut) *overviewOut
 		}
 	case domain.ScopeRepo:
 		repos = a.Repos
+		var total int
+		out.Areas, total = cut(a.Areas, f.rows)
+		if out.Areas == nil {
+			out.Areas = []report.Area{} // a repository without line facts has none: [], not absent
+		}
+		out.AreasTotal = &total
 	default:
 		var pg *page
 		repos, pg = paginate(a.Repos, f, a.Run.ID)
@@ -594,9 +631,9 @@ func (s *shaper) overviewAnswer(a *app.OverviewAnswer, sc scopeOut) *overviewOut
 	}
 	if f.detailed || sc.Kind == domain.ScopeRepo {
 		// A repository is answered whole: its card and its tables.
-		var detail []report.Repo
+		var detail []repoOut
 		for _, r := range repos {
-			detail = append(detail, s.repoDetail(r))
+			detail = append(detail, repoOut{ScopeArg: s.scopeArg(report.Scope{Kind: domain.ScopeRepo, Key: r.Key}), Repo: s.repoDetail(r)})
 		}
 		out.Repos = detail
 	} else {
@@ -688,7 +725,9 @@ func (s *shaper) values(vs []report.Value, repos bool, n named) ([]valueOut, int
 // repository or a group) leaves only when that share does: otherwise the
 // value leaves without the copy. explain refuses a withheld share before it
 // reads any; this keeps every answer that lists values on the same
-// decision, whichever metric carries the share.
+// decision, whichever metric carries the share. A shown share leaves
+// without its cohort comparisons (report.AICohortIn, #87), which can be one
+// or two people's however many the share covers.
 func (s *shaper) withholdAI(vs []report.Value) []report.Value {
 	var out []report.Value
 	for _, v := range vs {
@@ -705,6 +744,12 @@ func (s *shaper) withholdAI(vs []report.Value) []report.Value {
 			v.Detail = maps.Clone(v.Detail)
 			delete(v.Detail, key)
 			s.aiWithheld = append(s.aiWithheld, scopeName(v.Scope, s.repoName(v.Scope.Key)))
+		}
+		if cohorts := report.AICohortIn(v); slices.ContainsFunc(cohorts, func(k string) bool { _, ok := v.Detail[k]; return ok }) {
+			v.Detail = maps.Clone(v.Detail)
+			for _, k := range cohorts {
+				delete(v.Detail, k)
+			}
 		}
 		out = append(out, v)
 	}
@@ -1173,17 +1218,98 @@ func (s *shaper) diffAnswer(d *app.DiffAnswer) *diffOut {
 		out.Caveats = append(slices.Clip(out.Caveats), report.Caveat{Code: "truncated", Message: fmt.Sprintf(
 			"The patch was cut at %d bytes so the answer fits: ask for a path under the change to see the rest of it.", len(p))})
 	}
+	if n := s.w.count(out.Patch); n > 0 {
+		// The egress filter will replace them, as in every string: say so
+		// where the code is, so an id is not read as the code's own (MC-18).
+		out.Caveats = append(slices.Clip(out.Caveats), report.Caveat{Code: "patch-emails", Message: fmt.Sprintf(
+			"%d email address(es) in the patch are replaced by ids (p-…), as everywhere without --allow-emails: the code "+
+				"shown differs from the repository's there, and an id in a patch, such as a test's made-up address, is not "+
+				"necessarily anyone in the run.", n)})
+	}
 	return out
 }
 
 // The identity_candidates tool serves report.Identities as #26 builds it,
-// whole but for its provenance, whose HEADs are cut as every answer's are:
-// its shape is #26's, so this server needs no change when the candidates
-// and their evidence land.
+// its candidates paged as every list tool pages its main list (#58): a
+// repository of 12,000 commits holds some 80 candidates, about 75,000
+// characters whole, which no single answer may carry. Concise rows say who
+// may be one person, how sure the rules are, and the lines to apply;
+// detailed adds each rule's evidence (links, hand-offs) and every
+// address's repositories, up to the answer's rows.
 type identitiesOut struct {
-	Provenance provenanceOut `json:"provenance"` // in place of the report's own
-	*report.Identities
-	Withheld []string `json:"withheld"`
+	head
+	Scope      report.Scope `json:"scope"`
+	Addresses  int          `json:"addresses"`
+	Bots       int          `json:"bots"`
+	Shared     int          `json:"shared"`
+	Oversized  int          `json:"oversized"`
+	Candidates any          `json:"candidates"` // concise: []identityBrief; detailed: []identityDetail
+	// Rules is every rule's definition, how it links and how it can be
+	// wrong: bounded by the rules, not the run.
+	Rules []report.IdentityRule `json:"rules"`
+	tail
 }
 
-func (o *identitiesOut) provenance() *report.Provenance { return &o.Provenance.Provenance }
+// identityBrief is one candidate in a concise answer: report's candidate
+// without its links, whose evidence detailed carries.
+type identityBrief struct {
+	Confidence string            `json:"confidence"`
+	Guess      bool              `json:"guess"`
+	Commented  bool              `json:"commented"`
+	Chained    bool              `json:"chained"`
+	Rules      []string          `json:"rules"`
+	Name       string            `json:"name"`
+	Addresses  []identityAddress `json:"addresses"`
+	Mailmap    *[]string         `json:"mailmap"` // null unless emails may leave (--allow-emails)
+}
+
+// identityDetail is one candidate in a detailed answer: the report's whole,
+// its addresses' repositories cut to the answer's rows with their totals.
+type identityDetail struct {
+	report.IdentityCandidate
+	Addresses []identityAddress `json:"addresses"` // in place of the report's
+}
+
+// identityAddress is one address of a candidate, its repositories cut to
+// the answer's rows.
+type identityAddress struct {
+	report.IdentityAddress
+	ReposTotal int `json:"repos_total"`
+}
+
+func (s *shaper) identitiesAnswer(ids *report.Identities) *identitiesOut {
+	f := s.f
+	out := &identitiesOut{Scope: ids.Scope, Addresses: ids.Addresses, Bots: ids.Bots, Shared: ids.Shared,
+		Oversized: ids.Oversized, Rules: ids.Rules, tail: tail{Caveats: ids.Caveats}}
+	cands, pg := paginate(ids.Candidates, f, ids.Provenance.RunID)
+	out.Page = pg
+	n := newNamed()
+	addresses := func(as []report.IdentityAddress) []identityAddress {
+		var o []identityAddress
+		for _, a := range as {
+			ia := identityAddress{IdentityAddress: a}
+			ia.Repos, ia.ReposTotal = cut(a.Repos, f.rows)
+			for _, k := range ia.Repos {
+				n.key(k)
+			}
+			o = append(o, ia)
+		}
+		return o
+	}
+	if f.detailed {
+		detail := []identityDetail{}
+		for _, c := range cands {
+			detail = append(detail, identityDetail{IdentityCandidate: c, Addresses: addresses(c.Addresses)})
+		}
+		out.Candidates = detail
+	} else {
+		brief := []identityBrief{}
+		for _, c := range cands {
+			brief = append(brief, identityBrief{Confidence: c.Confidence, Guess: c.Guess, Commented: c.Commented,
+				Chained: c.Chained, Rules: c.Rules, Name: c.Name, Addresses: addresses(c.Addresses), Mailmap: c.Mailmap})
+		}
+		out.Candidates = brief
+	}
+	out.head = head{Provenance: f.provenance(ids.Provenance, n)}
+	return out
+}

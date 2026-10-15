@@ -248,6 +248,12 @@ type Run struct {
 	Options      map[string]string // effective options; never secrets
 }
 
+type RunScopes struct { // MC-17: a stored run's scopes, read without its facts (FactStore.Runs)
+	Run    Run
+	Groups []Group // as LoadFacts returns them
+	Repos  []Repo  // each RepoFacts.Repo LoadFacts returns, by Key
+}
+
 type UsageError struct{ Msg string } // exit 2
 var ErrNoFacts = errors.New("no repository produced facts") // exit 1
 var ErrNotFound = errors.New("not found")
@@ -292,6 +298,8 @@ type FactStore interface {
 	// The read side sees complete and partial runs only: an unknown, running or failed run is ErrNotFound.
 	Run(ctx context.Context, id int64) (Run, error)           // status, tool version, times, options, policy source
 	LatestRun(ctx context.Context, kind RunKind) (Run, error) // the newest one: the last begun, whatever its Now
+	Runs(ctx context.Context, kind RunKind) ([]RunScopes, error) // MC-17: every complete or partial run of the kind, newest first (by id, as LatestRun),
+	                                                            // with its groups and repositories and no other fact; none is an empty list
 	LoadFacts(ctx context.Context, runID int64) (*FactSet, error)
 	LoadMetrics(ctx context.Context, runID int64) ([]MetricValue, []RankInterval, error)
 	Close() error
@@ -737,6 +745,12 @@ func OwnPageOnly(metric domain.MetricID) bool // a person's values only their ow
 func AIShareIn(v Value) (whole bool, key string) // #68: where a value holds an AI-assisted share: whole for ai_assisted's own values, key
                                                  // "ai_assisted_share" for surviving's copy of its scope's share; the one place, so a reader that withholds a share
                                                  // (the MCP server, by app.AIShares) withholds every copy of it
+func AICohortIn(v Value) []string // #87: the Detail keys of ai_assisted's cohort comparisons (durable_ai, durable_other, their _n, reverted_ai,
+                                  // reverted_other), which the MCP server never sends: they can be one or two people's; nil for another metric
+type Area struct { Path string; Lines int; KnowledgeLoss *Share; People, PeopleInactive *int; Concentration *Concentration; ProdFiles *int }
+func Areas(values []domain.MetricValue, repo string) []Area // #106: one repository's area values of knowledge_loss@1 and knowledge_concentration@1,
+                                  // a row per top-level directory, largest first (lines, then lines gone quiet, then path): the one mapping of them,
+                                  // which MCP's overview of a repository reads and a page that lists areas should read too
 type RankSet struct { Metric MetricInfo; Scope domain.Scope; Window domain.Window; Percent bool; MinN int; Intervals []domain.RankInterval } // bots left out; Percent: metrics.Definition.Ratio
 func Build(in *Input) *Model
 // The read commands' answers live here too, so the renderers and the MCP server share one shape.
@@ -903,7 +917,9 @@ type NamedPerson struct { Key, Name string; Bot bool; Repos []string; Lines int;
 // may print beside the person (not identity.Directory.LoginWithheld)
 type OverviewRequest struct { RunID int64; Scope domain.Scope; Rank []domain.MetricID } // zero Scope: the whole run; no Rank: no rank table (a report adds the scan's)
 type OverviewAnswer struct { Provenance report.Provenance; Run report.Run; Scope domain.Scope; Overviews []report.Overview;
-	Repos []report.Repo; Ranks []report.RankTable; Warnings []report.Warning; Caveats []report.Caveat }
+	Repos []report.Repo; Areas []report.Area; Ranks []report.RankTable; Warnings []report.Warning; Caveats []report.Caveat } // Areas (#106):
+	// one repository's, report.Areas over the stored values; nil for another scope
+type StoredRun struct { Run domain.Run; Groups []NamedGroup; Repos []NamedRepo } // MC-17: a stored scan run by its scopes, as Names lists them
 type PersonRequest struct { RunID int64; Email string }
 type ChangesRequest struct { RunID int64; Scope domain.Scope; Since time.Time; Person, Me string; Titles bool }
 type HighlightsRequest struct { RunID int64; Scope domain.Scope; Since time.Time; Titles bool }
@@ -911,8 +927,11 @@ type DiffRequest struct { RunID int64; Repo, Change, Path string; MaxBytes int }
 // ChangesAnswer, HighlightsAnswer and DiffAnswer, and their Change, ChangePerson, Contribution, TopTier,
 // HighlightChange and DiffFile, carry their JSON names: what no report shows, in the shape docs/spec/mcp.md gives.
 // TopTier: Of eligible people, PeopleTotal whose 95% rank interval reaches first place, People them by name unless
-// they are more than a third of Of (no one stands out: a no-standout caveat).
+// they are more than a third of Of and someone else could take a place one of theirs reaches (no one stands out: a
+// no-standout caveat); a tier whose intervals lie above everyone else's is named in a table of any size (MC-16).
 func RunNames(ctx context.Context, d Deps, r NamesRequest) (*Names, error)
+func StoredRuns(ctx context.Context, d Deps) ([]StoredRun, error) // MC-17: every stored scan run by its scopes, newest first (FactStore.Runs): which
+                                                                  // run holds a scope the served run lacks; reads no facts
 func Overview(ctx context.Context, d Deps, r OverviewRequest) (*OverviewAnswer, error) // report.Build's sections for one scope; Provenance.Metrics: every number's
 func Person(ctx context.Context, d Deps, r PersonRequest) (*report.Me, error) // Me without the AI-assisted share (ADR 0007); both build through one helper, so they cannot drift
 func Changes(ctx context.Context, d Deps, r ChangesRequest) (*ChangesAnswer, error) // landings with durable@1 and simplifying@1 clusters
@@ -931,7 +950,8 @@ type Config struct {
 	Log         *slog.Logger     // stderr
 }
 func Serve(ctx context.Context, cfg Config, in io.ReadCloser, out io.Writer) error // stdio until in closes or ctx ends; only protocol on out;
-                                                                                   // a line on in that is no JSON-RPC message gets JSON-RPC's error and is skipped
+                                                                                   // a line on in that is no JSON-RPC message gets JSON-RPC's error and is skipped;
+                                                                                   // #58: when in closes, every call read before is answered first
 
 // cli
 type Build struct{ Version, Commit, Date string } // from -ldflags -X main.version, main.commit, main.date
@@ -1083,7 +1103,7 @@ Tests sit at stable boundaries, so a refactor does not rewrite them (Kent Beck, 
 | `TestAUC` | `rank` | the validity check's statistic: a hand-counted example with ties, 1 and 0 for perfect separation, 0.5 when either class is empty, and the value counting every pair gives |
 | `TestRedact` | `redact` | no credential survives `URL`, `Scrub` or `Message` (userinfo, scp-like and malformed remotes, query strings and fragments, a URL given as a path and made absolute with any of those, quotes, the 180-rune cut); text that holds none is unchanged, a Windows path with a `#` included |
 | `TestRunner` | `gitcli` | per-user and system attributes change neither numstat nor `check-attr`; no askpass, signature or external diff program runs; an inherited `GIT_DIR` changes nothing; a timeout or cancellation kills git's process group and is reported as such even when the reader fails first on the truncated output; a helper that left the group cannot hold `Stream` |
-| `TestStoreRoundTrip` | `sqlite` | `LoadFacts(PutRepoFacts(x)) == x`, a zero loading as +0; `Run(id)` returns the run as begun and finished, policy source included; `RunWatermarks` returns the last `PutRunWatermarks` of the run, names and joins included, and a watermark that joins nothing is refused; `RunForge` returns the last `PutRunForge` of the run with its watermarks and its join (#38), and a pull request of a repository not the run's is refused; readers never see a running or failed run (`ErrNotFound`, `RunWatermarks` and `RunForge` included) |
+| `TestStoreRoundTrip` | `sqlite` | `LoadFacts(PutRepoFacts(x)) == x`, a zero loading as +0; `Run(id)` returns the run as begun and finished, policy source included, and `Runs` the run with the groups and repositories `LoadFacts` gives, and no run of another kind (MC-17); `RunWatermarks` returns the last `PutRunWatermarks` of the run, names and joins included, and a watermark that joins nothing is refused; `RunForge` returns the last `PutRunForge` of the run with its watermarks and its join (#38), and a pull request of a repository not the run's is refused; readers never see a running or failed run (`ErrNotFound`, `RunWatermarks` and `RunForge` included) |
 | `TestStoreLifecycle` | `sqlite` | `Open` creates a missing directory 0700 and files 0600, in WAL mode; it refuses another program's SQLite file, a file that is not SQLite and a newer facts database with a `UsageError`, without waiting for a held lock and leaving the file byte for byte, and a file or directory it cannot write with one that names it (#71); `OpenExisting` creates no directory or file for a missing path, refuses it with a `UsageError` that names it, refuses what `Open` refuses, reads what a writer wrote without deleting a run left running, and migrates an empty file (#71); first opens racing in separate processes all succeed; a run left running is deleted once its store has written nothing for a day, and not before; retention and `LatestRun` match a model of the run-model rule across gaps, year-long pauses, ties and backfills, and no table with a `run_id` keeps a row of a deleted run, the GitHub data a run kept included (#38) |
 | `TestGitHubSync` | `github` | recorded responses ([testdata/github](../../testdata/github/README.md)) become the expected repositories and pull request pages, through rate limits (a 403 with Retry-After, a nearly spent budget, and a spent budget and a secondary limit that GitHub reports inside a 200), a 502 and nested follow-ups; a mirror clones and fetches from a local git server that takes only the token, follows a rename by node id, moves to `.stale` and back, and never follows a redirect to another host; the token is in no fact, mirror file, log or error; the pages the passes return, stored through `sqlite.Open` and `PutForgePage`, come back from `LoadForge` as the last page that carried each pull request said, reviews in submission order, and from a `since` between the passes only the pull requests updated at or after it; `reviews_given@1` over what `LoadForge` returns matches its oracle in scope `all`, the group and the repository, another organization's repository and a failed one counting nowhere (M2) |
-| `TestMCPTools` | `mcp` | each tool through the SDK's in-memory client (M4); and AI-assisted shares that add up, against the local report's: no answer, alone or less another, gives back a withheld share, a group's, a repository's or with `--scope all` the whole run's, nor surviving@1's copy of it (`ai_assisted_share`), and one person's three unmerged addresses count as one (#68) |
+| `TestMCPTools` | `mcp` | each tool through the SDK's in-memory client (M4); and AI-assisted shares that add up, against the local report's: no answer, alone or less another, gives back a withheld share, a group's, a repository's or with `--scope all` the whole run's, nor surviving@1's copy of it (`ai_assisted_share`), nor a shown share's cohort comparisons (#87), and one person's three unmerged addresses count as one (#68); and the agent's dead ends of the dogfood (wave 9): `identity_candidates` paged, stdin's end drained, `changes(person: "")` the `--me` person, the index's `scope_arg`, a scope only an earlier run holds named with that run, a repository's areas, a top tier set apart by its intervals in a table of two, arguments the schema refuses refused with what to pass, an id with no method answered, and `diff` of a shallow clone's boundary and of a partial clone refused with why ([mcp.md](mcp.md#the-test)) |

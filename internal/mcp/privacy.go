@@ -107,6 +107,17 @@ func (w *withholder) text(s string, path bool) string {
 	return w.addrs.Replace(s, path, pseudonym)
 }
 
+// count is how many addresses text would withhold in free text that is not
+// a path; 0 for a nil withholder, which withholds nothing.
+func (w *withholder) count(s string) int {
+	if w == nil {
+		return 0
+	}
+	n := 0
+	w.addrs.Replace(s, false, func(a string) string { n++; return pseudonym(a) })
+	return n
+}
+
 // encode renders an answer as compact JSON in the rules of
 // docs/spec/report-json.md: fields in declaration order, map keys sorted,
 // empty lists [] and maps {}, absent sections null, invalid UTF-8 as U+FFFD
