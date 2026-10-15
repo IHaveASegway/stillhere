@@ -1,8 +1,10 @@
 # Blame collector
 
-Status: carried over from the 2026-10-07 plan, updated 2026-10-14 (per-repo ignore-revs, per-commit rows, goroutine pool; then, with #7, the ignore-revs lookup, the list resolved to commits, its warnings, per-commit author keys and shared blame slots; then by #13: no `.gitattributes` file read, `--no-textconv`, `--indent-heuristic`, `--encoding=UTF-8`; then 2026-10-15, by #54's review: the porcelain `filename`, kept per row as the path in the commit) · becomes tests in M1
+Status: carried over from the 2026-10-07 plan, updated 2026-10-14 (per-repo ignore-revs, per-commit rows, goroutine pool; then, with #7, the ignore-revs lookup, the list resolved to commits, its warnings, per-commit author keys and shared blame slots; then by #13: no `.gitattributes` file read, `--no-textconv`, `--indent-heuristic`, `--encoding=UTF-8`; then 2026-10-15, by #54's review: the porcelain `filename`, kept per row as the path in the commit; then by #70: blame reads the commit as of `--now`, and `durable@1` classifies a row by its path in the commit) · becomes tests in M1
 
 This collector answers one question: whose non-blank lines does `git blame` still attribute on the default branch?
+
+`<sha>` below is the commit the run reads, the repository as it stood at `--now` (#70): the newest first-parent commit of the default branch whose committer time is before `--now`, which is the branch's head unless the head holds landings at or after `--now` ([run model](codebase.md#run-model)). Every activity window ends at `--now`, so blaming a newer head would credit lines written after `--now` to people whose landings no window holds yet. On a chain whose committer times are out of order, that commit can still sit above landings dated at or after `--now`, whose lines blame counts: the repository's `dated-after-now` warning counts those landings. The repository's ignore-revs file is read at that commit too.
 
 ## Tree and command
 
@@ -74,7 +76,7 @@ Both forms are a sequence of records, one per line of the file: a header, key li
 
 ## Persisted facts
 
-One row per (repo, head SHA, path, commit SHA, path in the commit), with `author_email` and `nonblank_lines`. Rows are aggregated per commit rather than per line, but they must keep the commit SHA, because durability joins surviving lines back to the commits and landings that wrote them ([week-collector.md](week-collector.md#landing--commit-map)), and the path in the commit (`LineOwner.OrigPath`, `""` when it is the path at HEAD), because that pair is the one key the history's changes share whatever renames lie between: `durable@1` leaves a binary change's lines out of its sums by it ([metrics.md](../metrics.md#change-facts-shared-by-durable1-and-simplifying1)). A commit blame reached through one path, the usual case, has one row per path at HEAD. Path role is not stored with these facts: it is a policy output, computed when reducing.
+One row per (repo, head SHA, path, commit SHA, path in the commit), with `author_email` and `nonblank_lines`. Rows are aggregated per commit rather than per line, but they must keep the commit SHA, because durability joins surviving lines back to the commits and landings that wrote them ([week-collector.md](week-collector.md#landing--commit-map)), and the path in the commit (`LineOwner.OrigPath`, `""` when it is the path at HEAD), because that pair is the one key the history's changes share whatever renames lie between: `durable@1` leaves a binary change's lines out of its sums by it, and counts a line as surviving only when the path it had in its commit is `prod`, as it counts a change's added lines ([metrics.md](../metrics.md#change-facts-shared-by-durable1-and-simplifying1)). A commit blame reached through one path, the usual case, has one row per path at HEAD. Path role is not stored with these facts: it is a policy output, computed when reducing.
 
 ## Reductions the fixture asserts
 

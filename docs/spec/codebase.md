@@ -11,7 +11,7 @@ Read this before touching code. It names every package, what it owns, what it ma
 | `cmd/stillhere` | `main`: signal handling, then `cli.Execute` | entry point |
 | `internal/cli` | Commands, flags, exit codes, and the composition root (the only place adapters are built and wired) | inbound adapter |
 | `internal/app` | Use cases: week, scan, report, explain, me, who-knows, validate, identities, sync, mcp | application |
-| `internal/collect` | git output → facts: discovery, clone health, tree and attributes, history, blame | anti-corruption layer for git |
+| `internal/collect` | git output → facts: discovery, clone health, the commit a run reads at `--now`, tree and attributes, history, blame | anti-corruption layer for git |
 | `internal/domain` | Fact types, metric value types, port interfaces, typed errors | core |
 | `internal/policy` | The policy model, embedded default policy and deny list, parsing, hashing | core |
 | `internal/classify` | The ordered path classifier | core |
@@ -67,7 +67,8 @@ type Repo struct {
 	Bare    bool
 	Remote  string // scrubbed origin URL; "" when there is no origin
 	Branch  string // default branch (spec/discovery.md#default-branch)
-	Head    string // full SHA the branch resolved to; every later command names it
+	Head    string // full SHA the branch resolved to; in a run's facts (#70), the commit the run read: the newest first-parent commit
+	               // of that SHA whose committer time is before --now (collect.SnapshotAt, run model); every later command names it
 	Shallow bool
 	Partial bool
 }
@@ -79,7 +80,7 @@ type Group struct {
 }
 
 type Warning struct {
-	Code    string // duplicate-repo, shallow-clone, shallow-window, partial-clone, ignore-revs, excluded-repo, path-failed, ...
+	Code    string // duplicate-repo, shallow-clone, shallow-window, partial-clone, ignore-revs, head-after-now, dated-after-now, excluded-repo, path-failed, no-commit-before-now, ...
 	Message string // already scrubbed
 	Repo    string // Repo.Key; "" for run-level warnings
 }
@@ -136,7 +137,8 @@ type LineOwner struct { // one row per (Path, Commit, OrigPath)
 	Path       string
 	Commit     string
 	OrigPath   string   // #54: the path the lines had in Commit, blame's porcelain "filename"; "" when it is Path. (OrigPath, Commit) is the key
-	                    // FileChange's (Path, Commit) shares, whatever renames lie between, so durable@1 matches a binary change's lines by it
+	                    // FileChange's (Path, Commit) shares, whatever renames lie between, so durable@1 matches a binary change's lines by it,
+	                    // and (#70) classifies a blamed line by OrigPath's role, as Σ added classifies a change by its Path
 	Author     Person
 	AuthorTime time.Time
 	CoAuthors  []Person // Commit's Co-authored-by trailers, canonicalised and ordered like Commit.CoAuthors; credit reads them (ADR 0007)
@@ -458,6 +460,16 @@ type Discovery struct {
 	Warnings []domain.Warning   // duplicate-repo, shallow-clone, partial-clone; sorted by Repo, Code, Message
 	Failed   []domain.FileError // paths that gave no repository, each once, sorted by Path: a PATH slot that was neither a repo nor a group, or a repo (named or a group's member) git cannot read or whose default branch has no commit; app reports each as a run-level path-failed warning and marks the run partial (see Errors and logging)
 }
+// SnapshotAt (#70): the commit a run reads repo at, the repository as it stood at now (run model): one
+// rev-list --first-parent --timestamp of repo.Head, read down from the head to the first commit whose committer
+// time is before now, as Window.Contains compares, and on to the chain's end to count Below
+func SnapshotAt(ctx context.Context, git domain.GitRunner, repo domain.Repo, now time.Time) (Snapshot, error)
+type Snapshot struct {
+	Commit string    // the newest first-parent commit of repo.Head committed before now; repo.Head unless that is not; "" when none is
+	Time   time.Time // Commit's committer time
+	After  int       // the first-parent commits above Commit: landings at or after now, which the run does not read
+	Below  int       // the first-parent commits below Commit committed at or after now: landings it reads, which no window holds
+}
 type PathAt struct{ Commit, Path string } // a path in the tree of a commit that touched it
 // ClassifyPaths: every path at Head, symbolic links and submodules included (they get no role), plus each touched
 // path Head no longer has, sized at its Commit. touched: every path the history touched (week and scan), one entry
@@ -544,9 +556,11 @@ type Definition struct {
 	Question, Unit                                           string
 	Ranked                                                   bool
 	Forge                                                    bool // reads FactSet.Forge (#38): the one declaration the report dates and caveats GitHub numbers by
-	Ratio                                                    bool // its values are shares, Num of Den (durable@1, knowledge_loss@1, ai_assisted@1): the one declaration a report prints a percent by, never the unit's words
+	Ratio                                                    bool // its values are shares, Num of Den (durable@1, knowledge_loss@1, ai_assisted@1): the one declaration a report prints a percent by, never the unit's words,
+	                                                              // a rank table included (RankSet.Percent), and the one a ranked metric's bootstrap follows (RankKind)
 	Eligibility, BlindSpots, Gaming, Oracle, Validity        string
 }
+func (d Definition) RankKind() rank.Kind // ARCH-10: rank.Ratio for a share (Ratio), else rank.Sum; no metric declares a kind of its own, so ranks and values print in one unit
 type Input struct {
 	Facts  *domain.FactSet     // required, with Now
 	Policy *policy.Policy      // nil: no bot or AI patterns and no [week] days, so Days must be set
@@ -561,10 +575,10 @@ type Ranked interface {
 	Metric
 	Clusters(in *Input, scope domain.Scope) (RankInput, error)
 }
-// RankInput: the metric owns its window and eligibility (both are part of its versioned definition), so a
-// caller ranks with rank.Intervals(def.ID, scope, ri.Window, ri.Kind, ri.Data, ri.Options) and restates nothing.
+// RankInput: the metric owns its window and eligibility (both are part of its versioned definition), and its kind
+// follows from its definition, so a caller ranks with rank.Intervals(def.ID, scope, ri.Window, def.RankKind(), ri.Data,
+// ri.Options) and restates nothing.
 type RankInput struct {
-	Kind    rank.Kind
 	Window  domain.Window // the metric's window for Facts.Now (durable@1: [now-365d, now-90d)); joins ranks to MetricValue.Window
 	Options rank.Options  // MinN from the eligibility rule; Blocks for Sum; Replicates 0 = 1000
 	Data    map[domain.Subject][]rank.Cluster // each person's clusters, sorted by Change; bots left out; nil when empty
@@ -650,7 +664,7 @@ type ForgeSync struct {                    // a watermark as the run read it
 	Updated, Synced *time.Time // ForgeWatermark's, nil for its zero times
 }
 func OwnPageOnly(metric domain.MetricID) bool // a person's values only their own page shows: ai_assisted (ADR 0007); explain refuses them
-type RankSet struct { Metric MetricInfo; Scope domain.Scope; Window domain.Window; Percent bool; MinN int; Intervals []domain.RankInterval } // bots left out
+type RankSet struct { Metric MetricInfo; Scope domain.Scope; Window domain.Window; Percent bool; MinN int; Intervals []domain.RankInterval } // bots left out; Percent: metrics.Definition.Ratio
 func Build(in *Input) *Model
 // The read commands' answers live here too, so the renderers and the MCP server share one shape.
 // Each has Provenance (run id, as-of, policy, HEAD SHAs, metric@version, when the GitHub data was synced) and Caveats:
@@ -827,7 +841,8 @@ func Backdated(t testing.TB) string                             // builds <t.Tem
 func BuildBackdated(ctx context.Context, dir string) error      // the backdated guard in dir, which must be empty or absent
 func MergedRevert(t testing.TB) string                          // builds <t.TempDir()>/merged-revert: reverts on side branches that --no-ff merges land
 func BuildMergedRevert(ctx context.Context, dir string) error   // the merged-revert guard in dir, which must be empty or absent
-func Binary(t testing.TB) string                                // builds <t.TempDir()>/binary (#54): files git takes for binary at some commits, one renamed by a commit older than the window, one moved out of vendor/
+func Binary(t testing.TB) string                                // builds <t.TempDir()>/binary (#54): files git takes for binary at some commits, one renamed by a commit older than the window, one moved out of vendor/;
+                                                                // (#70) text files whose path changes role on the way to HEAD, onto prod paths and off them
 func BuildBinary(ctx context.Context, dir string) error         // the binary-file guard in dir, which must be empty or absent
 // discovery.go (#4): the discovery and clone-health repositories, as structs of absolute paths
 const DiscoveryToken = "TOKENVALUE"                             // planted in remote URLs; TestDiscover asserts no output holds it
@@ -847,6 +862,7 @@ func BuildMergeMethods(ctx context.Context, dir string) error   // the merge-met
 
 Every `scan` is a **run**: a snapshot of facts at one set of HEADs, under one policy and one mailmap, with the metric values computed from them.
 
+- **A run reads each repository as it stood at `--now`** (#70, [ADR 0012](../adr/0012-a-run-reads-each-repository-as-it-stood-at-now.md)). Every window ends at `--now`, so the code the run blames, classifies and sizes must be the code of that moment: a run that read a newer head would credit lines written after `--now` to people whose landings no window holds yet, and `knowledge_loss@1` would count them as gone. The run's HEAD in each repository is the newest first-parent commit of the default branch, as discovery resolved it, whose committer time is before `--now`, strictly, as the windows are half-open (`collect.SnapshotAt`). Newest means nearest the branch's head on its first-parent chain, the chain landings are counted on, not the latest committer time: what lies below that commit is read with it, whatever its date, as a wrong clock or a rebase that kept old committer dates can leave a chain. Blame, classification, sizes, the ignore-revs file and the history all read that commit, `Repo.Head` records it, and so do the provenance `heads` of every section. When it is not the branch's head, the repository gets a `head-after-now` warning, a caveat wherever its numbers are, naming the commit read and how many landings came at or after `--now`. When landings below it are dated at or after `--now` (`Snapshot.Below`), blame counts their lines while no window counts them, so their authors can look gone: a scan that blamed the repository gives it a `dated-after-now` warning, also a caveat wherever its numbers are, counting them. The run then describes no single moment, and says so rather than claim `--now`. A repository whose branch has no commit before `--now` yields no facts: it is left out of the run with a run-level `no-commit-before-now` warning, like a repository `--exclude-repo` leaves out, and the run is not partial. Without `--now`, the wall clock, nothing changes unless a commit is dated in the future. `week` reads the same commit for the same `--now`, so the two reports agree on the code they describe.
 - **Git-derived facts are stored per run**, not once per commit. The mailmap and the policy can change between runs, and every number in a run must come from one HEAD set, one policy and one mailmap. The cost is repeated rows across runs, bounded by retention. The store is disposable, so this is a two-way door.
 - **Publishing** is a status flip. A run is written as `running` and becomes `complete` (or `partial` when some repo failed) only after its last row. Readers select complete and partial runs only, so nobody sees half a run: every `FactStore` read method returns `ErrNotFound` for a running or failed run. A run left `running` by a crash is deleted by the next open once its lease has lapsed. The store that began the run holds the lease: every write it makes renews it, a sync's forge writes included, and it lapses after a day without one, so an open deletes a running run only after its writer has written nothing for a day.
 - **Retention.** When a run finishes, the store keeps, among the runs of its kind, that run, the newest 8 published runs and the newest published run of each of the 12 most recent months that have one (by `Now`, as restic's `--keep-last` and `--keep-monthly` count), and deletes the others, failed runs included.
@@ -919,7 +935,7 @@ Exit codes are in [report-json.md](report-json.md#exit-codes): 0 when any repo p
 
 Issues are built in parallel branches, so a shared package or file needs a rule that keeps two branches from colliding, or from compiling apart and failing only at merge.
 
-- **`collect` is shared by #4, #5, #6 and #7.** Each collector's unexported identifiers carry its prefix (`discover…`, `classify…`, `history…`, `blame…`). The readers every collector needs are in `scan.go` (`newScanner`, which allows long lines, `scanNUL` for `-z` output, and `nonBlank`, the one non-blank predicate that the history and blame collectors both count with), and the test helper in `collect_test.go` (`newRunner`, a real `gitcli.Runner`). The co-author reader `coAuthors` is in `coauthors.go`: #6 implements it, and #7 calls it for the commits blame attributes lines to, which can be older than any history window. The package has at most one `TestMain`, and it goes in `collect_test.go`.
+- **`collect` is shared by #4, #5, #6 and #7.** Each collector's unexported identifiers carry its prefix (`discover…`, `classify…`, `history…`, `blame…`, and #70's `snapshot…`). The readers every collector needs are in `scan.go` (`newScanner`, which allows long lines, `scanNUL` for `-z` output, and `nonBlank`, the one non-blank predicate that the history and blame collectors both count with), and the test helper in `collect_test.go` (`newRunner`, a real `gitcli.Runner`). The co-author reader `coAuthors` is in `coauthors.go`: #6 implements it, and #7 calls it for the commits blame attributes lines to, which can be older than any history window. The package has at most one `TestMain`, and it goes in `collect_test.go`.
 - **Files that belong to one issue.** #14: `domain/forge.go`, `internal/github`, `sqlite/forge.go`, `sqlite/migrations/0002_forge.sql`, `cli/forge.go`, `cli/sync.go`, `app/sync.go`, `metrics/reviews.go` (registered with one line in `metrics.All`). #15: `app/mcp.go`, `cli/mcp.go`, `internal/mcp`, `sqlite/readonly.go`, `docs/spec/mcp.md`, `plugins/stillhere`. #26: `identity/candidates.go`, `app/identities.go`, `report/identities.go`, `cli/identities.go`. #38: `identity/reviewer.go`, `sqlite/forgesnapshot.go`, `sqlite/migrations/0004_forge_snapshot.sql`, `app/reviews_oracle_test.go`, `fixture/mergemethods.go`. #5: everything in `policy` but `types.go`, which is this file's contract. Where such a file shares a package with another issue's, its unexported identifiers carry a prefix, as in `collect`: `forge…` and `snapshot…` in `sqlite`, `reviews…` in `metrics`, `mcp…` in `app`, `review…` in `app`'s tests and `readOnly…` in `sqlite`.
 - **A stub another branch calls.** When one branch calls a use case another builds in parallel, the signature lands here first, as a stub that returns an error naming its issue, and the caller's test skips that one call until both merge. The MCP server's `identity_candidates()` (#15) was built this way against `app.Identities` (#26), and `report.Identities` was a `Document` from the start, so the server serves whatever #26 put in it (Consumer-Driven Contracts: Ian Robinson, "Consumer-Driven Contracts: A Service Evolution Pattern", 2006). The walking skeleton's last stub went with it, and so did `domain.ErrNotImplemented`.
 - **Shared documents.** Each issue edits only the sections its scope names: in [metrics.md](../metrics.md), the entries of the metrics it builds or derives oracles for; in this file, the signatures it changes; in [report-json.md](report-json.md), the shape (#11). Where two branches still touch the same lines, #13 resolves them when it merges, as it does `go.mod` and `go.sum`.
@@ -932,11 +948,11 @@ Tests sit at stable boundaries, so a refactor does not rewrite them (Kent Beck, 
 | --- | --- | --- |
 | `TestWeekOracle` | `app` | the week table in the fixture spec, people and bots apart, and the `--days 1` window against `[week] days = 7`: `window.days` 1, `days_from` `cli`, `since` `2026-10-06T00:00:00Z`, and `history`, the window the run collected, equal to it |
 | `TestStillHereOracle` | `app` | the still-here table, people and bots apart, and the concentration walk |
-| `TestChangeOracles` | `app` | `durable@1` and `simplifying@1` per person and per landing, with their rank tables and eligibility, reverts and AI-assisted tags on both fixtures; `knowledge_loss@1` and `who_knows@1` on the main fixture, and with a replica written by hand their reviews (#38): a reviewer who keeps an area's knowledge from counting as lost, with a comment on her own open pull request, recent reviewers of a path (one known only as `@login`; not the author, a bot, a review outside each window, or a squash read as a rebase), on the merge-methods guard a rebase merge's commits in one committer second and a squash that takes no other pull request's landing in its second, and a stored run that a later sync leaves unchanged; `surviving@1` credit on the sibling, where an agent's blamed lines go to its human co-author; and the regression guards: a backdated first-parent commit hides no landing below it; a rebased one lands, and is dated, by its committer time, and is credited to its author; and a revert merged with `--no-ff` is linked to the merge landing, which neither change metric counts, while `surviving@1` keeps the lines the revert restored; and a change git takes for binary leaves both of `durable@1`'s sums, and `ai_assisted@1`'s cohort ratio, with the lines blamed to its commit from its path, through a rename the history never collected and from a path with no role, while its commit's other changes and the file's text commits, before and after its binary ones, keep theirs; and the identity candidates of each fixture, without its mailmap and with it, whose mailmap form changes nothing in `git check-mailmap` until its lines are uncommented |
+| `TestChangeOracles` | `app` | `durable@1` and `simplifying@1` per person and per landing, with their rank tables and eligibility, reverts and AI-assisted tags on both fixtures; `knowledge_loss@1` and `who_knows@1` on the main fixture, and with a replica written by hand their reviews (#38): a reviewer who keeps an area's knowledge from counting as lost, with a comment on her own open pull request, recent reviewers of a path (one known only as `@login`; not the author, a bot, a review outside each window, or a squash read as a rebase), on the merge-methods guard a rebase merge's commits in one committer second and a squash that takes no other pull request's landing in its second, and a stored run that a later sync leaves unchanged; `surviving@1` credit on the sibling, where an agent's blamed lines go to its human co-author; and the regression guards: a backdated first-parent commit hides no landing below it; a rebased one lands, and is dated, by its committer time, and is credited to its author; and a revert merged with `--no-ff` is linked to the merge landing, which neither change metric counts, while `surviving@1` keeps the lines the revert restored; and a change git takes for binary leaves both of `durable@1`'s sums, and `ai_assisted@1`'s cohort ratio, with the lines blamed to its commit from its path, through a rename the history never collected and from a path with no role, while its commit's other changes and the file's text commits, before and after its binary ones, keep theirs; and both sums classify a line by the path it had in its commit (#70), so text files moved onto `prod` paths from `vendor/`, `tests/` and a name with no role keep no line their commits did not add, a `prod` file moved into `tests/` keeps its lines and one moved under `vendor/`, which blame does not read, keeps none; a run reads each repository as it stood at `--now` (#70): the main fixture at `--now 2026-03-15` reads its newest landing before then, records it as its head with a `head-after-now` caveat, gives `knowledge_loss@1` 0 / 18, and renders as the same repository cut back to that commit does, while at a `--now` before its root commit it yields no facts and a `no-commit-before-now` warning, and the backdated guard at `--now 2026-07-01` reads its backdated commit and gives a `dated-after-now` caveat for the 1 landing below it dated after `--now`; and the identity candidates of each fixture, without its mailmap and with it, whose mailmap form changes nothing in `git check-mailmap` until its lines are uncommented |
 | `TestDeterminism` | `app` | two scans of both fixtures as one group, into separate facts.db files, give byte-identical JSON without `timings`, and identical text and Markdown; `report` on the stored run reproduces the scan; a token planted in a URL given as a PATH, in its userinfo, query or fragment, is in no byte of facts.db or its `-wal` and `-shm`, no rendering and no log line; with the cli's Deps (the store as both ports) and a replica that holds the fixture's forge repository beside another organization's, the run keeps only its own repository's watermark, with its name and join, `reviews_given@1` counts its reviews in scope `all`, the group and the repository, a review 7 days before `Now` in week block 0 and one at the window's start in block 12, and `report` reproduces the scan after a later sync renamed the repository; and a repository written with `git fast-import` (#52), whose display names are a login, the same name on another address, an address, none twice, a label's shape and two bots', gives the same bytes over two scans and `report`, labels included, no text or Markdown page (who-knows included) holding a local part a name would give away or a domain, two `(no name N)` labels and four `(name withheld N)`, the label-shaped name printed quoted, and JSON names withheld on both of jdoe's addresses and for the bot named by an address, not for `dependabot[bot]` |
 | `TestDiscover` | `collect` | duplicates, bare repos, scp vs HTTPS remotes; a planted token appears in no output |
 | `TestCloneHealth` | `collect` | shallow and partial clones warn and lose only the facts they should |
-| `TestAttributes` | `collect` | `check-attr --source` on a work tree and a bare clone: the scanned commit's attributes, not the checked-out ones or `attr.tree`'s, matched case-sensitively under `core.ignorecase=true`; an empty value is on; an attribute that settles a generated header; a deleted path classified by Head's attributes; a header sniff that no attribute changes (`-diff`, `binary`, an uncommitted edit), with each of its rules, prose and a generator program that stay `prod`, and the line-40 limit; a symbolic link and a submodule unclassified. History (scan) and Blame on the same pair, under the repository config that each pin of [git-invocation.md](git-invocation.md#repository-settings-that-change-facts) overrides: the same facts in both clones, and the expected ones, with no file binary although Head, the checkout and `attr.tree` each mark files `-diff`, a CRLF-to-LF rename followed, the indent heuristic's owner, a UTF-8 author name, a co-author, a root commit's diff, a gitlink's row and a decomposed path blamed; and no textconv driver or filter run |
+| `TestAttributes` | `collect` | `check-attr --source` on a work tree and a bare clone: the scanned commit's attributes, not the checked-out ones or `attr.tree`'s, matched case-sensitively under `core.ignorecase=true`; an empty value is on; an attribute that settles a generated header; a deleted path classified by Head's attributes; a header sniff that no attribute changes (`-diff`, `binary`, an uncommitted edit), with each of its rules, prose, a generator program and a generator script's string template that writes an rST comment (#70) that stay `prod`, a Haskell module whose generated header opens a `{-` comment, as proto-lens writes it, and the line-40 limit; a symbolic link and a submodule unclassified. History (scan) and Blame on the same pair, under the repository config that each pin of [git-invocation.md](git-invocation.md#repository-settings-that-change-facts) overrides: the same facts in both clones, and the expected ones, with no file binary although Head, the checkout and `attr.tree` each mark files `-diff`, a CRLF-to-LF rename followed, the indent heuristic's owner, a UTF-8 author name, a co-author, a root commit's diff, a gitlink's row and a decomposed path blamed; and no textconv driver or filter run |
 | `TestNumstatRename` | `collect` | the rename path forms |
 | `TestBlamePorcelain` | `collect` | `--line-porcelain` and `--porcelain` parse to the same counts and the same path in each commit (`OrigPath`), a commit that blame reached through two paths included |
 | `TestClassify` | `classify` | roles, role precedence, test directories for code and configuration only, `too_big`, segment matching, the deny list's minimum contents and what it leaves out, Linguist's attribute values, no role for a link or a submodule |

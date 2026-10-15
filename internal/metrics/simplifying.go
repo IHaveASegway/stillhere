@@ -73,7 +73,6 @@ func (simplifyingV1) Clusters(in *Input, scope domain.Scope) (RankInput, error) 
 	clusters, _ := simplifyingClusters(v)
 	w := v.window(recentDays, 0)
 	return RankInput{
-		Kind:    rank.Sum,
 		Window:  w,
 		Options: rank.Options{MinN: minClusters, Blocks: w.Weeks()},
 		Data: rankData(v, clusters, func(k *cluster) rank.Cluster {

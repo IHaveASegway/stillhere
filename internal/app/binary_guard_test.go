@@ -16,6 +16,12 @@ import (
 // onto a prod path. It keeps every other change's: B1's core.py beside its
 // binary bin.py, and T1's and T4's lines on flip.py, which T2 made binary
 // and T3 text again. ai_assisted@1's cohort comparison reads the same sums.
+//
+// Both sums classify a line by the path it had in its commit (#70): the
+// text files M1 moves onto prod paths keep none of the lines their commits
+// never added as prod, the prod file it moves into tests/ keeps its lines,
+// and the one it moves under vendor/, which blame does not read, keeps
+// none: durable@1's blind spot.
 func binaryGuard(t *testing.T) {
 	s := scan(t, "", nil, scanRanked(fixture.Binary(t)))
 	r := onlyRepo(t, s.model)
@@ -43,9 +49,14 @@ func binaryGuard(t *testing.T) {
 	})
 
 	checkDurable(t, s, r.Key, "SPEC regression guards, binary files, durable@1", map[string]durableRow{
-		"ann@example.com": {"Ann Binary", 2, 2, 1, 0, false},
-		"flo@example.com": {"Flo Flip", 4, 6, 3, 0, false},
-		"val@example.com": {"Val Vendor", 2, 2, 1, 0, false},
+		"ann@example.com":  {"Ann Binary", 2, 2, 1, 0, false},
+		"flo@example.com":  {"Flo Flip", 4, 6, 3, 0, false},
+		"val@example.com":  {"Val Vendor", 2, 2, 1, 0, false},
+		"uma@example.com":  {"Uma Unvendor", 2, 2, 1, 0, false},
+		"tess@example.com": {"Tess Tester", 1, 1, 1, 0, false},
+		"nate@example.com": {"Nate Notes", 1, 1, 1, 0, false},
+		"kim@example.com":  {"Kim Kept", 3, 3, 1, 0, false},
+		"pat@example.com":  {"Pat Parked", 0, 4, 1, 0, false},
 	}, map[string]map[string]cluster{
 		// B1: core.py; bin.py's 3 lines, blamed to B1 in moved.py from
 		// bin.py through R1's rename, are in neither sum.
@@ -58,6 +69,18 @@ func binaryGuard(t *testing.T) {
 		// V1: val.py; vendor/lib.py's 3 lines, blamed to V1 in lib.py, are
 		// in neither sum, although their path had no role in V1.
 		"val@example.com": {"2026-05-11T12:00:00Z": {2, 2}},
+		// U1, E1, N1: the prod file beside each; the 3, 4 and 5 lines M1
+		// moved onto prod paths had no prod role in their commits, so they
+		// are in neither sum.
+		"uma@example.com":  {"2026-06-15T12:00:00Z": {2, 2}},
+		"tess@example.com": {"2026-06-16T12:00:00Z": {1, 1}},
+		"nate@example.com": {"2026-06-17T12:00:00Z": {1, 1}},
+		// K1: tool.py's 3 lines survive in tests/tool.py, a test file at
+		// HEAD, from tool.py, prod in K1.
+		"kim@example.com": {"2026-06-18T12:00:00Z": {3, 3}},
+		// P1: pat.py's 4 lines are at HEAD in vendor/pat.py, which blame
+		// does not read.
+		"pat@example.com": {"2026-06-19T12:00:00Z": {0, 4}},
 	})
 
 	// ai_assisted@1: no landing is tagged, so every cluster above is in the
@@ -66,8 +89,8 @@ func binaryGuard(t *testing.T) {
 	e := s.explain(t, domain.MetricID{Name: "ai_assisted", Version: 1}, domain.Subject{Kind: domain.SubjectRepo, Key: r.Key})
 	if v, ok := repoValue(t, table, e, r.Key); ok {
 		_, ai := v.Detail["durable_ai"]
-		if v.Num != 0 || v.Den != 7 || v.Detail["durable_other"] != 8.0/10 || v.Detail["durable_other_n"] != 5 || ai {
-			t.Errorf("%s: %s, want 0 of 7 landings tagged, durable_other 8/10 over 5 clusters and no durable_ai", table, describe(v))
+		if v.Num != 0 || v.Den != 13 || v.Detail["durable_other"] != 15.0/21 || v.Detail["durable_other_n"] != 10 || ai {
+			t.Errorf("%s: %s, want 0 of 13 landings tagged, durable_other 15/21 over 10 clusters and no durable_ai", table, describe(v))
 		}
 	}
 }

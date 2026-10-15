@@ -74,6 +74,7 @@ Rows are per person, per repo, with `commits`, `lines_added`, and `prod_lines_ad
 - `--since` is `--now` minus the effective number of days: `[week].days`, overridden by `--days`. `--week-sort` overrides `[week].sort` the same way.
 - The report's `window` stores the effective values plus `days_from` and `sort_from` (`cli` or `policy`). The policy hash stays the hash of the file's bytes.
 - `--ignore-revs-file` is accepted on `week` and ignored with one stderr line, because it is not a `git log` option.
+- `<sha>` is the commit the run reads, as `scan` reads it (#70): the newest first-parent commit of the default branch committed before `--now`, so classification reads the repository as it stood then, a `head-after-now` warning says when the branch's head is newer, and a branch with no commit before `--now` is left out with a `no-commit-before-now` warning ([run model](codebase.md#run-model)). The window's landings are the same either way: every first-parent commit above that one was committed at or after `--now`.
 
 Budget: `week` alone finishes in under 60 s for 100 repos.
 

@@ -164,6 +164,7 @@ func matchGlob(globs []string, name string) (string, bool) {
 type collectOptions struct {
 	mode           collect.HistoryMode
 	window         domain.Window
+	now            time.Time // the run's --now: each repository is read as it stood then (collect.SnapshotAt)
 	ignoreRevsFile string
 	slots          *collect.BlameSlots // scan only: shared by every repository's blame
 }
@@ -172,6 +173,10 @@ type collectOptions struct {
 type repoResult struct {
 	facts  domain.RepoFacts
 	timing report.RepoTiming
+	// leftOut is set when the repository's branch has no commit before
+	// --now: the run has no facts of it (facts holds its Repo only) and
+	// says why with this run-level warning.
+	leftOut *domain.Warning
 }
 
 // collectAll collects every repository with each, at most limit at a time,
@@ -212,9 +217,17 @@ func collector(d Deps, opt collectOptions) func(context.Context, repoJob) (repoR
 	}
 }
 
-// collectRepo collects one repository: its history, then the class of every
-// path (the history says which paths no longer at HEAD it touched), then,
-// for a scan of a clone that has its blobs and its whole history, blame.
+// collectRepo collects one repository as it stood at --now: the commit it
+// reads (collect.SnapshotAt), its history, then the class of every path
+// (the history says which paths no longer at HEAD it touched), then, for a
+// scan of a clone that has its blobs and its whole history, blame. HEAD in
+// every later step is that commit, which is the branch's head unless the
+// head holds landings at or after now; then the repository carries a
+// head-after-now warning, and its caveats say so. When landings below that
+// commit are dated at or after now, a scan that blamed says so too
+// (dated-after-now): their lines count, their landings do not. A repository
+// whose branch has no commit before now is left out of the run with a
+// run-level warning.
 // A failure at any stage becomes the repository's error, and none of its
 // facts are kept: a repository is either collected or failed, never half.
 func collectRepo(ctx context.Context, d Deps, job repoJob, opt collectOptions) (repoResult, error) {
@@ -232,7 +245,27 @@ func collectRepo(ctx context.Context, d Deps, job repoJob, opt collectOptions) (
 		}, timing: t}, nil
 	}
 
+	// The snapshot's walk counts toward the history's time: both read the
+	// branch's first-parent chain.
 	start := time.Now()
+	snap, err := collect.SnapshotAt(ctx, d.Git, repo, opt.now)
+	if err != nil {
+		t.HistoryMS = time.Since(start).Milliseconds()
+		return fail("snapshot", err)
+	}
+	if snap.Commit == "" {
+		t.HistoryMS = time.Since(start).Milliseconds()
+		w := snapshotNoCommit(repo, opt.now, snap)
+		d.Log.Warn("repository left out: no commit before --now", "repo", repo.Name, "later_landings", snap.After)
+		return repoResult{facts: domain.RepoFacts{Repo: repo}, timing: t, leftOut: &w}, nil
+	}
+	var asOf []domain.Warning
+	if snap.Commit != repo.Head {
+		asOf = append(asOf, snapshotHeadAfterNow(repo, opt.now, snap))
+		d.Log.Info("read as it stood at --now", "repo", repo.Name, "commit", snapshotShort(snap.Commit),
+			"later_landings", snap.After)
+		repo.Head = snap.Commit
+	}
 	h, err := collect.History(ctx, d.Git, repo, collect.HistoryOptions{Window: opt.window, Mode: opt.mode})
 	t.HistoryMS = time.Since(start).Milliseconds()
 	if err != nil {
@@ -240,7 +273,7 @@ func collectRepo(ctx context.Context, d Deps, job repoJob, opt collectOptions) (
 	}
 	rf := domain.RepoFacts{
 		Repo: repo, Status: domain.RepoStatusOK,
-		Warnings:    repoWarnings(repo, job.warnings, h.Warnings),
+		Warnings:    repoWarnings(repo, job.warnings, asOf, h.Warnings),
 		FirstCommit: h.FirstCommit, History: opt.window,
 		Commits: h.Commits, Landings: h.Landings, Changes: h.Changes, Reverts: h.Reverts,
 	}
@@ -283,6 +316,11 @@ func collectRepo(ctx context.Context, d Deps, job repoJob, opt collectOptions) (
 		rf.LineFacts = lineFacts
 		rf.Owners, rf.IgnoreRevs, rf.BlameErrors = bf.Owners, bf.IgnoreRevs, bf.Errors
 		rf.Warnings = repoWarnings(repo, rf.Warnings, bf.Warnings)
+		if lineFacts && snap.Below > 0 {
+			rf.Warnings = repoWarnings(repo, rf.Warnings, []domain.Warning{snapshotDatedAfterNow(repo, opt.now, snap)})
+			d.Log.Info("landings dated at or after --now below the commit read", "repo", repo.Name,
+				"commit", snapshotShort(snap.Commit), "landings", snap.Below)
+		}
 		for i, e := range bf.Errors {
 			if i == 8 {
 				d.Log.Warn("more blame failures", "repo", repo.Name, "files", len(bf.Errors)-8)
@@ -394,11 +432,37 @@ func blameProgress(log *slog.Logger, repo string) func(done, total int) {
 }
 
 // factSet assembles a run's facts from what discovery planned and the
-// collectors found.
+// collectors found. A repository whose branch had no commit before --now
+// is in none of them: its warning joins the run's, and its groups drop it,
+// as they drop a repository --exclude-repo left out.
 func factSet(now time.Time, p *policy.Policy, pl *plan, results []repoResult) *domain.FactSet {
-	fs := &domain.FactSet{Now: now, Policy: p.Ref(), Groups: pl.groups, Warnings: pl.warnings}
+	fs := &domain.FactSet{Now: now, Policy: p.Ref(), Groups: pl.groups, Warnings: slices.Clone(pl.warnings)}
+	var gone map[string]bool
 	for _, r := range results {
+		if r.leftOut != nil {
+			if gone == nil {
+				gone = map[string]bool{}
+			}
+			gone[r.facts.Repo.Key] = true
+			fs.Warnings = append(fs.Warnings, *r.leftOut)
+			continue
+		}
 		fs.Repos = append(fs.Repos, r.facts)
+	}
+	if gone != nil {
+		var groups []domain.Group
+		for _, g := range pl.groups {
+			var keys []string
+			for _, k := range g.Repos {
+				if !gone[k] {
+					keys = append(keys, k)
+				}
+			}
+			g.Repos = keys
+			groups = append(groups, g)
+		}
+		fs.Groups = groups
+		sortWarnings(fs.Warnings)
 	}
 	slices.SortFunc(fs.Repos, func(a, b domain.RepoFacts) int { return cmp.Compare(a.Repo.Key, b.Repo.Key) })
 	slices.SortFunc(fs.Groups, func(a, b domain.Group) int { return cmp.Compare(a.Name, b.Name) })
