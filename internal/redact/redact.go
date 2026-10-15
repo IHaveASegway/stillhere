@@ -58,6 +58,18 @@ var (
 	// is the scheme and its separator.
 	collapsedUserinfo = regexp.MustCompile(`([A-Za-z][A-Za-z0-9+.-]*:[/\\])[^/\\?#\s]*@`)
 
+	// collapsedQuery matches the query and fragment of a URL whose "//" a
+	// path cleaner collapsed, "/cwd/https:/host/r.git?access_token=TOKEN",
+	// which URL removes from the URL as typed: either can carry a token.
+	// Group 1 is the URL before them. Group 2 ends the match and is kept:
+	// whitespace, a quote, or the end of the text, after the ":" that joins
+	// a path to its message ("<path>: does not exist") when there is one.
+	// The scheme has two characters or more, because a one-letter one is a
+	// Windows drive, as git itself reads it (has_dos_drive_prefix):
+	// "C:\src\C#\app" is a path, and keeps its "#". The pattern also
+	// matches a URL whose "//" is intact, where it removes what URL would.
+	collapsedQuery = regexp.MustCompile("([A-Za-z][A-Za-z0-9+.-]+:[/\\\\][^\\s'\"<>`?#]*)[?#][^\\s'\"<>`]*?(:?(?:[\\s'\"<>`]|$))")
+
 	// textPassword matches a "user:password@" prefix on a token without a
 	// scheme inside free text, such as an scp-like remote git quotes in
 	// "fatal: 'user:pw@host:o/r.git' does not appear to be a git
@@ -110,14 +122,16 @@ func URL(raw string) string {
 
 // Scrub removes credentials from free text and leaves everything else as it
 // was: URL is applied to every URL with a scheme, any remaining
-// "scheme://user:pass@" is stripped, and so is the userinfo of a URL whose
-// "//" a path cleaner collapsed ("/cwd/https:/user:pass@host"), and a
+// "scheme://user:pass@" is stripped, and so are the userinfo, the query and
+// the fragment of a URL whose "//" a path cleaner collapsed
+// ("/cwd/https:/user:pass@host/r.git?access_token=X"), and a
 // "user:password@" prefix on a token without a scheme or on a segment of a
 // path. Use it where the text must otherwise stay intact, such as the
 // arguments of a domain.GitError; Message also normalises and truncates.
 func Scrub(s string) string {
 	s = userinfo.ReplaceAllString(s, "$1")
 	s = collapsedUserinfo.ReplaceAllString(s, "$1")
+	s = collapsedQuery.ReplaceAllString(s, "${1}${2}")
 	s = urlToken.ReplaceAllStringFunc(s, URL)
 	return textPassword.ReplaceAllString(s, "$1")
 }

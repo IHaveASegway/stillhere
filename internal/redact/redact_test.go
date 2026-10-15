@@ -69,6 +69,13 @@ func TestRedact(t *testing.T) {
 			"/tmp/run/https:/TOKEN@github.com/o/r.git: does not exist",
 			`C:\run\https:\user:TOKEN@github.com\o\r.git: does not exist`,
 			"stat /tmp/run/user:TOKEN@host.example:o/r.git: not a directory",
+			// The query and the fragment of such a URL, which URL removes
+			// from the URL as typed, with or without a host before them.
+			"/tmp/run/https:/github.com/o/r.git?access_token=TOKEN: does not exist",
+			"/tmp/run/https:/github.com/o/r.git#TOKEN: does not exist",
+			"/tmp/run/https:/?access_token=TOKEN: does not exist",
+			`C:\run\https:\github.com\o\r.git?access_token=TOKEN: does not exist`,
+			"stat '/tmp/run/https:/user:TOKEN@github.com/o/r.git?access_token=TOKEN': no such file",
 		} {
 			for name, scrub := range map[string]func(string) string{"Scrub": redact.Scrub, "Message": redact.Message} {
 				if got := scrub(in); strings.Contains(got, "TOKEN") {
@@ -88,15 +95,32 @@ func TestRedact(t *testing.T) {
 			"/home/ada/go/pkg/mod/golang.org/x/sync@v0.8.0/errgroup",
 			"git@github.com:/o/r.git",
 			"C:/src/r and HEAD@{1}",
+			// A drive letter is no scheme, so a "#" in a Windows path is no
+			// fragment.
+			`C:\src\C#\app: does not exist`,
+			"C:/src/C#/app: does not exist",
+			"/home/ada/src/C#/app: does not exist",
 		} {
 			if got := redact.Scrub(in); got != in {
 				t.Errorf("Scrub(%q) = %q, want it unchanged", in, got)
 			}
 		}
-		long := "clone https://user:TOKEN@github.com/o/" + strings.Repeat("x", 300) + "  tail"
-		want := "clone https://github.com/o/" + strings.Repeat("x", 300) + "  tail"
-		if got := redact.Scrub(long); got != want {
-			t.Errorf("Scrub(long) = %q, want %q", got, want)
+		for _, tc := range []struct{ in, want string }{
+			{
+				"clone https://user:TOKEN@github.com/o/" + strings.Repeat("x", 300) + "  tail",
+				"clone https://github.com/o/" + strings.Repeat("x", 300) + "  tail",
+			},
+			// A URL made absolute loses its query or fragment and keeps the
+			// rest, the ":" that joins a path to its message included.
+			{
+				"/tmp/run/https:/github.com/o/r.git?access_token=TOKEN: does not exist",
+				"/tmp/run/https:/github.com/o/r.git: does not exist",
+			},
+			{"'/tmp/run/https:/github.com/o/r.git#TOKEN' and more", "'/tmp/run/https:/github.com/o/r.git' and more"},
+		} {
+			if got := redact.Scrub(tc.in); got != tc.want {
+				t.Errorf("Scrub(%q) = %q, want %q", tc.in, got, tc.want)
+			}
 		}
 	})
 

@@ -1,8 +1,8 @@
 # Fixture repository and oracles
 
-Status: carried over from the 2026-10-07 plan, change oracles and the sibling fixture added 2026-10-14 · the week oracle becomes `go test` in M0, still-here and change oracles in M1, web escaping in M3
+Status: carried over from the 2026-10-07 plan, change oracles and the sibling fixture added 2026-10-14, regression guards added 2026-10-14 (#13) · the week, still-here and change oracles run as `go test` in `internal/app` (`TestWeekOracle`, `TestStillHereOracle`, `TestChangeOracles`, `TestDeterminism`, #13), web escaping in M3
 
-`internal/fixture` builds this repository (`fixture.Main`) and the [sibling fixture](#sibling-fixture) (`fixture.Sibling`) in temporary directories for `go test`. Every number below is an oracle: a change that moves one fails CI. Each oracle exists so that one specific wrong implementation fails, and that implementation is named next to it.
+`internal/fixture` builds this repository (`fixture.Main`), the [sibling fixture](#sibling-fixture) (`fixture.Sibling`) and the [regression guards](#regression-guards-testchangeoracles)' two repositories (`fixture.Backdated`, `fixture.MergedRevert`) in temporary directories for `go test`. Every number below is an oracle: a change that moves one fails CI. Each oracle exists so that one specific wrong implementation fails, and that implementation is named next to it.
 
 CI runs real git; porcelain output is never faked. The `GitRunner` port exists so git flags live in one place, not so tests can avoid running git.
 
@@ -173,6 +173,7 @@ Why each row is what it is:
 - **Ivy, 4 and 0.** `tests/test_service.py` matches the segment pattern `(^|/)tests(/|$)`, but the substring `/tests/` does not occur in it. `notes.csv` is unclassified and adds 0, yet the commit still counts.
 - **Jules, 0.** A commit that touches only an unclassified path still makes a row.
 - **One Ada row.** Her in-window commit is authored as `ada@other.example` while `log.mailmap=false`. `%aN`/`%aE` give one row at `ada@example.com`; `%an`/`%ae` would give a second row.
+- **`--days 1`.** Against `[week].days = 7`, the report writes `window.days` 1, `days_from` `cli`, and `since` `2026-10-06T00:00:00Z`; an override the report ignores leaves `window.days` at 7. `history`, the window the run collected, equals `window`, as in every week report ([report-json.md](../../docs/spec/report-json.md#shape)): an override that reaches the report but not the collector leaves `history` at `[2026-09-30, 2026-10-07)`. The rows do not move: every week landing is on 2026-10-06, inside both windows.
 
 ## Still-here oracle (M1, `TestStillHereOracle`)
 
@@ -532,6 +533,86 @@ Wrong implementations this catches:
 - **Co-authors not canonicalised.** The 4 lines go to `81234567+piapair@users.noreply.github.com`, a second person, and Pia has 5.
 - **Crediting the first co-author whoever the author is.** L3, O4 and P2 give their lines to the agents in their trailers, and Q1 gives its 6 to Claude Dupont: Lena 34, Omar 33, Pia 7, Quinn 25.
 
+## Regression guards (`TestChangeOracles`)
+
+Two small repositories hold history shapes that once broke the history collector (the review of #37) and that neither fixture may hold, because each would move its oracles: `fixture.Backdated(t)` and `fixture.MergedRevert(t)`. Each is its own repository, so a guard that fails names its own cause.
+
+- **Setup.** Each is scanned alone with `--now 2026-10-07T00:00:00Z`, no mailmap and the packaged policy, so the windows are those of the [change oracles](#change-oracles-m1-testchangeoracles). Every commit is at 12:00:00Z on the stated day, with the same author and committer except the backdated guard's A2, which was authored and committed on different days by different people; no date is within a day of a window boundary. Where a row gives only a line count, the file holds lines `<name>_<i> = <i>` and the subject is `feat: add <file>`. Commit IDs are stable, as in the sibling, and are for debugging only.
+- **Derivation.** The values below were derived by hand from the History tables and [metrics.md](../../docs/metrics.md#change-facts-shared-by-durable1-and-simplifying1), then confirmed with plain git 2.50.1 through `gitcli.Runner` (`log --first-parent` with `--since` and with `--since-as-filter`, `rev-list M^1..M`, `log --no-walk --stdin --grep`, `blame -w -M`). The commands and their output are in the pull request for #13 that added them.
+
+### Backdated first-parent commit (`fixture.Backdated`)
+
+X is a first-parent commit whose committer date, 2025-06-01, is older than the scan's 365-day window, as `git rebase --committer-date-is-author-date` or a wrong clock leaves a commit. It sits above two landings in the window and below two more. The top one, A2, is the other way round: its author date, 2025-04-14, is older than the window and its committer date is inside it, as `git rebase`, `git cherry-pick` and GitHub's rebase merge leave a commit. Each keeps the author and the author date, and whoever replays the commit becomes its committer: Cal wrote A2, and Bea rebased it onto `main`.
+
+| Row | When | Author | What | Commit |
+| --- | --- | --- | --- | --- |
+| B1 | 2026-02-02 | Bea Below `<bea@example.com>` | `bea.py` (4 lines), the root commit: a `durable@1` cohort landing | `0a28836` |
+| B2 | 2026-08-03 | Cal Below `<cal@example.com>` | `cal.py` (2 lines): a 90-day window landing | `53dd3dd` |
+| X | 2025-06-01 | Dot Dated `<dot@example.com>` | `dot.py` (1 line), committed on `main` on top of B2 | `d4fc72d` |
+| S1 | 2026-08-10 | Cal | On `side`, branched from X: `side.py` (2 lines) | `dc041ab` |
+| A1 | 2026-08-17 | Bea | `--no-ff` merge of `side`, `Merge branch 'side'`: a window landing above X | `8924a5a` |
+| A2 | 2026-08-24, authored 2025-04-14 | Cal, committed by Bea | `rebased.py` (2 lines), on `main` on top of A1: a window landing by its committer time, written before the window | `d910bc4` |
+
+The first-parent chain from HEAD is A2, A1, X, B2, B1. Landings are chosen and dated by committer time, so the landings in `[2025-10-07, 2026-10-07)` are B1, B2, A1 and A2: X's committer time is outside the window, so X is no landing and no landing's map holds it, while A2's is inside, whatever its author date. A1's map is {A1, S1}, and A2's is {A2}.
+
+| Metric | Who | Value | N | Clusters |
+| --- | --- | --- | --- | --- |
+| `durable@1` | Bea Below | 4 / 4 | 1 | B1 |
+| `simplifying@1` | Cal Below | 0 removed, 0 simplifying landings | 3 | B2, S1 landed by A1, and A2 (at 2026-08-24) |
+
+No one else has a value in either metric: Bea's A1 is a merge commit, which never counts; A2 is credited to its author, Cal, not to Bea, who committed it; and Dot has no landing.
+
+Wrong implementations this catches:
+
+- **Plain `--since`.** It stops the `--first-parent` walk at X, the first commit older than the window: `git log --first-parent --since=2025-10-07T00:00:00Z` prints A2 and A1 alone, where `--since-as-filter` prints A2, A1, B2 and B1. The history window then holds 2 landings instead of 4, Bea has no `durable@1` value, and Cal's `simplifying@1` N is 2.
+- **A backdated commit's claim given to the landing above it.** The landing map is one walk for every landing ([week-collector.md](../../docs/spec/week-collector.md#landing--commit-map)). If only landings claimed commits, A1 would claim X, and Dot would get a `simplifying@1` cluster: 0 removed, N 1.
+- **Choosing landings by author time** (`%at`, where the window is committer time). A2 is then no landing: the history window holds 3 landings, and Cal's `simplifying@1` N is 2.
+- **Dating landings by author time** (`Landing.Time` from `%at`). A2 still lands, but at 2025-04-14, outside every metric's window: Cal's `simplifying@1` N is 2, with no cluster at 2026-08-24.
+- **Crediting the committer** (`%cN`/`%cE` instead of `%aN`/`%aE`). A2 goes to Bea, who gets a `simplifying@1` cluster, 0 removed, N 1; Cal's N is 2.
+
+### Revert merged with `--no-ff` (`fixture.MergedRevert`)
+
+Each revert is made on a side branch and landed by a `--no-ff` merge whose message names no revert, as a pull request merged with GitHub's default merge method lands: only the commit the merge brought in says `This reverts commit <sha>.` ([week-collector.md](../../docs/spec/week-collector.md#subjects-and-reverts)). M1 lands a delete-then-revert in the `durable@1` cohort and M2 an add-then-revert in the 90-day window: the two ways an unseen revert earns credit ([metrics.md](../../docs/metrics.md#change-facts-shared-by-durable1-and-simplifying1)).
+
+| Row | When | Author | What | Commit |
+| --- | --- | --- | --- | --- |
+| U0 | 2025-09-15 | Nia Normal `<nia@example.com>` | `chore: import legacy.py`: `legacy.py` (6 lines), the root commit. More than 365 days old, so it is not a landing in the scan | `6f83d6f` |
+| D1 | 2026-01-12 | Wes Reverted `<wes@example.com>` | `refactor: drop legacy_1 to legacy_4`: deletes the first 4 lines of `legacy.py` | `8753903` |
+| R1 | 2026-01-19 | Rex Revert `<rex@example.com>` | On `undo-d1`, branched from D1: `git revert --no-edit` of D1, which restores the 4 lines | `2f389e3` |
+| M1 | 2026-01-26 | Mia Merge `<mia@example.com>` | `--no-ff` merge of `undo-d1`, `Merge branch 'undo-d1'` | `575bf23` |
+| N1 | 2026-02-09 | Nia | `nia.py` (3 lines) | `5e0bae3` |
+| X2 | 2026-08-03 | Wes | `wes.py` (20 lines) | `eee85d8` |
+| R2 | 2026-08-10 | Rex | On `undo-x2`, branched from X2: `git revert --no-edit` of X2, which deletes `wes.py` | `6965c0f` |
+| M2 | 2026-08-17 | Mia | `--no-ff` merge of `undo-x2`, `Merge branch 'undo-x2'` | `e38d376` |
+| N2 | 2026-08-24 | Nia | `nia_w.py` (1 line) | `82ed0c1` |
+
+The landings in `[2025-10-07, 2026-10-07)` are D1, M1, N1, X2, M2 and N2. M1's map is {M1, R1}, and M2's is {M2, R2}. The revert query over the mapped commits returns two links:
+
+| Revert landing | Its revert commit names | Reverted landing |
+| --- | --- | --- |
+| M1 (2026-01-26) | `87539038da7cc3c8233f467504a1a7ea30ad5c3b` (R1) | D1 |
+| M2 (2026-08-17) | `eee85d8e100c39f254183866fa0b19632e5c16c0` (R2) | X2 |
+
+| Metric | Who | Value | N | Why |
+| --- | --- | --- | --- | --- |
+| `durable@1` | Nia Normal | 3 / 3 | 1 | N1. D1 only deletes, so it is no cluster; M1 is a revert landing |
+| `simplifying@1` | Nia Normal | 0 removed, 0 simplifying landings | 1 | N2. X2 is reverted, so every commit of it leaves; M2 is a revert landing |
+
+Rex, Wes and Mia have no value in either metric. `surviving@1` excludes no commit, so it holds what blame `-w -M` gives each person at HEAD, 10 `prod` lines in all:
+
+| Who | `surviving@1` | Blamed lines at HEAD |
+| --- | --- | --- |
+| Nia Normal | 6 | `legacy_5` and `legacy_6` from U0, `nia.py` 3 (N1), `nia_w.py` 1 (N2) |
+| Rex Revert | 4 | `legacy_1` to `legacy_4`, which R1 restored: blame credits restored lines to the revert, the blind spot `durable@1` names |
+
+Wes holds no line, because D1 only deleted and R2 deleted `wes.py`; neither merge commit holds one, and no bot does.
+
+Wrong implementations this catches:
+
+- **Revert detection on the first-parent walk** (`git log --first-parent --grep`, which reads only the landings' own messages). It finds no revert here. M1 then credits Rex with R1's 4 restored lines, which blame gives to R1: `durable@1` 4/4, N 1. X2 stays in, so Wes has a `simplifying@1` cluster, 0 removed, N 1; and M2 credits Rex with R2's 20 removed lines: `simplifying@1` 20, N 1, with a simplifying landing (net −20).
+- **Revert links at commit grain** (`Revert.SHA` set to the revert commit, not to the landing whose map holds it). R1 and R2 are no landings, so M1 and M2 are not revert landings: Rex has `durable@1` 4/4 and `simplifying@1` 20. D1 and X2 are still reverted, so Wes has no value.
+- **Leaving a revert landing's commits out of `surviving@1`**, as the change metrics leave revert landings out. Rex then holds nothing, and the people's lines at HEAD sum to 6, not 10.
+
 ## Tests that are not extra commits in this history
 
 Ada's oracle stays stable only if these cases stay out of the fixture repo.
@@ -543,21 +624,21 @@ Ada's oracle stays stable only if these cases stay out of the fixture repo.
 - **Rename paths** (`TestNumstatRename`, a small repository built with `git fast-import`): the collector reads numstat with `-z` ([week-collector.md](../../docs/spec/week-collector.md#parsing)), so each form git would print without it gives the true destination and source, in week and scan runs alike. `dir/{old => new}/file.py` gives `dir/new/file.py`; `x/{y => }/z.py` gives `x/z.py`, not `x//z.py`; `a => b => c` gives `b => c` renamed from `a`, with no warning; a modified file named `{x => y}.py` keeps its name and is not a rename; quoted and octal-escaped names keep their own bytes. Scan runs add each file's non-blank lines from its own patch, so a blank line added in a rename counts in numstat only.
 - **Policy** (`TestPolicy`):
   - A user file that omits `[bots]` exits 2 and names `bots`.
-  - `--days 1` against `[week].days = 7` writes `window.days` 1, `days_from` `cli`, and `since` `2026-10-06T00:00:00Z`.
   - `policy.sha256` stays the hash of the file.
+  - The deny list loads: a `generated_paths.txt` line that `regexp.Compile` rejects, such as a lookahead `(?=…)` (RE2 has none), fails the test. The real file's header names RE2, Linguist (MIT), and the upstream commit that was read. (This was `TestDenyListLoads`; it is part of `TestPolicy`.)
+  - The `--days 1` override of `[week].days` is the [week oracle](#week-oracle-m0-testweekoracle)'s, in `TestWeekOracle`.
 - **Attributes** (`TestAttributes`, a tiny second repo):
   - A packaged deny plus `-linguist-generated` is not denied.
   - No deny plus `linguist-generated` is denied.
   - A deny with one attribute unset and the other set stays denied.
   - Repeat all three against a bare clone of that repo; without `--source` every case would read `unspecified`.
-- **Loader** (`TestDenyListLoads`): a `generated_paths.txt` line that `regexp.Compile` rejects, such as a lookahead `(?=…)` (RE2 has none), fails the test. The real file's header names RE2, Linguist (MIT), and the upstream commit that was read.
 - **Clone health** (`TestCloneHealth`):
   - A `--depth 1` clone warns `shallow-clone` and has no blame facts.
   - A `--filter=blob:none` clone warns `partial-clone`, and has commit facts but no line facts.
   - With a fake promisor URL, assert that nothing connects under the Analysis profile (`GIT_NO_LAZY_FETCH=1` and `GIT_ALLOW_PROTOCOL=none`). The 2.45 floor means the assertion is never skipped, and neither variable is ever unset.
-- **Ignore-revs** (`TestIgnoreRevs`): a root `.git-blame-ignore-revs` at the scanned SHA is used and recorded; `--ignore-revs-file` on a multi-repo run exits 2.
-- **Prefix with odd M** (`TestConcentrationOddM`): three authors with `majority_files` 1 each, so M = 3 and half is 1.5, with equal lines on two of them. The walk stops at ≥ 1.5, and the email tie-break decides who the second author is.
-- **Display name** (`TestDisplayName`): one email, no mailmap name, two names with equal counts. The newer committer timestamp wins; equal timestamps fall through to UTF-8 bytes ascending.
+- **Ignore-revs** (no test of its own: the [sibling](#sibling-fixture) oracles cover it, in `TestChangeOracles`): a root `.git-blame-ignore-revs` at the scanned SHA is used and recorded. Blame looks through F, so L5 keeps 3 of 3 in `durable@1`; F is no `simplifying@1` cluster; and the run records `blame_ignore_revs` with source `root` and F's full ID. `--ignore-revs-file` on a multi-repo run is a usage error ([report-json.md](../../docs/spec/report-json.md#exit-codes)) that no test asserts yet.
+- **Prefix with odd M** (no test yet: [codebase.md](../../docs/spec/codebase.md#tests) lists none): three authors with `majority_files` 1 each, so M = 3 and half is 1.5, with equal lines on two of them. The walk stops at ≥ 1.5, and the email tie-break decides who the second author is.
+- **Display name** (no test yet: [codebase.md](../../docs/spec/codebase.md#tests) lists none): one email, no mailmap name, two names with equal counts. The newer committer timestamp wins; equal timestamps fall through to UTF-8 bytes ascending.
 - **Cache** (`TestCacheAmend`, only if open decision #3 is approved): blame the fixture, then amend a blamed commit away without `git gc`. `git cat-file -e` of the old HEAD still exits 0, and the next scan misses every blame fact.
 - **Hotspots** (only with open decision #1):
   - Option A: with the jar absent, `hotspots.status = skipped`, `reason = jar-not-found`, and still-here rows are unchanged. CSV fixtures under `testdata/maat_csv/` cover an ambiguous display name and a path that no longer exists, with `ownership` as a 0–1 ratio and `degree` as an integer percent.
@@ -610,6 +691,7 @@ The token check runs `Discover` over every path above with git's debug log on: t
 
 - **Oracles.** Any week or still-here oracle above changes. That includes Frank's 3 versus 2, Ivy's `prod_lines_added` 0, Jules's 0-line commit, Erin's rename insertion of 1, Ada's single mailmapped week row, and both Gina and Hank at `majority_files` 1.
 - **Change oracles.** Any value in the change-oracle tables of either fixture changes. That includes Bob's move keeping 0 of 2, Ada's `durable@1` N of 2, Cara's absence from `durable@1`, `knowledge_loss@1` at 4/34, Lena eligible at exactly 10 clusters in both metrics, Omar not eligible at 9, S1 simplifying at exactly −20, S2 not simplifying at −16, Q1 untagged, M tagged through P2, and C1's 4 surviving lines credited to Pia (`surviving@1` 9), not to Copilot.
+- **Regression guards.** A landing below a backdated first-parent commit goes missing, or that commit's own change counts for a landing; a rebased landing is chosen or dated by its author time, or credited to its committer; a revert that a `--no-ff` merge landed is not linked to the merge, or the merge's commits count in `durable@1` or `simplifying@1`, or the lines the revert restored leave `surviving@1`.
 - **Classification.** `tests/test_service.py` is classified `prod`, or `bootstrap/cache/config.php` is blamed.
 - **Discovery.** A duplicate remote is not skipped, a scrubbed URL contains userinfo, a bare repo is skipped, the SSH and HTTPS forms of one path are collapsed, or a work tree is measured at a local branch although its clone has upstream's.
 - **Isolation.** A repo whose git directory was removed makes a sibling repo disappear, or the run exits 1 when the sibling succeeded.
@@ -624,4 +706,5 @@ The token check runs `Discover` over every path above with git's debug log on: t
 Work out the expected values from the history above and write them into this file before writing the code that computes them. The implementation must never produce its own oracle.
 
 - **Done for M1 (issue #3):** `durable@1` per landing and per person, `simplifying@1`, revert detection, AI-assisted tagging, `knowledge_loss@1` and `who_knows@1`. They are in [Change oracles](#change-oracles-m1-testchangeoracles) and the [Sibling fixture](#sibling-fixture), which holds the revert and AI-assisted cases so that the main oracles don't move. The oracle audit (2026-10-14) re-derived them and added [`surviving@1` credit](#surviving1-credit-sibling) on the sibling.
+- **Done for #13:** the [regression guards](#regression-guards-testchangeoracles) that the review of #37 asked for, a backdated first-parent commit and a revert merged with `--no-ff`, on repositories of their own.
 - **GitHub sync contract tests**: done for the sync (#14) in [testdata/github/README.md](../github/README.md): recorded responses for repositories, pull requests, reviews (with their inline comments counted), labels and commits, with no live calls, and the expected facts and `reviews_given@1` derived by hand. Team membership and the viewer's verified emails belong to sign-in (M3, #17).
