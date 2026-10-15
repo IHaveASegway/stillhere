@@ -88,6 +88,16 @@ go run github.com/goreleaser/goreleaser/v2@v2.18.3 release --snapshot --clean
 
 A tag such as `v0.2.0-rc.1` publishes a pre-release, which gets no cask update and no `latest` image tag. To promote it, tag the same commit `v0.2.0`.
 
+### One-time setup
+
+Until the tap and its token exist, a tag stops at release.yml's tap check, before anything is published:
+
+1. **The tap**: the public repository `IHaveASegway/homebrew-tap`, which Homebrew finds as `ihaveasegway/tap`. If it is missing, create it with a first commit, such as a README. GoReleaser writes the cask to its `Casks/stillhere.rb`.
+2. **A token that can push to the tap and nowhere else.** `GITHUB_TOKEN` cannot: it writes only to the repository its workflow runs in. As the IHaveASegway account, create a fine-grained personal access token with resource owner IHaveASegway, repository access "Only select repositories" set to `IHaveASegway/homebrew-tap` alone, and the repository permission Contents set to read and write; GitHub adds Metadata, read-only, by itself. Give it an expiry, and renew it before then: release.yml checks that the token can push to the tap and stops, before publishing anything, when it is missing, expired or read-only.
+3. **The secret**: store the token in this repository as the Actions secret `HOMEBREW_TAP_GITHUB_TOKEN`. `gh secret set HOMEBREW_TAP_GITHUB_TOKEN --repo IHaveASegway/stillhere` asks for the value, so it stays out of your shell history.
+
+After the first release, make the image public, once. GitHub publishes a package for the first time as private, whatever the visibility of the repository it came from, so until then `docker pull ghcr.io/ihaveasegway/stillhere` fails for everyone else. On the IHaveASegway profile's Packages tab, open `stillhere`, then Package settings, Danger Zone, Change visibility, Public. A public package cannot be made private again.
+
 Dependabot cannot read the release toolchain's pins, so they are updated by hand: GoReleaser's version, and the binfmt and BuildKit images, appear in both workflows, and CI's lint job fails if any copy differs. Change every copy in one commit.
 
 ## License
