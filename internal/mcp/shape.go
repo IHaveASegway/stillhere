@@ -95,8 +95,10 @@ type provenanceOut struct {
 	// heads order, so two answers can be checked against one HEAD set.
 	HeadsSHA256 string `json:"heads_sha256"`
 	// ForgeReposTotal counts forge.repos before they were cut with heads;
-	// 0 when they were not cut.
-	ForgeReposTotal int `json:"forge_repos_total,omitempty"`
+	// absent when they were not cut. omitzero, not omitempty:
+	// encoding/json/v2 omits only empty JSON values (a string, a list, an
+	// object), never a 0 or a false.
+	ForgeReposTotal int `json:"forge_repos_total,omitzero"`
 }
 
 // named is the set of repositories an answer names, by key or by name.
@@ -982,7 +984,7 @@ type metricBrief struct {
 	Question    string `json:"question"`
 	Unit        string `json:"unit,omitempty"`
 	Ranked      bool   `json:"ranked"`
-	Ratio       bool   `json:"ratio,omitempty"` // its values are shares, num of den
+	Ratio       bool   `json:"ratio,omitzero"` // its values are shares, num of den; absent when false
 	Eligibility string `json:"eligibility,omitempty"`
 }
 
