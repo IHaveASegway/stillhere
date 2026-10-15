@@ -35,12 +35,13 @@ var historyRevertLine = regexp.MustCompile(`(?m)^This reverts commit ([0-9a-f]{7
 //
 // It is a query of its own because a message body cannot share a stream
 // with numstat: body lines can look like numstat rows. It prints no diff
-// and no trailers, so it needs none of historyConfig's settings, and -E
-// beats a repository's grep.patternType (verified on 2.50.1). It reads the
-// whole message (%B), not only the body (%b), because --grep searches the
-// subject too. A full SHA is kept as written, whether or not the commit exists
-// here. An abbreviated one is resolved to the one commit it names with git
-// cat-file --batch-check, and dropped when it names none or several.
+// and no trailers, so it reads no attribute and needs none of the diff
+// options, and -E beats a repository's grep.patternType (verified on
+// 2.50.1). It reads the whole message (%B), not only the body (%b), because
+// --grep searches the subject too. A full SHA is kept as written, whether or
+// not the commit exists here. An abbreviated one is resolved to the one
+// commit it names with git cat-file --batch-check, and dropped when it
+// names none or several.
 func (h *historyRun) readReverts(ctx context.Context) error {
 	owner := make(map[string]string) // a mapped commit → the landing whose map holds it
 	var want []string

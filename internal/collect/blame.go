@@ -233,23 +233,42 @@ func (b *blamer) all(ctx context.Context, paths []string, slots *BlameSlots, pro
 
 // file blames one path at Head:
 //
-//	git blame -w -M --line-porcelain --no-ignore-revs-file
-//	    [--ignore-revs-file <list>] <head> -- <path>
+//	git --attr-source=<empty tree> blame -w -M --no-textconv
+//	    --indent-heuristic --encoding=UTF-8 --line-porcelain
+//	    --no-ignore-revs-file [--ignore-revs-file <list>] <head> -- <path>
 //
 // -w -M is git-fame's surviving-lines benchmark; -M credits a block moved
-// within the file to the commit that wrote it. --no-ignore-revs-file comes
-// first because it clears a repository's own blame.ignoreRevsFile, which
-// would otherwise add to the list stillhere records, and fail every blame
-// when it names a missing file (docs/spec/git-invocation.md).
+// within the file to the commit that wrote it. The other options pin what
+// the repository's checkout or config would change
+// (docs/spec/blame-collector.md, each verified on git 2.50.1):
+//
+//   - --attr-source reads no .gitattributes file (attrSource), as History's
+//     logs do. Blame reads the diff attribute when it follows a rename,
+//     and a file marked binary is compared byte for byte, so a rename that
+//     also turned CRLF into LF was followed in a bare clone but not in a
+//     work tree whose uncommitted .gitattributes said "*.py -diff", nor,
+//     when blame read Head's attributes, in a clone with
+//     core.ignorecase=true whose committed "*.PY -diff" then matched the
+//     file. Each time the renamer got every line.
+//   - --no-textconv counts the stored bytes, as History does. By default
+//     blame runs a textconv program that a diff=<driver> attribute and the
+//     repository's diff.<driver>.textconv name, and counts its output: one
+//     that turned blank lines into text made a commit keep 3 non-blank
+//     lines where its own patch added 2.
+//   - --indent-heuristic is git's default, which a repository's
+//     diff.indentHeuristic=false turns off. It decides which of two
+//     identical lines a deletion removes, so turning it off moved lines
+//     from one author to another.
+//   - --encoding=UTF-8 prints author names in UTF-8, as History's log
+//     does, whatever i18n.logOutputEncoding says: ISO-8859-1 printed the ë
+//     of Zoë as the byte 0xEB, so one person had two names.
+//   - --no-ignore-revs-file comes before any --ignore-revs-file because it
+//     clears a repository's own blame.ignoreRevsFile, which would otherwise
+//     add to the list stillhere records, and fail every blame when it names
+//     a missing file (docs/spec/git-invocation.md).
 func (b *blamer) file(ctx context.Context, path string) blameResult {
-	args := []string{"blame", "-w", "-M", "--line-porcelain", "--no-ignore-revs-file"}
-	if b.ignoreFile != "" {
-		args = append(args, "--ignore-revs-file", b.ignoreFile)
-	}
-	args = append(args, b.repo.Head, "--", path)
-
 	var owners []domain.LineOwner
-	err := b.git.Stream(ctx, domain.GitCmd{Dir: b.repo.Path, Args: args, Timeout: b.timeout},
+	err := b.git.Stream(ctx, domain.GitCmd{Dir: b.repo.Path, Args: b.args(path), Timeout: b.timeout},
 		func(r io.Reader) error {
 			var err error
 			owners, err = blameParse(r, path)
@@ -259,6 +278,18 @@ func (b *blamer) file(ctx context.Context, path string) blameResult {
 		return blameResult{err: err}
 	}
 	return blameResult{owners: owners}
+}
+
+// args returns the arguments of path's blame, which prints
+// "--line-porcelain". TestBlamePorcelain prints the same blame as
+// "--porcelain" by replacing that one argument.
+func (b *blamer) args(path string) []string {
+	args := []string{attrSource(b.repo.Head), "blame", "-w", "-M", "--no-textconv", "--indent-heuristic",
+		"--encoding=UTF-8", "--line-porcelain", "--no-ignore-revs-file"}
+	if b.ignoreFile != "" {
+		args = append(args, "--ignore-revs-file", b.ignoreFile)
+	}
+	return append(args, b.repo.Head, "--", path)
 }
 
 // blameCoAuthors sets CoAuthors on every owner from its commit's

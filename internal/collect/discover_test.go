@@ -11,13 +11,16 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
 	"github.com/IHaveASegway/stillhere/internal/fixture"
 	"github.com/IHaveASegway/stillhere/internal/gitcli"
+	"github.com/IHaveASegway/stillhere/internal/policy"
 	"github.com/IHaveASegway/stillhere/internal/redact"
 )
 
@@ -307,12 +310,14 @@ func TestDiscover(t *testing.T) {
 
 // TestCloneHealth is the contract test of clone health
 // (docs/spec/discovery.md#clone-health, testdata/fixture/SPEC.md): shallow
-// and partial clones are kept, flagged and warned about; a partial clone
-// still gives commit facts but no line facts; and nothing connects to its
-// promisor remote for the blobs it lacks, because the Analysis profile sets
-// GIT_NO_LAZY_FETCH=1, and GIT_ALLOW_PROTOCOL refuses every transport besides.
-// gitcli.New refuses git older than 2.45, the first to honour the first
-// variable, so the assertion is never skipped.
+// and partial clones are kept, flagged and warned about; History on a
+// partial clone gives its commits and landings but no FileChange, and the
+// rest of what a scan runs there (ClassifyPaths, Blame with no paths)
+// succeeds; and none of it connects to the clone's promisor remote for the
+// blobs it lacks, because the Analysis profile sets GIT_NO_LAZY_FETCH=1, and
+// GIT_ALLOW_PROTOCOL refuses every transport besides. gitcli.New refuses git
+// older than 2.45, the first to honour the first variable, so the assertion
+// is never skipped.
 func TestCloneHealth(t *testing.T) {
 	t.Parallel()
 	promisor, connections := discoverPromisor(t)
@@ -357,17 +362,66 @@ func TestCloneHealth(t *testing.T) {
 	}
 
 	t.Run("a partial clone gives commit facts, fails on line facts, and fetches nothing", func(t *testing.T) {
-		out, err := git.Run(t.Context(), domain.GitCmd{Dir: fx.Partial, Args: []string{"log", "--format=%H", main}})
-		if n := len(strings.Fields(string(out))); err != nil || n != 2 {
-			t.Errorf("git log on the partial clone: %d commits, %v; want both commits of main", n, err)
+		ctx := t.Context()
+		out, err := git.Run(ctx, domain.GitCmd{Dir: fx.Partial, Args: []string{"log", "--format=%H", main}})
+		commits := strings.Fields(string(out))
+		if err != nil || len(commits) != 2 {
+			t.Errorf("git log on the partial clone: %d commits, %v; want both commits of main", len(commits), err)
 		}
+		slices.Sort(commits) // the order History sorts commits and landings in
+
+		// The collectors a scan runs on a partial clone, in its order.
+		// History gives every commit and landing but no FileChange, because
+		// numstat and patches need blobs the clone lacks, and in a scan the
+		// repository's age, which needs none. Classification lists the tree,
+		// and Blame with no paths only resolves the ignore-revs list. A
+		// failure is reported and the subtest goes on, so the assertion that
+		// nothing connected always runs.
+		partial := wantRepos[0]
+		window := domain.Window{Since: fixture.Now.AddDate(0, 0, -365), Until: fixture.Now}
+		for _, mode := range []HistoryMode{HistoryWeek, HistoryScan} {
+			h, err := History(ctx, git, partial, HistoryOptions{Window: window, Mode: mode})
+			if err != nil {
+				t.Errorf("mode %d: History on the partial clone: %v", mode, err)
+				continue
+			}
+			var shas, landed []string
+			for _, c := range h.Commits {
+				shas = append(shas, c.SHA)
+			}
+			for _, l := range h.Landings {
+				landed = append(landed, l.SHA)
+			}
+			if !slices.Equal(shas, commits) || !slices.Equal(landed, commits) ||
+				h.Changes != nil || h.Reverts != nil || h.Warnings != nil {
+				t.Errorf("mode %d: commits %v, landings %v, changes %v, reverts %v, warnings %v; want both commits of main as commits and as landings, and nothing else",
+					mode, shas, landed, h.Changes, h.Reverts, h.Warnings)
+			}
+			first := time.Time{} // week runs leave the repository's age unknown
+			if mode == HistoryScan {
+				first = time.Date(2026, time.January, 1, 12, 0, 0, 0, time.UTC) // the root's author time
+			}
+			if !h.FirstCommit.Equal(first) {
+				t.Errorf("mode %d: FirstCommit = %v, want %v", mode, h.FirstCommit, first)
+			}
+		}
+		if p, err := policy.Default(); err != nil {
+			t.Errorf("policy.Default: %v", err)
+		} else if _, err := ClassifyPaths(ctx, git, partial, p, nil); err != nil {
+			t.Errorf("ClassifyPaths on the partial clone: %v", err)
+		}
+		bf, err := Blame(ctx, git, partial, BlameOptions{Slots: NewBlameSlots(1)})
+		if err != nil || bf.Owners != nil || bf.Errors != nil || bf.Warnings != nil || !reflect.DeepEqual(bf.IgnoreRevs, domain.IgnoreRevs{}) {
+			t.Errorf("Blame with no paths on the partial clone = %+v, %v; want no facts and no error", bf, err)
+		}
+
 		// numstat diffs app.py against its first version, and blame reads
 		// every version: the clone has neither blob.
 		for _, args := range [][]string{
 			{"log", "--numstat", "-1", "--format=%H", main},
 			{"blame", "--line-porcelain", main, "--", "app.py"},
 		} {
-			if _, err := git.Run(t.Context(), domain.GitCmd{Dir: fx.Partial, Args: args}); err == nil {
+			if _, err := git.Run(ctx, domain.GitCmd{Dir: fx.Partial, Args: args}); err == nil {
 				t.Errorf("git %s succeeded on the partial clone, so it fetched the missing blob", strings.Join(args, " "))
 			}
 		}
@@ -376,7 +430,7 @@ func TestCloneHealth(t *testing.T) {
 		}
 		// The control: without GIT_NO_LAZY_FETCH, the same command does
 		// connect, so the promisor would have seen a lazy fetch above.
-		_, _ = git.Run(t.Context(), domain.GitCmd{Dir: fx.Partial, Profile: domain.Sync, Args: []string{"log", "--numstat", "-1", "--format=%H", main}})
+		_, _ = git.Run(ctx, domain.GitCmd{Dir: fx.Partial, Profile: domain.Sync, Args: []string{"log", "--numstat", "-1", "--format=%H", main}})
 		if connections() == 0 {
 			t.Errorf("a lazy fetch under the Sync profile never reached the fake promisor, so the assertion above proves nothing")
 		}

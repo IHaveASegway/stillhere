@@ -1,55 +1,100 @@
 package collect
 
 import (
+	"errors"
+	"fmt"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
 	"github.com/IHaveASegway/stillhere/internal/policy"
 )
 
-// TestAttributes checks that ClassifyPaths reads linguist-generated and
-// linguist-vendored with check-attr --source at the scanned commit, in a
-// work tree and in a bare clone of it
-// (docs/spec/classification.md#gitattributes). Without --source a bare
+// TestAttributes checks, on a work tree and a bare clone of one repository,
+// that no fact depends on what is checked out, on the machine, or on the
+// repository's own config
+// (docs/spec/git-invocation.md#repository-settings-that-change-facts).
+//
+// ClassifyPaths reads linguist-generated and linguist-vendored with
+// check-attr --source at the scanned commit
+// (docs/spec/classification.md#gitattributes): without --source a bare
 // clone reads every attribute as unspecified, and a work tree reads
-// whatever is checked out.
+// whatever is checked out. The repository holds what the attributes decide
+// beyond the deny list, a generated header that -linguist-generated
+// settles and a deleted path that Head's attributes still classify, and
+// what no attribute may change: the header sniff
+// (docs/spec/classification.md#header-sniff), whose rules each file below
+// pins, and the tree entries that are no file, a symbolic link and a
+// submodule.
+//
+// History (scan) and Blame read no .gitattributes file (attrSource), so a
+// -diff decides nothing, whether Head commits it, the work tree checks it
+// out or attr.tree names it. Once the history is written, both clones get
+// the repository config that each pin of the runner's prefix and of the
+// collectors' options exists for, an info/attributes whose upper-case
+// pattern matches only where core.ignorecase=true reaches attribute
+// matching, and textconv drivers and filters that are marker programs; the
+// work tree also gets an uncommitted .gitattributes that marks every file
+// -diff and would flip every linguist answer. Each expected fact below
+// names the pins it fails without, and no marker program may run.
 //
 // The repository is a tiny one of its own, so the fixture oracles never
-// move (testdata/fixture/SPEC.md, "Tests that are not extra commits"). It
-// also holds what the attributes decide beyond the deny list: a generated
-// header that -linguist-generated settles, and a deleted path, which Head's
-// attributes still classify. And it holds what no attribute may change:
-// the header sniff (docs/spec/classification.md#header-sniff), whose rules
-// each file below pins, in both clones, while the work tree's uncommitted
-// .gitattributes marks every file -diff; and the tree entries that are no
-// file, a symbolic link and a submodule.
+// move (testdata/fixture/SPEC.md, "Tests that are not extra commits").
 func TestAttributes(t *testing.T) {
 	git := newRunner(t, "")
 	work := filepath.Join(t.TempDir(), "attributes")
 	if err := os.MkdirAll(work, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	run := func(dir string, args ...string) string {
+	runStdin := func(dir, stdin string, args ...string) string {
 		t.Helper()
-		out, err := git.Run(t.Context(), domain.GitCmd{Dir: dir, Args: args})
+		cmd := domain.GitCmd{Dir: dir, Args: args}
+		if stdin != "" {
+			cmd.Stdin = strings.NewReader(stdin)
+		}
+		out, err := git.Run(t.Context(), cmd)
 		if err != nil {
 			t.Fatalf("git %s: %v", strings.Join(args, " "), err)
 		}
 		return strings.TrimSpace(string(out))
 	}
-	commit := func(msg string) string {
+	run := func(dir string, args ...string) string {
+		t.Helper()
+		return runStdin(dir, "", args...)
+	}
+	write := func(path, content string) {
+		t.Helper()
+		full := filepath.Join(work, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// authored is when the commit of day d is authored: 2026-01-d, 12:00 UTC.
+	authored := func(d int) time.Time { return time.Date(2026, time.January, d, 12, 0, 0, 0, time.UTC) }
+	commit := func(who domain.Person, day int, msg string) string {
 		t.Helper()
 		// No automatic maintenance: a detached gc could still be writing
 		// into the repository when the test removes it.
-		run(work, "-c", "user.name=Attributes Test", "-c", "user.email=attributes@example.com",
-			"-c", "maintenance.auto=false", "-c", "gc.auto=0", "commit", "--quiet", "--message", msg)
+		run(work, "-c", "user.name="+who.Name, "-c", "user.email="+who.Email,
+			"-c", "maintenance.auto=false", "-c", "gc.auto=0", "commit", "--quiet",
+			"--date=@"+strconv.FormatInt(authored(day).Unix(), 10)+" +0000", "--message", msg)
 		return run(work, "rev-parse", "HEAD")
 	}
+	ann := domain.Person{Name: "Ann", Email: "ann@example.com"}
+	bob := domain.Person{Name: "Bob", Email: "bob@example.com"}
+	cara := domain.Person{Name: "Cara", Email: "cara@example.com"}
+	zoe := domain.Person{Name: "Zoë", Email: "zoe@example.com"} // not ASCII, for i18n.logOutputEncoding
 
 	const header = "// Code generated by protoc-gen-go. DO NOT EDIT.\n"
 	files := map[string]string{
@@ -62,9 +107,11 @@ func TestAttributes(t *testing.T) {
 			// An empty value is set, as GitHub Linguist reads it.
 			"empty.py linguist-generated=\n" +
 			// -diff and binary make git grep -I skip a file, which the
-			// header sniff must not.
+			// header sniff must not; History and Blame read neither.
 			"diff_gen.py -diff\n" +
 			"binary_gen.py binary\n" +
+			"f.py -diff\n" +
+			"g.py -diff\n" +
 			// A clone with core.ignorecase=true, the default on macOS and
 			// Windows, would let this mark plain.py too.
 			"*.PY linguist-generated\n",
@@ -104,16 +151,56 @@ func TestAttributes(t *testing.T) {
 	}
 	run(work, "init", "--quiet", "--template=", "--initial-branch=main")
 	for path, content := range files {
-		full := filepath.Join(work, filepath.FromSlash(path))
-		if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(full, []byte(content), 0o600); err != nil {
-			t.Fatal(err)
-		}
+		write(path, content)
 	}
 	run(work, slices.Concat([]string{"add", "--"}, slices.Sorted(maps.Keys(files)))...)
-	added := commit("attributes")
+	added := commit(ann, 1, "attributes")
+
+	// The history History and Blame read. f.py has ten lines with CRLF
+	// endings; Bob renames it to g.py and turns them into LF. git follows
+	// that rename only while it takes both files for text: for a binary
+	// file, rename detection compares bytes, CRs included, and blame then
+	// gives Bob all ten lines.
+	var crlf, lf strings.Builder
+	for i := range 10 {
+		fmt.Fprintf(&crlf, "total_%d = %d\r\n", i, i*1000)
+		fmt.Fprintf(&lf, "total_%d = %d\n", i, i*1000)
+	}
+	// Which of two identical lines Cara's deletion in slide.py removes is
+	// the diff heuristic's choice, and with it whose line survives: both
+	// stay Ann's under the indent heuristic, git's default, and one is
+	// Bob's under diff.indentHeuristic=false (found by a random search of
+	// three-commit histories, verified on git 2.50.1).
+	const (
+		slideAnn  = "    return total\n  count = 1\n    return total\nlimit = 2\n"
+		slideBob  = "    return total\nlimit = 2\n  count = 1\n    return total\nlimit = 2\n"
+		slideCara = "    return total\nlimit = 2\n"
+		zoePy     = "name = \"Zoë\"\nlimit = 3\n"
+		cafe      = "café.py" // decomposed: an e, then a combining acute accent
+		cafePy    = "café = 1\n"
+	)
+	write("f.py", crlf.String())
+	write("slide.py", slideAnn)
+	run(work, "add", "--", "f.py", "slide.py")
+	ann2 := commit(ann, 2, "add f.py and slide.py")
+	run(work, "mv", "--", "f.py", "g.py")
+	write("g.py", lf.String())
+	write("slide.py", slideBob)
+	run(work, "add", "--", "g.py", "slide.py")
+	bobs := commit(bob, 3, "rename f.py to g.py, with LF endings")
+	write("slide.py", slideCara)
+	run(work, "add", "--", "slide.py")
+	caras := commit(cara, 4, "trim slide.py")
+	// Zoë's commit has a co-author, and a path that the tree stores
+	// decomposed. It reaches the index on standard input, which neither a
+	// file system nor core.precomposeUnicode composes; git on macOS
+	// rewrites a path argument.
+	write("zoe.py", zoePy)
+	run(work, "add", "--", "zoe.py")
+	cafeBlob := runStdin(work, cafePy, "hash-object", "-w", "--stdin")
+	runStdin(work, "100644 "+cafeBlob+"\t"+cafe+"\n", "update-index", "--index-info")
+	zoes := commit(zoe, 5, "add zoe.py and café.py\n\nCo-authored-by: Cara <cara@example.com>\n")
+
 	// Tree entries that are no file, written to the index directly so no
 	// file system needs symbolic links: link.py points at plain.py, and
 	// sub is a submodule at the first commit.
@@ -125,7 +212,7 @@ func TestAttributes(t *testing.T) {
 	run(work, "update-index", "--add", "--cacheinfo", "120000,"+link+",link.py")
 	run(work, "update-index", "--add", "--cacheinfo", "160000,"+added+",sub")
 	run(work, "rm", "--quiet", "--", "vendor/gone.py")
-	head := commit("delete vendor/gone.py; add link.py and sub")
+	head := commit(ann, 6, "delete vendor/gone.py; add link.py and sub")
 	// The history touched vendor/gone.py, which Head no longer has.
 	touched := []PathAt{{Commit: added, Path: "vendor/gone.py"}, {Commit: added, Path: "plain.py"}}
 
@@ -135,76 +222,241 @@ func TestAttributes(t *testing.T) {
 		Args: []string{"clone", "--quiet", "--bare", "--no-local", work, bare}}); err != nil {
 		t.Fatalf("git clone: %v", err)
 	}
-	for _, dir := range []string{work, bare} {
-		run(dir, "config", "core.ignorecase", "true")
-	}
-	// An uncommitted edit that would flip every case: check-attr must read
-	// the scanned commit, not the checked-out files, and the header sniff
-	// must read no attribute at all, where -diff would hide every header.
-	if err := os.WriteFile(filepath.Join(work, ".gitattributes"), []byte("vendor/lib.py -linguist-vendored\n*.py linguist-generated\n* -diff\n"), 0o600); err != nil {
+
+	// What no fact may depend on, set once the history is written: git's
+	// own commands above would have obeyed it. Each setting names the pin
+	// that overrides it.
+	marker := filepath.Join(t.TempDir(), "ran")
+	program := filepath.Join(t.TempDir(), "marker")
+	quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+	script := "#!/bin/sh\necho \"$0 $*\" >>" + quote(marker) + "\ncat \"$@\"\n"
+	if err := os.WriteFile(program, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
-
-	p, err := policy.Default()
-	if err != nil {
-		t.Fatalf("policy.Default: %v", err)
+	for _, dir := range []string{work, bare} {
+		// attr.tree names a tree whose .gitattributes marks every file
+		// -diff; without an attribute source, a bare clone reads it too.
+		attrs := runStdin(dir, "* -diff\n", "hash-object", "-w", "--stdin")
+		tree := runStdin(dir, "100644 blob "+attrs+"\t.gitattributes\n", "mktree")
+		// info/attributes applies under any attribute source.
+		info := filepath.Join(run(dir, "rev-parse", "--absolute-git-dir"), "info")
+		if err := os.MkdirAll(info, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(info, "attributes"), []byte("*.go diff=tc filter=marker\n*.PY -diff\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, kv := range [][2]string{
+			{"core.ignorecase", "true"},              // prefix: git on macOS and Windows writes it
+			{"core.precomposeUnicode", "true"},       // prefix: git on macOS writes it
+			{"core.bigFileThreshold", "10"},          // prefix
+			{"diff.default.binary", "true"},          // prefix
+			{"core.commentChar", "C"},                // prefix
+			{"trailer.separators", "#"},              // prefix
+			{"attr.tree", tree},                      // --attr-source
+			{"diff.renames", "false"},                // -M
+			{"log.showRoot", "false"},                // --root
+			{"diff.noprefix", "true"},                // --default-prefix
+			{"color.ui", "always"},                   // --no-color
+			{"diff.submodule", "log"},                // --submodule=short
+			{"diff.ignoreSubmodules", "all"},         // --ignore-submodules=none
+			{"i18n.logOutputEncoding", "ISO-8859-1"}, // --encoding=UTF-8
+			{"diff.indentHeuristic", "false"},        // --indent-heuristic (blame)
+			{"blame.ignoreRevsFile", ".missing"},     // --no-ignore-revs-file
+			{"diff.tc.textconv", quote(program)},     // --no-textconv
+			{"diff.default.textconv", quote(program)},
+			{"filter.marker.clean", quote(program)}, // analysis converts no content
+			{"filter.marker.smudge", quote(program)},
+		} {
+			run(dir, "config", kv[0], kv[1])
+		}
 	}
-	class := func(path string, role domain.Role, skip domain.Skip) domain.PathClass {
-		return domain.PathClass{Path: path, Role: role, Skip: skip, Size: int64(len(files[path])), AtHead: path != "vendor/gone.py"}
-	}
-	want := []domain.PathClass{
-		class(".gitattributes", "", domain.SkipDeniedPath),      // Linguist's vendor.yml denies it
-		class("generated_client.py", "", domain.SkipDeniedPath), // no deny plus linguist-generated: denied
-		class("header.py", "", domain.SkipGeneratedHeader),      // a generated header, no attribute
-		class("ours.py", domain.RoleProd, ""),                   // a generated header, but -linguist-generated settles it
-		class("plain.py", domain.RoleProd, ""),                  // *.PY does not match plain.py
-		class("vendor/both.py", "", domain.SkipDeniedPath),      // a deny, one attribute unset and the other set: denied
-		class("vendor/false.py", domain.RoleProd, ""),           // a deny plus linguist-vendored=false: not denied
-		class("vendor/gone.py", domain.RoleProd, ""),            // deleted; Head's -linguist-vendored un-denies it
-		class("vendor/keep.py", domain.RoleProd, ""),            // a packaged deny plus -linguist-generated: not denied
-		class("vendor/lib.py", "", domain.SkipDeniedPath),       // the packaged deny alone
-		class("empty.py", "", domain.SkipDeniedPath),            // linguist-generated= is on
-		class("diff_gen.py", "", domain.SkipGeneratedHeader),    // -diff hides nothing from the sniff
-		class("binary_gen.py", "", domain.SkipGeneratedHeader),  // nor does binary
-		class("openapi_client.py", "", domain.SkipGeneratedHeader),
-		class("bindgen.rs", "", domain.SkipGeneratedHeader),
-		class("tfgen.cs", "", domain.SkipGeneratedHeader),
-		class("prose.go", domain.RoleProd, ""),
-		class("ident.go", domain.RoleProd, ""),
-		class("Strings.cs", "", domain.SkipGeneratedHeader),
-		class("header_decl.h", "", domain.SkipGeneratedHeader),
-		class("printer.go", domain.RoleProd, ""),
-		class("locale_codes.ts", "", domain.SkipGeneratedHeader),
-		class("advice.go", domain.RoleProd, ""),
-		class("late.py", domain.RoleProd, ""),
-		// No file, so no role: a link's size is its target's length, and a
-		// submodule has none.
-		{Path: "link.py", Skip: domain.SkipUnclassified, Size: int64(len("plain.py")), AtHead: true},
-		{Path: "sub", Skip: domain.SkipUnclassified, Size: -1, AtHead: true},
-	}
-	slices.SortFunc(want, func(a, b domain.PathClass) int { return strings.Compare(a.Path, b.Path) })
-	for _, repo := range []domain.Repo{
+	// An uncommitted edit that would flip every case: check-attr must read
+	// the scanned commit, not the checked-out files, and neither the header
+	// sniff nor History nor Blame may read an attribute from it, where
+	// -diff would hide every header and make every file binary.
+	write(".gitattributes", "vendor/lib.py -linguist-vendored\n*.py linguist-generated\n* -diff\n")
+	repos := []domain.Repo{
 		{Key: "local:attributes", Name: "attributes", Path: work, Branch: "main", Head: head},
 		{Key: "local:attributes-bare", Name: "attributes", Path: bare, Bare: true, Branch: "main", Head: head},
-	} {
-		got, err := ClassifyPaths(t.Context(), git, repo, p, touched)
+	}
+
+	t.Run("ClassifyPaths", func(t *testing.T) {
+		p, err := policy.Default()
 		if err != nil {
-			t.Fatalf("ClassifyPaths(%s): %v", repo.Path, err)
+			t.Fatalf("policy.Default: %v", err)
 		}
-		if slices.Equal(got, want) {
-			continue
+		atHead := map[string]string{"g.py": lf.String(), "slide.py": slideCara, "zoe.py": zoePy, cafe: cafePy}
+		class := func(path string, role domain.Role, skip domain.Skip) domain.PathClass {
+			content, ok := atHead[path]
+			if !ok {
+				content = files[path]
+			}
+			return domain.PathClass{Path: path, Role: role, Skip: skip, Size: int64(len(content)), AtHead: path != "vendor/gone.py"}
 		}
-		byPath := map[string]domain.PathClass{}
-		for _, c := range got {
-			byPath[c.Path] = c
+		want := []domain.PathClass{
+			class(".gitattributes", "", domain.SkipDeniedPath),      // Linguist's vendor.yml denies it
+			class("generated_client.py", "", domain.SkipDeniedPath), // no deny plus linguist-generated: denied
+			class("header.py", "", domain.SkipGeneratedHeader),      // a generated header, no attribute
+			class("ours.py", domain.RoleProd, ""),                   // a generated header, but -linguist-generated settles it
+			class("plain.py", domain.RoleProd, ""),                  // *.PY does not match plain.py
+			class("vendor/both.py", "", domain.SkipDeniedPath),      // a deny, one attribute unset and the other set: denied
+			class("vendor/false.py", domain.RoleProd, ""),           // a deny plus linguist-vendored=false: not denied
+			class("vendor/gone.py", domain.RoleProd, ""),            // deleted; Head's -linguist-vendored un-denies it
+			class("vendor/keep.py", domain.RoleProd, ""),            // a packaged deny plus -linguist-generated: not denied
+			class("vendor/lib.py", "", domain.SkipDeniedPath),       // the packaged deny alone
+			class("empty.py", "", domain.SkipDeniedPath),            // linguist-generated= is on
+			class("diff_gen.py", "", domain.SkipGeneratedHeader),    // -diff hides nothing from the sniff
+			class("binary_gen.py", "", domain.SkipGeneratedHeader),  // nor does binary
+			class("openapi_client.py", "", domain.SkipGeneratedHeader),
+			class("bindgen.rs", "", domain.SkipGeneratedHeader),
+			class("tfgen.cs", "", domain.SkipGeneratedHeader),
+			class("prose.go", domain.RoleProd, ""),
+			class("ident.go", domain.RoleProd, ""),
+			class("Strings.cs", "", domain.SkipGeneratedHeader),
+			class("header_decl.h", "", domain.SkipGeneratedHeader),
+			class("printer.go", domain.RoleProd, ""),
+			class("locale_codes.ts", "", domain.SkipGeneratedHeader),
+			class("advice.go", domain.RoleProd, ""),
+			class("late.py", domain.RoleProd, ""),
+			// What the later history added; *.PY matches none of them.
+			class("g.py", domain.RoleProd, ""),
+			class("slide.py", domain.RoleProd, ""),
+			class("zoe.py", domain.RoleProd, ""),
+			class(cafe, domain.RoleProd, ""),
+			// No file, so no role: a link's size is its target's length, and a
+			// submodule has none.
+			{Path: "link.py", Skip: domain.SkipUnclassified, Size: int64(len("plain.py")), AtHead: true},
+			{Path: "sub", Skip: domain.SkipUnclassified, Size: -1, AtHead: true},
 		}
-		for _, w := range want {
-			if g, ok := byPath[w.Path]; !ok || g != w {
-				t.Errorf("ClassifyPaths(bare=%v) %s = %+v, want %+v", repo.Bare, w.Path, g, w)
+		slices.SortFunc(want, func(a, b domain.PathClass) int { return strings.Compare(a.Path, b.Path) })
+		for _, repo := range repos {
+			got, err := ClassifyPaths(t.Context(), git, repo, p, touched)
+			if err != nil {
+				t.Fatalf("ClassifyPaths(%s): %v", repo.Path, err)
+			}
+			if slices.Equal(got, want) {
+				continue
+			}
+			byPath := map[string]domain.PathClass{}
+			for _, c := range got {
+				byPath[c.Path] = c
+			}
+			for _, w := range want {
+				if g, ok := byPath[w.Path]; !ok || g != w {
+					t.Errorf("ClassifyPaths(bare=%v) %s = %+v, want %+v", repo.Bare, w.Path, g, w)
+				}
+			}
+			if len(got) != len(want) {
+				t.Errorf("ClassifyPaths(bare=%v) returned %d paths, want %d: %+v", repo.Bare, len(got), len(want), got)
 			}
 		}
-		if len(got) != len(want) {
-			t.Errorf("ClassifyPaths(bare=%v) returned %d paths, want %d: %+v", repo.Bare, len(got), len(want), got)
+	})
+
+	t.Run("History and Blame", func(t *testing.T) {
+		// Every commit's author and co-authors: Zoë's name in UTF-8
+		// (--encoding=UTF-8), and her co-author (core.commentChar,
+		// trailer.separators).
+		type credit struct {
+			author    domain.Person
+			coAuthors []domain.Person
 		}
+		wantCommits := map[string]credit{
+			added: {ann, nil}, ann2: {ann, nil}, bobs: {bob, nil}, caras: {cara, nil},
+			zoes: {zoe, []domain.Person{cara}}, head: {ann, nil},
+		}
+		// No row may be binary. Head commits -diff for diff_gen.py, f.py and
+		// g.py, the work tree checks it out for every file, attr.tree names
+		// it for every file and info/attributes for every .py file in any
+		// case (--attr-source of the empty tree, core.ignoreCase), and every
+		// blob is above core.bigFileThreshold and named by no diff
+		// attribute (core.bigFileThreshold, diff.default.binary).
+		row := func(commit, path, oldPath string, added, removed, addedNonBlank int) domain.FileChange {
+			return domain.FileChange{Commit: commit, Path: path, OldPath: oldPath, Added: added, Removed: removed,
+				AddedNonBlank: addedNonBlank}
+		}
+		wantRows := []domain.FileChange{
+			row(added, "diff_gen.py", "", 2, 0, 2), // --root
+			row(added, "prose.go", "", 4, 0, 3),    // --no-textconv
+			row(ann2, "f.py", "", 10, 0, 10),
+			row(bobs, "g.py", "f.py", 10, 10, 0), // -M; -w drops the line endings from the patch
+			row(zoes, cafe, "", 1, 0, 1),         // --default-prefix, --no-color: the patch's paths and lines
+			row(head, "sub", "", 1, 0, 1),        // --ignore-submodules=none, --submodule=short
+		}
+		// Ann keeps g.py through Bob's rename (--attr-source,
+		// core.ignoreCase, core.bigFileThreshold, diff.default.binary) and
+		// both lines of slide.py (--indent-heuristic); Zoë's lines carry
+		// her co-author; the decomposed path is blamed
+		// (core.precomposeUnicode, on macOS); prose.go is blamed without its
+		// textconv driver (--no-textconv); and the repository's missing
+		// ignore-revs file fails nothing (--no-ignore-revs-file).
+		owner := func(path, commit string, who domain.Person, day int, coAuthors []domain.Person, lines int) domain.LineOwner {
+			return domain.LineOwner{Path: path, Commit: commit, Author: who, AuthorTime: authored(day), CoAuthors: coAuthors, Lines: lines}
+		}
+		wantOwners := []domain.LineOwner{
+			owner(cafe, zoes, zoe, 5, []domain.Person{cara}, 1),
+			owner("g.py", ann2, ann, 2, nil, 10),
+			owner("prose.go", added, ann, 1, nil, 3),
+			owner("slide.py", ann2, ann, 2, nil, 2),
+			owner("zoe.py", zoes, zoe, 5, []domain.Person{cara}, 2),
+		}
+		blamed := []string{cafe, "g.py", "prose.go", "slide.py", "zoe.py"}
+
+		window := domain.Window{Since: time.Unix(0, 0).UTC(), Until: time.Date(2099, time.January, 1, 0, 0, 0, 0, time.UTC)}
+		var histories []*HistoryFacts
+		var blames []*BlameFacts
+		for _, repo := range repos {
+			h, err := History(t.Context(), git, repo, HistoryOptions{Window: window, Mode: HistoryScan})
+			if err != nil {
+				t.Fatalf("History(bare=%v): %v", repo.Bare, err)
+			}
+			histories = append(histories, h)
+			for _, c := range h.Commits {
+				if w := wantCommits[c.SHA]; !reflect.DeepEqual(c.Author, w.author) || !reflect.DeepEqual(c.CoAuthors, w.coAuthors) {
+					t.Errorf("History(bare=%v) commit %s: author %+v, co-authors %+v; want %+v, %+v",
+						repo.Bare, c.SHA, c.Author, c.CoAuthors, w.author, w.coAuthors)
+				}
+			}
+			if len(h.Commits) != len(wantCommits) {
+				t.Errorf("History(bare=%v) gave %d commits, want %d", repo.Bare, len(h.Commits), len(wantCommits))
+			}
+			rows := make(map[[2]string]domain.FileChange)
+			for _, c := range h.Changes {
+				rows[[2]string{c.Commit, c.Path}] = c
+				if c.Binary {
+					t.Errorf("History(bare=%v): %s in commit %s is binary", repo.Bare, c.Path, c.Commit)
+				}
+			}
+			for _, w := range wantRows {
+				if g, ok := rows[[2]string{w.Commit, w.Path}]; !ok || g != w {
+					t.Errorf("History(bare=%v) %s in commit %s = %+v, want %+v", repo.Bare, w.Path, w.Commit, g, w)
+				}
+			}
+
+			b, err := Blame(t.Context(), git, repo, BlameOptions{Paths: blamed, Slots: NewBlameSlots(2)})
+			if err != nil {
+				t.Fatalf("Blame(bare=%v): %v", repo.Bare, err)
+			}
+			blames = append(blames, b)
+			if !reflect.DeepEqual(b.Owners, wantOwners) || b.Errors != nil || b.Warnings != nil ||
+				!reflect.DeepEqual(b.IgnoreRevs, domain.IgnoreRevs{}) {
+				t.Errorf("Blame(bare=%v):\n owners %+v\n errors %+v, warnings %+v, ignore-revs %+v\nwant owners %+v and nothing else",
+					repo.Bare, b.Owners, b.Errors, b.Warnings, b.IgnoreRevs, wantOwners)
+			}
+		}
+		if len(histories) == 2 && !reflect.DeepEqual(histories[0], histories[1]) {
+			t.Errorf("History differs between the work tree and the bare clone:\n%+v\n%+v", histories[0], histories[1])
+		}
+		if len(blames) == 2 && !reflect.DeepEqual(blames[0], blames[1]) {
+			t.Errorf("Blame differs between the work tree and the bare clone:\n%+v\n%+v", blames[0], blames[1])
+		}
+	})
+
+	// Neither a textconv driver nor a filter may have run, in any of the
+	// collectors.
+	if runs, err := os.ReadFile(marker); err == nil {
+		t.Errorf("a program the repository names ran:\n%s", runs)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		t.Fatal(err)
 	}
 }

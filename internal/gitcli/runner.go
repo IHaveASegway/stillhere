@@ -4,11 +4,14 @@
 // Every git process stillhere starts goes through Runner, so the hardening
 // lives in one place (docs/spec/git-invocation.md): the common prefix that
 // disables hooks, fsmonitor, external diff, signature verification and the
-// per-user attributes file; an environment stripped of inherited GIT_* and
-// askpass variables and of system and global config and attributes; a
-// profile that keeps analysis offline and prompt-free; a timeout that kills
-// git and everything it started; and errors whose stderr has been scrubbed
-// of credentials. Call sites still spell out their git arguments, so the
+// per-user attributes file, and pins the repository settings no subcommand
+// option can (which files git takes for binary, how trailers are parsed,
+// how attribute patterns match case, and, on macOS, how path arguments are
+// read); an environment stripped of inherited GIT_* and askpass variables
+// and of system and global config and attributes; a profile that keeps
+// analysis offline and prompt-free; a timeout that kills git and everything
+// it started; and errors whose stderr has been scrubbed of credentials.
+// Call sites still spell out their git arguments, options included, so the
 // exact command stays visible where it is used.
 package gitcli
 
@@ -140,7 +143,10 @@ type invocation struct {
 //
 //	git -C <dir> --no-optional-locks -c core.hooksPath=/dev/null
 //	    -c core.fsmonitor= -c core.attributesFile=/dev/null -c diff.external=
-//	    -c log.showSignature=false [-c mailmap.file=<org-mailmap>] <args>
+//	    -c log.showSignature=false -c core.bigFileThreshold=512m
+//	    -c diff.default.binary=auto -c core.commentChar=#
+//	    -c trailer.separators=: -c core.ignoreCase=false
+//	    -c core.precomposeUnicode=false [-c mailmap.file=<org-mailmap>] <args>
 //
 // Command-line -c beats repo-local config. core.attributesFile=/dev/null
 // drops only the per-user attributes file: the repository's .gitattributes
@@ -149,6 +155,30 @@ type invocation struct {
 // empty command and fail, so a git diff that forgets --no-ext-diff fails
 // closed instead of running a program the repository names.
 // log.showSignature=false keeps log and show from running gpg.program.
+//
+// The next six are git's defaults, pinned here because no subcommand
+// option overrides them and a repository's own value changes facts (each
+// verified on git 2.50.1 with the value in the repository's config). Above
+// core.bigFileThreshold every blob is binary, so numstat counts no lines and
+// a patch has no hunks; diff.default.binary=true does the same to every
+// file no diff attribute names, while blame still counts every line of it.
+// git's trailer parser skips comment lines, so core.commentChar=C (or
+// core.commentString, the same setting) hides every Co-authored-by line,
+// and without ":" in trailer.separators no line is a trailer.
+// core.ignoreCase=true, which git on macOS and Windows writes into every
+// repository it creates or clones, matches attribute patterns in any case:
+// "*.PY linguist-generated" marked a.py, which a Linux clone, like GitHub,
+// does not. core.precomposeUnicode=true, which git on macOS writes too,
+// rewrites a decomposed path argument in composed form, so blame found no
+// such path for a file whose name the tree stores decomposed, which git on
+// Linux blames. Every command gets them (classification, the history and
+// co-author logs, blame, and any command added later), and none changes
+// the output of a command that does not read it.
+// Settings that a subcommand option pins, such as rename detection
+// or submodule diffs, are pinned by that option where the command is built,
+// because an option also beats the more specific config a -c cannot reach
+// (submodule.<name>.ignore beats -c diff.ignoreSubmodules=none, while
+// --ignore-submodules=none beats both).
 //
 // Malformed commands are programmer errors, returned as plain errors.
 func (r *Runner) invocation(cmd domain.GitCmd) (invocation, error) {
@@ -172,6 +202,12 @@ func (r *Runner) invocation(cmd domain.GitCmd) (invocation, error) {
 		"-c", "core.attributesFile=" + os.DevNull,
 		"-c", "diff.external=",
 		"-c", "log.showSignature=false",
+		"-c", "core.bigFileThreshold=512m",
+		"-c", "diff.default.binary=auto",
+		"-c", "core.commentChar=#",
+		"-c", "trailer.separators=:",
+		"-c", "core.ignoreCase=false",
+		"-c", "core.precomposeUnicode=false",
 	}
 	if r.mailmap != "" {
 		argv = append(argv, "-c", "mailmap.file="+r.mailmap)
