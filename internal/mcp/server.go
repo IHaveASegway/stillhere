@@ -48,7 +48,9 @@ type Config struct {
 	// The server calls it on the first tool call that reads the store,
 	// and again after a failure, so a server started before the first scan
 	// answers once there is one, and an agent sees what to run instead
-	// of a server that would not start.
+	// of a server that would not start. A store that is a
+	// domain.ForgeStore too, as *sqlite.Store is, is also the use cases'
+	// forge replica.
 	Open func(ctx context.Context) (domain.FactStore, error)
 	// Git runs the diff tool's git commands; nil unless AllowSource.
 	Git domain.GitRunner
@@ -210,7 +212,14 @@ func (c *call) deps(ctx context.Context) (app.Deps, error) {
 		}
 		s.store = newCachedStore(st)
 	}
-	return app.Deps{Store: s.store, Git: s.cfg.Git, Log: s.log, Version: s.cfg.Version}, nil
+	d := app.Deps{Store: s.store, Git: s.cfg.Git, Log: s.log, Version: s.cfg.Version}
+	if fs, ok := s.store.FactStore.(domain.ForgeStore); ok {
+		// The forge replica in the same facts.db, as the command line
+		// hands it over: readers date a run's GitHub data by the
+		// watermarks it read (ADR 0004).
+		d.ForgeStore = fs
+	}
+	return d, nil
 }
 
 // resolver returns the resolver over the run's vocabulary, read once per
