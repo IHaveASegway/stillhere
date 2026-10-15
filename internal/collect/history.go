@@ -285,7 +285,7 @@ func (h *historyRun) readLandings(ctx context.Context) error {
 	err := h.git.Stream(ctx, domain.GitCmd{Dir: h.repo.Path, Args: args}, func(r io.Reader) error {
 		return historyParseLog(r, func(rec *historyRecord) error {
 			if !h.opt.Window.Contains(rec.commit.CommitTime) {
-				return nil // git's --since and --until both include the boundary instant
+				return nil // git's --since-as-filter and --until both include the boundary instant
 			}
 			h.landings = append(h.landings, rec.commit.SHA)
 			return h.add(rec)
