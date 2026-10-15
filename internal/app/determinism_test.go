@@ -20,8 +20,9 @@ import (
 // both fixtures, scanned as one group with their mailmaps in one file: two
 // fresh scans, each into its own facts.db, render byte-identical JSON once
 // timings are removed, and byte-identical text and Markdown; report on the
-// stored run reproduces its scan; and a token planted in a PATH reaches no
-// byte of facts.db, no rendering and no log line.
+// stored run reproduces its scan; and a token planted in a URL given as a
+// PATH, in its userinfo, query or fragment, reaches no byte of facts.db, no
+// rendering and no log line.
 func TestDeterminism(t *testing.T) {
 	t.Parallel()
 	group := filepath.Join(t.TempDir(), "acme")
@@ -54,16 +55,28 @@ func TestDeterminism(t *testing.T) {
 		// The review of #42 found a token typed in a PATH in facts.db and in
 		// every renderer: discovery made the URL a path under the working
 		// directory, "<cwd>/https:/x-access-token:TOKEN@host/...", which the
-		// scrubber did not match. The PATH is no repository, so the run
-		// records it as a path-failed warning, scrubbed.
+		// scrubber did not match. The review of #13 found the same for a
+		// token in the query or the fragment. The token sits in each of the
+		// three parts of a URL that redact.URL removes: the userinfo, the
+		// query and the fragment. No PATH is a repository, so the run
+		// records each as a path-failed warning, scrubbed.
 		var logs bytes.Buffer
 		log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
-		planted := "https://x-access-token:" + fixture.DiscoveryToken + "@example.com/acme/pay.git"
-		s := scan(t, mailmap, log, scanRanked(group, planted))
-		if s.model.Run.Status != string(domain.RunStatusPartial) ||
-			!slices.ContainsFunc(s.model.Warnings, func(w report.Warning) bool { return w.Code == "path-failed" }) {
-			t.Fatalf("the planted PATH gave run status %q and warnings %v, want a partial run with a path-failed warning",
-				s.model.Run.Status, s.model.Warnings)
+		planted := []string{
+			"https://x-access-token:" + fixture.DiscoveryToken + "@example.com/acme/pay.git",
+			"https://example.com/acme/pay.git?access_token=" + fixture.DiscoveryToken,
+			"https://example.com/acme/pay.git#" + fixture.DiscoveryToken,
+		}
+		s := scan(t, mailmap, log, scanRanked(append([]string{group}, planted...)...))
+		failed := 0
+		for _, w := range s.model.Warnings {
+			if w.Code == "path-failed" {
+				failed++
+			}
+		}
+		if s.model.Run.Status != string(domain.RunStatusPartial) || failed != len(planted) {
+			t.Fatalf("the planted PATHs gave run status %q and %d path-failed warnings, want a partial run with %d",
+				s.model.Run.Status, failed, len(planted))
 		}
 		m, err := app.Report(t.Context(), s.read, app.ReportRequest{RunID: s.run})
 		if err != nil {
