@@ -1,0 +1,49 @@
+# ADR 0011: A run keeps the GitHub facts it read
+
+Status: Proposed · 2026-10-15 · Deciders: Joseph Peterson · Amends the run model's "forge facts are not per run" ([codebase.md](../spec/codebase.md#run-model)) and the watermarks-only decision of #48
+
+## Context
+
+GitHub is the system of record for pull requests and reviews ([ADR 0004](0004-github-behind-sync-boundary.md)). facts.db holds a replica of them that outlives runs: a sync replaces a pull request as a whole whenever it sees it updated. Until now a scan run kept only when each of its forge repositories was synced (the watermarks, with the names and the join it read them under, #48), and the values and ranks it computed. That was enough while every number from GitHub data was computed at scan time and stored: `reviews_given@1`'s values and ranks.
+
+#38 adds reviews to two metrics, and one of them cannot be stored. `knowledge_loss@1` counts a review as activity; it is computed at scan time and stored like any value. `who_knows@1` lists recent reviewers for any path a user asks about, down to one file, so it is answered per query from a stored run and never stored: a value for every directory of every repository would outnumber the facts. Its reviewers therefore have to come from somewhere when the run is read, and the replica is the wrong place:
+
+- **Two snapshots in one answer.** The owners, top authors and landers of the answer are the run's, at its HEADs; reviewers read from today's replica would be another state of GitHub, and the answer's `provenance.forge` would date neither honestly. #48 rejected exactly this for ranks.
+- **A later sync rewrites a stored run.** A sync that adds a review submitted before the run's `--now`, as an incremental sync of a stale replica does, would change a stored run's who-knows answer. The run model says a later sync moves nothing a stored run shows.
+- **A newer metric version has no GitHub data.** The run model listed as "not built yet" that a metric version newer than a run, computed over its stored facts, gets no forge facts.
+
+A run's git facts already solve the same problem by being a snapshot per run. What a run read is part of that snapshot (Pat Helland, "Immutability Changes Everything", CIDR 2015).
+
+## Decision
+
+- **A scan run keeps its own part of the replica, whole.** Its GitHub data is the replica cut by the one join of its forge repositories to the repositories it collected (`domain.ForgeJoin`): those forge repositories as the replica listed them, their watermarks, and every pull request of them updated in the 365-day history window, with its labels, reviews and commits. That is `FactSet.Forge` at scan time, so the metrics compute over exactly what the run keeps. Another organization's repositories, and a repository whose collection failed, are none of the run's.
+- **It is stored with the run**, while the run is running, by `ForgeStore.PutRunForge`, in migration 4's `forge_snapshot_*` tables, one row per list item numbered by position as migration 1 stores git facts, each row deleted with its run (`ON DELETE CASCADE`) by retention or as a crash's leftover.
+- **Readers read it back** with `ForgeStore.RunForge` into the stored run's `FactSet.Forge`, and never read the replica. A run stored before migration 4 kept watermarks but no pull requests; its readers report no GitHub data for it rather than half of it, as #48 did for a run stored before migration 3.
+- **The run's GitHub data stays a copy, never a second owner.** Nothing updates it after the run is published; the replica remains the only mutable copy, and GitHub the only source. Readers need it exactly as consistent as the run's git facts, which a snapshot gives.
+
+The pattern is a periodic snapshot per run, as Maxime Beauchemin's "Functional Data Engineering" (2018) keeps a full dimension snapshot per partition at Facebook, Airbnb and Lyft: storage is cheap, reproducibility comes free, and nobody has to reason about which version of a row a past computation saw.
+
+## Alternatives considered
+
+- **Read today's replica at query time, dated by today's watermarks.** No storage at all, and a stored run's reviewers always as current as the last sync. Rejected: one answer would mix the run's git snapshot with another GitHub snapshot, its "as of" would have to be two dates, and every sync would change a stored run's who-knows answer. It is the option #48 rejected for ranks, for the same reason.
+- **Store only who_knows@1's reviewers.** Impossible as stated: the answer is per path prefix, so the run would have to precompute every directory, which is why `who_knows@1` is never stored. Its smaller cousin, storing per run only the derived review facts the metrics need (each landed pull request's landings and its counted reviewers as subjects), saves about three rows in five: a pull request's commits and labels, and its title. Rejected: it stores derived values, with today's login resolution and review filters baked in, so a newer metric version, `explain` of `reviews_given@1`, or a corrected login rule cannot recompute from it. Facts, then versioned metrics ([ADR 0003](0003-facts-metrics-views-sqlite.md)).
+- **Store the run's joined pull requests, whole (chosen).** About 1 KB per pull request per run (below), and nothing derived.
+- **Version the replica instead of copying it** (a slowly changing dimension of type 2, or time travel as Delta Lake and Apache Iceberg tables offer it): keep every version of a pull request a sync replaced, and have a run reference the versions it read. One copy of each version instead of one per run: most pull requests stop changing once merged, so at about 20 runs it would store a tenth to a twentieth as much. Rejected for now: the sync's "replace a pull request as a whole" becomes "append a version and close the old one", every reader becomes an "as of" query, and versions that no run references need collecting. The port hides the difference, so this is the move to make if the copies grow too large (see Revisit if).
+
+## Consequences
+
+- **Storage, measured** (2026-10-15, through `PutRunForge` into a real facts.db): a year of 20,000 pull requests with 4 commits, 3 reviews and 2 labels each is 200,000 rows per run and 21.3 MB, about 1.1 KB per pull request. Retention keeps, per run kind, at most 21 runs (the one just finished, the newest 8 and the newest of each of the 12 most recent months), about 19 in steady state with daily scans: up to 4.2 million rows and 450 MB for such an organization, against the replica's one copy of 21 MB.
+- **Next to the git facts it is small.** One run of Homebrew/brew (2,384 landings in a year, 2,149 blamed files) is 16.5 MB of git facts, about 6.9 KB per landing; the forge snapshot adds about 1.1 KB per pull request, a sixth of that per change. The store is disposable: deleting facts.db and scanning again loses nothing GitHub and git do not still hold.
+- **Time.** Writing the 20,000 pull requests takes 0.5 s and reading them back 0.12 s on an Apple M4 Max shared with two other builds, where that scan of Homebrew/brew took 93 s. Every reader of a stored run reads the snapshot once; the MCP server, which caches a run's facts, re-reads it on each call until its cache holds it too.
+- **#48's two follow-ups are answered.** A newer metric version computed over an old run gets that run's own GitHub data. `explain` of `reviews_given@1` could now list the pull requests behind a person's value from the run; this decision does not build that, and explain says it lists none of them yet (`pulls-not-listed`).
+- **A run says the same thing forever.** A later sync, a rename or a review submitted before `--now` and synced after it, changes no stored run's numbers, reviewers or dates.
+
+## Door
+
+Two-way. facts.db is disposable and migration 4 is additive; the snapshot sits behind `ForgeStore`, so moving to a versioned replica changes `internal/sqlite` and nothing that reads the port.
+
+## Revisit if
+
+- The forge snapshots grow beyond a fifth of facts.db on a real organization, or past 1 GB: version the replica instead (above).
+- Reading the snapshot shows up in the latency of `report` or of MCP tool calls (over 0.5 s): cache it in the MCP server as it caches facts, or load it only for the use cases that compute from it.
+- A use case needs GitHub data the scan did not read, such as pull requests older than the history window: widen what a scan reads, rather than reading the replica from a stored run.
