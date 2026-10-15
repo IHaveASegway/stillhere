@@ -4,8 +4,8 @@
 # the change that broke it rather than on the next tag:
 #
 #   - an archive per OS and architecture, each holding the binary GoReleaser
-#     built, LICENSE, README.md and the bash, zsh and fish completion
-#     scripts, each matching the checksums file;
+#     built, LICENSE, README.md, the bash, zsh and fish completion scripts
+#     and the agent skill, each matching the checksums file;
 #   - a cask that installs those archives, depends on Homebrew's git, and
 #     links the archived completion scripts instead of running the binary at
 #     install (.goreleaser.yaml says why);
@@ -54,6 +54,11 @@ binary() {
 
 # Archives and checksums.
 completions="completions/_stillhere completions/stillhere.bash completions/stillhere.fish"
+# The agent skill: every file of the plugin directory, at the path it has in
+# the repository, which the README gives. Each is followed by a space, as in
+# the archive listings below.
+plugin=$(find plugins/stillhere -type f | sort | tr '\n' ' ')
+[[ -n $plugin ]] || fail "no files under plugins/stillhere: run this from the repository root"
 checksums=$(artifacts Checksum)
 [[ -n $checksums ]] || fail "no checksums file"
 for os in darwin linux windows; do
@@ -74,7 +79,7 @@ for os in darwin linux windows; do
 			contents=$(tar -tzf "dist/$archive" | sort | tr '\n' ' ')
 			archived=$(tar -xOzf "dist/$archive" "$bin" | sha256)
 		fi
-		want="LICENSE README.md $completions $bin "
+		want="LICENSE README.md $completions $plugin$bin "
 		[[ $contents == "$want" ]] || fail "$archive holds [$contents], want [$want]"
 		built=$(binary "$os" "$arch")
 		[[ -f $built ]] || fail "no $os/$arch binary in dist"
@@ -95,7 +100,7 @@ bash=$(tar -xOzf "$sample" completions/stillhere.bash)
 [[ $bash == *"-F __start_stillhere stillhere"* ]] || fail "completions/stillhere.bash does not register __start_stillhere"
 fish=$(tar -xOzf "$sample" completions/stillhere.fish)
 [[ $fish == *"complete -c stillhere "* ]] || fail "completions/stillhere.fish does not register completions for stillhere"
-ok "6 archives, each with the binary GoReleaser built, LICENSE, README.md and bash, zsh and fish completions, all matching $checksums"
+ok "6 archives, each with the binary GoReleaser built, LICENSE, README.md, bash, zsh and fish completions and the agent skill (${plugin% }), all matching $checksums"
 
 # The cask.
 cask=dist/homebrew/Casks/stillhere.rb
@@ -143,7 +148,7 @@ for platform in linux/amd64 linux/arm64; do
 	uid=$(docker run --rm --platform "$platform" --entrypoint id "$image" -u)
 	[[ $uid != 0 ]] || fail "$image runs as root"
 	gitv=$(docker run --rm --platform "$platform" --entrypoint git "$image" version | awk '{ print $3 }')
-	awk -v v="$gitv" 'BEGIN { split(v, p, "."); exit !(p[1] > 2 || (p[1] == 2 && p[2] >= 44)) }' ||
+	awk -v v="$gitv" 'BEGIN { split(v, p, "."); exit !(p[1] > 2 || (p[1] == 2 && p[2] >= 45)) }' ||
 		fail "$image ships git $gitv, older than the 2.45 floor"
 	ok "$image holds $built, prints 'stillhere $version', runs as uid $uid, ships git $gitv"
 done

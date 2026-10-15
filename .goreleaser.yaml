@@ -66,6 +66,11 @@ archives:
       - LICENSE
       - README.md
       - completions/*
+      # The agent skill: the plugin directory, whole and at its repository
+      # path (plugins/stillhere/skills/stillhere), where the README points.
+      # The cask ships it too, because Homebrew unpacks the whole archive
+      # into the cask's directory in the Caskroom.
+      - plugins/stillhere/**
 
 checksum:
   algorithm: sha256

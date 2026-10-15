@@ -1,6 +1,6 @@
 # ADR 0003: Facts, then versioned metrics, then views, on SQLite
 
-Status: Accepted · 2026-10-14 · Deciders: Joseph Peterson
+Status: Accepted · 2026-10-14 · Deciders: Joseph Peterson · Consequences amended 2026-10-15: [as built](#as-built-amended-2026-10-15)
 
 ## Context
 
@@ -33,6 +33,13 @@ Prior art: Airbnb's Minerva keeps metric definitions in one place with review, v
 - Every number has provenance, and agents and people get SQL.
 - Schema migrations become real work: a migrations table, and a full rebuild as the fallback because the file is disposable.
 - `facts.db` contains emails, so it is created with mode 0600 and documented as sensitive.
+
+### As built (amended 2026-10-15)
+
+The decision stands. Two of its details were built otherwise, and the [run model](../spec/codebase.md#run-model) is the contract:
+
+- **A run is published by a status flip, not committed in one transaction, and readers see partial runs too.** `scan` computes everything first, then writes the run while its status is `running`, in several transactions (one per repository, then the run's groups and warnings, the GitHub data it read and its metric values), and publishes it in a last one that sets the status to `complete`, or to `partial` when a repository or a path failed. Readers select complete and partial runs only, so nobody sees half a run, and a partial run is read like a complete one, its failures listed with it. Readers see what one transaction would have shown them. The cost is cleanup that a rollback would have done: a write that fails marks the run `failed`, which no reader sees, and a run that a crash left `running` is deleted by a later open once its writer has written nothing for a day.
+- **The schema version is `PRAGMA user_version`, not a migrations table.** Each embedded migration runs in a transaction of its own that also sets the version it brings, and a facts.db newer than the binary is refused. A full rebuild stays the fallback.
 
 ## Door
 

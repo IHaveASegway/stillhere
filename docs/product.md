@@ -78,16 +78,16 @@ Ranked metrics: durable, simplifying, reviews given, load-bearing. Activity (cha
 ## How people use it
 
 ```
-brew install <your-tap>/stillhere
+brew install --cask ihaveasegway/tap/stillhere             # from the first release; until then, see the README
 
-stillhere week   ~/src/acme                  # what landed, offline
-stillhere sync github --org acme             # the only command that uses the network
-stillhere scan   ~/.stillhere/mirrors/acme   # blame, durability, ownership facts
-stillhere me                                 # your own page
-stillhere scan ... --rank                    # per-metric ranks (leads)
-stillhere explain durable --person ada@...   # the commits behind a number
-stillhere serve                              # team web UI, Sign in with GitHub
-stillhere mcp                                # the same facts for your agent
+stillhere week ~/src/acme                                  # what landed, offline
+stillhere sync github --org acme                           # the only command that uses the network
+stillhere scan ~/.stillhere/mirrors/acme --rank durable@1  # blame, durability, ownership facts; ranks (leads)
+stillhere me --email you@example.com                       # your own page
+stillhere explain durable@1 --person ada@example.com       # the commits behind a number
+stillhere mcp --me you@example.com                         # the same facts for your agent
+stillhere serve                                            # M3, not built yet: team web UI, Sign in with GitHub
+stillhere narrate                                          # M4, not built yet: highlights narrated by Anthropic, pseudonymized
 ```
 
 What a lead sees on the web (M3):
@@ -109,7 +109,7 @@ Everyone else sees their own page, the highlights ("biggest simplification this 
 1. **Measure changes; rank one metric at a time.** No composite score. Every rank shows its interval, and people below the minimum sample are not ranked.
 2. **Every number is explainable.** `explain` and the web UI go from any number to the commits and pull requests that produced it.
 3. **Facts, then metrics, then views.** Collectors write facts. Metrics are versioned (`durable@1`) and recomputable over stored facts. Every report cites the versions it used. A definition change is a new version, never a silent edit.
-4. **Offline, deterministic analysis.** Only `sync` touches the network. The same inputs and `--now` produce the same report.
+4. **Offline, deterministic analysis.** Only `sync` touches the network. The same inputs and `--now` produce the same report, all but its wall-clock `timings`.
 5. **Sources of truth stay where they are.** git holds code and history; GitHub holds pull requests, reviews, teams and verified emails; `.mailmap` holds email aliases. stillhere stores derived copies only and never writes to any of them.
 6. **Noise first.** Nothing is counted before classification.
 7. **Bots are separated; AI-assisted work is tagged.** Humans are credited for their changes. AI involvement is a tag and a cohort comparison, never a ranked row.
@@ -154,7 +154,7 @@ Recommendations that were not approved stay open. The baseline is what happens i
 
 - **It measures what we mean.** A lead labels 50 recent changes as meaningful or routine. Durable and simplifying must separate the two with an AUC of at least 0.7 (0.5 is chance). If they do not, the definition changes, as a new metric version, before more UI is built on it. Canonical reading: Kaner and Bond, "Software Engineering Metrics: What Do They Measure and How Do We Know?" (METRICS 2004).
 - **It gets used.** Leads open who-knows and highlights weekly. If ranked views go unused after M3, drop them and keep the highlights.
-- **It is reliable.** Fixture oracles pass on git 2.45 and on the latest git. Two runs with the same inputs are byte-identical. A cold scan of 100 repos and 50,000 files finishes in under 15 minutes on 8 cores.
+- **It is reliable.** Fixture oracles pass on git 2.45 and on the latest git. Two runs with the same inputs are byte-identical once their wall-clock `timings` are removed. A cold scan of 100 repos and 50,000 files finishes in under 15 minutes on 8 cores.
 - **It spreads.** Homebrew installs, and 75 GitHub stars (the homebrew-core bar).
 
 ## Glossary
