@@ -1,0 +1,11 @@
+{
+  "data": {
+    "rateLimit": {"cost": 1, "remaining": 4996, "resetAt": "2026-10-02T02:00:04Z"},
+    "node": {
+      "labels": {
+        "pageInfo": {"hasNextPage": false, "endCursor": "labels-09-end"},
+        "nodes": [{"name": "enhancement"}]
+      }
+    }
+  }
+}

@@ -60,27 +60,41 @@ The 2026-10-07 plan let the tool run on 2.31–2.43 with a weaker guarantee. `--
 Analysis never touches the network. Only `stillhere sync github` does, and it is the only code path allowed to run these:
 
 ```
-git clone --bare <https-url-without-userinfo> <mirrors>/<owner>/<repo>.git
+git clone --bare <https-url-without-userinfo> <mirrors>/<owner>/.stillhere-clones/<repo>.git-<random>
+git -C <that clone> config stillhere.forgeId <node id from the GitHub API>
+                                   (then renamed to <mirrors>/<owner>/<repo>.git)
 git -C <mirror> config remote.origin.fetch '+refs/heads/*:refs/heads/*'
 git -C <mirror> fetch --prune origin
 git -C <mirror> symbolic-ref HEAD refs/heads/<default branch from the GitHub API>
 ```
 
-- `--bare` with an explicit refspec, not `--mirror`. A mirror's refspec is `+refs/*:refs/*` (verified), which copies every ref the server advertises; on GitHub that includes `refs/pull/*` (verify in M2). A plain `--bare` clone has no fetch refspec at all (verified), hence the `config` line. No collector needs tags.
-- `symbolic-ref HEAD` on every sync: `fetch` never moves a bare repo's HEAD, so a renamed upstream default branch would leave HEAD dangling. The GitHub API is the system of record for the default branch.
+Before any of these, once per sync, `git config --file <dir>/config --get stillhere.forgeId` reads the node id of every mirror under `<mirrors>` (it follows no include and needs no repository around it), and mirrors move to match the listing; see below.
+
+- `--bare` with an explicit refspec, not `--mirror`. A mirror's refspec is `+refs/*:refs/*` (verified), which copies every ref the server advertises. On GitHub that includes `refs/pull/<n>/head` and `merge` for every pull request: verified 2026-10-14 with git 2.50.1, `ls-remote` of `cli/safeexec` advertised 13 `refs/pull/*` refs beside 1 branch and 2 tags. A plain `--bare` clone has no fetch refspec at all (verified again in M2), hence the `config` line. No collector needs tags.
+- The first clone goes into `<mirrors>/<owner>/.stillhere-clones/` (mode 0700), is marked with its node id, and is renamed into place only when complete. `scan <mirrors>/<owner>` reads that group's immediate children only ([discovery.md](discovery.md#rules-in-order), rule 3), so an interrupted clone is never scanned, as it would be beside the mirror: `git clone` writes `HEAD`, `objects/` and `refs/` before it fetches, which makes a directory look like a bare repository. The directory is on the mirror's own file system, so the rename is atomic. A later clone in that owner's directory removes a leftover older than the clone timeout plus ten minutes, which no clone still running can be, so two syncs never delete each other's clone in progress.
+- A mirror is its repository's by node id (`stillhere.forgeId`), not by path. An existing directory is fetched only when it is a bare repository that carries the repository's node id, or carries none and fetches from the expected URL (it then gets the id); anything else at that path is reported and never changed. A mirror that carries the id gets the URL the API reports as its `remote.origin.url` (one `git config`), so it follows a rename.
+- Once per sync, before any fetch, the mirrors follow the listing (`ForgeSource.ReconcileMirrors`). The mirror of a repository that was renamed, transferred, or changed only the case of its name moves to the repository's path. Under `<mirrors>/<owner>`, the mirror of a repository the owner no longer lists (deleted, transferred to an owner this sync does not list, or hidden from the token), and a second mirror of a listed one, move to `<mirrors>/.stale/<owner>/`, outside every group directory, and back once the repository is listed again. Nothing is deleted. Without this, a renamed repository would be cloned again under its new name and its history scanned twice, because discovery keys repositories by origin URL. The moves are renames, made one at a time; two repositories that swapped names pass through `<mirrors>/.stale/.moving`. A repository whose mirror cannot be moved is not mirrored that sync, so that no second copy is cloned.
+- `symbolic-ref HEAD` on every sync: `fetch` never moves a bare repo's HEAD, so a renamed upstream default branch would leave HEAD dangling. The GitHub API is the system of record for the default branch. `symbolic-ref` itself refuses a name that is not a valid branch (verified on 2.50.1).
 - Never `--depth` or `--filter`: shallow and partial clones break line facts ([discovery.md](discovery.md#clone-health)).
-- The whole analysis prefix and environment apply to sync commands too, with two exceptions. `GIT_NO_LAZY_FETCH` is not set, because these commands fetch on purpose. `GIT_ASKPASS` is left to the credential mechanism below; `SSH_ASKPASS` is still removed, so that mechanism is the only prompt path.
+- Timeouts: one hour for `clone`, 30 minutes for `fetch`, one minute for the local commands. The analysis default of 300 s would cut off the first clone of a large repository.
+- The whole analysis prefix and environment apply to sync commands too, with two exceptions. `GIT_NO_LAZY_FETCH` is not set, because these commands fetch on purpose. `GIT_ASKPASS` is set by the credential mechanism below (to empty); `SSH_ASKPASS` is still removed, so no prompt path is left.
+- `clone` and `fetch` get the credential variables; the local commands (`config`, `symbolic-ref`, `rev-parse`) get none. All of them run on the Sync profile, whose SIGTERM lets git remove its lock files when a sync is interrupted.
+- Two syncs may run at once (a scheduled one and a manual one). Every move and publish is a rename, so each repository's mirror is whole or absent, and a conflict fails that repository in one of them; the next sync heals it.
 
 ## Credentials
 
 A token is never written to a remote URL, `.git/config`, command-line arguments (visible in `ps`), logs, or reports. Clones that keep credentials in their remote URLs are a common way tokens leak, and analysis would otherwise copy them into every warning.
 
-Candidate mechanisms, both environment-only. Pick and verify the exact one in M2:
+The candidates were two environment-only mechanisms:
 
 1. `GIT_ASKPASS` pointing at the stillhere binary, which answers git's username and password prompts from an environment variable only it reads.
 2. Environment-scoped config: `GIT_CONFIG_COUNT=1`, `GIT_CONFIG_KEY_0=http.https://github.com/.extraheader`, `GIT_CONFIG_VALUE_0=AUTHORIZATION: basic <base64 of x-access-token:TOKEN>`. Never pass this with `-c`, which puts it in argv.
 
-The same OS user can still read a process environment. That is the accepted boundary. The M2 contract test clones and fetches a mirror, then asserts that `remote.origin.url` has no userinfo and that no config value, log line, or report contains the token.
+**Chosen in M2 (#14): mechanism 2**, plus `GIT_ASKPASS=` (empty), so that a rejected token fails at once instead of reaching for a prompt, and `http.followRedirects=false` (`GIT_CONFIG_COUNT=2`). It is the header `actions/checkout` sends, without the config file `actions/checkout` writes it to. It needs git 2.31, below the 2.44 floor. Mechanism 1 would work too, but it gives the binary a second mode, answering git's prompts from inside git's child process: more code on the credential path, and harder to test.
+
+The key is scoped to the GitHub URL (`http.<url>.extraheader`), but that scope alone does not keep the header on GitHub. git matches the key once, against the URL it was given, and by default (`http.followRedirects=initial`) it follows a redirect of the first request and sends the rest of the command to the new location with the header still attached. Verified on 2.50.1 (Apple Git-155, curl 8.7.1): with a server on 127.0.0.1 redirecting to one on localhost, curl dropped the header from the redirected `GET info/refs`, but git's next request, the `POST git-upload-pack`, carried it to the other host. GitHub does not redirect git across hosts, but an Enterprise host behind an SSO proxy can. Hence `http.followRedirects=false`: sync always clones and fetches the URL the API reports, which needs no redirect, and a repository renamed between the listing and the clone fails once, until the next sync lists its new name. `TestGitHubSync` checks that a redirecting server's target gets no request at all.
+
+The same OS user can still read a process environment. That is the accepted boundary. `TestGitHubSync` verifies the mechanism end to end: it clones and fetches a mirror from a local git server (git's own `http-backend`) that refuses any request without the token, then asserts that `remote.origin.url` has no userinfo and that neither the token nor its base64 form is in any file of the mirror, its config, the logs, the facts or an error. A refused token fails the clone without a prompt and leaves no directory behind. The same code also cloned and fetched a public repository (`cli/safeexec`) from github.com with the header on 2026-10-14, which shows GitHub accepts its form; a public repository cannot show that the header is what authenticates, which is the local server's part.
 
 ## URL scrubbing
 

@@ -123,6 +123,7 @@ func All() []Metric {
 		durableV1{},
 		simplifyingV1{},
 		aiAssistedV1{},
+		reviewsGiven{},
 	}
 }
 

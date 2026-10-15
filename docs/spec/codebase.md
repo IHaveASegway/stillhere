@@ -50,7 +50,7 @@ Every module is code someone must keep current, so each one says why it beat the
 | `github.com/BurntSushi/toml` | `policy` | A TOML 1.0 decoder with no dependencies; a policy file is small, so decoding speed does not matter. | `github.com/pelletier/go-toml/v2` |
 | `modernc.org/sqlite` | `sqlite` | SQLite without cgo, so the binary stays static and cross-compiles ([architecture.md](../architecture.md)). | `github.com/mattn/go-sqlite3`, which needs cgo |
 | `golang.org/x/sync` | `collect`, `app` | `errgroup` with `SetLimit` bounds the number of git processes, and `semaphore` holds the blame slots every repo shares (`collect.BlameSlots`) ([Concurrency](#concurrency)). | a hand-written semaphore |
-| `github.com/cli/go-gh/v2` (M2, #14) | `github` | gh's own auth and API client, so a user's `gh auth login` works unchanged. | `github.com/google/go-github` with our own token handling |
+| `github.com/cli/go-gh/v2` (M2, #14; v2.16.2) | `github` | gh's own auth and API client, so a user's `gh auth login` works unchanged: the token comes from `GH_TOKEN`, `GITHUB_TOKEN` or gh's stored token, as gh finds it. `sync github` reaches github.com only; an Enterprise host needs a `--host` flag and per-host mirrors (#44), which `github.Config.Host` already supports. It adds 13 modules to `go.mod`. `pkg/auth` alone would add 4; the other 9 (shurcooL-graphql, httpretty, termenv and three of its own, go-timezone-local, `x/term`, `x/text`) come with `pkg/api`, mostly for `GH_DEBUG` logging and terminal handling that stillhere turns off. Revisit if that count matters more than gh's token lookup: replacing `pkg/api` with `net/http` touches `internal/github` only. | `github.com/google/go-github` with our own token handling |
 | `github.com/modelcontextprotocol/go-sdk` (M4, #15) | `mcp` | The official MCP SDK ([ADR 0006](../adr/0006-ai-mcp-and-narrated-highlights.md)). | `github.com/mark3labs/mcp-go` |
 
 ## Domain types (`internal/domain`)
@@ -292,13 +292,71 @@ type FactStore interface {
 ```
 
 ```go
-// domain/forge.go, filled by the GitHub sync (#14) in M2
-type ForgeFacts struct{}       // pull requests, reviews, login links, watermarks
-type ForgeSource interface{}   // the forge's API: GitHub, later GitLab (ADR 0004)
-type ForgeStore interface{}    // the forge replica in facts.db, upserted by node id with a watermark per repo
+// domain/forge.go (#14): the Forge context. GitHub is the system of record; facts.db holds a replica.
+type ForgeRepo struct {
+	ID, Key       string // node id (stable across renames); the HTTPS clone URL, which is its mirror's Repo.Key
+	Owner, Name   string
+	DefaultBranch string // "" for an empty repository
+	Archived      bool
+	Fork          bool
+}
+type ForgeUser struct { Login string; Bot bool }                  // Login "" for a deleted account; Bot: an app account
+type ForgeCommit struct { SHA, AuthorEmail, AuthorLogin string }  // the forge's author account for a commit: how logins link to people
+type Review struct {
+	ID         string
+	Author     ForgeUser
+	State      string    // ReviewApproved, ReviewChangesRequested, ReviewCommented, ReviewDismissed
+	Submitted  time.Time
+	BodyLength int       // characters of the review's own text, trimmed; the text is not kept
+	Comments   int       // inline comments in the review
+}
+type PullRequest struct { // replaced as a whole on every sync that sees it updated
+	ID, Repo                                string // node id; ForgeRepo.ID
+	Number                                  int
+	Title                                   string // local only; never sent to an AI
+	Author                                  ForgeUser
+	State                                   string // PullOpen, PullClosed, PullMerged
+	Draft                                   bool
+	BaseBranch                              string
+	Created, Updated, Closed, Merged        time.Time
+	MergeCommit                             ForgeCommit   // zero unless merged
+	Labels                                  []string      // sorted
+	Reviews                                 []Review      // sorted by Submitted, then ID
+	Commits                                 []ForgeCommit // the forge's order
+}
+type ForgeWatermark struct { Repo string; Updated, Synced time.Time } // every PR updated before Updated is replicated; Synced: the "as of" time
+type ForgePage struct { Repo string; PullRequests []PullRequest; Updated time.Time } // stored with its watermark in one transaction
+type ForgeFacts struct { Repos []ForgeRepo; PullRequests []PullRequest; Watermarks []ForgeWatermark } // the replica a run read
+// RemoteRepo: "host/owner/name" of a remote, lowercased, with no user, port or ".git", for https://, ssh:// and
+// git@host:o/r remotes. A run's repository (Repo.Remote) is a forge repository (ForgeRepo.Key) when the two match.
+func RemoteRepo(remote string) (string, bool)
+
+type MirrorMove struct { // a mirror ReconcileMirrors moved, or could not
+	Repo, From, To string // ForgeRepo.ID; absolute paths
+	Reason         string // MirrorRenamed, MirrorRestored, MirrorStale, MirrorDuplicate
+	Err            string // why it could not move; a listed repository whose mirror could not move is not mirrored that sync
+}
+
+type ForgeSource interface { // GitHub's GraphQL API and git remotes (internal/github); GitLab later (ADR 0004)
+	Repos(ctx context.Context, owner string) ([]ForgeRepo, error) // sorted by Key; an unknown login is a *UsageError
+	// Once per sync, before any fetch, with owner's whole listing: mirrors follow their repositories by node id, which a
+	// rename or a transfer keeps; a mirror under root/<owner> of a repository no longer listed moves to root/.stale.
+	ReconcileMirrors(ctx context.Context, owner string, listed []ForgeRepo, root string) ([]MirrorMove, error)
+	Mirror(ctx context.Context, repo ForgeRepo, root string) (string, error) // root/<owner>/<name>.git, created or fetched
+	PullRequests(ctx context.Context, repo ForgeRepo, since time.Time, put func(*ForgePage) error) error // updated at or after since
+}
+type ForgeStore interface { // the replica in facts.db (*sqlite.Store, sqlite/forge.go)
+	PutForgeRepos(ctx context.Context, repos []ForgeRepo) error
+	ForgeWatermark(ctx context.Context, repo string) (ForgeWatermark, error)
+	PutForgePage(ctx context.Context, page *ForgePage) error // the watermark only rises; a pull request is replaced only by a copy updated as late or later
+	MarkForgeSynced(ctx context.Context, repo string, at time.Time) error
+	LoadForge(ctx context.Context, since time.Time) (*ForgeFacts, error) // PRs updated at or after since; nil for an empty replica
+	PutRunWatermarks(ctx context.Context, runID int64, watermarks []ForgeWatermark) error // a running run: the Watermarks it read
+	RunWatermarks(ctx context.Context, runID int64) ([]ForgeWatermark, error) // sorted by Repo; ErrNotFound unless complete or partial
+}
 ```
 
-The forge ports exist now, empty, so the sync can be built without editing another issue's files: #14 owns `domain/forge.go`, `sqlite/forge.go` (where `*sqlite.Store` implements `ForgeStore`), `cli/forge.go` (which builds the `ForgeSource` adapter) and `app/sync.go`. `ForgeStore` is a port of its own rather than more `FactStore` methods: `FactStore` holds per-run snapshots, while forge facts are a replica that outlives runs ([run model](#run-model)), and a separate port leaves `FactStore` and #8's implementation untouched (Interface Segregation Principle). Store migrations are embedded files, `internal/sqlite/migrations/NNNN_<name>.sql`, applied in order, one transaction each, and numbered by `PRAGMA user_version`: 1 (`0001_facts.sql`) is #8's schema, 2 is #14's forge tables. M4 adds narrations the same way.
+#14 owns `domain/forge.go`, `internal/github`, `sqlite/forge.go` and `sqlite/migrations/0002_forge.sql` (where `*sqlite.Store` implements `ForgeStore`), `cli/forge.go` (which builds the `ForgeSource` adapter), `cli/sync.go`, `app/sync.go` and `metrics/reviews.go`. `ForgeStore` is a port of its own rather than more `FactStore` methods: `FactStore` holds per-run snapshots, while forge facts are a replica that outlives runs ([run model](#run-model)), and a separate port leaves `FactStore` and #8's implementation untouched (Interface Segregation Principle). Mirroring is on `ForgeSource` because the credentials are the forge's: the adapter holds the token, so it runs the clone and the fetch (through `domain.GitRunner`), and the token never reaches `app`. A mirror carries its repository's node id in its own git config (`stillhere.forgeId`), because its path does not identify it: a rename or a transfer changes the path and keeps the id, and discovery keys repositories by origin URL, so a mirror left under the old name would be scanned twice. `ReconcileMirrors` is a separate, sequential call because only it sees the whole listing: it can tell a rename from a deletion, and settle two repositories that swapped names, before the parallel fetches start. Store migrations are embedded files, `internal/sqlite/migrations/NNNN_<name>.sql`, applied in order, one transaction each, and numbered by `PRAGMA user_version`: 1 (`0001_facts.sql`) is #8's schema, 2 (`0002_forge.sql`) is #14's forge tables (`forge_run_watermarks` references #8's `runs`). M4 adds narrations the same way.
 
 ## Package APIs
 
@@ -501,6 +559,23 @@ func Open(ctx context.Context, path string) (*Store, error) // creates a missing
 // another process's lock and renews the leases of the store's runs; a statement on the writer connection itself fails
 // with SQLITE_BUSY after a second.
 
+// github (#14): domain.ForgeSource over GitHub's GraphQL API and git over HTTPS
+type Config struct {
+	Host      string            // "github.com" when empty; go-gh derives the API endpoint. cli leaves it empty (#44)
+	Token     string            // "" looks one up as gh does: GH_TOKEN, GITHUB_TOKEN, then gh's stored token
+	Git       domain.GitRunner  // runs the mirror commands, Sync profile
+	Logger    *slog.Logger
+	UserAgent string            // "stillhere/<version>"
+	GitURL    string            // base URL mirrors clone from; "https://" + Host when empty; https unless loopback (tests)
+	Transport http.RoundTripper // nil: http.DefaultTransport; tests replay recorded responses
+	Sleep     func(ctx context.Context, d time.Duration) error // nil: a timer; tests record the waits
+}
+func New(ctx context.Context, cfg Config) (*Source, error) // no token → *domain.UsageError
+// *Source implements domain.ForgeSource. API requests go one at a time, paced by each query's rateLimit
+// cost; Retry-After and X-RateLimit-Reset are obeyed, inside a 200 too; secondary limits and 5xx back off
+// with jitter; a connection whose cursor does not advance fails. Mirrors get the token only as an
+// environment-scoped http.extraheader, and git follows no redirect (git-invocation.md#credentials).
+
 // app
 type Deps struct {
 	Git        domain.GitRunner
@@ -531,7 +606,7 @@ type ExplainRequest struct { RunID int64; Metric domain.MetricID; Subject domain
 type WhoKnowsRequest struct { RunID int64; Path, Repo string }
 type MeRequest struct { RunID int64; Email string }                                // Email required: the CLI resolves any default
 type ValidateRequest struct { RunID int64; Labels []byte; LabelsName string }      // the CLI reads the file; app opens none
-type SyncRequest struct { Org, Mirrors string; IncludeArchived, IncludeForks bool }
+type SyncRequest struct { Org, Mirrors string; IncludeArchived, IncludeForks bool; Now time.Time } // Now: read once by cli; stamps the run and ForgeWatermark.Synced
 func Week(ctx context.Context, d Deps, r WeekRequest) (*report.Model, error)
 func Scan(ctx context.Context, d Deps, r ScanRequest) (*report.Model, error)
 // The read side reads the latest complete or partial run unless a run id is given, with the run's own policy:
@@ -579,7 +654,7 @@ Every `scan` is a **run**: a snapshot of facts at one set of HEADs, under one po
 - **Publishing** is a status flip. A run is written as `running` and becomes `complete` (or `partial` when some repo failed) only after its last row. Readers select complete and partial runs only, so nobody sees half a run: every `FactStore` read method returns `ErrNotFound` for a running or failed run. A run left `running` by a crash is deleted by the next open once its lease has lapsed. The store that began the run holds the lease: every write it makes renews it, a sync's forge writes included, and it lapses after a day without one, so an open deletes a running run only after its writer has written nothing for a day.
 - **Retention.** When a run finishes, the store keeps, among the runs of its kind, that run, the newest 8 published runs and the newest published run of each of the 12 most recent months that have one (by `Now`, as restic's `--keep-last` and `--keep-monthly` count), and deletes the others, failed runs included.
 - **The policy travels with the run.** `Run.PolicySource` holds exactly the bytes `PolicyRef.SHA256` hashes. Every reader of a stored run (`report`, `explain`, `who-knows`, `me`, `validate`, `mcp`, and a new metric version computed over old facts) rebuilds that policy with `policy.FromSource` and checks its `Ref` against `Run.Policy`. Today's `stillhere.toml`, or a newer packaged default, never changes a stored run's numbers; only `week` and `scan` load a policy file.
-- **Forge facts** (M2) are not per run. They are a replica of GitHub, upserted by node id with a watermark per repo, and each run records the watermark it read.
+- **Forge facts** (M2) are not per run. They are a replica of GitHub, upserted by node id with a watermark per repo, and each run records the watermark it read. `scan` reads the replica with `ForgeStore.LoadForge` into `FactSet.Forge` and records its `Watermarks` with `ForgeStore.PutRunWatermarks` while the run is running; `report`, `explain` and the other readers of a stored run read them back with `RunWatermarks` and show "as of" each repository's `Synced` ([ADR 0004](../adr/0004-github-behind-sync-boundary.md)). The run keeps those times, not a copy of the pull requests, so the stored metric values are the run's forge numbers, and a new metric version computed over an old run reads today's replica, which the watermarks show to be newer. Wiring both calls is #13's (#14 owns the methods). A sync is recorded as a run of kind `sync` (no policy, no facts of its own), so its status is kept like a scan's.
 - **Metric values** are stored with the run, keyed by `metric@version`. A new metric version can be computed over an old run's facts with `LoadFacts`, which is why `LoadFacts(PutRepoFacts(x)) == x` is tested.
 
 ## Command surface
@@ -641,7 +716,7 @@ Exit codes are in [report-json.md](report-json.md#exit-codes): 0 when any repo p
 Issues are built in parallel branches, so a shared package or file needs a rule that keeps two branches from colliding, or from compiling apart and failing only at merge.
 
 - **`collect` is shared by #4, #5, #6 and #7.** Each collector's unexported identifiers carry its prefix (`discover…`, `classify…`, `history…`, `blame…`). The readers every collector needs are in `scan.go` (`newScanner`, which allows long lines, `scanNUL` for `-z` output, and `nonBlank`, the one non-blank predicate that the history and blame collectors both count with), and the test helper in `collect_test.go` (`newRunner`, a real `gitcli.Runner`). The co-author reader `coAuthors` is in `coauthors.go`: #6 implements it, and #7 calls it for the commits blame attributes lines to, which can be older than any history window. The package has at most one `TestMain`, and it goes in `collect_test.go`.
-- **Files that belong to one issue.** #14: `domain/forge.go`, `sqlite/forge.go`, `cli/forge.go`, `app/sync.go`. #15: `app/mcp.go`, `cli/mcp.go`, `internal/mcp`. #5: everything in `policy` but `types.go`, which is this file's contract.
+- **Files that belong to one issue.** #14: `domain/forge.go`, `internal/github`, `sqlite/forge.go`, `sqlite/migrations/0002_forge.sql`, `cli/forge.go`, `cli/sync.go`, `app/sync.go`, `metrics/reviews.go` (registered with one line in `metrics.All`). #15: `app/mcp.go`, `cli/mcp.go`, `internal/mcp`. #5: everything in `policy` but `types.go`, which is this file's contract. Where such a file shares a package with another issue's, its unexported identifiers carry a prefix, as in `collect`: `forge…` in `sqlite`, `reviews…` in `metrics`.
 - **Shared documents.** Each issue edits only the sections its scope names: in [metrics.md](../metrics.md), the entries of the metrics it builds or derives oracles for; in this file, the signatures it changes; in [report-json.md](report-json.md), the shape (#11). Where two branches still touch the same lines, #13 resolves them when it merges, as it does `go.mod` and `go.sum`.
 
 ## Tests
@@ -667,5 +742,5 @@ Tests sit at stable boundaries, so a refactor does not rewrite them (Kent Beck, 
 | `TestRunner` | `gitcli` | per-user and system attributes change neither numstat nor `check-attr`; no askpass, signature or external diff program runs; an inherited `GIT_DIR` changes nothing; a timeout or cancellation kills git's process group and is reported as such even when the reader fails first on the truncated output; a helper that left the group cannot hold `Stream` |
 | `TestStoreRoundTrip` | `sqlite` | `LoadFacts(PutRepoFacts(x)) == x`, a zero loading as +0; `Run(id)` returns the run as begun and finished, policy source included; readers never see a running or failed run (`ErrNotFound`) |
 | `TestStoreLifecycle` | `sqlite` | `Open` creates a missing directory 0700 and files 0600, in WAL mode; it refuses another program's SQLite file, a file that is not SQLite and a newer facts database with a `UsageError`, without waiting for a held lock and leaving the file byte for byte; first opens racing in separate processes all succeed; a run left running is deleted once its store has written nothing for a day, and not before; retention and `LatestRun` match a model of the run-model rule across gaps, year-long pauses, ties and backfills |
-| `TestGitHubSync` | `github` | recorded responses become the expected facts; the token is never stored (M2) |
+| `TestGitHubSync` | `github` | recorded responses ([testdata/github](../../testdata/github/README.md)) become the expected repositories and pull request pages, through rate limits (a 403 with Retry-After, a nearly spent budget, and a spent budget and a secondary limit that GitHub reports inside a 200), a 502 and nested follow-ups; a mirror clones and fetches from a local git server that takes only the token, follows a rename by node id, moves to `.stale` and back, and never follows a redirect to another host; the token is in no fact, mirror file, log or error; `reviews_given@1` over the pages the passes return matches its oracle (M2). The store round trip of those pages (`LoadForge` after `PutForgePage`) joins it when #8's `sqlite.Open` merges (#13) |
 | `TestMCPTools` | `mcp` | each tool through the SDK's in-memory client (M4) |

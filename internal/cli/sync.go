@@ -25,10 +25,16 @@ func (e *env) syncGitHubCommand() *cobra.Command {
 		Use:   "github --org ORG",
 		Short: "Mirror an organization's repositories and sync pull requests and reviews",
 		Long: `sync github lists an organization's repositories, keeps a bare mirror of
-each one current, and copies pull requests, reviews and review comments into
-facts.db. It is the only command that uses the network. The token is passed
-to git per command and is never written to a remote URL, config, log or
-report.`,
+each one current, and copies pull requests, their reviews, labels and commits
+into facts.db. It is the only command that uses the network. Each later sync
+reads only what changed since the last one. A repository that fails is
+reported and the others continue.
+
+Scan the mirrors with: stillhere scan <mirrors>/<org>
+
+The token comes from GH_TOKEN or GITHUB_TOKEN, else from gh auth login. It is
+passed to git per command, in the environment, and is never written to a
+remote URL, config, log or report.`,
 		Args: usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if req.Org == "" {
@@ -41,7 +47,15 @@ report.`,
 				}
 				req.Mirrors = filepath.Join(home, "mirrors")
 			}
-			return e.with(cmd.Context(), need{git: true, store: true, forge: true}, func(d app.Deps) error {
+			mirrors, err := filepath.Abs(req.Mirrors)
+			if err != nil {
+				return usagef("--mirrors %s: %v", req.Mirrors, err)
+			}
+			req.Mirrors = mirrors
+			req.Now = e.now
+			// The forge adapter runs the mirror commands with a git runner
+			// of its own, so the use case needs no git runner.
+			return e.with(cmd.Context(), need{store: true, forge: true}, func(d app.Deps) error {
 				return app.Sync(cmd.Context(), d, req)
 			})
 		},

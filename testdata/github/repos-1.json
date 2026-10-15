@@ -1,0 +1,15 @@
+{
+  "data": {
+    "rateLimit": {"cost": 1, "remaining": 4999, "resetAt": "2026-10-02T01:00:00Z"},
+    "repositoryOwner": {
+      "repositories": {
+        "pageInfo": {"hasNextPage": true, "endCursor": "repos-page-2"},
+        "nodes": [
+          {"id": "R_empty", "name": "empty-repo", "owner": {"login": "acme"}, "isArchived": false, "isFork": false, "defaultBranchRef": null},
+          {"id": "R_gadget", "name": "gadget", "owner": {"login": "acme"}, "isArchived": false, "isFork": false, "defaultBranchRef": {"name": "trunk"}},
+          {"id": "R_legacy", "name": "legacy", "owner": {"login": "acme"}, "isArchived": true, "isFork": false, "defaultBranchRef": {"name": "main"}}
+        ]
+      }
+    }
+  }
+}

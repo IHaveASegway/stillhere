@@ -52,7 +52,7 @@ This is CQRS in its simplest form: jobs that write facts are separate from the s
 | Sources | repo, group, mirror, default branch | repos, heads | A forge inventory |
 | History | commit, landing, trailer | commits, landings, landing_commits, commit_files, trailers | Ownership |
 | Authorship | line owner, majority owner | line_owners (per run) | Activity |
-| Forge | pull request, review, team | prs, pr_commits, reviews, review_comments, logins | Git facts |
+| Forge | pull request, review, team | forge_repos, forge_watermarks, forge_pull_requests, forge_pull_labels, forge_reviews (inline comments counted, not kept), forge_pull_commits; forge_run_watermarks per run | Git facts |
 | Identity | person, alias, login link | people, login_links (both derived) | A people database |
 | Metrics | metric@version, scope, window | metric_values, rank_intervals | Facts |
 | Presentation | page, highlight, tool | Nothing (read-only) | Measurement |

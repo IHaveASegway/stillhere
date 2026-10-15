@@ -1,0 +1,80 @@
+{
+  "data": {
+    "rateLimit": {"cost": 2, "remaining": 40, "resetAt": "2026-10-02T01:00:00Z"},
+    "node": {
+      "pullRequests": {
+        "pageInfo": {"hasNextPage": true, "endCursor": "pulls-asc-3"},
+        "nodes": [
+          {
+            "id": "PR_06", "number": 6, "title": "feat: rewrite everything",
+            "state": "CLOSED", "isDraft": false, "baseRefName": "main",
+            "createdAt": "2026-08-20T10:00:00Z", "updatedAt": "2026-09-02T08:00:00Z",
+            "closedAt": "2026-09-02T08:00:00Z", "mergedAt": null,
+            "author": {"__typename": "User", "login": "ada"},
+            "mergeCommit": null,
+            "labels": {"pageInfo": {"hasNextPage": false, "endCursor": "labels-06-end"}, "nodes": [{"name": "wontfix"}]},
+            "reviews": {
+              "pageInfo": {"hasNextPage": false, "endCursor": "reviews-06-end"},
+              "nodes": [
+                {"id": "PRR_06a", "state": "CHANGES_REQUESTED", "submittedAt": "2026-09-01T16:00:00Z", "body": "This is too big; please split it.", "author": {"__typename": "User", "login": "bob"}, "comments": {"totalCount": 3}}
+              ]
+            },
+            "commits": {
+              "pageInfo": {"hasNextPage": false, "endCursor": "MQ"},
+              "nodes": [
+                {"commit": {"oid": "0600000000000000000000000000000000000001", "author": {"email": "ada@example.com", "user": {"login": "ada"}}}}
+              ]
+            }
+          },
+          {
+            "id": "PR_02", "number": 2, "title": "fix: handle empty input",
+            "state": "MERGED", "isDraft": false, "baseRefName": "main",
+            "createdAt": "2026-09-10T08:00:00Z", "updatedAt": "2026-09-15T16:00:00Z",
+            "closedAt": "2026-09-15T16:00:00Z", "mergedAt": "2026-09-15T16:00:00Z",
+            "author": {"__typename": "User", "login": "bob"},
+            "mergeCommit": {"oid": "f020000000000000000000000000000000000000", "author": {"email": "bob@example.com", "user": {"login": "bob"}}},
+            "labels": {"pageInfo": {"hasNextPage": false, "endCursor": "labels-02-end"}, "nodes": [{"name": "bug"}]},
+            "reviews": {
+              "pageInfo": {"hasNextPage": false, "endCursor": "reviews-02-end"},
+              "nodes": [
+                {"id": "PRR_02a", "state": "CHANGES_REQUESTED", "submittedAt": "2026-09-14T11:00:00Z", "body": "Please add a test for empty input.", "author": {"__typename": "User", "login": "ada"}, "comments": {"totalCount": 1}},
+                {"id": "PRR_02b", "state": "COMMENTED", "submittedAt": "2026-09-14T13:00:00Z", "body": "Added the test.", "author": {"__typename": "User", "login": "bob"}, "comments": {"totalCount": 1}},
+                {"id": "PRR_02c", "state": "APPROVED", "submittedAt": "2026-09-15T14:00:00Z", "body": "  \n", "author": {"__typename": "User", "login": "ada"}, "comments": {"totalCount": 0}},
+                {"id": "PRR_02d", "state": "APPROVED", "submittedAt": "2026-09-15T15:00:00Z", "body": "", "author": {"__typename": "User", "login": "renovate-approver"}, "comments": {"totalCount": 0}}
+              ]
+            },
+            "commits": {
+              "pageInfo": {"hasNextPage": false, "endCursor": "Mg"},
+              "nodes": [
+                {"commit": {"oid": "0200000000000000000000000000000000000001", "author": {"email": "bob@example.com", "user": {"login": "bob"}}}},
+                {"commit": {"oid": "0200000000000000000000000000000000000002", "author": {"email": "bob@example.com", "user": {"login": "bob"}}}}
+              ]
+            }
+          },
+          {
+            "id": "PR_04", "number": 4, "title": "chore(deps): bump golang.org/x/text from 0.40.0 to 0.41.0",
+            "state": "MERGED", "isDraft": false, "baseRefName": "main",
+            "createdAt": "2026-09-19T06:00:00Z", "updatedAt": "2026-09-20T11:00:00Z",
+            "closedAt": "2026-09-20T11:00:00Z", "mergedAt": "2026-09-20T11:00:00Z",
+            "author": {"__typename": "Bot", "login": "dependabot"},
+            "mergeCommit": {"oid": "f040000000000000000000000000000000000000", "author": {"email": "49699333+dependabot[bot]@users.noreply.github.com", "user": {"login": "dependabot[bot]"}}},
+            "labels": {"pageInfo": {"hasNextPage": false, "endCursor": "labels-04-end"}, "nodes": [{"name": "dependencies"}]},
+            "reviews": {
+              "pageInfo": {"hasNextPage": false, "endCursor": "reviews-04-end"},
+              "nodes": [
+                {"id": "PRR_04a", "state": "COMMENTED", "submittedAt": "2026-09-19T06:05:00Z", "body": "Copilot reviewed 1 out of 1 changed files in this pull request and generated 1 comment.", "author": {"__typename": "Bot", "login": "copilot-pull-request-reviewer"}, "comments": {"totalCount": 1}},
+                {"id": "PRR_04b", "state": "APPROVED", "submittedAt": "2026-09-20T10:30:00Z", "body": "", "author": {"__typename": "User", "login": "bob"}, "comments": {"totalCount": 0}}
+              ]
+            },
+            "commits": {
+              "pageInfo": {"hasNextPage": false, "endCursor": "MQ"},
+              "nodes": [
+                {"commit": {"oid": "0400000000000000000000000000000000000001", "author": {"email": "49699333+dependabot[bot]@users.noreply.github.com", "user": {"login": "dependabot[bot]"}}}}
+              ]
+            }
+          }
+        ]
+      }
+    }
+  }
+}
