@@ -51,6 +51,9 @@ func (m *Model) writeMarkdown(p *printer) {
 	if m.Kind == KindScan {
 		p.line("- " + historySummary(m))
 	}
+	if s := forgeSummary(m); s != "" {
+		p.line("- " + s)
+	}
 	p.line("- " + repoSummary(m, mdText))
 	if len(m.Metrics) > 0 {
 		var ids []string
@@ -207,7 +210,8 @@ func mdWithBots[R any](p *printer, cols []column, humans, bots []R, row func(R) 
 
 func mdRanks(p *printer, level string, t *RankTable) {
 	p.blank()
-	p.line(level + " Ranks: " + mdID(t.Metric) + ", " + scopeText(t.Scope, mdText, t.Provenance) + ", " + interval(t.Window))
+	p.line(level + " Ranks: " + mdID(t.Metric) + ", " + scopeText(t.Scope, mdText, t.Provenance) + ", " + interval(t.Window) +
+		rankForgeAsOf(t))
 	p.blank()
 	if t.Question != "" {
 		p.line(mdText(t.Question))

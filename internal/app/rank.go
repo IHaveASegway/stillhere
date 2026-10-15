@@ -123,8 +123,10 @@ func rankScopes(kind string, fs *domain.FactSet) []domain.Scope {
 // computed. A scope where nobody has a cluster still gets its table, empty,
 // so that a rank the user asked for never disappears without a word (the
 // report says why). With subject given, only the tables subject is in are
-// kept: a person's own page needs only theirs. It returns the tables for
-// the report and the intervals to store.
+// kept: a person's own page needs only theirs. A stored table counts when it
+// lists subject, because the clusters of a metric that reads GitHub data
+// cannot be recomputed from a stored run. It returns the tables for the
+// report and the intervals to store.
 func rankAll(in *metrics.Input, ms []rankedMetric, scopes []domain.Scope, stored []domain.RankInterval,
 	subject *domain.Subject) ([]report.RankSet, []domain.RankInterval, error) {
 	type key struct {
@@ -145,10 +147,11 @@ func rankAll(in *metrics.Input, ms []rankedMetric, scopes []domain.Scope, stored
 				return nil, nil, fmt.Errorf("ranking %s in %s %s: %w", m.def.ID, s.Kind, s.Key, err)
 			}
 			data := people(ri.Data, in.Who)
-			if subject != nil && len(data[*subject]) == 0 {
+			intervals := prev[key{m.def.ID, s}]
+			if subject != nil && len(data[*subject]) == 0 &&
+				!slices.ContainsFunc(intervals, func(x domain.RankInterval) bool { return x.Subject == *subject }) {
 				continue
 			}
-			intervals := prev[key{m.def.ID, s}]
 			if len(intervals) == 0 && len(data) > 0 {
 				intervals = rank.Intervals(m.def.ID, s, ri.Window, ri.Kind, data, ri.Options)
 			}

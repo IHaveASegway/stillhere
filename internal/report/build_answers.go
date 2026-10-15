@@ -23,6 +23,7 @@ type ExplainInput struct {
 	// Clusters holds, by Repo.Key, the subject's clusters in that
 	// repository's scope: the changes a ranked metric counted for them.
 	Clusters map[string][]rank.Cluster
+	Forge    *ForgeRead // the GitHub data the run read; nil when the reader cannot tell
 }
 
 // NewExplain builds the explain answer: the subject's values and, for a
@@ -64,8 +65,17 @@ func NewExplain(in *ExplainInput) *Explain {
 	}
 	sortChanges(e.Changes)
 	repos := reposWith(in.Facts, involved)
-	e.Provenance = answerProvenance(in.Run, in.Facts, repos, []string{in.Metric.ID})
+	e.Provenance = answerProvenance(in.Run, in.Facts, in.Forge, repos, []string{in.Metric.ID})
 	e.Caveats = answerCaveats(repos)
+	if forgeMetric(in.Metric.ID) {
+		// The pull requests behind the values are in the replica, which a run
+		// does not copy: the stored values stand, unexplained by change.
+		b := answerBuilder(in.Run, in.Facts, in.Forge)
+		e.Caveats = append(e.Caveats, b.forgeCaveats(reposWith(in.Facts, nil))...)
+		if len(in.Values) > 0 {
+			e.Caveats = append(e.Caveats, forgeNotKept(in.Metric.ID))
+		}
+	}
 	if in.Subject.Kind == domain.SubjectPerson {
 		if c, ok := sameName(in.Facts, in.Who, in.Subject.Key); ok {
 			e.Caveats = append(e.Caveats, c)
@@ -101,6 +111,7 @@ type WhoKnowsInput struct {
 	// about the path itself and one per person (MetricWhoKnows in
 	// values.go).
 	Values []domain.MetricValue
+	Forge  *ForgeRead // the GitHub data the run read; nil when the reader cannot tell
 }
 
 // NewWhoKnows builds the who-knows answer: per repository, the majority
@@ -180,7 +191,7 @@ func NewWhoKnows(in *WhoKnowsInput) *WhoKnows {
 		}
 	}
 	slices.SortFunc(w.Repos, func(a, b WhoKnowsRepo) int { return cmp.Or(cmp.Compare(a.Repo, b.Repo), cmp.Compare(a.Key, b.Key)) })
-	w.Provenance = answerProvenance(in.Run, in.Facts, asked, []string{MetricWhoKnows})
+	w.Provenance = answerProvenance(in.Run, in.Facts, in.Forge, asked, []string{MetricWhoKnows})
 	w.Caveats = answerCaveats(asked)
 	if c, ok := whoKnowsMissing(in.Path, asked, ix); ok {
 		w.Caveats = append(w.Caveats, c)
@@ -233,6 +244,7 @@ type MeInput struct {
 	Email  string               // canonical
 	Values []domain.MetricValue // the person's values
 	Ranks  []RankSet            // whole rank tables: the person's place is found in each
+	Forge  *ForgeRead           // the GitHub data the run read; nil when the reader cannot tell
 }
 
 // NewMe builds a person's own page: their values and their place in every
@@ -280,8 +292,10 @@ func NewMe(in *MeInput) *Me {
 		ids = append(ids, id)
 	}
 	repos := reposWith(in.Facts, involved)
-	m.Provenance = answerProvenance(in.Run, in.Facts, repos, ids)
+	m.Provenance = answerProvenance(in.Run, in.Facts, in.Forge, repos, ids)
 	m.Caveats = answerCaveats(repos)
+	// A person's review numbers can come from any repository of the run.
+	m.Caveats = append(m.Caveats, answerBuilder(in.Run, in.Facts, in.Forge).forgeCaveats(reposWith(in.Facts, nil))...)
 	if c, ok := sameName(in.Facts, in.Who, in.Email); ok {
 		m.Caveats = append(m.Caveats, c)
 	}
@@ -289,22 +303,29 @@ func NewMe(in *MeInput) *Me {
 }
 
 // AnswerProvenance says where an answer that covers repos and reads metrics
-// comes from. run may be nil.
+// comes from. run may be nil. It does not date GitHub data (Forge is nil):
+// the answers that show GitHub numbers build their provenance themselves.
 func AnswerProvenance(run *domain.Run, fs *domain.FactSet, metrics []string) Provenance {
 	var repos []*domain.RepoFacts
 	for i := range fs.Repos {
 		repos = append(repos, &fs.Repos[i])
 	}
-	return answerProvenance(run, fs, repos, metrics)
+	return answerProvenance(run, fs, nil, repos, metrics)
 }
 
-func answerProvenance(run *domain.Run, fs *domain.FactSet, repos []*domain.RepoFacts, metrics []string) Provenance {
-	b := &builder{in: &Input{Run: run, Facts: fs}}
+func answerProvenance(run *domain.Run, fs *domain.FactSet, forge *ForgeRead, repos []*domain.RepoFacts, metrics []string) Provenance {
+	b := answerBuilder(run, fs, forge)
 	sorted := slices.Clone(repos)
 	slices.SortFunc(sorted, func(x, y *domain.RepoFacts) int {
 		return cmp.Or(cmp.Compare(x.Repo.Name, y.Repo.Name), cmp.Compare(x.Repo.Key, y.Repo.Key))
 	})
 	return b.provenance(sorted, metrics)
+}
+
+// answerBuilder is the part of a report builder an answer's provenance and
+// caveats read.
+func answerBuilder(run *domain.Run, fs *domain.FactSet, forge *ForgeRead) *builder {
+	return &builder{in: &Input{Run: run, Facts: fs, Forge: forge}}
 }
 
 // AnswerCaveats says what could make an answer drawn from every repository

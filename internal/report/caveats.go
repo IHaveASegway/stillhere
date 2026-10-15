@@ -225,6 +225,7 @@ func (b *builder) runCaveats(m *Model) []Caveat {
 		out = append(out, c)
 	}
 	out = append(out, b.noValues()...)
+	out = append(out, b.forgeCaveats(b.repos)...)
 	if aiShown(m) {
 		out = append(out, aiLowerBound())
 	}

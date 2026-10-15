@@ -1,9 +1,11 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -16,16 +18,28 @@ import (
 	"github.com/IHaveASegway/stillhere/internal/report"
 )
 
-// Scan runs discovery, then history, classification and blame per
-// repository (each one a bulkhead, every blame sharing one pool of --jobs
-// slots), computes every metric and the ranks asked for, stores it all as
-// one run and publishes the run. It returns domain.ErrNoFacts, alongside
-// the report, when no repository produced facts; then nothing is stored.
+// Scan runs discovery, reads the forge replica, then runs history,
+// classification and blame per repository (each one a bulkhead, every blame
+// sharing one pool of --jobs slots), computes every metric and every rank,
+// stores it all as one run and publishes the run. It returns
+// domain.ErrNoFacts, alongside the report, when no repository produced
+// facts; then nothing is stored.
 //
 // The run is written only after everything is computed, so it is "running"
 // for as short a time as possible, and a scan that fails before then leaves
 // nothing behind. Readers never see it until FinishRun flips it to complete
 // or partial (docs/spec/codebase.md#run-model).
+//
+// GitHub data comes from the replica that sync github keeps in facts.db
+// (Deps.ForgeStore), never from the network (ADR 0004). The scan reads it
+// once, before any git process starts, and records the watermarks it read
+// with the run, which date its forge numbers for every later reader. An
+// empty replica is normal: the run then has no GitHub data, and every
+// forge-based value is absent, never zero. A replica that cannot be read
+// stops the scan: it is the facts.db the run would be written to, so the
+// run could most likely not be stored either, and a run published without
+// the GitHub data the replica holds would read as "not synced", plausible
+// but wrong (fail fast: Shore, "Fail Fast", IEEE Software, 2004).
 func Scan(ctx context.Context, d Deps, r ScanRequest) (*report.Model, error) {
 	d, err := d.ready("app.Scan", true, true, true)
 	if err != nil {
@@ -61,8 +75,13 @@ func Scan(ctx context.Context, d Deps, r ScanRequest) (*report.Model, error) {
 	}
 	timings.DiscoverMS = time.Since(started).Milliseconds()
 
-	start := time.Now()
 	window := domain.Window{Since: r.Now.Add(-scanHistoryDays * 24 * time.Hour), Until: r.Now}
+	replica, err := loadReplica(ctx, d, window.Since)
+	if err != nil {
+		return nil, err
+	}
+
+	start := time.Now()
 	results, err := collectAll(ctx, pl.jobs, jobs, collector(d, collectOptions{
 		mode: collect.HistoryScan, window: window, ignoreRevsFile: r.IgnoreRevsFile,
 		// One slot per running git blame, shared by every repository.
@@ -75,6 +94,12 @@ func Scan(ctx context.Context, d Deps, r ScanRequest) (*report.Model, error) {
 	timings.Repos = repoTimings(results)
 
 	fs := factSet(r.Now, d.Policy, pl, results)
+	fs.Forge = replica
+	var forge *report.ForgeRead // nil without the replica port: the scan cannot speak for the replica, as a reader without it cannot
+	var watermarks []domain.ForgeWatermark
+	if d.ForgeStore != nil {
+		forge, watermarks = runForge(fs)
+	}
 	who := identity.New(fs, d.Policy)
 	landed := report.Landed{Days: d.Policy.Week.Days, Sort: d.Policy.Week.Sort}
 	build := func(run *domain.Run, values []domain.MetricValue, sets []report.RankSet) *report.Model {
@@ -82,6 +107,7 @@ func Scan(ctx context.Context, d Deps, r ScanRequest) (*report.Model, error) {
 		return report.Build(&report.Input{
 			Kind: report.KindScan, Tool: d.Version, Run: run, Facts: fs, Policy: d.Policy, Who: who,
 			Values: values, Ranks: sets, Landed: landed, History: window, Timings: timings, Scope: scope,
+			Forge: forge,
 		})
 	}
 	if !produced(fs) {
@@ -96,10 +122,17 @@ func Scan(ctx context.Context, d Deps, r ScanRequest) (*report.Model, error) {
 	}
 	timings.MetricsMS = time.Since(start).Milliseconds()
 	start = time.Now()
-	sets, intervals, err := rankAll(in, ranked, rankScopes(scope, fs), nil, nil)
+	// Every ranked metric is ranked in every scope and stored with the run,
+	// whichever ones --rank names: a rank of GitHub data cannot be computed
+	// again from the stored run, which keeps the watermarks it read and not
+	// the pull requests (docs/spec/codebase.md#run-model), and one rule for
+	// every metric leaves no metric to forget. A reader uses the stored
+	// ranks; --rank picks the tables this report prints.
+	all, intervals, err := rankAll(in, allRanked(), rankScopes(scope, fs), nil, nil)
 	if err != nil {
 		return nil, err
 	}
+	sets := chosenSets(all, ranked)
 	timings.RankMS = time.Since(start).Milliseconds()
 
 	start = time.Now()
@@ -108,7 +141,7 @@ func Scan(ctx context.Context, d Deps, r ScanRequest) (*report.Model, error) {
 		ToolVersion: d.Version, Policy: d.Policy.Ref(), PolicySource: d.Policy.Source,
 		Options: scanOptions(r, d, pl, jobs, scope, ranked),
 	}
-	id, err := storeRun(ctx, d.Store, run, fs, values, intervals)
+	id, err := storeRun(ctx, d, run, fs, values, intervals, watermarks)
 	timings.StoreMS = time.Since(start).Milliseconds()
 	if err != nil {
 		if ctx.Err() != nil {
@@ -174,9 +207,11 @@ func scanOptions(r ScanRequest, d Deps, pl *plan, jobs int, scope string, ranked
 
 // storeRun writes a run and publishes it with run.Status. If any write
 // fails, the run is marked failed, which hides it from every reader, even
-// when ctx was cancelled.
-func storeRun(ctx context.Context, s domain.FactStore, run domain.Run, fs *domain.FactSet,
-	values []domain.MetricValue, ranks []domain.RankInterval) (int64, error) {
+// when ctx was cancelled. The forge watermarks the run read are recorded
+// while it is still running, so no reader sees the run without them.
+func storeRun(ctx context.Context, d Deps, run domain.Run, fs *domain.FactSet,
+	values []domain.MetricValue, ranks []domain.RankInterval, watermarks []domain.ForgeWatermark) (int64, error) {
+	s := d.Store
 	status := run.Status
 	run.Status = domain.RunStatusRunning
 	id, err := s.BeginRun(ctx, run)
@@ -199,6 +234,12 @@ func storeRun(ctx context.Context, s domain.FactStore, run domain.Run, fs *domai
 	if err := s.PutRunFacts(ctx, id, fs.Groups, fs.Warnings); err != nil {
 		return abort(fmt.Errorf("storing run %d's groups and warnings: %w", id, err))
 	}
+	// Watermarks come only from a replica the ForgeStore loaded.
+	if len(watermarks) > 0 && d.ForgeStore != nil {
+		if err := d.ForgeStore.PutRunWatermarks(ctx, id, watermarks); err != nil {
+			return abort(fmt.Errorf("storing run %d's forge watermarks: %w", id, err))
+		}
+	}
 	if err := s.PutMetrics(ctx, id, values, ranks); err != nil {
 		return abort(fmt.Errorf("storing run %d's metrics: %w", id, err))
 	}
@@ -206,4 +247,132 @@ func storeRun(ctx context.Context, s domain.FactStore, run domain.Run, fs *domai
 		return abort(fmt.Errorf("publishing run %d: %w", id, err))
 	}
 	return id, nil
+}
+
+// loadReplica reads the forge replica a scan computes over (FactSet.Forge):
+// every repository and watermark, and the pull requests updated since the
+// start of the history window, which holds every metric's window. It returns
+// nil without the replica port, and for an empty replica: the run then has
+// no GitHub data.
+func loadReplica(ctx context.Context, d Deps, since time.Time) (*domain.ForgeFacts, error) {
+	if d.ForgeStore == nil {
+		return nil, nil
+	}
+	f, err := d.ForgeStore.LoadForge(ctx, since)
+	if err != nil {
+		return nil, fmt.Errorf("reading the GitHub data in facts.db, before collecting anything: %w", err)
+	}
+	if f == nil {
+		d.Log.Info("no GitHub data in facts.db: forge-based metrics get no values ('stillhere sync github' copies it)")
+		return nil, nil
+	}
+	d.Log.Info("read the GitHub data in facts.db", "forge_repos", len(f.Repos), "pull_requests", len(f.PullRequests))
+	return f, nil
+}
+
+// runForge returns the GitHub data the run read: the watermark of each
+// forge repository whose clone URL names the same host, owner and name as
+// the origin of one of the run's repositories (domain.RemoteRepo, the join
+// reviews_given@1 counts by), for the report and for the store, where they
+// date the run's forge numbers (ForgeStore.PutRunWatermarks). The replica's
+// other repositories, such as another organization's, are none of the run's
+// business. A forge repository the replica holds no watermark for gets a
+// zero one: the run read none of its pull requests.
+func runForge(fs *domain.FactSet) (*report.ForgeRead, []domain.ForgeWatermark) {
+	read := &report.ForgeRead{}
+	if fs.Forge == nil {
+		return read, nil
+	}
+	origins := originsOf(fs.Repos)
+	marks := make(map[string]domain.ForgeWatermark, len(fs.Forge.Watermarks))
+	for _, wm := range fs.Forge.Watermarks {
+		marks[wm.Repo] = wm
+	}
+	var watermarks []domain.ForgeWatermark
+	for _, r := range fs.Forge.Repos {
+		name, ok := domain.RemoteRepo(r.Key)
+		if !ok || len(origins[name]) == 0 {
+			continue
+		}
+		wm, ok := marks[r.ID]
+		if !ok {
+			wm = domain.ForgeWatermark{Repo: r.ID}
+		}
+		watermarks = append(watermarks, wm)
+	}
+	slices.SortFunc(watermarks, func(a, b domain.ForgeWatermark) int { return cmp.Compare(a.Repo, b.Repo) })
+	read.Repos = forgeSyncs(fs.Repos, fs.Forge.Repos, watermarks)
+	return read, watermarks
+}
+
+// forgeSyncs dates a run's GitHub data for the report: one ForgeSync for
+// each watermark and each of the run's repositories whose origin names the
+// watermark's forge repository in listing, sorted by forge repository, then
+// key. A watermark whose forge repository no repository of the run names
+// any more, as after a rename on the forge since the run read it, gets one
+// with no key: it still dates the run, though no section can claim it.
+func forgeSyncs(repos []domain.RepoFacts, listing []domain.ForgeRepo, watermarks []domain.ForgeWatermark) []report.ForgeSync {
+	origins := originsOf(repos)
+	byID := make(map[string]domain.ForgeRepo, len(listing))
+	for _, r := range listing {
+		byID[r.ID] = r
+	}
+	var out []report.ForgeSync
+	for _, wm := range watermarks {
+		name, keys := wm.Repo, []string(nil) // the node id, when the replica no longer lists it
+		if r, ok := byID[wm.Repo]; ok {
+			name = r.Owner + "/" + r.Name
+			if remote, ok := domain.RemoteRepo(r.Key); ok {
+				keys = origins[remote]
+			}
+		}
+		if len(keys) == 0 {
+			keys = []string{""}
+		}
+		for _, key := range keys {
+			out = append(out, report.ForgeSync{Repo: name, Key: key, Updated: instant(wm.Updated), Synced: instant(wm.Synced)})
+		}
+	}
+	slices.SortFunc(out, func(a, b report.ForgeSync) int { return cmp.Or(cmp.Compare(a.Repo, b.Repo), cmp.Compare(a.Key, b.Key)) })
+	return out
+}
+
+// originsOf maps each repository a run's origins name (domain.RemoteRepo)
+// to the keys of the run's repositories with that origin: one, unless the
+// run scanned two clones of it, such as an SSH and an HTTPS one. A
+// repository without an origin, or with a local one, names none.
+func originsOf(repos []domain.RepoFacts) map[string][]string {
+	out := map[string][]string{}
+	for i := range repos {
+		r := &repos[i].Repo
+		if name, ok := domain.RemoteRepo(r.Remote); ok {
+			out[name] = append(out[name], r.Key)
+		}
+	}
+	return out
+}
+
+// instant is t in UTC, or nil for the zero time, which a watermark uses for
+// "not yet".
+func instant(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	t = t.UTC()
+	return &t
+}
+
+// chosenSets keeps the rank tables of the metrics --rank named, in the
+// order named, each in its scopes' order.
+func chosenSets(sets []report.RankSet, named []rankedMetric) []report.RankSet {
+	var out []report.RankSet
+	for _, m := range named {
+		id := m.def.ID.String()
+		for _, s := range sets {
+			if s.Metric.ID == id {
+				out = append(out, s)
+			}
+		}
+	}
+	return out
 }

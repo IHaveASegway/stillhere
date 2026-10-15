@@ -209,6 +209,10 @@ type Provenance struct {
 	Policy  string    `json:"policy"`  // the policy's sha256
 	Heads   []Head    `json:"heads"`   // every repository the section covers, sorted by name and key
 	Metrics []string  `json:"metrics"` // metric@version of every number in the section, sorted
+	// Forge is the GitHub data the run read for the repositories in Heads,
+	// which dates every number computed from the forge replica (ADR 0004);
+	// null when they had none, and in a week report.
+	Forge *ForgeProvenance `json:"forge"`
 }
 
 // Head is the commit a repository was read at.

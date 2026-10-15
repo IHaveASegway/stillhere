@@ -51,6 +51,9 @@ func textHeader(p *printer, m *Model) {
 	if m.Kind == KindScan {
 		p.line(historySummary(m))
 	}
+	if s := forgeSummary(m); s != "" {
+		p.wrapped("", "  ", s)
+	}
 	p.wrapped("", "  ", repoSummary(m, clean))
 	if len(m.Metrics) > 0 {
 		p.wrapped("metrics ", "  ", strings.Join(m.Metrics, ", "))
@@ -336,7 +339,8 @@ func withBots[R any](humans, bots []R, row func(R) []string, width int) [][]stri
 }
 
 func textRanks(p *printer, t *RankTable) {
-	p.wrapped("", "  ", "Ranks · "+clean(t.Metric)+" · "+scopeText(t.Scope, clean, t.Provenance)+" · "+interval(t.Window))
+	p.wrapped("", "  ", "Ranks · "+clean(t.Metric)+" · "+scopeText(t.Scope, clean, t.Provenance)+" · "+interval(t.Window)+
+		rankForgeAsOf(t))
 	if t.Question != "" {
 		p.wrapped("  ", "  ", clean(t.Question))
 	}
@@ -363,6 +367,15 @@ func textRanks(p *printer, t *RankTable) {
 	}
 	p.wrapped("  ", "  ", rankFooter(t))
 	textCaveats(p, "  ", "What could make this wrong", t.Caveats, true)
+}
+
+// rankForgeAsOf dates a rank table of a metric that reads GitHub data, and
+// is "" for any other.
+func rankForgeAsOf(t *RankTable) string {
+	if !forgeMetric(t.Metric) {
+		return ""
+	}
+	return forgeAsOf(t.Provenance.Forge)
 }
 
 // rankFooter explains how to read a rank table, as product.md shows it.

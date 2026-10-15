@@ -36,13 +36,21 @@ const finishTimeout = 10 * time.Second
 // Deps are the ports and settings a use case runs with, built by the
 // composition root in internal/cli.
 type Deps struct {
-	Git        domain.GitRunner   // nil for commands that only read facts.db
-	Store      domain.FactStore   // nil for week
-	Forge      domain.ForgeSource // sync only: the forge's API
-	ForgeStore domain.ForgeStore  // sync only: the forge replica in facts.db
-	Policy     *policy.Policy     // week and scan only; a read use case rebuilds the run's own (policy.FromSource on Run.PolicySource)
-	Log        *slog.Logger       // progress and warnings, on stderr; nil discards them
-	Version    string             // the tool version recorded on every run
+	Git   domain.GitRunner   // nil for commands that only read facts.db
+	Store domain.FactStore   // nil for week
+	Forge domain.ForgeSource // sync only: the forge's API
+	// ForgeStore is the forge replica in facts.db, the same store as Store:
+	// sync writes it; scan reads it (LoadForge) and records the watermarks
+	// it read (PutRunWatermarks); the read use cases read those back
+	// (RunWatermarks) to say when a run's GitHub data was synced. With nil,
+	// a scan reads no GitHub data, and neither a scan nor a reader says
+	// anything about it, provenance or caveat: they cannot speak for a
+	// replica they were not given, and so a stored run renders as its scan
+	// did.
+	ForgeStore domain.ForgeStore
+	Policy     *policy.Policy // week and scan only; a read use case rebuilds the run's own (policy.FromSource on Run.PolicySource)
+	Log        *slog.Logger   // progress and warnings, on stderr; nil discards them
+	Version    string         // the tool version recorded on every run
 }
 
 // ready returns d with a logger, after checking that it holds the ports op
