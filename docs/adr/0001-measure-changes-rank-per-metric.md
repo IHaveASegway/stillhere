@@ -38,7 +38,7 @@ Rules also apply when people are ranked. The EU AI Act (Annex III 4(b)) treats *
 
 ### Before anyone uses this for performance reviews or pay
 
-Not supported in v1. An organization that wants it would need, at minimum: notice to staff before use; self-access (already built); a way for a person to annotate or contest a number; an audit log of who viewed ranked data (already built); a works-council agreement where one applies; a person, not the tool, making every decision; retention limits; and AI kept out of the ranking path.
+Not supported in v1. An organization that wants it would need, at minimum: notice to staff before use; self-access (already built); a way for a person to annotate or contest a number; an audit log of who viewed ranked data (M3, not built); a works-council agreement where one applies; a person, not the tool, making every decision; retention limits; and AI kept out of the ranking path.
 
 ## Door
 
