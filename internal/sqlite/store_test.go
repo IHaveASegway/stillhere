@@ -23,8 +23,9 @@ import (
 // put in, and a zero as +0; Run(id) returns the run as begun and finished,
 // policy source included; RunWatermarks returns the forge watermarks the
 // run read as they were last put, each with its name and the run's
-// repositories it joined (domain.RunWatermark); and readers never see a
-// running or failed run.
+// repositories it joined (domain.RunWatermark); RunForge returns the GitHub
+// data the run kept as it was last put, with those watermarks and that join
+// (ADR 0011); and readers never see a running or failed run.
 func TestStoreRoundTrip(t *testing.T) {
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "home", "facts.db") // Open creates the directory
@@ -86,6 +87,19 @@ func TestStoreRoundTrip(t *testing.T) {
 	}
 	if err := s.PutRunWatermarks(ctx, id, []domain.RunWatermark{{ForgeWatermark: domain.ForgeWatermark{Repo: "R_api"}}}); err == nil {
 		t.Error("PutRunWatermarks took a watermark that joins none of the run's repositories")
+	}
+	// The GitHub data the run read, whole. A second call replaces the
+	// first, and a pull request of a repository that is not the run's is
+	// refused.
+	repos, pulls := sampleRunForge(zone)
+	if err := s.PutRunForge(ctx, id, repos[:1], pulls[:1]); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutRunForge(ctx, id, repos, pulls); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutRunForge(ctx, id, repos[:1], pulls); err == nil {
+		t.Error("PutRunForge took a pull request of a repository that is not among the run's")
 	}
 	before := time.Now().UTC()
 	if err := s.FinishRun(ctx, id, domain.RunStatusComplete); err != nil {
@@ -161,6 +175,26 @@ func TestStoreRoundTrip(t *testing.T) {
 		}
 	})
 
+	t.Run("RunForge returns the GitHub data as put, with its watermarks and join", func(t *testing.T) {
+		got, err := s.RunForge(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		repos, pulls := sampleRunForge(time.UTC)
+		want := &domain.ForgeFacts{Repos: repos, PullRequests: pulls}
+		for _, wm := range sampleRunWatermarks(time.UTC) {
+			want.Watermarks = append(want.Watermarks, wm.ForgeWatermark)
+			if want.Join == nil {
+				want.Join = map[string][]string{}
+			}
+			want.Join[wm.Repo] = wm.Keys
+		}
+		wantEqual(t, "RunForge", want, got)
+		if err := s.PutRunForge(ctx, id, repos, pulls); err == nil {
+			t.Error("PutRunForge changed a published run")
+		}
+	})
+
 	t.Run("a failed run is invisible, and a partial one is published", func(t *testing.T) {
 		later := run
 		later.Now = run.Now.Add(24 * time.Hour)
@@ -203,6 +237,9 @@ func TestStoreRoundTrip(t *testing.T) {
 		if marks, err := s.RunWatermarks(ctx, partial); err != nil || marks != nil {
 			t.Errorf("RunWatermarks of a run that read no GitHub data = %v, %v; want nil", marks, err)
 		}
+		if github, err := s.RunForge(ctx, partial); err != nil || github != nil {
+			t.Errorf("RunForge of a run that read no GitHub data = %+v, %v; want nil", github, err)
+		}
 		wantNotFound(t, s, partial+1000)
 	})
 
@@ -239,6 +276,9 @@ func wantNotFound(t *testing.T, s *sqlite.Store, id int64) {
 	if _, err := s.RunWatermarks(ctx, id); !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("RunWatermarks(%d) = %v, want ErrNotFound", id, err)
 	}
+	if _, err := s.RunForge(ctx, id); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("RunForge(%d) = %v, want ErrNotFound", id, err)
+	}
 }
 
 // sampleRunWatermarks are the forge watermarks of the sample run, with
@@ -258,6 +298,44 @@ func sampleRunWatermarks(zone *time.Location) []domain.RunWatermark {
 		Name:           "acme/docs",
 		Keys:           []string{"https://github.com/acme/docs"},
 	}}
+}
+
+// sampleRunForge is the GitHub data the sample run kept, with times in
+// zone: the forge repositories of its watermarks, and their pull requests
+// with every field set somewhere and every list empty somewhere (nil), as
+// LoadForge sorts them.
+func sampleRunForge(zone *time.Location) ([]domain.ForgeRepo, []domain.PullRequest) {
+	at := func(day, hour int) time.Time {
+		return time.Date(2026, time.September, day, hour, 0, 0, 0, time.UTC).In(zone)
+	}
+	repos := []domain.ForgeRepo{
+		{ID: "R_api", Key: "https://github.com/acme/api.git", Owner: "acme", Name: "api", DefaultBranch: "main"},
+		{ID: "R_docs", Key: "https://github.com/acme/docs.git", Owner: "acme", Name: "docs", Archived: true, Fork: true},
+	}
+	pulls := []domain.PullRequest{{
+		ID: "PR_1", Repo: "R_api", Number: 1, Title: "Fix the Grüße parser", Author: domain.ForgeUser{Login: "ada"},
+		State: domain.PullMerged, BaseBranch: "main", Created: at(1, 9), Updated: at(3, 12), Closed: at(3, 12), Merged: at(3, 12),
+		MergeCommit: domain.ForgeCommit{SHA: sha('f'), AuthorEmail: "ada@example.com", AuthorLogin: "ada"},
+		Labels:      []string{"bug", "parser"},
+		Reviews: []domain.Review{
+			{ID: "PRR_1", Author: domain.ForgeUser{Login: "renovate", Bot: true}, State: domain.ReviewCommented, Submitted: at(2, 9),
+				BodyLength: 12, Comments: 3},
+			{ID: "PRR_2", Author: domain.ForgeUser{Login: "bob"}, State: domain.ReviewApproved, Submitted: at(2, 10)},
+		},
+		Commits: []domain.ForgeCommit{
+			{SHA: sha('c'), AuthorEmail: "ada@example.com", AuthorLogin: "ada"},
+			{SHA: sha('d'), AuthorEmail: "ada@other.example"},
+		},
+	}, {
+		ID: "PR_2", Repo: "R_api", Number: 2, Title: "Draft", Author: domain.ForgeUser{Login: "bob"}, State: domain.PullOpen,
+		Draft: true, BaseBranch: "main", Created: at(4, 9), Updated: at(4, 9),
+		Commits: []domain.ForgeCommit{{SHA: sha('e'), AuthorEmail: "bob@example.com", AuthorLogin: "bob"}},
+	}, {
+		ID: "PR_3", Repo: "R_docs", Number: 7, Title: "Typo", State: domain.PullClosed, BaseBranch: "gh-pages",
+		Created: at(5, 9), Updated: at(6, 9), Closed: at(6, 9), // a deleted author: no login
+		Reviews: []domain.Review{{ID: "PRR_3", Author: domain.ForgeUser{Login: "ada"}, State: domain.ReviewDismissed, Submitted: at(5, 10)}},
+	}}
+	return repos, pulls
 }
 
 // wantEqual fails the test unless got is reflect.DeepEqual to want, naming

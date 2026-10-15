@@ -301,7 +301,9 @@ func runForge(repos []domain.RepoFacts, replica *domain.ForgeFacts) (*domain.For
 	for _, wm := range replica.Watermarks {
 		marks[wm.Repo] = wm
 	}
-	own := &domain.ForgeFacts{}
+	// The join travels with the data: the metrics count by it, and the
+	// watermarks record it (their Keys), so the run has one join, made here.
+	own := &domain.ForgeFacts{Join: join}
 	var watermarks []domain.RunWatermark
 	for _, r := range replica.Repos {
 		keys := join[r.ID]

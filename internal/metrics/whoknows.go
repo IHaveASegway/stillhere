@@ -42,7 +42,8 @@ func (whoKnowsV1) Definition() Definition {
 			"nor landed or reviewed a change under it recently, does not appear. Reviews count only in repositories whose " +
 			"GitHub data the run read, on pull requests that landed on the default branch: one merged into another branch, " +
 			"which reached it inside another landing, does not count. A rebase merge whose commits GitHub committed in " +
-			"different seconds counts its last commit only.",
+			"different seconds counts its last commit only, and a commit pushed straight to the branch, with no pull " +
+			"request, in the same second as a squash of several commits and just before it counts as that pull request's.",
 		Gaming:   "Not a target: appearing in it earns nothing but questions.",
 		Oracle:   "testdata/fixture/SPEC.md#who_knows1-main-fixture and #reviews-in-knowledge_loss1-and-who_knows1-main-fixture",
 		Validity: "Context. Mockus and Herbsleb, \"Expertise Browser\" (ICSE 2002), routed questions by the same experience atoms (changes). " + survivingValidity,
@@ -81,9 +82,10 @@ func WhoKnows(in *Input, repo, prefix string) ([]domain.MetricValue, error) {
 	}
 	clean := cleanPrefix(prefix)
 	w := v.window(recentDays, 0)
+	reviews := v.reviews() // once for every repository asked about
 	var out []domain.MetricValue
 	for _, r := range v.repos {
-		out = append(out, whoKnows(v, r, clean, w)...)
+		out = append(out, whoKnows(v, reviews, r, clean, w)...)
 	}
 	return sorted(out), nil
 }
@@ -117,8 +119,9 @@ func cleanPrefix(p string) string {
 	return strings.TrimPrefix(path.Clean("/"+p), "/")
 }
 
-// whoKnows answers for one repository.
-func whoKnows(v *view, r *repoView, prefix string, w domain.Window) []domain.MetricValue {
+// whoKnows answers for one repository, its reviewers from the view's
+// GitHub data, indexed once per query.
+func whoKnows(v *view, reviews *reviewsIndex, r *repoView, prefix string, w domain.Window) []domain.MetricValue {
 	under := func(p string) bool {
 		return prefix == "" || p == prefix || strings.HasPrefix(p, prefix+"/")
 	}
@@ -165,7 +168,7 @@ func whoKnows(v *view, r *repoView, prefix string, w domain.Window) []domain.Met
 	// landings changed a path under the query, as a lander's change counts.
 	// The review's time is what makes it recent, so a pull request that
 	// landed earlier counts for a review in w.
-	pulls, reviewed := v.reviewsLandings(r)
+	pulls, reviewed := reviews.landings(r)
 	for _, pl := range pulls {
 		if !slices.ContainsFunc(pl.landings, func(l *landingView) bool { return l.changedUnder(r, under) }) {
 			continue

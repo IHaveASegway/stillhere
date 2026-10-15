@@ -21,11 +21,14 @@ import (
 // one, and every expected value is a literal from that section. Its
 // top-level names carry the prefix review, apart from the harness's.
 
-// The forge repository the fixture's origin names, and when its sync
-// started: the as-of time the run reads.
+// The forge repositories the origins of the main fixture and of the
+// merge-methods guard name, and when their sync started: the as-of time the
+// runs read.
 var (
 	reviewRepo = domain.ForgeRepo{ID: "R_fixture", Key: "https://git.example.test/acme/fixture.git",
 		Owner: "acme", Name: "fixture", DefaultBranch: "main"}
+	reviewMergesRepo = domain.ForgeRepo{ID: "R_merges", Key: "https://git.example.test/acme/merge-methods.git",
+		Owner: "acme", Name: "merge-methods", DefaultBranch: "main"}
 	reviewSynced = reviewAt(time.October, 6, 22)
 )
 
@@ -37,12 +40,15 @@ func reviewAt(month time.Month, day, hour int) time.Time {
 // reviewOracles checks SPEC's review oracles on the main fixture: reviews
 // as knowledge_loss@1's activity, who_knows@1's recent reviewers, the logins
 // both resolve as reviews_given@1 does, and a stored run that a later sync
-// leaves as it was.
+// leaves as it was; and on the merge-methods guard, how pull requests land.
 func reviewOracles(t *testing.T) {
+	t.Run("merge methods", func(t *testing.T) { t.Parallel(); reviewMergeMethods(t) })
 	repo := fixture.Main(t)
 	setOrigin(t, repo, reviewRepo.Key)
 	commits := reviewCommits(t, repo)
-	s := scan(t, fixture.Mailmap(t), nil, scanRanked(repo), func(st *sqlite.Store) { reviewSeed(t, st, commits) })
+	s := scan(t, fixture.Mailmap(t), nil, scanRanked(repo), func(st *sqlite.Store) {
+		reviewSeed(t, st, reviewRepo, reviewPulls(commits), reviewAt(time.October, 6, 16))
+	})
 	r := onlyRepo(t, s.model)
 	if r.Key != reviewRepo.Key {
 		t.Fatalf("the fixture's key is %s, want its origin %s", r.Key, reviewRepo.Key)
@@ -148,6 +154,32 @@ func reviewOracles(t *testing.T) {
 	})
 }
 
+// reviewMergeMethods checks SPEC's merge-methods guard: a rebase merge lands
+// as the first-parent commits that share its committer second, and a squash
+// of several commits does not take, in the same second, the landing of
+// another pull request.
+func reviewMergeMethods(t *testing.T) {
+	repo := fixture.MergeMethods(t)
+	setOrigin(t, repo, reviewMergesRepo.Key)
+	shas := reviewSubjects(t, repo)
+	s := scan(t, "", nil, scanRanked(repo), func(st *sqlite.Store) {
+		reviewSeed(t, st, reviewMergesRepo, reviewMergesPulls(shas), reviewAt(time.October, 2, 12))
+	})
+	r := onlyRepo(t, s.model)
+	for _, c := range []struct {
+		path string
+		want map[string]int
+	}{
+		{"base.py", map[string]int{}},
+		{"one.py", map[string]int{"@sam": 1}},
+		{"two.py", map[string]int{"@sam": 1}},
+		{"a.py", map[string]int{"@rita": 1}},
+		{"b.py", map[string]int{"@tess": 1}},
+	} {
+		reviewCheckReviewers(t, "SPEC merge methods, who_knows@1, "+c.path, s.whoKnows(t, c.path), r.Key, c.want)
+	}
+}
+
 // reviewCheckReviewers compares an answer's recent reviewers in repository
 // key, and each one's pull requests, with SPEC's.
 func reviewCheckReviewers(t *testing.T, oracle string, w *report.WhoKnows, key string, want map[string]int) {
@@ -170,24 +202,51 @@ func reviewCheckReviewers(t *testing.T, oracle string, w *report.WhoKnows, key s
 // are for debugging.
 func reviewCommits(t *testing.T, repo string) map[string]string {
 	t.Helper()
-	git, err := gitcli.New(t.Context(), gitcli.Config{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	out, err := git.Run(t.Context(), domain.GitCmd{Dir: repo, Args: []string{"log", "--all", "--format=%H %ct"}})
-	if err != nil {
-		t.Fatal(err)
-	}
 	shas := map[string]string{}
-	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
-		sha, unix, ok := strings.Cut(line, " ")
+	for sha, unix := range reviewLog(t, repo, "%ct") {
 		sec, err := strconv.ParseInt(unix, 10, 64)
-		if !ok || err != nil {
-			t.Fatalf("git log printed %q", line)
+		if err != nil {
+			t.Fatalf("git log printed %q for %s", unix, sha)
 		}
 		shas[rfc3339(time.Unix(sec, 0))] = sha
 	}
 	return shas
+}
+
+// reviewSubjects maps the subject of each of the merge-methods guard's
+// commits, as SPEC's rows give it, to its SHA: its commits share committer
+// times, so its rows are told apart by what they add.
+func reviewSubjects(t *testing.T, repo string) map[string]string {
+	t.Helper()
+	shas := map[string]string{}
+	for sha, subject := range reviewLog(t, repo, "%s") {
+		shas[subject] = sha
+	}
+	return shas
+}
+
+// reviewLog returns, for every commit of repo, its SHA and what format (a
+// git log placeholder) prints for it, read with git through the runner the
+// command line uses.
+func reviewLog(t *testing.T, repo, format string) map[string]string {
+	t.Helper()
+	git, err := gitcli.New(t.Context(), gitcli.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := git.Run(t.Context(), domain.GitCmd{Dir: repo, Args: []string{"log", "--all", "--format=%H " + format}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	log := map[string]string{}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		sha, value, ok := strings.Cut(line, " ")
+		if !ok {
+			t.Fatalf("git log printed %q", line)
+		}
+		log[sha] = value
+	}
+	return log
 }
 
 // reviewPulls is SPEC's replica: the six pull requests of acme/fixture,
@@ -227,9 +286,9 @@ func reviewPulls(commits map[string]string) []domain.PullRequest {
 			bot,
 			review("PRR_4d", "bob", domain.ReviewCommented, reviewAt(time.October, 5, 10)),
 			review("PRR_4e", "cara", domain.ReviewApproved, reviewAt(time.October, 5, 11))),
-		{ID: "PR_5", Repo: reviewRepo.ID, Number: 5, Title: "t5", Author: user("bob"), State: domain.PullOpen,
+		{ID: "PR_5", Repo: reviewRepo.ID, Number: 5, Title: "t5", Author: user("gina"), State: domain.PullOpen,
 			BaseBranch: "main", Created: reviewAt(time.May, 1, 9), Updated: reviewAt(time.May, 20, 10),
-			Commits: []domain.ForgeCommit{unlanded("5", "bob")},
+			Commits: []domain.ForgeCommit{unlanded("5", "gina")},
 			Reviews: []domain.Review{review("PRR_5a", "gina", domain.ReviewCommented, reviewAt(time.May, 20, 10))}},
 		merged(6, "erin", reviewAt(time.October, 4, 9), reviewAt(time.October, 6, 16), landed(reviewAt(time.October, 6, 16), "erin"),
 			[]domain.ForgeCommit{unlanded("6", "erin"), unlanded("7", "erin")},
@@ -237,20 +296,49 @@ func reviewPulls(commits map[string]string) []domain.PullRequest {
 	}
 }
 
-// reviewSeed stores SPEC's replica as a sync would: the repository, one page
-// whose watermark is #6's update, and the sync that started at
-// reviewSynced.
-func reviewSeed(t *testing.T, s *sqlite.Store, commits map[string]string) {
+// reviewMergesPulls is SPEC's replica of the merge-methods guard: the three
+// pull requests of acme/merge-methods, with their merge commits found by
+// subject in shas.
+func reviewMergesPulls(shas map[string]string) []domain.PullRequest {
+	user := func(login string) domain.ForgeUser { return domain.ForgeUser{Login: login} }
+	commit := func(sha, login string) domain.ForgeCommit {
+		return domain.ForgeCommit{SHA: sha, AuthorEmail: login + "@example.com", AuthorLogin: login}
+	}
+	unlanded := func(c byte, login string) domain.ForgeCommit { // written before the merge: no run holds it
+		return commit(strings.Repeat(string(c), 40), login)
+	}
+	merged := func(n int, author string, at time.Time, merge string, commits []domain.ForgeCommit, reviewer string,
+		submitted time.Time) domain.PullRequest {
+		id := "PR_m" + strconv.Itoa(n)
+		return domain.PullRequest{ID: id, Repo: reviewMergesRepo.ID, Number: n, Title: "m" + strconv.Itoa(n), Author: user(author),
+			State: domain.PullMerged, BaseBranch: "main", Created: at.Add(-72 * time.Hour), Updated: at, Closed: at, Merged: at,
+			MergeCommit: commit(shas[merge], author), Commits: commits,
+			Reviews: []domain.Review{{ID: id + "a", Author: user(reviewer), State: domain.ReviewApproved, Submitted: submitted}}}
+	}
+	return []domain.PullRequest{
+		merged(1, "rob", reviewAt(time.October, 1, 12), "feat: add two.py", // R2, after R1 in the same second
+			[]domain.ForgeCommit{unlanded('8', "rob"), unlanded('9', "rob")}, "sam", reviewAt(time.October, 1, 9)),
+		merged(2, "ali", reviewAt(time.October, 2, 12), "feat: add a.py", // S1
+			[]domain.ForgeCommit{unlanded('a', "ali")}, "rita", reviewAt(time.October, 2, 9)),
+		merged(3, "bo", reviewAt(time.October, 2, 12), "feat: add b.py", // S2, after S1 in the same second
+			[]domain.ForgeCommit{unlanded('b', "bo"), unlanded('c', "bo")}, "tess", reviewAt(time.October, 2, 10)),
+	}
+}
+
+// reviewSeed stores a SPEC replica as a sync would: the forge repository,
+// one page of its pull requests with watermark updated, and the sync that
+// started at reviewSynced.
+func reviewSeed(t *testing.T, s *sqlite.Store, repo domain.ForgeRepo, pulls []domain.PullRequest, updated time.Time) {
 	t.Helper()
 	ctx := t.Context()
-	page := domain.ForgePage{Repo: reviewRepo.ID, PullRequests: reviewPulls(commits), Updated: reviewAt(time.October, 6, 16)}
-	if err := s.PutForgeRepos(ctx, []domain.ForgeRepo{reviewRepo}); err != nil {
+	page := domain.ForgePage{Repo: repo.ID, PullRequests: pulls, Updated: updated}
+	if err := s.PutForgeRepos(ctx, []domain.ForgeRepo{repo}); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.PutForgePage(ctx, &page); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.MarkForgeSynced(ctx, reviewRepo.ID, reviewSynced); err != nil {
+	if err := s.MarkForgeSynced(ctx, repo.ID, reviewSynced); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -184,7 +184,7 @@ type reviewsView struct {
 	window     domain.Window
 	all        []reviewsPull
 	groupRepos map[string][]string // group name → Repo.Key of its repositories
-	join       map[string][]string // ForgeRepo.ID → Repo.Key of the run's repositories (domain.ForgeJoin)
+	join       map[string][]string // ForgeRepo.ID → Repo.Key of the run's repositories (reviewsJoin)
 }
 
 // newReviewsView applies the definition to the forge facts. It returns nil
@@ -196,9 +196,10 @@ type reviewsView struct {
 // scope's numbers describe the repositories the run scanned. A forge
 // repository is the run's when its clone URL and the origin of one of the
 // run's repositories that it collected name the same host, owner and name
-// (domain.ForgeJoin, which a scan records the watermarks by too), so a
-// user's SSH clone counts like a managed mirror, and a repository whose
-// collection failed adds nothing here, as it adds nothing to any number.
+// (domain.ForgeJoin, which the scan made once and the run keeps, as its
+// watermarks record it: reviewsJoin), so a user's SSH clone counts like a
+// managed mirror, and a repository whose collection failed adds nothing
+// here, as it adds nothing to any number.
 //
 // A review counts when reviewsByOthers counts it, on a pull request merged
 // before Now.
@@ -210,7 +211,7 @@ func newReviewsView(in *Input) *reviewsView {
 	rv := &reviewsView{
 		window:     reviewsGivenWindow(fs.Now),
 		groupRepos: map[string][]string{},
-		join:       domain.ForgeJoin(fs.Repos, fs.Forge.Repos),
+		join:       reviewsJoin(fs),
 	}
 	for _, g := range fs.Groups {
 		rv.groupRepos[g.Name] = g.Repos
@@ -331,11 +332,40 @@ func reviewsByOthers(p *domain.PullRequest, w domain.Window, who *identity.Direc
 	}
 }
 
-// reviewsJoin is domain.ForgeJoin over the view's repositories: for each
-// forge repository, the Repo.Key of the view's repositories it is. A
-// repository the view left out, such as one a who-knows query did not ask
-// about, joins nothing. It is nil without GitHub data.
-func (v *view) reviewsJoin() map[string][]string {
+// reviewsJoin returns the join every metric that reads GitHub data counts
+// by: ForgeRepo.ID → the Repo.Key of the repositories of the fact set it
+// is. A run's GitHub data carries the join its scan made and recorded
+// (ForgeFacts.Join), and that one is used, so a stored run's numbers are
+// counted by the join its provenance dates, whatever a later stillhere's
+// domain.ForgeJoin would make of the same origins. Only GitHub data that no
+// run joined, the replica itself, is joined here.
+func reviewsJoin(fs *domain.FactSet) map[string][]string {
+	if fs.Forge.Join != nil {
+		return fs.Forge.Join
+	}
+	return domain.ForgeJoin(fs.Repos, fs.Forge.Repos)
+}
+
+// reviewsIndex is the GitHub data of a view's repositories that
+// knowledge_loss@1 and who_knows@1 read, indexed once per computation: a
+// question about a path in every repository of a large organization joins
+// the repositories and reads the pull requests once, not once per
+// repository.
+type reviewsIndex struct {
+	who     *identity.Directory
+	pulls   []domain.PullRequest             // every pull request of the GitHub data, FactSet.Forge's
+	join    map[string][]string              // ForgeRepo.ID → Repo.Key of the view's repositories it is (reviewsJoin)
+	known   map[string]bool                  // Repo.Key → the run had GitHub data for it: a page or a finished sync
+	merged  map[string][]*domain.PullRequest // Repo.Key → the merged pull requests of its forge repositories, in FactSet order
+	claimed map[string]bool                  // the merge commit of every merged pull request: the landing that pull request lands
+	facts   map[string]*domain.RepoFacts     // Repo.Key → its facts, whose commits name each landing's first parent
+}
+
+// reviews indexes the GitHub data of the view's repositories: those the
+// run's join names, less the ones the view left out, such as a repository
+// a who-knows query did not ask about. It is nil without GitHub data for
+// any of them.
+func (v *view) reviews() *reviewsIndex {
 	if v.facts == nil || v.facts.Forge == nil {
 		return nil
 	}
@@ -343,35 +373,57 @@ func (v *view) reviewsJoin() map[string][]string {
 	for _, r := range v.repos {
 		in[r.key] = true
 	}
-	var out map[string][]string
-	for id, keys := range domain.ForgeJoin(v.facts.Repos, v.facts.Forge.Repos) {
-		keys = slices.DeleteFunc(slices.Clone(keys), func(k string) bool { return !in[k] })
-		if len(keys) == 0 {
+	x := &reviewsIndex{who: v.who, pulls: v.facts.Forge.PullRequests, join: map[string][]string{}, known: map[string]bool{},
+		merged: map[string][]*domain.PullRequest{}, claimed: map[string]bool{}, facts: map[string]*domain.RepoFacts{}}
+	for id, keys := range reviewsJoin(v.facts) {
+		if keys = slices.DeleteFunc(slices.Clone(keys), func(k string) bool { return !in[k] }); len(keys) > 0 {
+			x.join[id] = keys
+		}
+	}
+	if len(x.join) == 0 {
+		return nil
+	}
+	for _, wm := range v.facts.Forge.Watermarks {
+		if !wm.Updated.IsZero() || !wm.Synced.IsZero() {
+			for _, key := range x.join[wm.Repo] {
+				x.known[key] = true
+			}
+		}
+	}
+	for i := range x.pulls {
+		p := &x.pulls[i]
+		if p.State != domain.PullMerged || p.MergeCommit.SHA == "" {
 			continue
 		}
-		if out == nil {
-			out = map[string][]string{}
+		x.claimed[p.MergeCommit.SHA] = true
+		for _, key := range x.join[p.Repo] {
+			x.merged[key] = append(x.merged[key], p)
 		}
-		out[id] = keys
 	}
-	return out
+	for i := range v.facts.Repos {
+		if rf := &v.facts.Repos[i]; in[rf.Repo.Key] {
+			x.facts[rf.Repo.Key] = rf
+		}
+	}
+	return x
 }
 
-// reviewsActive returns the people, by canonical email, who submitted a
-// review (reviewsSubmitted) in w on any pull request of the view's forge
+// active returns the people, by canonical email, who submitted a review
+// (reviewsSubmitted) in w on any pull request of the view's forge
 // repositories, whatever its state, their own pull requests included:
-// knowledge_loss@1's review activity. A reviewer the run cannot link to an
-// email ("@login") holds no line, so it is left out, and so is an app
-// account. It is nil without GitHub data.
-func (v *view) reviewsActive(w domain.Window) map[string]bool {
-	join := v.reviewsJoin()
-	if len(join) == 0 {
+// knowledge_loss@1's review activity, which asks only whether someone is
+// still around, and a reply in a review thread of one's own pull request,
+// which GitHub records as a review, says they are. A reviewer the run
+// cannot link to an email ("@login") holds no line, so it is left out, and
+// so is an app account. It is nil without GitHub data.
+func (x *reviewsIndex) active(w domain.Window) map[string]bool {
+	if x == nil {
 		return nil
 	}
 	var out map[string]bool
-	for i := range v.facts.Forge.PullRequests {
-		p := &v.facts.Forge.PullRequests[i]
-		if len(join[p.Repo]) == 0 {
+	for i := range x.pulls {
+		p := &x.pulls[i]
+		if len(x.join[p.Repo]) == 0 {
 			continue
 		}
 		for j := range p.Reviews {
@@ -379,7 +431,7 @@ func (v *view) reviewsActive(w domain.Window) map[string]bool {
 			if !reviewsSubmitted(r) || r.Author.Login == "" || !w.Contains(r.Submitted) {
 				continue
 			}
-			if s := v.who.Reviewer(r.Author); !strings.HasPrefix(s.Key, "@") {
+			if s := x.who.Reviewer(r.Author); !strings.HasPrefix(s.Key, "@") {
 				if out == nil {
 					out = map[string]bool{}
 				}
@@ -397,11 +449,11 @@ type reviewsLanded struct {
 	landings []*landingView
 }
 
-// reviewsLandings returns the merged pull requests of the view's repository
-// r that landed in its history, each with its landings, and whether the run
-// has GitHub data for r at all: a forge repository that joins it, whose
-// replica held a page or a finished sync when the run read it. Without
-// that, who_knows@1's reviewers are unknown, not none.
+// landings returns the merged pull requests of the view's repository r that
+// landed in its history, each with its landings, and whether the run has
+// GitHub data for r at all: a forge repository that joins it, whose replica
+// held a page or a finished sync when the run read it. Without that,
+// who_knows@1's reviewers are unknown, not none.
 //
 // A pull request lands as its merge commit (PullRequest.MergeCommit), which
 // GitHub reports for each merge method as the commit the base branch was
@@ -409,24 +461,19 @@ type reviewsLanded struct {
 // commits; a squash commit, the one landing; and for a rebase merge, the
 // last of the commits it put on the branch one by one. Those carry new
 // SHAs, which the pull request's commit list does not hold, and they share
-// the merge's committer time, so the first-parent landings before the
-// merge commit's that share its committer time, and are not merges, which
-// a rebase never puts on the branch, are the pull request's too, up to its
-// commit count. A squash of several commits stops at its own landing, whose
-// first parent another change committed earlier. A pull request merged
-// into another branch has no landing of its own.
-func (v *view) reviewsLandings(r *repoView) ([]reviewsLanded, bool) {
-	join := v.reviewsJoin()
-	if len(join) == 0 {
-		return nil, false
-	}
-	known := false
-	for _, wm := range v.facts.Forge.Watermarks {
-		if slices.Contains(join[wm.Repo], r.key) && (!wm.Updated.IsZero() || !wm.Synced.IsZero()) {
-			known = true
-		}
-	}
-	if !known {
+// the merge's committer second, so the first-parent landings before the
+// merge commit's that share its committer time are the pull request's too,
+// up to its commit count, unless one is a merge, which a rebase never puts
+// on the branch, or another pull request's merge commit, which that pull
+// request lands: a merge queue or a bot can land two squashes in one
+// second, and the second, of several commits, must not take the first's
+// landing. A commit pushed straight to the branch in the same second, just
+// before a squash of several commits, is still taken: nothing in the
+// history or the GitHub data tells the two apart (the definition's blind
+// spots). A pull request merged into another branch has no landing of its
+// own.
+func (x *reviewsIndex) landings(r *repoView) ([]reviewsLanded, bool) {
+	if x == nil || !x.known[r.key] {
 		return nil, false
 	}
 	bySHA := make(map[string]*landingView, len(r.landings))
@@ -434,27 +481,24 @@ func (v *view) reviewsLandings(r *repoView) ([]reviewsLanded, bool) {
 		bySHA[l.sha] = l
 	}
 	firstParent := map[string]string{} // landing commit → its first parent, a landing too when the history reaches it
-	for i := range v.facts.Repos {
-		if rf := &v.facts.Repos[i]; rf.Repo.Key == r.key {
-			for j := range rf.Commits {
-				if c := &rf.Commits[j]; bySHA[c.SHA] != nil && len(c.Parents) > 0 {
-					firstParent[c.SHA] = c.Parents[0]
-				}
+	if rf := x.facts[r.key]; rf != nil {
+		for j := range rf.Commits {
+			if c := &rf.Commits[j]; bySHA[c.SHA] != nil && len(c.Parents) > 0 {
+				firstParent[c.SHA] = c.Parents[0]
 			}
 		}
 	}
 	var out []reviewsLanded
-	for i := range v.facts.Forge.PullRequests {
-		p := &v.facts.Forge.PullRequests[i]
+	for _, p := range x.merged[r.key] {
 		l := bySHA[p.MergeCommit.SHA]
-		if p.State != domain.PullMerged || l == nil || !slices.Contains(join[p.Repo], r.key) {
+		if l == nil {
 			continue
 		}
 		pl := reviewsLanded{pull: p, landings: []*landingView{l}}
 		if l.commit != nil && !l.commit.merge {
 			for sha := l.sha; len(pl.landings) < len(p.Commits); {
 				prev := bySHA[firstParent[sha]]
-				if prev == nil || prev.commit == nil || prev.commit.merge || !prev.time.Equal(l.time) {
+				if prev == nil || prev.commit == nil || prev.commit.merge || !prev.time.Equal(l.time) || x.claimed[prev.sha] {
 					break
 				}
 				pl.landings = append(pl.landings, prev)

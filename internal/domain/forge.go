@@ -75,10 +75,12 @@ func RemoteRepo(remote string) (string, bool) {
 // every repository of the run whose origin names it (RemoteRepo of
 // Repo.Remote and of ForgeRepo.Key), sorted. A forge repository that no
 // repository of the run names is absent, and the result is nil when none
-// is named. reviews_given@1 counts the pull requests of the forge
-// repositories in it, and a scan records their watermarks
-// (ForgeStore.PutRunWatermarks), so the two can never disagree about which
-// GitHub data is a run's.
+// is named. A scan joins by it once: the forge repositories in it, their
+// watermarks and their pull requests are the run's GitHub data, which the
+// run keeps with the join itself (ForgeFacts.Join, RunWatermark.Keys), and
+// every metric that reads GitHub data counts by that kept join, so what a
+// run counts and what it dates can never disagree, and a later change to
+// this function moves no stored run.
 //
 // A repository whose collection failed (status error) joins nothing: a
 // failed repository adds nothing to a run's numbers, its GitHub ones
@@ -208,6 +210,15 @@ type ForgeFacts struct {
 	Repos        []ForgeRepo      // sorted by Key, then ID
 	PullRequests []PullRequest    // sorted by Repo, then Number
 	Watermarks   []ForgeWatermark // sorted by Repo: the replica's, of which a run keeps those of its own repositories (RunWatermark)
+	// Join is the run's join of these forge repositories to its own
+	// repositories, as its scan made it with ForgeJoin and recorded it
+	// (RunWatermark.Keys): ForgeRepo.ID → the sorted Repo.Key of every
+	// repository of the run that it is. The metrics count by it, so a stored
+	// run keeps one owner of the join, its record, and a later stillhere
+	// whose ForgeJoin reads origins differently moves none of its numbers.
+	// It is nil for the replica LoadForge returns, which no run has joined:
+	// a metric over the replica itself joins it with ForgeJoin.
+	Join map[string][]string
 }
 
 // RunWatermark is the watermark of one of a scan run's forge repositories

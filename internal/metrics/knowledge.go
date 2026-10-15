@@ -52,7 +52,7 @@ func (knowledgeLossV1) compute(v *view) ([]domain.MetricValue, error) {
 	// A review is activity as a landing is (docs/metrics.md#knowledge_loss1-per-area):
 	// someone who reviewed has not gone quiet. Only a reviewer linked to an
 	// email can hold lines, so only they change a value.
-	for email := range v.reviewsActive(w) {
+	for email := range v.reviews().active(w) {
 		active[email] = true
 	}
 	var out []domain.MetricValue

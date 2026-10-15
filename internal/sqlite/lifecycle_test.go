@@ -282,6 +282,9 @@ func retentionRuns(t *testing.T, seed uint64) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if kind == domain.RunKindScan {
+				retentionForge(t, s, id)
+			}
 			m.begin(id, kind, now)
 			if rng.IntN(20) > 0 { // else left running for good, which retention never touches
 				running = append(running, id)
@@ -299,6 +302,9 @@ func retentionRuns(t *testing.T, seed uint64) {
 		m.finish(id, status)
 		if got, want := storedRuns(t, raw), m.stored(); !slices.Equal(got, want) {
 			t.Fatalf("step %d: after FinishRun(%d, %s) the store holds\n%v\nwant\n%v", step, id, status, got, want)
+		}
+		if orphans := orphanRunRows(t, raw); len(orphans) > 0 {
+			t.Fatalf("step %d: after FinishRun(%d, %s) rows of deleted runs remain: %v", step, id, status, orphans)
 		}
 		for _, kind := range []domain.RunKind{domain.RunKindScan, domain.RunKindSync} {
 			got, err := s.LatestRun(ctx, kind)
@@ -319,6 +325,67 @@ func retentionRuns(t *testing.T, seed uint64) {
 			t.Errorf("Run(%d) = %v; want it visible: %v", id, err, visible)
 		}
 	}
+}
+
+// retentionForge records, for a running scan run, GitHub data it read (ADR
+// 0011): a watermark with its join, and a pull request with a label, a
+// review and a commit, so that every table of a run's GitHub data holds a
+// row of it, which retention must delete with the run.
+func retentionForge(t *testing.T, s *sqlite.Store, id int64) {
+	t.Helper()
+	ctx := t.Context()
+	repo := domain.ForgeRepo{ID: "R_api", Key: "https://github.com/acme/api.git", Owner: "acme", Name: "api"}
+	if err := s.PutRunWatermarks(ctx, id, []domain.RunWatermark{
+		{ForgeWatermark: domain.ForgeWatermark{Repo: repo.ID}, Name: "acme/api", Keys: []string{"local:api"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	pull := domain.PullRequest{ID: "PR_1", Repo: repo.ID, Number: 1, State: domain.PullOpen, Labels: []string{"bug"},
+		Reviews: []domain.Review{{ID: "PRR_1", Author: domain.ForgeUser{Login: "ada"}, State: domain.ReviewApproved}},
+		Commits: []domain.ForgeCommit{{SHA: sha('a')}}}
+	if err := s.PutRunForge(ctx, id, []domain.ForgeRepo{repo}, []domain.PullRequest{pull}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// orphanRunRows names each table with a run_id column, every table whose
+// rows a run owns, that holds rows of a run the file no longer has, with
+// their count. The tables come from the schema itself, so a table a later
+// migration adds without ON DELETE CASCADE fails here too.
+func orphanRunRows(t *testing.T, raw *sql.DB) []string {
+	t.Helper()
+	ctx := t.Context()
+	rows, err := raw.QueryContext(ctx, `
+SELECT m.name FROM sqlite_master AS m, pragma_table_info(m.name) AS c
+WHERE m.type = 'table' AND c.name = 'run_id' ORDER BY m.name`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var tables []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		tables = append(tables, name)
+	}
+	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(tables, "forge_snapshot_commits") {
+		t.Fatalf("the tables with a run_id column are %v, which lacks the forge snapshot's", tables)
+	}
+	var out []string
+	for _, table := range tables {
+		var n int
+		if err := raw.QueryRowContext(ctx, `SELECT count(*) FROM `+table+` WHERE run_id NOT IN (SELECT id FROM runs)`).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		if n > 0 {
+			out = append(out, fmt.Sprintf("%s: %d", table, n))
+		}
+	}
+	return out
 }
 
 // retentionModel is the store as the rule describes it: the runs it holds.

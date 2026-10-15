@@ -93,10 +93,11 @@ func snapshotPut(ctx context.Context, tx *sql.Tx, runID int64, repos []domain.Fo
 }
 
 // RunForge returns the forge snapshot a complete or partial run kept, with
-// the watermarks it recorded as its Watermarks, or nil when it kept no forge
+// the watermarks it recorded as its Watermarks and the join it recorded
+// with them (their Keys) as its Join, or nil when it kept no forge
 // repository; domain.ErrNotFound for a run that is unknown, running or
-// failed. It reads in one transaction, so the snapshot and the watermarks
-// come from one state of the file.
+// failed. It reads in one transaction, so the snapshot, the watermarks and
+// the join come from one state of the file.
 func (s *Store) RunForge(ctx context.Context, runID int64) (*domain.ForgeFacts, error) {
 	var f *domain.ForgeFacts
 	err := s.read(ctx, func(tx *sql.Tx) error {
@@ -147,6 +148,22 @@ SELECT seq, id, key, owner, name, default_branch, archived, fork FROM forge_snap
 			return err
 		}); err != nil {
 		return nil, fmt.Errorf("reading forge_run_watermarks: %w", err)
+	}
+	// The join the run recorded with its watermarks (migration 3), which
+	// its metrics count by: the one the scan made, never one made again.
+	if err := each(ctx, tx, `SELECT repo, key FROM forge_run_repos WHERE run_id = ? ORDER BY repo, key`,
+		args, func(rows *sql.Rows) error {
+			var repo, key string
+			if err := rows.Scan(&repo, &key); err != nil {
+				return err
+			}
+			if f.Join == nil {
+				f.Join = map[string][]string{}
+			}
+			f.Join[repo] = append(f.Join[repo], key)
+			return nil
+		}); err != nil {
+		return nil, fmt.Errorf("reading forge_run_repos: %w", err)
 	}
 	if err := each(ctx, tx, `
 SELECT seq, id, repo, number, title, author, author_bot, state, draft, base_branch, created, updated, closed, merged,
