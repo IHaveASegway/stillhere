@@ -1,6 +1,6 @@
 # Blame collector
 
-Status: carried over from the 2026-10-07 plan, updated 2026-10-14 (per-repo ignore-revs, per-commit rows, goroutine pool) · becomes tests in M1
+Status: carried over from the 2026-10-07 plan, updated 2026-10-14 (per-repo ignore-revs, per-commit rows, goroutine pool; then, with #7, the ignore-revs lookup, the list resolved to commits, its warnings, per-commit author keys and shared blame slots) · becomes tests in M1
 
 This collector answers one question: whose non-blank lines does `git blame` still attribute on the default branch?
 
@@ -25,11 +25,18 @@ git <common> blame -w -M --line-porcelain --no-ignore-revs-file [--ignore-revs-f
 
 One `--ignore-revs-file` cannot serve many repos, because commit SHAs belong to a single repository. Per repo:
 
-1. **Use the repo's own file.** If `git cat-file -e <sha>:.git-blame-ignore-revs` succeeds, write `git cat-file blob <sha>:.git-blame-ignore-revs` to a temp file and pass it. GitHub's blame view honours the same root file. Check existence first: `git show` on a missing path exits fatally (verified).
+1. **Use the repo's own file.** GitHub's blame view honours the same root file. Look it up with `git ls-tree --full-tree --format='%(objectmode) %(objecttype) %(objectname)' <sha> -- .git-blame-ignore-revs`, then read the blob by its ID with `git cat-file blob <oid>`, stopping at 1 MiB. Check existence first, because `git show` on a missing path exits fatally, and check it with `ls-tree` rather than `git cat-file -e <sha>:<path>`: `cat-file -e` exits 128 with "path ... does not exist" both for a missing file and for a commit the repo does not have, while `ls-tree` prints nothing and exits 0 for a missing file and fails only for a broken repo (verified). Leave `%(objectsize)` out of the format: it needs the blob itself, so in a partial clone that lacks the blob, `ls-tree` fails outright (verified).
 2. **CLI override.** A `--ignore-revs-file` flag overrides the repo's file only on a single-repo run. On a multi-repo run it is a usage error (exit 2).
-3. **Record the source.** Per repo, record which file was used (`root`, `cli`, or none), its SHA-256, and the commits it lists (`IgnoreRevs.Revs`), which `durable@1` and `simplifying@1` exclude ([metrics.md](../metrics.md#change-facts-shared-by-durable1-and-simplifying1)).
+3. **Resolve the IDs as git does.** git turns each listed ID into a commit with `peel_to_commit_oid`: an annotated tag becomes the commit it tags, and an ID that names no commit (a tree, a blob, or an object the clone lacks) is dropped without a word (verified). One `git cat-file --batch-check='%(objectname) %(objecttype)'` over `<id>^{commit}` lines does the same for every ID. In a shallow clone this drops the commits behind the boundary, which the clone's history cannot contain either.
+4. **Record the source.** Per repo, record which file was used (`root`, `cli`, or none), the SHA-256 of its bytes, and the commits git ignores (`IgnoreRevs.Revs`), which `durable@1` and `simplifying@1` exclude ([metrics.md](../metrics.md#change-facts-shared-by-durable1-and-simplifying1)). Shallow and partial clones get no line facts, but their history still needs the list, so a scan calls `Blame` with no paths for them, which only resolves it.
+5. **Pass the resolved list.** Write those commits, lowercased, sorted and one per line, to a 0600 file in a new 0700 directory under the system temp directory. Pass that file by its absolute path, because git runs with `-C <repo>` and would resolve a relative one (from a relative `$TMPDIR`) against the repo. Remove it when the repo's blame ends, also on error or cancellation. git then ignores exactly the commits `IgnoreRevs.Revs` records.
 
-On 2.50.1, `#` comment lines and SHAs absent from the repo are both accepted (verified). CI checks the floor version.
+git's rules (`oidset_parse_file_carefully`, verified on 2.50.1): everything from a `#` to the end of the line is a comment; spaces, tabs and line endings around a name are trimmed; empty lines are skipped; every other line must be one full object ID, in either case. SHAs absent from the repo are accepted and ignored. An abbreviated or otherwise malformed line makes blame refuse the whole file (`fatal: invalid object name`, exit 128), which would fail every blame in the repo. So:
+
+- **Root file.** The user may not control it, so a problem does not stop the repo. Malformed lines are skipped; a file that is not a regular file, is over 1 MiB, or cannot be read (a bare partial clone lacks the blob) is not used. Either way, one warning with code `ignore-revs` names `.git-blame-ignore-revs` and says why (`BlameFacts.Warnings`, which go to `RepoFacts.Warnings`). It is not an `errors.blame` entry: that list holds only the blamed files whose lines are unknown.
+- **CLI file.** The user named it and can fix it, so an unreadable file, one over 1 MiB, or a malformed line is a usage error.
+
+CI checks the floor version.
 
 ## Co-authors
 
@@ -37,19 +44,21 @@ Blame names a commit's author, but credit follows [ADR 0007](../adr/0007-ai-assi
 
 ## Porcelain parsing
 
-`--line-porcelain` (what we run) and `--porcelain` (also accepted) differ. Four naive parsers are wrong:
+`--line-porcelain` (what we run) and `--porcelain` (also accepted) differ. Five naive parsers are wrong:
 
 - **Requiring four fields.** The first line of a group is `<sha> <orig> <final> <group-size>`, but continuation lines are `<sha> <orig> <final>` with **no fourth field**. A matcher that requires four fields drops every continuation line.
 - **Rejecting repeated headers.** `--line-porcelain` repeats `author`, `author-mail`, `author-time` and the other headers on every line. A parser that treats a repeated `author` line as an error fails on every multi-line group.
 - **Requiring headers on every line.** `--porcelain` prints those headers only the first time a commit appears. A parser that requires them on every line fails on it.
 - **Multiplying by group size.** Never do this: a group can contain blank lines.
+- **Carrying the previous record's author.** In `--porcelain`, a commit that comes back after another commit's lines has no author lines, so the previous record's values belong to the other commit. In a file whose lines go Ann, Ben, Ann, git 2.50.1 printed the second Ann record as a bare header and its content (verified), and this parser gives that line to Ben.
 
-The rules, per line:
+Both forms are a sequence of records, one per line of the file: a header, key lines, then the content. The rules:
 
 - **Header.** `^([0-9a-f]{7,64}) (\d+) (\d+)( (\d+))?$`: remember the SHA and ignore the optional group size.
-- **Author lines.** `author `, `author-mail ` and `author-time ` replace the current values. When a header omits them, carry the previous values forward.
-- **Content.** A line starting with a tab is content. If the rest of the line is non-blank after trimming whitespace, add **one** line to the current (SHA, email). Blank content adds nothing.
-- **Everything else** (`filename`, `summary`, `previous`, `boundary`, and so on) is ignored.
+- **Author lines.** `author `, `author-mail ` and `author-time ` give the record's commit its author. Keep them per commit: when a record omits them, use the values that commit's earlier record gave.
+- **Content.** A line starting with a tab is content. If the rest of the line is non-blank (it holds a character outside Unicode's White_Space, [metrics.md](../metrics.md#noise-applied-before-every-metric)), add **one** line to the record's (SHA, email). Blank content adds nothing. The test is `nonBlank` in `internal/collect/scan.go`, the predicate the history collector counts added lines with, so `durable@1` compares like with like.
+- **Everything else** (`filename`, `summary`, `previous`, `boundary`, and the `ignored` and `unblamable` marks a repo-local `blame.markIgnoredLines` and `blame.markUnblamableLines` add, verified) is ignored.
+- **Structure.** Every content line follows exactly one header. Output that breaks this is unreadable porcelain and a file failure, so an unrecognised header cannot hand its line to the previous record.
 
 `author-mail` is already mailmapped by git ([git-invocation.md](git-invocation.md#identity-mailmap-and-bots)). Strip the `<>` and lowercase it; never re-parse mailmap in Go. The measured porcelain for the fixture's `service.py` is in [../../testdata/fixture/SPEC.md](../../testdata/fixture/SPEC.md#measured-blame).
 
@@ -73,7 +82,7 @@ The metric definitions belong to [../metrics.md](../metrics.md). Until they move
 
 ## Parallelism, errors, budget
 
-- **Concurrency.** A goroutine worker pool, default `min(12, runtime.NumCPU())`, overridable with `--jobs`. Each blame is its own process, so more workers than that thrash a large machine.
+- **Concurrency.** A goroutine worker pool, default `min(12, runtime.NumCPU())`, overridable with `--jobs`. Each blame is its own process, so more workers than that thrash a large machine. Every repo shares one `collect.BlameSlots` of that capacity (a `golang.org/x/sync` semaphore, which serves waiters in arrival order), and a repo takes a slot before it starts each file's goroutine, so the slots bound the goroutines as well as the git processes.
 - **Calibration.** A proof run over one 80-repo organization blamed 24,188 files in 93 s, with 12 workers on 16 cores.
 - **Budget.** A cold scan should finish in under 15 minutes for 100 repos and 50,000 surviving files on 8 cores. It is checked by hand on a large tree, with the `timings` object pasted into the PR. CI never asserts wall-clock time.
 - **File failures.** A non-zero exit, a timeout or unreadable porcelain appends `{path, message}` to the repo's `errors.blame`, with the message scrubbed and truncated per [git-invocation.md](git-invocation.md#url-scrubbing). The repo continues, and up to eight messages are echoed to stderr.
