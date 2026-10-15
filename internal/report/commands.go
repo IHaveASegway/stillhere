@@ -30,6 +30,9 @@ type Commands interface {
 	// (domain.Subject kinds), or "" when the reader cannot ask about any of
 	// them.
 	Explain(metric string, kinds []string) string
+	// WhoKnows names where who knows the code under a path is asked:
+	// who_knows@1, which a scan never stores, so explain has none of it.
+	WhoKnows() string
 	// OwnPage names where a person's own page is, which alone shows their
 	// own AI-assisted share (ADR 0007).
 	OwnPage() string
@@ -58,6 +61,9 @@ func (CLI) Explain(metric string, kinds []string) string {
 	}
 	return ""
 }
+
+// WhoKnows is the who-knows command.
+func (CLI) WhoKnows() string { return "'stillhere who-knows PATH'" }
 
 // OwnPage is the me command.
 func (CLI) OwnPage() string { return "'stillhere me --email EMAIL'" }

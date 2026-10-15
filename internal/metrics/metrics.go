@@ -32,6 +32,15 @@ type Definition struct {
 	ID             domain.MetricID
 	Question, Unit string
 	Ranked         bool
+	// Subjects are the kinds of subject (domain.SubjectPerson, SubjectRepo,
+	// SubjectArea, SubjectGroup, SubjectChange) of the values a scan stores,
+	// in the order the catalog entry names them: none for who_knows@1, which
+	// who-knows computes per query, and no person for ai_assisted@1, whose
+	// personal share only that person's page computes (PersonalAIShare). It
+	// is the one declaration of it, as Forge is of GitHub data: explain,
+	// which reads stored values, refuses a metric about any other kind of
+	// subject, whatever a run holds, rather than answer with nothing (#69).
+	Subjects []string
 	// Forge is true for a metric that reads the GitHub data a run read
 	// (FactSet.Forge): its numbers are as current as that data's sync, and
 	// a report dates them by it and says where it is missing. It is the one

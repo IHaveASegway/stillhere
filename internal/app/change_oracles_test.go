@@ -141,12 +141,12 @@ func mainChangeOracles(t *testing.T) {
 		}
 		// It describes code, never a person: explain about one refuses the
 		// question, with the command that answers instead, rather than
-		// answer it with nothing (#69). The fixture's files sit at its root
-		// and it is scanned alone, so its values are about the repository
-		// only: no area and no group.
+		// answer it with nothing (#69). The kinds are the metric's own, not
+		// the run's: the fixture's files sit at its root and it is scanned
+		// alone, so this run holds no value about an area or a group.
 		_, err := app.Explain(t.Context(), s.read, app.ExplainRequest{RunID: s.run,
 			Metric: domain.MetricID{Name: "knowledge_loss", Version: 1}, Subject: person("ada@example.com")})
-		const refusal = "knowledge_loss@1 holds no value about a person in run 1: its values are about repositories. " +
+		const refusal = "knowledge_loss@1 holds no value about a person: its values are about repositories, areas and groups. " +
 			"Ask instead: 'stillhere report'."
 		var usage *domain.UsageError
 		if !errors.As(err, &usage) || usage.Msg != refusal {

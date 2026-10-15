@@ -40,7 +40,7 @@ These rules were settled on 2026-10-14, before the first release, so no metric v
 
 ## Values: what every metric returns
 
-Each metric returns `domain.MetricValue`s. They are a published language: the report, the store, `explain` and the MCP server all read them, so these rules hold for every metric in this catalog, and each entry names its subjects and `Detail` keys.
+Each metric returns `domain.MetricValue`s. They are a published language: the report, the store, `explain` and the MCP server all read them, so these rules hold for every metric in this catalog, and each entry names its subjects and `Detail` keys. A metric's definition in code declares the kinds of subject a scan stores its values about (`metrics.Definition.Subjects`), and `explain` refuses a question about any other kind, in every run (#69).
 
 - **Scopes and subjects.** A value about a person (subject `person`, the canonical email) is computed in each repository (scope `repo`), each group (scope `group`) and the whole run (scope `all`), over the repositories in that scope. A value about code has the code as its subject: a repository (subject `repo`), a top-level directory (subject `area`, keyed `<repo key>:<dir>/`) or a group (subject `group`), in the scope of its repository or group. A group's code values are recomputed over its repositories, never summed from per-repository values, and code values have no cross-group total. A value about one change has subject `change` (the landing SHA).
 - **Window.** The metric's own window for `--now`, half-open. A snapshot at the scanned HEAD (surviving lines, ownership) has the zero window.
@@ -114,7 +114,9 @@ Each metric returns `domain.MetricValue`s. They are a published language: the re
 - **How it can be gamed**: a quiet expert who lands one trivial change, or submits one review, resets their clock.
 - **Fixture oracle**: [SPEC.md, knowledge_loss@1](../testdata/fixture/SPEC.md#knowledge_loss1-main-fixture), and with reviews, [SPEC.md, reviews in knowledge_loss@1 and who_knows@1](../testdata/fixture/SPEC.md#reviews-in-knowledge_loss1-and-who_knows1-main-fixture).
 - **Validity**: context, unvalidated; inactivity stands in for departure, which it is not. Prior art measures the same thing: Rigby, Zhu, Donadelli and Mockus, "Quantifying and Mitigating Turnover-Induced Knowledge Loss" (ICSE 2016), used files abandoned by departed developers as the proxy at Chrome and Avaya, and CodeScene's knowledge-loss view (Tornhill, *Software Design X-Rays*, 2018) does it with history.
-- **Changelog**: 2026-10-15 (#38): submitted reviews count as activity. No release had shipped `knowledge_loss@1` without them, so it keeps `@1`, as the 2026-10-14 change-fact rules did.
+- **Changelog**:
+  - 2026-10-15 (#38): submitted reviews count as activity. No release had shipped `knowledge_loss@1` without them, so it keeps `@1`, as the 2026-10-14 change-fact rules did.
+  - 2026-10-15 (#69): logins link to people without case, as `reviews_given@1`'s do (`identity.Directory.Reviewer`). A login whose pull request commits carry it in one case and whose reviews carry it in another, as after the account changed the case of its login between two syncs, had stayed an unlinked `@login`, which holds no line, so the person's reviews were not their activity; now they are, and the value can fall. No release had shipped `knowledge_loss@1`, so it keeps `@1`.
 
 ### who_knows@1 (per path)
 Majority owners of files under the path, the top surviving-line authors, recent landers (90 days), and recent reviewers (90 days) from the GitHub data the run read. It is a routing answer, not a rank, computed per query (`who-knows PATH`, `metrics.WhoKnows`) over a run's facts, its GitHub data included, which the run keeps ([ADR 0011](adr/0011-a-run-keeps-the-github-facts-it-read.md)); a scan stores no values for it, because precomputing every directory of every repository would store more rows than the facts.
@@ -128,7 +130,9 @@ Majority owners of files under the path, the top surviving-line authors, recent 
 - **How it can be gamed**: it is no one's target; appearing in it earns questions.
 - **Fixture oracle**: [SPEC.md, who_knows@1](../testdata/fixture/SPEC.md#who_knows1-main-fixture), and with reviews, [SPEC.md, reviews in knowledge_loss@1 and who_knows@1](../testdata/fixture/SPEC.md#reviews-in-knowledge_loss1-and-who_knows1-main-fixture).
 - **Validity**: context. Routing by experience is old: Mockus and Herbsleb, "Expertise Browser" (ICSE 2002), recommended experts from their changes. For blame as an authorship signal, see `surviving@1`.
-- **Changelog**: 2026-10-15 (#38): recent reviewers. No release had shipped `who_knows@1` without them, so it keeps `@1`, as the 2026-10-14 change-fact rules did.
+- **Changelog**:
+  - 2026-10-15 (#38): recent reviewers. No release had shipped `who_knows@1` without them, so it keeps `@1`, as the 2026-10-14 change-fact rules did.
+  - 2026-10-15 (#69): logins link to people and are keyed without case, as `reviews_given@1`'s are (`identity.Directory.Reviewer`). A reviewer whose login two pull requests carry in two cases is listed once (`@zoe`, named `@Zoe`), with the pull requests of both, where they were two reviewers; one whose login its commits carry in another case than its reviews is listed as the person, not as `@login`. No release had shipped `who_knows@1`, so it keeps `@1`.
 
 ## Ranked metrics
 
@@ -175,7 +179,7 @@ Majority owners of files under the path, the top surviving-line authors, recent 
 - **How it can be gamed**: rubber-stamp approvals. The no-comment share is shown next to the count for that reason. Reviewing many trivial pull requests, such as dependency bumps.
 - **Fixture oracle**: [testdata/github/README.md, reviews_given@1](../testdata/github/README.md#reviews_given1), asserted by `TestGitHubSync` over the recorded responses.
 - **Validity**: unvalidated until the M2 labelled-sample check.
-- **Changelog**: 2026-10-15 (#69): logins compare without case, so one account whose login a pull request carries in another case, after the account changed its case, is one subject (`@zoe`, not `@Zoe` and `@zoe`), and is linked to its person whatever case its commits carry it in. This mends a split no definition meant: a login names one GitHub account, which GitHub compares without case. No release had shipped `reviews_given@1`, so it keeps `@1`; a run stored before keeps the case it stored, so scan again.
+- **Changelog**: 2026-10-15 (#69): logins compare without case, so one account whose login a pull request carries in another case, after the account changed its case, is one subject (`@zoe`, not `@Zoe` and `@zoe`), and is linked to its person whatever case its commits carry it in. This mends a split no definition meant: a login names one GitHub account, which GitHub compares without case. No release had shipped `reviews_given@1`, so it keeps `@1`. A run stored before kept the case in its keys, and is read with them lowercased ([run model](spec/codebase.md#run-model)), unless it holds one login in two cases: those stay two subjects, as they were ranked, until a new scan.
 
 ### load_bearing@1 (M5)
 - **Definition**: the share of a person's landings in the window that touched a top-decile hotspot, with hotspots computed from the 12 months *before* the window so a person's own changes cannot make a file hot.

@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
 	"path"
 	"slices"
 	"strings"
@@ -92,6 +91,11 @@ func load(ctx context.Context, d Deps, runID int64) (*stored, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading run %d's metrics: %w", run.ID, err)
 	}
+	values, ranks, split := canonicalKeys(values, ranks)
+	if split {
+		d.Log.Warn("the run was stored before stillhere compared GitHub logins without case, and holds one login in two "+
+			"cases: they stay two reviewers in its pages, and no name or id finds the one in capitals: scan again", "run", run.ID)
+	}
 	forge, watermarks, err := readForgeMarks(ctx, d, run)
 	if err != nil {
 		return nil, err
@@ -123,6 +127,62 @@ func load(ctx context.Context, d Deps, runID int64) (*stored, error) {
 	// After the run's GitHub data: it links forge logins to the run's people.
 	s.who = identity.New(s.facts, p)
 	return s, nil
+}
+
+// canonicalKeys upcasts the person keys of a run stored before #69, whose
+// GitHub logins kept their case ("@Zoe"), to the keys made since ("@zoe",
+// identity.CanonicalKey), in the one place a stored run enters the read
+// side. Its values and ranks then join, as a new run's do, the keys every
+// reader is handed (lowercased) and those it computes from the run's facts
+// when it reads it (who_knows@1's reviewers, explain's clusters). Nothing is
+// migrated: the rows stay as they were written, and a store that hands
+// every reader the same slices (the MCP server caches them) keeps its own,
+// since a key is changed in a copy. A run that holds one login in two cases
+// ("@Zoe" and "@zoe": one account it split in two) keeps both as stored
+// and reports split: it ranked them as two people, and folding them would
+// give one key two rows in a table, which only a new scan merges.
+func canonicalKeys(values []domain.MetricValue, ranks []domain.RankInterval) ([]domain.MetricValue, []domain.RankInterval, bool) {
+	keys := map[string]bool{} // every person key the run stored
+	for _, v := range values {
+		if v.Subject.Kind == domain.SubjectPerson {
+			keys[v.Subject.Key] = true
+		}
+	}
+	for _, r := range ranks {
+		if r.Subject.Kind == domain.SubjectPerson {
+			keys[r.Subject.Key] = true
+		}
+	}
+	folded := map[string]int{} // canonical key → the stored keys of that form
+	for key := range keys {
+		folded[identity.CanonicalKey(key)]++
+	}
+	upcast := map[string]string{} // stored key → its canonical form, when it is another key and no other stored key has that form
+	split := false
+	for key := range keys {
+		switch c := identity.CanonicalKey(key); {
+		case c == key:
+		case folded[c] > 1:
+			split = true
+		default:
+			upcast[key] = c
+		}
+	}
+	if len(upcast) == 0 {
+		return values, ranks, split
+	}
+	values, ranks = slices.Clone(values), slices.Clone(ranks)
+	for i := range values {
+		if c, ok := upcast[values[i].Subject.Key]; ok && values[i].Subject.Kind == domain.SubjectPerson {
+			values[i].Subject.Key = c
+		}
+	}
+	for i := range ranks {
+		if c, ok := upcast[ranks[i].Subject.Key]; ok && ranks[i].Subject.Kind == domain.SubjectPerson {
+			ranks[i].Subject.Key = c
+		}
+	}
+	return values, ranks, split
 }
 
 // readForge reads back how a stored run's GitHub data is dated, for a use
@@ -289,17 +349,17 @@ func Explain(ctx context.Context, d Deps, r ExplainRequest) (*report.Explain, er
 		return nil, &domain.UsageError{Msg: fmt.Sprintf(
 			"%s about a person is shown only on their own page (ADR 0007): %s", def.ID, d.commands().OwnPage())}
 	}
+	if !slices.Contains(def.Subjects, r.Subject.Kind) {
+		// No run holds an answer, so none is read.
+		return nil, explainKindError(d.commands(), def, r.Subject.Kind)
+	}
 	s, err := load(ctx, d, r.RunID)
 	if err != nil {
 		return nil, err
 	}
 	var values []domain.MetricValue
 	known := false
-	kinds := map[string]bool{} // the kinds of subject the metric's values are about in the run
 	for _, v := range s.values {
-		if v.Metric == def.ID {
-			kinds[v.Subject.Kind] = true
-		}
 		if v.Subject != r.Subject {
 			continue
 		}
@@ -312,9 +372,6 @@ func Explain(ctx context.Context, d Deps, r ExplainRequest) (*report.Explain, er
 		return nil, fmt.Errorf("%s %s has no values in run %d (a person is named by their canonical email, after .mailmap, "+
 			"or by @login when the run links no email to that GitHub login): %w",
 			r.Subject.Kind, r.Subject.Key, s.run.ID, domain.ErrNotFound)
-	}
-	if len(values) == 0 && len(kinds) > 0 && !kinds[r.Subject.Kind] {
-		return nil, explainKindError(d.commands(), def, r.Subject.Kind, slices.Sorted(maps.Keys(kinds)), s.run.ID)
 	}
 	clusters := map[string][]rank.Cluster{}
 	if rm, ok := m.(metrics.Ranked); ok && r.Subject.Kind == domain.SubjectPerson {
@@ -339,18 +396,27 @@ func Explain(ctx context.Context, d Deps, r ExplainRequest) (*report.Explain, er
 	}), nil
 }
 
-// explainKindError refuses to explain a metric about a kind of subject it
-// holds no value about in the run (#69), such as durable@1, a person's,
-// about a repository: an empty answer would read as "no data" when the
-// question has no answer, and an agent could not tell the two apart. The
-// error names the kinds the metric's values are about, read from the run's
-// own values, and the calls that answer instead, in the reader's words
-// (cmds): explain about one of those kinds, where the reader can ask it,
-// and the metric's rank tables, or its values per repository and group.
-func explainKindError(cmds report.Commands, def metrics.Definition, kind string, kinds []string, run int64) error {
+// explainKindError refuses to explain a metric about a kind of subject no
+// scan stores its values about (#69), such as durable@1, a person's, about
+// a repository: an empty answer would read as "no data" when the question
+// has no answer, and an agent could not tell the two apart. The kinds are
+// the metric's own declaration (metrics.Definition.Subjects), not what one
+// run happens to hold, so the same question is refused in every run, one
+// with no value of the metric included. The error names them and the calls
+// that answer instead, in the reader's words (cmds): explain about one of
+// those kinds, where the reader can ask it, and the metric's rank tables,
+// or its values per repository and group. The one metric a scan stores no
+// value of is who_knows@1, which who-knows computes for any path, so a
+// metric that declares no kind is sent there.
+func explainKindError(cmds report.Commands, def metrics.Definition, kind string) error {
 	id := def.ID.String()
+	if len(def.Subjects) == 0 {
+		return &domain.UsageError{Msg: fmt.Sprintf(
+			"%s is computed per query, for any path, and never stored, so explain has no value of it. Ask instead: %s.",
+			id, cmds.WhoKnows())}
+	}
 	var instead []string
-	if how := cmds.Explain(id, kinds); how != "" {
+	if how := cmds.Explain(id, def.Subjects); how != "" {
 		instead = append(instead, how)
 	}
 	if def.Ranked {
@@ -358,8 +424,8 @@ func explainKindError(cmds report.Commands, def metrics.Definition, kind string,
 	} else {
 		instead = append(instead, cmds.Report())
 	}
-	return &domain.UsageError{Msg: fmt.Sprintf("%s holds no value about %s in run %d: its values are about %s. Ask instead: %s.",
-		id, explainKindOne(kind), run, explainKindsMany(kinds), strings.Join(instead, "; "))}
+	return &domain.UsageError{Msg: fmt.Sprintf("%s holds no value about %s: its values are about %s. Ask instead: %s.",
+		id, explainKindOne(kind), explainKindsMany(def.Subjects), strings.Join(instead, "; "))}
 }
 
 // explainKindOne names one subject of a kind: "a person", "an area".
@@ -379,8 +445,8 @@ func explainKindOne(kind string) string {
 	return "a " + kind
 }
 
-// explainKindsMany names subjects of several kinds: "people", "areas,
-// groups and repositories".
+// explainKindsMany names subjects of several kinds, in their order:
+// "people", "repositories, areas and groups".
 func explainKindsMany(kinds []string) string {
 	plural := map[string]string{domain.SubjectPerson: "people", domain.SubjectRepo: "repositories",
 		domain.SubjectGroup: "groups", domain.SubjectArea: "areas", domain.SubjectChange: "changes"}

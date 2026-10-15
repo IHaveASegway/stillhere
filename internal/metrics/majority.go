@@ -19,6 +19,7 @@ func (majorityOwnerV1) Definition() Definition {
 		Unit: "Prod files at HEAD in which the person is credited with at least half of the non-blank lines, per person, " +
 			"per repository, group and all. A 50/50 file has two majority owners. Bots can be majority owners and stay in the bot table.",
 		Ranked:      false,
+		Subjects:    []string{domain.SubjectPerson},
 		Eligibility: "Not ranked: ownership rewards tenure.",
 		BlindSpots: "Blame-based, so it shares surviving@1's blind spots; a file nobody holds half of has no majority owner, " +
 			"so highly collaborative files are invisible here.",

@@ -379,6 +379,22 @@ func TestMCPTools(t *testing.T) {
 				t.Errorf("explain(durable, fixture as a repository) was refused with %q, want %q and no command", text, want)
 			}
 		}
+		// The kinds are the metric's own (metrics.Definition.Subjects), not
+		// what the run holds: this run read no GitHub data, so it has no
+		// value of reviews_given@1 at all, and the question is refused all
+		// the same. who_knows@1, which no scan stores, is sent to its tool.
+		for _, c := range []struct {
+			args map[string]any
+			want string
+		}{
+			{map[string]any{"metric": "reviews_given", "subject": "fixture", "subject_kind": "repo"},
+				"overview(scope, rank: reviews_given@1)"},
+			{map[string]any{"metric": "who_knows", "subject": "platform", "subject_kind": "group"}, "who_knows(path, repo)"},
+		} {
+			if text := refused(t, "explain", c.args); !strings.Contains(text, c.want) || strings.Contains(text, "stillhere") {
+				t.Errorf("explain(%v) was refused with %q, want %q and no command", c.args, text, c.want)
+			}
+		}
 		if text := refused(t, "explain", map[string]any{"metric": "durable@2", "subject": "Lena Lead"}); !strings.Contains(text, "(metrics() describes each)") ||
 			strings.Contains(text, "stillhere metrics") {
 			t.Errorf("explain(durable@2) was refused with %q, want the metrics tool named, not the command", text)

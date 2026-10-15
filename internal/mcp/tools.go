@@ -144,10 +144,11 @@ func (s *server) addTools(srv *sdk.Server) {
 			"metric about a person, each change it counted with its contribution, so a number can be traced to its commits. "+
 			"metric is an id such as durable@1, or a bare name for the latest version (metrics lists them). subject_kind is "+
 			"person (default), repo, group or area; for an area, subject is the repository and path its top-level directory. "+
-			"A metric about a kind of subject it holds no value about is refused with the calls that answer instead: the "+
+			"A metric about a kind of subject it has no values about is refused with the calls that answer instead: the "+
 			"ranked metrics (durable, simplifying, reviews_given) are about people, and overview with rank gives a "+
-			"repository's or a group's table of them. ai_assisted about a person is refused: a person's own share is on their "+
-			"own page (person, empty name). Changes are paged; commit subjects only with --allow-source."+untrusted,
+			"repository's or a group's table of them; who_knows is computed per path by the who_knows tool, never stored. "+
+			"ai_assisted about a person is refused: a person's own share is on their own page (person, empty name). Changes "+
+			"are paged; commit subjects only with --allow-source."+untrusted,
 		schema([]string{"metric"},
 			`"metric": {"type": "string", "description": "A metric id such as durable@1, or a name such as durable for its latest version."}`,
 			`"subject": {"type": "string", "description": "Who or what the number is about: a person's name or id, a repository, or a group; empty for the user the server runs for."}`,
@@ -763,6 +764,8 @@ func (toolCommands) Explain(metric string, kinds []string) string {
 	return "explain(metric: " + metric + ", subject_kind: " + strings.Join(take[:len(take)-1], ", ") + " or " +
 		take[len(take)-1] + ")"
 }
+
+func (toolCommands) WhoKnows() string { return "who_knows(path, repo)" }
 
 func (toolCommands) OwnPage() string {
 	return `person(name: "") for the user the server runs for (--me)`

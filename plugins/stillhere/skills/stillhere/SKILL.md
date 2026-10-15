@@ -44,8 +44,9 @@ directory, such as `src`). A metric has values about some kinds only: the ranked
 ones (`durable`, `simplifying`, `reviews_given`) are about people, so for a
 repository or a group read their rank tables (`overview(scope, rank)`), while
 `knowledge_loss` and `knowledge_concentration` are about repositories, groups
-and areas, and the AI-assisted share about repositories and groups. Asking about
-a kind a metric has no value about is refused with the calls that answer
+and areas, and the AI-assisted share about repositories and groups; `who_knows`
+is computed per path and never explained: call `who_knows(path, repo)`. Asking
+about a kind a metric has no value about is refused with the calls that answer
 instead.
 
 ## Reading an answer
@@ -140,7 +141,11 @@ answer, and say if a later one carries `run-changed`.
 4. `highlights(scope: P, period: "quarter")`: the top tiers, the changes that
    lasted, the largest removals that stuck.
 5. `changes(scope: P, since: "90d", limit: 100)`, following `cursor`: what
-   landed, with each person's durable and simplifying clusters.
+   landed in the quarter, with each person's simplifying clusters. durable@1
+   scores changes 90 to 365 days old only, so this window holds no durable
+   cluster: for those, `since: "365d"`, the whole history the run read, which
+   is longer to page; step 4's `lasted` already names the changes that kept
+   the most lines.
 6. `who_knows(path: "", repo: R)` for the repositories that matter, then for
    their hot paths: owners, authors, recent landers and reviewers.
 7. `identity_candidates(scope: P)`: addresses that may be one person, which

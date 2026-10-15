@@ -41,6 +41,7 @@ func (reviewsGiven) Definition() Definition {
 		Unit:     "merged pull requests reviewed, per person",
 		Ranked:   true,
 		Forge:    true,
+		Subjects: []string{domain.SubjectPerson},
 		Eligibility: "at least 10 reviewed pull requests in the window; " +
 			"bots (an app account, or a [bots] match) are listed and never ranked",
 		BlindSpots: "reviews of pull requests that were closed unmerged or are still open; dismissed reviews; " +

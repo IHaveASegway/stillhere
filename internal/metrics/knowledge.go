@@ -27,6 +27,7 @@ func (knowledgeLossV1) Definition() Definition {
 		Ratio:       true,
 		Ranked:      false,
 		Forge:       true,
+		Subjects:    []string{domain.SubjectRepo, domain.SubjectArea, domain.SubjectGroup},
 		Eligibility: "Not ranked: it describes code, not people.",
 		BlindSpots: "People who moved to repositories outside the scan look gone. Mailmap gaps split one person in two and can make " +
 			"either half look gone. Reviews count only on the pull requests of repositories whose GitHub data the run read, and " +

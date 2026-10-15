@@ -37,6 +37,19 @@ const appSuffix = "[bot]"
 // (LoginKey), so lowercasing is case folding.
 func foldLogin(login string) string { return strings.ToLower(login) }
 
+// CanonicalKey returns a stored person key in the form keys are made in
+// now: a login key folded as Reviewer folds it ("@Zoe", as a run stored
+// before #69 kept it, is "@zoe"), and any other key as it is, since the
+// collectors store every email lowercased. A reader of a run stored before
+// the fold asks it, so the run's keys join the ones made since (app's load,
+// an upcast at the boundary a stored run enters by).
+func CanonicalKey(key string) string {
+	if LoginKey(key) {
+		return foldLogin(key)
+	}
+	return key
+}
+
 // Reviewer returns who a forge account is in this run. A login is a person
 // when a commit the forge attributes to it, one of a pull request's commits
 // or its merge commit, is in the run's history: the person is the run's own

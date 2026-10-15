@@ -30,6 +30,7 @@ func (aiAssistedV1) Definition() Definition {
 			"AI-assisted.",
 		Ratio:       true,
 		Ranked:      false,
+		Subjects:    []string{domain.SubjectRepo, domain.SubjectGroup, domain.SubjectChange},
 		Eligibility: "Not ranked: AI-assisted work is a tag and a cohort comparison, never a ranked row (ADR 0007).",
 		BlindSpots: "A lower bound: editor completions leave no trace, and only the policy's co-author emails and agent authors " +
 			"are recognised, so a tool with an unknown trailer (Cursor's is unverified) is missed. GitHub squash merges list human " +
