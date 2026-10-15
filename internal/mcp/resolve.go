@@ -118,8 +118,11 @@ func (r *resolver) person(query string) (app.NamedPerson, *report.Caveat, error)
 	if near := r.nearPeople(want); len(near) > 0 {
 		msg += " Did you mean " + r.listPeople(near) + "?"
 	}
+	// Said on every miss, so it confirms nothing about this one: a name
+	// the reports withhold is no name to match (report.SubjectOf).
 	return app.NamedPerson{}, nil, notFoundf("%s Names are display names as the reports print them, after .mailmap; "+
-		"overview lists the people with the most surviving lines.", msg)
+		"overview lists the people with the most surviving lines. A display name that gives an address away (an "+
+		"address, or its local part) is withheld from every answer and matches no one: pass that person's id or email.", msg)
 }
 
 // wordPrefixes reports whether every word of query starts a different word
@@ -146,6 +149,9 @@ func (r *resolver) nearPeople(query string) []app.NamedPerson {
 	limit := max(1, len([]rune(query))/4)
 	var out []near
 	for _, p := range r.names.People {
+		if p.Name == "" {
+			continue // no name a report shows, so none to be near: such a person is passed by id
+		}
 		name := norm(p.Name)
 		best := levenshtein(query, name)
 		for _, w := range strings.Fields(name) {
