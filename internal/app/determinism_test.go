@@ -36,6 +36,10 @@ import (
 // reviews_given@1 counts that repository's reviews, in its week blocks at
 // both ends of its window, and the report dates them exactly as the scan
 // did, after a later sync renamed the repository too.
+//
+// A repository of display names the reports may not print as git recorded
+// them is scanned on its own, twice, and checked the same way, with how
+// each page names those people (displayNames, names_test.go, #52).
 func TestDeterminism(t *testing.T) {
 	t.Parallel()
 	group := filepath.Join(t.TempDir(), "acme")
@@ -86,6 +90,7 @@ func TestDeterminism(t *testing.T) {
 	}
 	sameBytes(t, "report's JSON after a rename and a later sync, and the scan's", render(t, withoutTimings(m)).json, a.json)
 
+	t.Run("names that give an address away", displayNames)
 	t.Run("a token planted in a PATH", func(t *testing.T) {
 		// The review of #42 found a token typed in a PATH in facts.db and in
 		// every renderer: discovery made the URL a path under the working
