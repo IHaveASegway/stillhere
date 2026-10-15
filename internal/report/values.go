@@ -286,6 +286,34 @@ type People interface {
 // the same rule.
 func OwnPageOnly(metric domain.MetricID) bool { return metric.Name == "ai_assisted" }
 
+// detailAIAssistedShare is surviving's copy, in its value about a
+// repository or a group, of that scope's AI-assisted share: ai_assisted@1's
+// Num over Den (docs/metrics.md#surviving1). No page reads it from there.
+const detailAIAssistedShare = "ai_assisted_share"
+
+// AIShareIn says where a value holds an AI-assisted share. whole is true
+// when the value is one: ai_assisted's own values (OwnPageOnly), a
+// repository's or a group's share, a person's own share, or a change's tag.
+// key names the Detail key in which another metric's value copies its
+// scope's share, "" for none: surviving's population makeup carries it as
+// ai_assisted_share. This is the one place that says where the shares are,
+// so a reader that must withhold one (the MCP server, by the run's decision
+// app.AIShares) withholds every copy of it; a metric that copies the share
+// under another key must be added here. The key is named whether or not
+// the value's Detail holds it.
+func AIShareIn(v Value) (whole bool, key string) {
+	id, err := domain.ParseMetricID(v.Metric)
+	switch {
+	case err != nil:
+		return false, ""
+	case OwnPageOnly(id):
+		return true, ""
+	case id.Name == "surviving":
+		return false, detailAIAssistedShare
+	}
+	return false, ""
+}
+
 func isBot(who People, email string) bool {
 	return who != nil && who.Bot(email)
 }

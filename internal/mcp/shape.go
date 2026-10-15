@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -678,22 +679,32 @@ func (s *shaper) values(vs []report.Value, repos bool, n named) ([]valueOut, int
 	return out, len(vs)
 }
 
-// withholdAI drops the AI-assisted values the run's decision withholds,
-// noted for the caveat: a repository's or a group's own share whose scope
-// is withheld, and any other one not about a person. A person's own share
-// is kept, since only their own page holds it (app.Me), as is every value
-// of another metric. explain refuses a withheld share before it reads any;
-// this keeps every answer that lists values on the same decision.
+// withholdAI withholds what the run's decision withholds of the AI-assisted
+// shares among an answer's values, wherever report.AIShareIn says they are,
+// noted for the caveat. A value that is a share leaves only when it is a
+// repository's or a group's whose scope the decision shows, or a person's
+// own, which only their own page holds (app.Me). A copy of its scope's
+// share in another metric's value (surviving@1's ai_assisted_share about a
+// repository or a group) leaves only when that share does: otherwise the
+// value leaves without the copy. explain refuses a withheld share before it
+// reads any; this keeps every answer that lists values on the same
+// decision, whichever metric carries the share.
 func (s *shaper) withholdAI(vs []report.Value) []report.Value {
 	var out []report.Value
 	for _, v := range vs {
-		id, err := domain.ParseMetricID(v.Metric)
-		ai := err == nil && report.OwnPageOnly(id)
-		ownShare := v.Subject.Kind == domain.SubjectPerson
+		whole, key := report.AIShareIn(v)
 		scopeShare := v.Subject.Kind == domain.SubjectRepo || v.Subject.Kind == domain.SubjectGroup
-		if ai && !ownShare && (!scopeShare || !showsAI(s.names, v.Scope)) {
+		shown := scopeShare && showsAI(s.names, v.Scope)
+		_, copied := v.Detail[key]
+		switch {
+		case whole && v.Subject.Kind == domain.SubjectPerson, whole && shown:
+		case whole:
 			s.aiWithheld = append(s.aiWithheld, scopeName(v.Scope, s.repoName(v.Scope.Key)))
 			continue
+		case key != "" && copied && !shown:
+			v.Detail = maps.Clone(v.Detail)
+			delete(v.Detail, key)
+			s.aiWithheld = append(s.aiWithheld, scopeName(v.Scope, s.repoName(v.Scope.Key)))
 		}
 		out = append(out, v)
 	}

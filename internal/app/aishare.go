@@ -6,6 +6,8 @@ import (
 	"slices"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
+	"github.com/IHaveASegway/stillhere/internal/identity"
+	"github.com/IHaveASegway/stillhere/internal/report"
 )
 
 // Which AI-assisted shares an answer that leaves the machine may hold (ADR
@@ -25,15 +27,20 @@ import (
 // tau-ARGUS's modular method for hierarchical tables; R's sdcTable). The
 // decision is made once per run, from the run's facts alone, so every
 // answer about the run reads the same one: no two calls disagree, and no
-// pair of answers can be subtracted to give what one of them withholds.
+// pair of answers about the run can be subtracted to give what one of them
+// withholds. Answers about two runs can be, since each run is decided on
+// its own: a rescan of fewer repositories at the same as-of time gives a
+// share the first run withheld exactly (a known limit, ADR 0007's
+// amendment, with what would close it).
 //
 // The rules, bottom-up over the tree of scopes: the whole run, its groups,
 // their repositories, and the repositories named on their own, which hang
 // from the run.
 //
 //   - Primary: a scope's share is withheld when fewer than
-//     AIShareMinPeople people landed in its window (mcpAIPeople counts them,
-//     the one rule for who a share is made of).
+//     AIShareMinPeople people landed in its window (aiSharePeople counts
+//     them, the one rule for who a share is made of, and errs low: it
+//     counts as one person the addresses the identities rules link).
 //   - Secondary: the children of a scope whose shares are withheld leave a
 //     part of it that no shown share covers. When the people of that part
 //     number 1 or 2, more children are withheld, the smallest first (fewest
@@ -69,6 +76,11 @@ import (
 //  3. Three, not two: one of a U's people who takes their own landings away
 //     still sees two people's together, which is the reason the minimum
 //     frequency rule of disclosure control asks for three.
+//  4. People are what aiSharePeople counts. The argument reasons about sets
+//     of them only, so it holds for any rule that gives each address one
+//     person; three people counted are three humans or more wherever the
+//     identities rules link every address of each human, whether or not
+//     they also link two humans wrongly.
 //
 // The whole run's share reaches an answer only in an overview of every
 // repository, which a run has when it was scanned with --scope all or has
@@ -115,12 +127,62 @@ type aiShareNode struct {
 	shown    bool
 }
 
+// aiShares decides a stored run's AI-assisted shares (aiShareDecide) from
+// the run's facts alone: its repositories with their groups, the people
+// behind each repository's share (aiSharePeople), and whether the whole
+// run's share reaches an answer (report.WholeRun).
+func aiShares(s *stored) AIShares {
+	repos := make([]domain.Repo, 0, len(s.facts.Repos))
+	for _, rf := range s.facts.Repos {
+		repos = append(repos, rf.Repo)
+	}
+	return aiShareDecide(repos, aiSharePeople(s), report.WholeRun(s.scope(), len(s.facts.Groups)))
+}
+
+// aiSharePeople returns, per repository with an AI-assisted share, the
+// people the share is made of as the threshold counts them: the humans
+// credited with a non-merge commit of a landing in its window
+// (mcpAIPeople), with the addresses the identities rules link counted as
+// one person, the one address of their candidate (identity.Candidates over
+// the whole run, at every confidence, hand-offs included).
+//
+// A .mailmap merges people on every page; this merges no one on any page,
+// and only makes the count err low, never high. One person who committed
+// from a work address, a laptop's made-up one and GitHub's noreply one,
+// which no .mailmap merges, is one person here, as stillhere identities
+// suggests, not three: a share of theirs alone is their own share. Two
+// people a rule links wrongly count as one, which withholds more and
+// leaks nothing. What no rule links still counts apart: addresses with
+// nothing in common, and a chain of more addresses than a candidate may
+// hold, which identities leaves out as several people's (Survey.Oversized).
+func aiSharePeople(s *stored) map[string]map[string]bool {
+	one := map[string]string{} // an address a candidate holds → the candidate's one address
+	for _, c := range identity.Candidates(s.facts, s.who).Candidates {
+		for _, a := range c.Addresses {
+			one[a.Email] = c.Canonical
+		}
+	}
+	out := map[string]map[string]bool{}
+	for key, people := range mcpAIPeople(s) {
+		counted := make(map[string]bool, len(people))
+		for p := range people {
+			if c, ok := one[p]; ok {
+				p = c
+			}
+			counted[p] = true
+		}
+		out[key] = counted
+	}
+	return out
+}
+
 // aiShareDecide decides a run's AI-assisted shares: repos are the run's
-// repositories with their groups (Repo.Group), people the humans behind
-// each repository's share (mcpAIPeople), and whole says whether the whole
-// run's share reaches any answer (report.WholeRun). It is a pure function
-// of the run's facts, so every call about one run gets the same decision.
-func aiShareDecide(repos []NamedRepo, people map[string]map[string]bool, whole bool) AIShares {
+// repositories with their groups (Repo.Group), people those behind each
+// repository's share as the threshold counts them (aiSharePeople), and
+// whole says whether the whole run's share reaches any answer
+// (report.WholeRun). It is a pure function of the run's facts, so every
+// call about one run gets the same decision.
+func aiShareDecide(repos []domain.Repo, people map[string]map[string]bool, whole bool) AIShares {
 	run := &aiShareNode{scope: domain.Scope{Kind: domain.ScopeAll}}
 	groups := map[string]*aiShareNode{}
 	for _, r := range repos {

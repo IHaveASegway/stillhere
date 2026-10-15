@@ -671,6 +671,9 @@ type ForgeSync struct {                    // a watermark as the run read it
 	Updated, Synced *time.Time // ForgeWatermark's, nil for its zero times
 }
 func OwnPageOnly(metric domain.MetricID) bool // a person's values only their own page shows: ai_assisted (ADR 0007); explain refuses them
+func AIShareIn(v Value) (whole bool, key string) // #68: where a value holds an AI-assisted share: whole for ai_assisted's own values, key
+                                                 // "ai_assisted_share" for surviving's copy of its scope's share; the one place, so a reader that withholds a share
+                                                 // (the MCP server, by app.AIShares) withholds every copy of it
 type RankSet struct { Metric MetricInfo; Scope domain.Scope; Window domain.Window; Percent bool; MinN int; Intervals []domain.RankInterval } // bots left out
 func Build(in *Input) *Model
 // The read commands' answers live here too, so the renderers and the MCP server share one shape.
@@ -789,13 +792,13 @@ func Sync(ctx context.Context, d Deps, r SyncRequest) error // #14
 // app/mcp.go (#15): the MCP server's own read use cases (ADR 0006), answered from #11's report model and the ranked
 // metrics' clusters, as explain reads them; their answers' JSON shape is docs/spec/mcp.md. Unexported names carry mcp….
 type NamesRequest struct { RunID int64 }
-type Names struct { Run domain.Run; Groups []NamedGroup; Repos []NamedRepo; People []NamedPerson; AIPeople int; AIShares AIShares } // what names resolve against
-type NamedGroup struct { Name string; Repos []string; AIPeople int }
-type NamedRepo struct { Key, Name, Group, Path string; AIPeople int }
-// AIPeople: the humans behind a scope's AI-assisted share, credited with a non-merge commit of a landing in its
-// ai_assisted@1 value's window (0 without one), the one rule for who a share is made of.
+type Names struct { Run domain.Run; Groups []NamedGroup; Repos []NamedRepo; People []NamedPerson; AIShares AIShares } // what names resolve against
+type NamedGroup struct { Name string; Repos []string }
+type NamedRepo struct { Key, Name, Group, Path string }
 // app/aishare.go (#68, ADR 0007's amendment): the run's one decision about which AI-assisted shares leave the machine, which
-// RunNames computes and every MCP answer reads. Primary: a scope of fewer than AIShareMinPeople people is withheld; secondary,
+// RunNames computes and every MCP answer reads, wherever report.AIShareIn says a share is. A share is made of the humans credited
+// with a non-merge commit of a landing in its ai_assisted@1 value's window, counted as one person where identity.Candidates links
+// their addresses (aiSharePeople: the count errs low, never high). Primary: a scope of fewer than AIShareMinPeople people is withheld; secondary,
 // bottom-up over the run, its groups and their repositories (by Repo.Group), more children are withheld, the smallest first, while
 // the withheld part of a scope covers 1 or 2 people, and the scope itself when no child can close it; the whole run is decided on
 // only when report.WholeRun. A shown share less the shown shares below it then covers no one or at least three people.
@@ -977,4 +980,4 @@ Tests sit at stable boundaries, so a refactor does not rewrite them (Kent Beck, 
 | `TestStoreRoundTrip` | `sqlite` | `LoadFacts(PutRepoFacts(x)) == x`, a zero loading as +0; `Run(id)` returns the run as begun and finished, policy source included; `RunWatermarks` returns the last `PutRunWatermarks` of the run, names and joins included, and a watermark that joins nothing is refused; `RunForge` returns the last `PutRunForge` of the run with its watermarks and its join (#38), and a pull request of a repository not the run's is refused; readers never see a running or failed run (`ErrNotFound`, `RunWatermarks` and `RunForge` included) |
 | `TestStoreLifecycle` | `sqlite` | `Open` creates a missing directory 0700 and files 0600, in WAL mode; it refuses another program's SQLite file, a file that is not SQLite and a newer facts database with a `UsageError`, without waiting for a held lock and leaving the file byte for byte; first opens racing in separate processes all succeed; a run left running is deleted once its store has written nothing for a day, and not before; retention and `LatestRun` match a model of the run-model rule across gaps, year-long pauses, ties and backfills, and no table with a `run_id` keeps a row of a deleted run, the GitHub data a run kept included (#38) |
 | `TestGitHubSync` | `github` | recorded responses ([testdata/github](../../testdata/github/README.md)) become the expected repositories and pull request pages, through rate limits (a 403 with Retry-After, a nearly spent budget, and a spent budget and a secondary limit that GitHub reports inside a 200), a 502 and nested follow-ups; a mirror clones and fetches from a local git server that takes only the token, follows a rename by node id, moves to `.stale` and back, and never follows a redirect to another host; the token is in no fact, mirror file, log or error; the pages the passes return, stored through `sqlite.Open` and `PutForgePage`, come back from `LoadForge` as the last page that carried each pull request said, reviews in submission order, and from a `since` between the passes only the pull requests updated at or after it; `reviews_given@1` over what `LoadForge` returns matches its oracle in scope `all`, the group and the repository, another organization's repository and a failed one counting nowhere (M2) |
-| `TestMCPTools` | `mcp` | each tool through the SDK's in-memory client (M4); and AI-assisted shares that add up, against the local report's: no answer, alone or less another, gives back a withheld share, a group's, a repository's or with `--scope all` the whole run's (#68) |
+| `TestMCPTools` | `mcp` | each tool through the SDK's in-memory client (M4); and AI-assisted shares that add up, against the local report's: no answer, alone or less another, gives back a withheld share, a group's, a repository's or with `--scope all` the whole run's, nor surviving@1's copy of it (`ai_assisted_share`), and one person's three unmerged addresses count as one (#68) |

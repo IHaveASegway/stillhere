@@ -760,11 +760,15 @@ func TestMCPTools(t *testing.T) {
 	// shown repositories' (ADR 0007's amendment of 2026-10-15). Group ai holds
 	// team, four people with one AI-assisted landing of 12, and solo, one
 	// person with three of 4; group solos holds three repositories of one
-	// person each. The local report shows every share, which is how the test
-	// knows what no answer may let the agent work out.
+	// person each; group alias holds max, one person who committed from three
+	// addresses no .mailmap merges. The local report shows every share, which
+	// is how the test knows what no answer may let the agent work out, and
+	// surviving@1's population makeup copies each share (ai_assisted_share),
+	// which explain must withhold as the decision does.
 	t.Run("AI-assisted shares that add up", func(t *testing.T) {
 		root := t.TempDir()
 		group, solos, lone := filepath.Join(root, "ai"), filepath.Join(root, "solos"), filepath.Join(root, "lone")
+		alias := filepath.Join(root, "alias")
 		const trailer = "\n\nCo-Authored-By: Claude <noreply@anthropic.com>"
 		commit := func(name, email string, day int, ai bool) testCommit {
 			subject := "feat: " + strings.ToLower(name) + " " + strconv.Itoa(day)
@@ -791,6 +795,12 @@ func TestMCPTools(t *testing.T) {
 				commit("Pat "+who, strings.ToLower(who)+"@solos.example", 24+i, i == 0)})
 		}
 		buildRepo(t, lone, []testCommit{commit("Lee Lone", "lee@lone.example", 28, true)})
+		// One person, three addresses: a work one, a laptop's made-up one and
+		// GitHub's noreply one, which identities links by their one name.
+		buildRepo(t, filepath.Join(alias, "max"), []testCommit{
+			commit("Max Multi", "max@multi.example", 13, true), commit("Max Multi", "max@maxs-laptop.local", 14, false),
+			commit("Max Multi", "4242+max@users.noreply.github.com", 15, false),
+		})
 
 		// overview answers each scope's share as the agent sees it, keyed
 		// "all:", "group:NAME" or "repo:NAME"; nil is withheld.
@@ -880,9 +890,39 @@ func TestMCPTools(t *testing.T) {
 				t.Errorf("explain(ai_assisted, %s %s) answered %q, want it refused without pointing at another share", kind, subject, text)
 			}
 		}
+		// copied checks the share surviving@1's population makeup copies
+		// (ai_assisted_share) in explain's answer about a repository or a
+		// group: the local report's share when want holds it, and otherwise
+		// none, with the caveat that names the scope.
+		copied := func(t *testing.T, cs *sdk.ClientSession, subject, kind string, want *report.Share) {
+			t.Helper()
+			text, isErr := callTool(t, cs, "explain", map[string]any{"metric": "surviving", "subject": subject, "subject_kind": kind})
+			if isErr {
+				t.Fatalf("explain(surviving, %s %s) failed: %s", kind, subject, text)
+			}
+			var e explainOut
+			decode(t, text, &e)
+			if len(e.Values) == 0 {
+				t.Fatalf("explain(surviving, %s %s) holds no value: %s", kind, subject, text)
+			}
+			for _, v := range e.Values {
+				share, ok := v.Detail["ai_assisted_share"]
+				switch {
+				case want != nil && (!ok || !near(share, want.Value)):
+					t.Errorf("explain(surviving, %s %s): ai_assisted_share %v (%v), want the local report's %v", kind, subject, share, ok, want.Value)
+				case want == nil && ok:
+					t.Errorf("explain(surviving, %s %s) holds the withheld AI-assisted share as ai_assisted_share %v", kind, subject, share)
+				}
+			}
+			if want == nil && !slices.ContainsFunc(e.Caveats, func(c report.Caveat) bool {
+				return c.Code == "ai-few-people" && strings.Contains(c.Message, strconv.Quote(subject))
+			}) {
+				t.Errorf("explain(surviving, %s %s) caveats %v, want ai-few-people naming it", kind, subject, e.Caveats)
+			}
+		}
 
 		db := filepath.Join(root, "group.db")
-		scan(t, db, mailmap, domain.ScopeGroup, group, solos)
+		scan(t, db, mailmap, domain.ScopeGroup, group, solos, alias)
 		truth := local(t, db)
 		cs := connect(t, Config{Open: openDB(db), Version: "test"}, 0)
 
@@ -898,12 +938,15 @@ func TestMCPTools(t *testing.T) {
 		}) {
 			t.Errorf("overview(ai) caveats %v, want ai-few-people naming team and solo", a.Caveats)
 		}
-		// A second call, about one repository, reads the same decision.
+		// A second call, about one repository, reads the same decision, and
+		// so does surviving@1's copy of the share.
 		for _, repo := range []string{"team", "solo"} {
 			got, _ = overview(t, cs, repo)
 			shown(t, "overview("+repo+")", got, truth)
 			withheld(t, cs, repo, "repo")
+			copied(t, cs, repo, "repo", nil)
 		}
+		copied(t, cs, "ai", "group", truth["group:ai"])
 		// Three people of one repository each make a group's share: it is
 		// shown, theirs are not.
 		got, _ = overview(t, cs, "solos")
@@ -916,6 +959,15 @@ func TestMCPTools(t *testing.T) {
 		if len(e.Values) != 1 {
 			t.Errorf("explain(ai_assisted, group solos) answered %s, want the group's share", text)
 		}
+		copied(t, cs, "solos", "group", truth["group:solos"])
+		copied(t, cs, "s1", "repo", nil)
+		// Three addresses that identities links are one person, so neither
+		// max's share nor its group's leaves: the count errs low, never high.
+		got, _ = overview(t, cs, "alias")
+		shown(t, "overview(alias)", got, truth)
+		withheld(t, cs, "max", "repo")
+		withheld(t, cs, "alias", "group")
+		copied(t, cs, "max", "repo", nil)
 
 		// With --scope all the whole run's share is shown too, and a
 		// repository of one person named on its own hangs from the run: the
@@ -924,11 +976,14 @@ func TestMCPTools(t *testing.T) {
 		db = filepath.Join(root, "all.db")
 		scan(t, db, mailmap, domain.ScopeAll, group, lone)
 		truth = local(t, db)
-		got, _ = overview(t, connect(t, Config{Open: openDB(db), Version: "test"}, 0), "")
+		cs = connect(t, Config{Open: openDB(db), Version: "test"}, 0)
+		got, _ = overview(t, cs, "")
 		shown(t, "overview() of the whole run", got, truth, "all:")
 		if sh := got["all:"]; sh == nil || residual(sh, got["group:ai"], got["repo:lone"]) == residual(truth["repo:lone"]) {
 			t.Errorf("overview(): the whole run's share less those shown gives lone's own share %+v", truth["repo:lone"])
 		}
+		copied(t, cs, "ai", "group", nil)
+		copied(t, cs, "lone", "repo", nil)
 	})
 }
 

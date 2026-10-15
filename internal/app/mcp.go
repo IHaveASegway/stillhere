@@ -65,9 +65,6 @@ type Names struct {
 	Groups []NamedGroup  // by name
 	Repos  []NamedRepo   // by group, name and key, as reports list them
 	People []NamedPerson // by name, then key
-	// AIPeople counts the humans behind the whole run's AI-assisted share,
-	// as NamedRepo.AIPeople does for one repository.
-	AIPeople int
 	// AIShares is the run's one decision about which AI-assisted shares may
 	// leave the machine (aishare.go), which every answer about the run reads.
 	AIShares AIShares
@@ -77,9 +74,6 @@ type Names struct {
 type NamedGroup struct {
 	Name  string
 	Repos []string // Repo.Key of its repositories, sorted
-	// AIPeople counts the humans behind the group's AI-assisted share, as
-	// NamedRepo.AIPeople does for one repository.
-	AIPeople int
 }
 
 // NamedRepo is one repository of a run.
@@ -87,12 +81,6 @@ type NamedRepo struct {
 	Key, Name string
 	Group     string // "" when the repository was named directly
 	Path      string // the absolute path the run read it at, for resolving an absolute path inside it
-	// AIPeople counts the humans behind the repository's AI-assisted share:
-	// those credited with a non-merge commit of a landing in the window of
-	// its ai_assisted@1 value; 0 when it has none. With one or two, the
-	// share is close to one person's own, which ADR 0007 shows only to
-	// that person.
-	AIPeople int
 }
 
 // NamedPerson is someone a run knows: an author, a co-author, or anyone a
@@ -180,21 +168,7 @@ func RunNames(ctx context.Context, d Deps, r NamesRequest) (*Names, error) {
 	}
 	slices.SortFunc(n.People, func(a, b NamedPerson) int { return cmp.Or(cmp.Compare(a.Name, b.Name), cmp.Compare(a.Key, b.Key)) })
 
-	behind := mcpAIPeople(s)
-	all := map[string]bool{}
-	for i := range n.Repos {
-		n.Repos[i].AIPeople = len(behind[n.Repos[i].Key])
-		maps.Copy(all, behind[n.Repos[i].Key])
-	}
-	n.AIPeople = len(all)
-	for i := range n.Groups {
-		group := map[string]bool{}
-		for _, key := range n.Groups[i].Repos {
-			maps.Copy(group, behind[key])
-		}
-		n.Groups[i].AIPeople = len(group)
-	}
-	n.AIShares = aiShareDecide(n.Repos, behind, report.WholeRun(s.scope(), len(s.facts.Groups)))
+	n.AIShares = aiShares(s)
 	return n, nil
 }
 
