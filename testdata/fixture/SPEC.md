@@ -705,7 +705,7 @@ U1 to M1 hold no binary change. Both sums classify a line by the path it had in 
 
 T3 is no cluster: its only change is binary, so no added line of it is in the ratio, and `flip_2 = 20` leaves Σ surviving. V2 and M1 add nothing, so they are no clusters either, Mo has no value, and R1 is no landing. Everyone has fewer than 10 clusters, so the rank table lists them below the minimum.
 
-Wrong implementations this catches (each was run as a mutation of `internal/metrics/view.go` when it was added, and #70 ran the first three, whole commits and its own again on its rule; each fails the guard with these numbers):
+Wrong implementations this catches (each was run as a mutation of `internal/metrics/view.go` when it was added, and #70 ran the first two, whole paths, whole commits and its own again on its rule; each fails the guard with these numbers):
 
 - **No binary rule.** Ann gets 5 / 2 = 2.5, num 5 and den 2, #54's evidence; Flo 5 / 6, with T2 at 2 / 1; and `durable_other` 19 / 21. `main` before #54, which also classified a blamed line by its path at HEAD, gave Val 5 / 2 too.
 - **Asking the binary rule by a blamed line's path at HEAD**, not by the path it had in its commit. HEAD has no `bin.py`, so `moved.py`'s 3 lines stay with B1: Ann 5 / 2. (V1's 3 lines in `lib.py` leave Σ surviving by the role `vendor/lib.py` had in V1, whichever path the binary rule asks.)
