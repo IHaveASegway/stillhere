@@ -2,7 +2,7 @@
 
 Status: v1 shape as emitted by `report.Build` and `report.JSON` (#11) · 2026-10-14 · `stillhere.report/v1`. No external consumer exists yet, so the shape may still change until the first tag; after it, the rules below hold.
 
-`stillhere week`, `scan` and `report` print one `stillhere.report/v1` document with `--format json`. The read commands (`explain`, `who-knows`, `me`, `validate`, `metrics`) print their own answers, described [below](#the-read-commands-answers). The Go types in `internal/report` are the same shapes, so the MCP server (#15) answers from them too.
+`stillhere week`, `scan` and `report` print one `stillhere.report/v1` document with `--format json`. The read commands (`explain`, `who-knows`, `me`, `identities`, `validate`, `metrics`) print their own answers, described [below](#the-read-commands-answers). The Go types in `internal/report` are the same shapes, so the MCP server (#15) answers from them too.
 
 ## Rules that carry forward, whatever the format
 
@@ -179,6 +179,7 @@ A metric whose values are missing although the run has the facts it computes fro
 | `duplicate-repo` | Another clone of the repository's remote was skipped, so the repository is counted once; on the kept repository's card. |
 | `excluded-repo`, `path-failed` | Run-level warnings, counted, with the first one's reason; `warnings` lists each one. |
 | `unmerged-identities` | Display names that more than one email shares were not merged; a `.mailmap` line merges them if they are one person. |
+| `mailmap-at-scan` | Every `identities` answer: its addresses are the run's, which git mailmapped when the run was scanned, so a `.mailmap` line added since takes effect at the next scan; git applies one line per commit and never follows a chain. |
 | `no-values` | A metric the report reads gave no value although the run has its facts; a rank table asked for is empty; a who-knows answer is missing. |
 | `ai-lower-bound` | An AI-assisted share is shown: editor completions leave no trace. |
 | `validity` | A ranked metric's validity note, such as unvalidated until the labelled-sample check. |
@@ -197,6 +198,7 @@ Each answer starts with `provenance` and ends with `caveats`. Values print as `{
 | `explain METRIC --person EMAIL` | `Explain` | `metric` (the definition: `id`, `question`, `unit`, `ranked`, `eligibility`, `blind_spots`, `gaming`, `oracle`, `validity`), `subject`, `values[]` (one per scope and window), `changes[]` (a ranked metric's clusters for the person: `{repo, repo_key, landing, time, merge, title, num, den}`; `title` is the landing's commit subject, local output only and never sent to an AI). `ai_assisted` about a person is a usage error: a person's own AI-assisted share is on their own page only (ADR 0007). |
 | `who-knows PATH [--repo KEY]` | `WhoKnows` | `path`, `repo`, `repos[]` of `{repo, key, lines, prod_files, files_with_majority, majority_owners[], top_authors[], recent_landers[], bots[]}`, each person a `{email, name, lines, majority_files, recent_landings}`: `who_knows@1` answered for the path at query time, so any prefix works, down to one file. When it gives nothing although the run holds surviving prod lines under the path, a `no-values` caveat names the repositories and the text says "no answer", not "nobody". |
 | `me --email EMAIL` | `Me` | `person`, `values[]`, `ranks[]` of `{metric, scope, window, percent, min_n, eligible, rank_lo, rank_hi, of, estimate, lo, hi, n}`: the person's place in every ranked metric's table, in the scan's rank scope. It holds the facts a lead sees about the person (ADR 0001) and their own AI-assisted share, which text and Markdown label "shown only on your own page (ADR 0007)". The command line has no viewer identity; enforcing who opens whose page is the web server's (M3). |
+| `identities [--run ID] [--format mailmap\|text\|md\|json]` | `Identities` | `scope`, `addresses`, `bots`, `shared`, `oversized`, `candidates[]` of `{confidence, guess, commented, chained, rules[], name, addresses[], links[]}`, each address `{email, name, name_withheld, domain_kind, canonical, commits, co_authored, first, last, repos[]}` and each link `{rule, addresses[], name, from_name, hand_off}`, and `rules[]`, each rule's definition and how it can be wrong ([identities.md](identities.md)). Emails are only in fields named `email`, and a name that gives an address away is withheld. `--format mailmap` prints the suggested `.mailmap` lines with their evidence as `#` comments, every candidate's but a high one's commented out; stillhere never applies one. |
 | `validate --labels FILE` | `Validation` | `labels`, `labellers`, `meaningful`, `routine`, `noise`, `unmatched`, `metrics[]` of `{metric, auc, n, meaningful, routine, beta}`; `auc` is `null` without both meaningful and routine changes scored, and `beta` is true below AUC 0.7 or 50 scored labels |
 | `metrics` | `Catalog` | `metrics[]` of definitions, in registry order |
 
@@ -214,7 +216,7 @@ The labels file is CSV: change id (a landing SHA, or an unambiguous prefix of at
 | --- | --- |
 | 0 | At least one repo produced week or still-here facts. This includes partial failure, clone-health skips, and skipped hotspots. |
 | 1 | No repo produced facts: every path failed, none was a repo, or `--exclude-repo` left none. The report is still printed, with each repository's error, and a scan stores no run. A read command asked about a run or a person the database does not hold also exits 1. |
-| 2 | A usage error (see below). Until the integration issue (#13) removes the last stub, a command whose use case is not built yet also exits 2. |
+| 2 | A usage error (see below). |
 | 128 + n | Interrupted by signal n (SIGINT, SIGTERM or SIGHUP). stillhere stops every git process, then ends itself with the same signal, so a shell sees it die by that signal (`$?` is 130 for Ctrl-C) and stops a loop. Where a process cannot signal itself (Windows), it exits 130. A scan interrupted after it began writing marks its run failed, which no reader sees. |
 
 Usage errors:

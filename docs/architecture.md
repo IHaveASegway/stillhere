@@ -128,7 +128,7 @@ The core (classification, metrics, ranking) imports no adapter package: no `os/e
 | Threat | Mitigation |
 |---|---|
 | A token leaks into a remote URL, log, report or page | Credentials are supplied per git command, never written to config or URLs. Userinfo is scrubbed from every stored or printed URL. A test greps every output for a planted token. |
-| A hostile repo runs code when git is invoked | Hooks, fsmonitor and external diff are disabled; global config is ignored. Residual risk: a repo's textconv or smudge filters. stillhere is not a sandbox for untrusted repos. |
+| A hostile repo runs code when git is invoked | Hooks, fsmonitor, external diff and textconv are disabled; analysis never runs clean or smudge filters, because it never moves content between a work tree and the object store; global config is ignored, and analysis refuses every network transport ([git-invocation.md](spec/git-invocation.md#analysis-commands-offline)). Residual risk: a repo-local `gpg.program`, which runs only for a command that verifies signatures, and no collector does. stillhere is not a sandbox for untrusted repos. |
 | Script injection through author names | `html/template` escapes by context (text, attribute, URL, JavaScript). Names are treated as untrusted; the fixture includes `Frank & Sons`. |
 | Session theft or forged sign-in | GitHub App sign-in with a state parameter; signed `HttpOnly`, `Secure`, `SameSite=Lax` cookies with a short lifetime; TLS required in front of the server. |
 | Someone sees ranks they should not | Deny by default. Leads (a named GitHub team) see ranks; each person sees their own page; org members see highlights and code-area views. An audit log records who opened ranked views. |

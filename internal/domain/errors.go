@@ -17,11 +17,3 @@ var ErrNoFacts = errors.New("no repository produced facts")
 
 // ErrNotFound means a requested record, such as a run id, does not exist.
 var ErrNotFound = errors.New("not found")
-
-// ErrNotImplemented marks code whose implementation has not landed yet: each
-// stub of the walking skeleton returns it wrapped with the issue that builds
-// it, and the command line maps it, and only it, to exit code 2. It is
-// stillhere's own sentinel rather than errors.ErrUnsupported, which syscall
-// errors such as ENOTSUP and ENOSYS also match. Delete it with the last stub
-// (#13).
-var ErrNotImplemented = errors.New("not implemented yet")

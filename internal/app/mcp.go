@@ -287,7 +287,7 @@ func Overview(ctx context.Context, d Deps, r OverviewRequest) (*OverviewAnswer, 
 	if err != nil {
 		return nil, err
 	}
-	m, err := Report(ctx, d, ReportRequest{RunID: r.RunID, Rank: r.Rank})
+	m, s, err := buildReport(ctx, d, ReportRequest{RunID: r.RunID, Rank: r.Rank})
 	if err != nil {
 		return nil, err
 	}
@@ -298,8 +298,11 @@ func Overview(ctx context.Context, d Deps, r OverviewRequest) (*OverviewAnswer, 
 	var group string // the group whose rank tables hold the scope
 	switch r.Scope.Kind {
 	case "":
+		// Where the whole report's numbers come from, as each of its
+		// sections says for itself, over every repository of the run.
 		a.Overviews, a.Repos, a.Ranks, a.Caveats = m.Overviews, m.Repos, m.Ranks, m.Caveats
-		a.Provenance = mcpModelProvenance(m)
+		run := s.run
+		a.Provenance = report.AnswerProvenance(&run, s.facts, s.forge, m.Metrics)
 		return a, nil
 	case domain.ScopeGroup:
 		i := slices.IndexFunc(m.Overviews, func(o report.Overview) bool {
@@ -339,23 +342,6 @@ func Overview(ctx context.Context, d Deps, r OverviewRequest) (*OverviewAnswer, 
 	return a, nil
 }
 
-// mcpModelProvenance says where a whole report's numbers come from, as each of
-// its sections says for itself: the run, the as-of time, the policy, every
-// repository's HEAD and every metric version the report read.
-func mcpModelProvenance(m *report.Model) report.Provenance {
-	p := report.Provenance{AsOf: m.Now, Policy: m.Policy.SHA256, Metrics: slices.Clone(m.Metrics)}
-	if m.Run != nil {
-		p.RunID = m.Run.ID
-	}
-	for _, rp := range m.Repos {
-		if rp.Head != "" {
-			p.Heads = append(p.Heads, report.Head{Repo: rp.Name, Key: rp.Key, Branch: rp.Branch, SHA: rp.Head})
-		}
-	}
-	slices.SortFunc(p.Heads, func(x, y report.Head) int { return cmp.Or(cmp.Compare(x.Repo, y.Repo), cmp.Compare(x.Key, y.Key)) })
-	return p
-}
-
 // PersonRequest asks what a stored run holds about one person, for someone
 // other than that person.
 type PersonRequest struct {
@@ -370,40 +356,7 @@ type PersonRequest struct {
 // share is never computed here; the MCP server answers the person the
 // server was started for (--me) through Me instead.
 func Person(ctx context.Context, d Deps, r PersonRequest) (*report.Me, error) {
-	d, err := d.ready("app.Person", false, false, true)
-	if err != nil {
-		return nil, err
-	}
-	email := strings.ToLower(strings.TrimSpace(r.Email))
-	if email == "" {
-		return nil, &domain.UsageError{Msg: "person needs the person's email"}
-	}
-	s, err := load(ctx, d, r.RunID)
-	if err != nil {
-		return nil, err
-	}
-	// The body of Me in read.go without metrics.PersonalAIShare. Folding
-	// Me into one helper with a switch for the share is left to read.go's
-	// owner, so that this branch touches no file of another issue.
-	subject := domain.Subject{Kind: domain.SubjectPerson, Key: email}
-	var values []domain.MetricValue
-	for _, v := range s.values {
-		if v.Subject == subject && !report.OwnPageOnly(v.Metric) {
-			values = append(values, v)
-		}
-	}
-	if len(values) == 0 {
-		return nil, fmt.Errorf("%s has no values in run %d (a person is named by their canonical email, after .mailmap): %w",
-			email, s.run.ID, domain.ErrNotFound)
-	}
-	sets, _, err := rankAll(s.input(), allRanked(), rankScopes(s.scope(), s.facts), s.ranks, &subject)
-	if err != nil {
-		return nil, err
-	}
-	run := s.run
-	return report.NewMe(&report.MeInput{
-		Run: &run, Facts: s.facts, Who: s.who, Email: email, Values: values, Ranks: sets,
-	}), nil
+	return personPage(ctx, d, "person", r.RunID, r.Email, false)
 }
 
 // ChangesRequest asks which changes landed in a scope of a stored run, at
@@ -532,7 +485,7 @@ func Changes(ctx context.Context, d Deps, r ChangesRequest) (*ChangesAnswer, err
 	}
 	scoped := mcpScopedFacts(s.facts, repos)
 	run := s.run
-	a.Provenance = report.AnswerProvenance(&run, scoped, []string{mcpDurable, mcpSimplifying})
+	a.Provenance = report.AnswerProvenance(&run, scoped, s.forge, []string{mcpDurable, mcpSimplifying})
 	a.Caveats = append(report.AnswerCaveats(scoped), caveats...)
 	return a, nil
 }
@@ -899,8 +852,11 @@ func Highlights(ctx context.Context, d Deps, r HighlightsRequest) (*HighlightsAn
 
 	scoped := mcpScopedFacts(s.facts, repos)
 	run := s.run
-	a.Provenance = report.AnswerProvenance(&run, scoped, used)
-	a.Caveats = append(report.AnswerCaveats(scoped), report.Caveat{Code: "highlights",
+	a.Provenance = report.AnswerProvenance(&run, scoped, s.forge, used)
+	// The top tier can hold reviews_given@1, whose GitHub numbers carry
+	// their caveats as its rank tables do.
+	a.Caveats = append(report.AnswerCaveats(scoped), report.ForgeCaveats(&run, scoped, s.forge, used)...)
+	a.Caveats = append(a.Caveats, report.Caveat{Code: "highlights",
 		Message: "Highlights are rule-based picks for recognition, not a ranking of people: the top tier counts everyone " +
 			"whose 95% rank interval reaches first place and names them when they are a third of the table or fewer, and " +
 			"the change lists are single changes with their numbers."})
@@ -1149,7 +1105,7 @@ func Diff(ctx context.Context, d Deps, r DiffRequest) (*DiffAnswer, error) {
 	}
 	scoped := mcpScopedFacts(s.facts, []*domain.RepoFacts{rf})
 	run := s.run
-	a.Provenance = report.AnswerProvenance(&run, scoped, nil)
+	a.Provenance = report.AnswerProvenance(&run, scoped, s.forge, nil)
 	a.Caveats = report.AnswerCaveats(scoped)
 	switch {
 	case left > 0:

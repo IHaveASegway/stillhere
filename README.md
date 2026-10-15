@@ -5,7 +5,7 @@ Change analytics for git and GitHub (what landed, what lasted, who knows it) for
 
 > stillhere measures specific properties of code changes: how long they lasted, how much they simplified, how much review they got. It does not measure a person's value, and it must not be the basis for performance or pay decisions.
 
-**Status:** pre-release; milestone M0 is in progress. No release is tagged yet, so build from source (see [Install](#install)).
+**Status:** pre-release. The MVP is built: milestones M0 to M2 and the MCP server of M4 ([product brief](docs/product.md#milestones)). No release is tagged yet, so build from source (see [Install](#install)).
 
 - [Product brief](docs/product.md): what it is, who it is for, milestones, open decisions
 - [Metric catalog](docs/metrics.md): every metric's definition, blind spots, and how it can be gamed
@@ -55,7 +55,18 @@ stillhere help week
 
 Two files in the current directory change the answer when present. `.mailmap` folds one person's addresses into one identity (`--mailmap FILE` names another). `stillhere.toml` replaces the packaged policy: which paths count as production code, which authors are bots (`--policy FILE` names another).
 
-The other commands (`scan`, `explain`, `sync github`, `mcp` and the rest in `stillhere help`) arrive with milestones M1 to M4 ([product brief](docs/product.md#milestones)); until then they exit with status 2.
+To keep a history, scan instead: `scan` records a run in facts.db (history, blame, metrics and ranks), and the read commands answer from the latest run, or from `--run ID`, without touching the repositories again.
+
+```sh
+stillhere scan ~/src/acme                           # record a run: the default branch of each repository
+stillhere report --rank durable@1                   # the run as a report, with durable@1's rank table
+stillhere who-knows services/billing                # who knows the code under a path
+stillhere explain durable@1 --person ada@example.com  # the changes behind one person's value
+stillhere me --email you@example.com                # your own page
+stillhere identities --format mailmap               # .mailmap suggestions with their evidence, never applied
+stillhere sync github --org acme                    # mirrors, pull requests and reviews: the one network command
+stillhere scan ~/.stillhere/mirrors/acme            # then scan the mirrors sync keeps
+```
 
 In Docker, mount the repositories and run as the user who owns them, because git refuses to read a repository that belongs to someone else:
 
@@ -66,7 +77,7 @@ docker run --rm --user "$(id -u):$(id -g)" -v "$HOME/src:/work:ro" \
 
 Docker Desktop on macOS presents mounted files as owned by root, so there either pass `--user 0:0` or use the Homebrew install.
 
-The commands that store facts (`scan`, from M1) keep them under `STILLHERE_HOME`, which is `/data` in the image, a directory only the image's own user may enter. When you pass `--user`, mount a directory that user owns there, such as `-v "$HOME/.stillhere:/data"`.
+The commands that store facts (`scan` and `sync github`) keep them under `STILLHERE_HOME`, which is `/data` in the image, a directory only the image's own user may enter. When you pass `--user`, mount a directory that user owns there, such as `-v "$HOME/.stillhere:/data"`.
 
 ## Use it from an agent (MCP)
 

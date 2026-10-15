@@ -111,6 +111,7 @@ type IdentitiesInput struct {
 	Facts  *domain.FactSet  // the scope's facts: provenance, caveats and repository names
 	Scope  domain.Scope     // the zero Scope: every repository of the run
 	Survey *identity.Survey // identity.Candidates over Facts
+	Forge  *ForgeRead       // the GitHub data the run read, which dates its repositories; nil: the reader cannot tell
 }
 
 // identCodeMailmap is the caveat every identities answer carries: the
@@ -151,8 +152,8 @@ func NewIdentities(in *IdentitiesInput) *Identities {
 		id.Rules = append(id.Rules, IdentityRule{ID: string(def.Rule), Matches: def.Matches, Confidence: def.Confidence, Risk: def.Risk})
 	}
 	// The answer covers every repository of the scope's facts and reads no
-	// metric and no forge fact.
-	id.Provenance = AnswerProvenance(in.Run, fs, nil)
+	// metric, so it shows no GitHub number and carries no forge caveat.
+	id.Provenance = AnswerProvenance(in.Run, fs, in.Forge, nil)
 	id.Caveats = append(AnswerCaveats(fs), Caveat{
 		Code: identCodeMailmap,
 		Message: "These are the run's addresses, which git mailmapped when the run was scanned: an address the " +

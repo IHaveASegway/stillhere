@@ -50,11 +50,10 @@ const defaultPolicyFile = "stillhere.toml"
 // Execute runs the command line with args, which exclude the program name,
 // and returns the exit code (docs/spec/report-json.md#exit-codes): 0 on
 // success; 1 when the command failed or no repository produced facts; 2 for
-// a usage error, including a command whose use case is not built yet; 130
-// when a command failed after ctx was cancelled, which is how cmd/stillhere
-// reports a signal. It prints at most one error line to stderr and never
-// calls os.Exit (cmd/stillhere turns off cobra's Windows mousetrap, which
-// would).
+// a usage error; 130 when a command failed after ctx was cancelled, which is
+// how cmd/stillhere reports a signal. It prints at most one error line to
+// stderr and never calls os.Exit (cmd/stillhere turns off cobra's Windows
+// mousetrap, which would).
 func Execute(ctx context.Context, args []string, stdout, stderr io.Writer, build Build) int {
 	e := &env{
 		stdout: stdout,
@@ -583,10 +582,7 @@ func exitCode(err error) int {
 	switch {
 	case err == nil:
 		return 0
-	case errors.As(err, &usage), errors.Is(err, domain.ErrNotImplemented):
-		// A command whose use case is not built yet is a usage error: the
-		// user cannot get a result from it today. The second case goes with
-		// domain.ErrNotImplemented when the last stub does (#13).
+	case errors.As(err, &usage):
 		return 2
 	default:
 		// Includes domain.ErrNoFacts: no repository produced facts.

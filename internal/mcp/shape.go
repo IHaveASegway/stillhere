@@ -94,6 +94,9 @@ type provenanceOut struct {
 	// HeadsSHA256 digests all of them, as "repo key branch sha" lines in
 	// heads order, so two answers can be checked against one HEAD set.
 	HeadsSHA256 string `json:"heads_sha256"`
+	// ForgeReposTotal counts forge.repos before they were cut with heads;
+	// 0 when they were not cut.
+	ForgeReposTotal int `json:"forge_repos_total,omitempty"`
 }
 
 // named is the set of repositories an answer names, by key or by name.
@@ -122,6 +125,18 @@ func (f format) provenance(pv report.Provenance, n named) provenanceOut {
 		if n.keys[h.Key] || n.names[h.Repo] {
 			out.Heads = append(out.Heads, h)
 		}
+	}
+	if pv.Forge != nil {
+		// The GitHub repositories are cut with the heads they join, and as_of
+		// stays the oldest sync over all of them, which dates the numbers.
+		forge := *pv.Forge
+		out.ForgeReposTotal, forge.Repos = len(forge.Repos), nil
+		for _, s := range pv.Forge.Repos {
+			if n.keys[s.Key] {
+				forge.Repos = append(forge.Repos, s)
+			}
+		}
+		out.Forge = &forge
 	}
 	return out
 }

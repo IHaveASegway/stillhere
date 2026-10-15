@@ -169,19 +169,26 @@ func historyOf(fs *domain.FactSet) domain.Window {
 // Report renders a stored run as a report, with ranks for the metrics
 // named, or, when none is named, for those the scan was asked to rank.
 func Report(ctx context.Context, d Deps, r ReportRequest) (*report.Model, error) {
+	m, _, err := buildReport(ctx, d, r)
+	return m, err
+}
+
+// buildReport is Report, with the stored run its model was built from, for
+// an answer built on a report (Overview).
+func buildReport(ctx context.Context, d Deps, r ReportRequest) (*report.Model, *stored, error) {
 	d, err := d.ready("app.Report", false, false, true)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	started := time.Now()
 	ids := r.Rank
 	ranked, err := resolveRanked(ids)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	s, err := load(ctx, d, r.RunID)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	loaded := time.Since(started).Milliseconds()
 	if len(ids) == 0 {
@@ -200,7 +207,7 @@ func Report(ctx context.Context, d Deps, r ReportRequest) (*report.Model, error)
 	start := time.Now()
 	sets, _, err := rankAll(s.input(), ranked, rankScopes(s.scope(), s.facts), s.ranks, nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	timings := &report.Timings{Started: s.run.Started, Finished: s.run.Finished, LoadMS: loaded,
 		RankMS: time.Since(start).Milliseconds()}
@@ -213,7 +220,7 @@ func Report(ctx context.Context, d Deps, r ReportRequest) (*report.Model, error)
 		Values: s.values, Ranks: sets,
 		Landed:  report.Landed{Days: s.policy.Week.Days, Sort: s.policy.Week.Sort},
 		History: historyOf(s.facts), Timings: timings, Scope: s.scope(), Forge: s.forge,
-	}), nil
+	}), s, nil
 }
 
 // Explain returns one subject's values for one metric and, for a ranked
@@ -386,33 +393,47 @@ func underPrefix(fs *domain.FactSet, prefix, repo string) *domain.FactSet {
 // open whose page is the web server's to enforce (M3): the command line
 // has no viewer identity.
 func Me(ctx context.Context, d Deps, r MeRequest) (*report.Me, error) {
-	d, err := d.ready("app.Me", false, false, true)
+	return personPage(ctx, d, "me", r.RunID, r.Email, true)
+}
+
+// personPage builds a person's page for Me (own) and Person (a lead's view
+// of them, without their own AI-assisted share), so the two cannot drift:
+// one reads what the other does, from the same run, with the same GitHub
+// dating.
+func personPage(ctx context.Context, d Deps, cmd string, runID int64, email string, own bool) (*report.Me, error) {
+	op := "app.Me"
+	if !own {
+		op = "app.Person"
+	}
+	d, err := d.ready(op, false, false, true)
 	if err != nil {
 		return nil, err
 	}
-	email := strings.ToLower(strings.TrimSpace(r.Email))
+	email = strings.ToLower(strings.TrimSpace(email))
 	if email == "" {
-		return nil, &domain.UsageError{Msg: "me needs the person's email"}
+		return nil, &domain.UsageError{Msg: cmd + " needs the person's email"}
 	}
-	s, err := load(ctx, d, r.RunID)
+	s, err := load(ctx, d, runID)
 	if err != nil {
 		return nil, err
 	}
 	subject := domain.Subject{Kind: domain.SubjectPerson, Key: email}
 	var values []domain.MetricValue
 	for _, v := range s.values {
-		if v.Subject == subject {
+		if v.Subject == subject && !report.OwnPageOnly(v.Metric) {
 			values = append(values, v)
 		}
 	}
-	// A person's own AI-assisted share is never stored: it is computed for
-	// this page alone (ADR 0007), and NewMe and the renderers label it
-	// (report.OwnPageOnly).
-	share, err := metrics.PersonalAIShare(s.input(), email)
-	if err != nil {
-		return nil, fmt.Errorf("computing the AI-assisted share: %w", err)
+	if own {
+		// A person's own AI-assisted share is never stored: it is computed
+		// for this page alone (ADR 0007), and NewMe and the renderers label
+		// it (report.OwnPageOnly).
+		share, err := metrics.PersonalAIShare(s.input(), email)
+		if err != nil {
+			return nil, fmt.Errorf("computing the AI-assisted share: %w", err)
+		}
+		values = append(values, share...)
 	}
-	values = append(values, share...)
 	if len(values) == 0 {
 		return nil, fmt.Errorf("%s has no values in run %d (a person is named by their canonical email, after .mailmap): %w",
 			email, s.run.ID, domain.ErrNotFound)

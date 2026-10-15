@@ -403,14 +403,7 @@ linters:
   exclusions:
     # Log any exclusion rule below that no longer matches anything.
     warn-unused: true
-    # Each rule says why, and when it can go.
-    rules:
-      # app.Identities is #26's stub, which always returns an error, so
-      # staticcheck proves the MCP server's check of it always true. Goes
-      # when #26 merges and the stub returns candidates; warn-unused says so.
-      - path: internal/mcp/tools\.go
-        linters: [staticcheck]
-        text: SA4023
+    # No rules: a rule added here must say why, and when it can go.
 
 formatters:
   enable:

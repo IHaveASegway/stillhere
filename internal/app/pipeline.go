@@ -300,16 +300,13 @@ func collectRepo(ctx context.Context, d Deps, job repoJob, opt collectOptions) (
 // the repository's own failure. A cancellation stops the run, while a
 // timeout, which only one git command hit, is the repository's failure. A
 // usage error, such as an unreadable --ignore-revs-file, is the user's to
-// fix and exits 2 rather than failing the repository. A collector that is
-// not built yet stops the run too, so the command still exits 2 rather than
-// reporting every repository as failed (domain.ErrNotImplemented goes with
-// the last stub, #13).
+// fix and exits 2 rather than failing the repository.
 func runStopped(ctx context.Context, err error) error {
 	if ctx.Err() != nil {
 		return fmt.Errorf("collecting repositories: %w", context.Cause(ctx))
 	}
 	var usage *domain.UsageError
-	if errors.As(err, &usage) || errors.Is(err, domain.ErrNotImplemented) {
+	if errors.As(err, &usage) {
 		return err
 	}
 	return nil

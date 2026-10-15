@@ -375,9 +375,6 @@ func TestMCPTools(t *testing.T) {
 
 	t.Run("identity_candidates", func(t *testing.T) {
 		text, isErr := callTool(t, cs, "identity_candidates", nil)
-		if isErr && strings.Contains(text, domain.ErrNotImplemented.Error()) {
-			t.Skip("#26")
-		}
 		if isErr {
 			t.Fatalf("identity_candidates failed: %s", text)
 		}
@@ -621,14 +618,11 @@ func TestMCPTools(t *testing.T) {
 		ask(t, "changes", map[string]any{"scope": "odd", "since": "365d", "response_format": "detailed"})
 		ask(t, "highlights", map[string]any{"period": "quarter", "response_format": "detailed"})
 		ask(t, "who_knows", map[string]any{"path": "src", "repo": "odd", "response_format": "detailed"})
-		if text, isErr := callTool(t, cs, "identity_candidates", nil); !isErr || !strings.Contains(text, domain.ErrNotImplemented.Error()) {
-			// Once #26 lands: its addresses are emails too.
-			if isErr {
-				t.Errorf("identity_candidates failed: %s", text)
-			}
-			if e := leak(text); e != "" {
-				t.Errorf("identity_candidates holds %q without --allow-emails: %s", e, text)
-			}
+		// identity_candidates' addresses are emails too.
+		if text, isErr := callTool(t, cs, "identity_candidates", nil); isErr {
+			t.Errorf("identity_candidates failed: %s", text)
+		} else if e := leak(text); e != "" {
+			t.Errorf("identity_candidates holds %q without --allow-emails: %s", e, text)
 		}
 
 		// A path with a version pin in it is the repository's path, which

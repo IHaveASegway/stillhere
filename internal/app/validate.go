@@ -121,7 +121,7 @@ func Validate(ctx context.Context, d Deps, r ValidateRequest) (*report.Validatio
 	}
 	slices.SortFunc(v.Metrics, func(a, b report.MetricAUC) int { return cmp.Compare(a.Metric, b.Metric) })
 	run := s.run
-	v.Provenance = report.AnswerProvenance(&run, s.facts, ids)
+	v.Provenance = report.AnswerProvenance(&run, s.facts, s.forge, ids)
 	v.Caveats = report.AnswerCaveats(s.facts)
 	if v.Unmatched > 0 {
 		what := fmt.Sprintf("%d labelled changes are not landings of run %d, or name more than one, and were left out", v.Unmatched, s.run.ID)

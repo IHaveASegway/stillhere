@@ -34,7 +34,7 @@ func lookupMetric(id string) (metrics.Metric, error) {
 		return m, nil
 	}
 	var usage *domain.UsageError
-	if errors.Is(err, domain.ErrNotImplemented) || errors.As(err, &usage) {
+	if errors.As(err, &usage) {
 		return nil, err
 	}
 	return nil, &domain.UsageError{Msg: fmt.Sprintf("unknown metric %q (%v): 'stillhere metrics' lists them", id, err)}

@@ -247,7 +247,6 @@ type Run struct {
 type UsageError struct{ Msg string } // exit 2
 var ErrNoFacts = errors.New("no repository produced facts") // exit 1
 var ErrNotFound = errors.New("not found")
-var ErrNotImplemented = errors.New("not implemented yet") // a stub of the walking skeleton, wrapped with its issue; exit 2; deleted with the last stub (#13)
 ```
 
 ## Ports
@@ -601,8 +600,8 @@ type Input struct {
 	Scope      string    // the scan's rank scope: domain.ScopeAll (or a run without groups) adds an overview of every repository
 	Forge      *ForgeRead // the GitHub data a scan run read, which app builds; nil for week, and when the reader cannot tell
 }
-// forge.go: the GitHub data a run read, which dates its forge numbers (ADR 0004). ExplainInput, WhoKnowsInput and MeInput
-// carry Forge too. Every Provenance gets Forge *ForgeProvenance (json "forge"): {AsOf, Repos} for the repositories in its
+// forge.go: the GitHub data a run read, which dates its forge numbers (ADR 0004). ExplainInput, WhoKnowsInput, MeInput and
+// IdentitiesInput carry Forge too. Every Provenance gets Forge *ForgeProvenance (json "forge"): {AsOf, Repos} for the repositories in its
 // Heads that had GitHub data (a page or a finished sync), AsOf the oldest Synced (nil while a first sync has not
 // finished), and nil when none had any. On me and explain, a forge metric's value in a group or in all puts every
 // repository of that scope in Heads. Only a section that shows a forge metric's numbers gets a forge-not-synced caveat.
@@ -628,12 +627,16 @@ type Identities struct { Provenance Provenance; Scope Scope; Addresses, Bots, Sh
 type IdentityCandidate struct { Confidence string; Guess, Commented, Chained bool; Rules []string; Name string; Addresses []IdentityAddress; Links []IdentityLink } // Commented: all but high
 type IdentityAddress struct { Email, Name string; NameWithheld bool; DomainKind string; Canonical bool; Commits, CoAuthored int; First, Last time.Time; Repos []string }
 type IdentityLink struct { Rule string; Addresses []int; Name string; FromName bool; HandOff *IdentityHandOff }
-type IdentitiesInput struct { Run *domain.Run; Facts *domain.FactSet; Scope domain.Scope; Survey *identity.Survey } // Facts: the scope's
+type IdentitiesInput struct { Run *domain.Run; Facts *domain.FactSet; Scope domain.Scope; Survey *identity.Survey; Forge *ForgeRead } // Facts: the scope's
 func NewIdentities(in *IdentitiesInput) *Identities // identity.Candidates' survey as an answer, with provenance (AnswerProvenance) and caveats (mailmap-at-scan)
 func Mailmap(w io.Writer, id *Identities) error    // the suggested .mailmap lines, evidence as # comments; every candidate's but a high one's commented out
 func NewExplain(in *ExplainInput) *Explain    // values, and a ranked metric's clusters per repository as changes
 func NewWhoKnows(in *WhoKnowsInput) *WhoKnows // who_knows@1's values under the path, as lists
 func NewMe(in *MeInput) *Me                   // the person's values and their row in each RankSet
+// For an answer app builds itself (the MCP server's, validate's) over every repository of fs:
+func AnswerProvenance(run *domain.Run, fs *domain.FactSet, forge *ForgeRead, metrics []string) Provenance // dated by forge, as every section is
+func AnswerCaveats(fs *domain.FactSet) []Caveat                                                          // what could make it wrong
+func ForgeCaveats(run *domain.Run, fs *domain.FactSet, forge *ForgeRead, metrics []string) []Caveat        // its GitHub numbers' caveats; nil unless metrics name a forge metric
 
 // sqlite
 func Open(ctx context.Context, path string) (*Store, error) // creates a missing dir 0700 and file 0600; migrated, then WAL (a newer facts database, or a file that is not one, SQLite or not, is a *domain.UsageError, refused unchanged and without waiting for a lock); deletes runs left running
@@ -741,7 +744,7 @@ type DiffRequest struct { RunID int64; Repo, Change, Path string; MaxBytes int }
 // they are more than a third of Of (no one stands out: a no-standout caveat).
 func RunNames(ctx context.Context, d Deps, r NamesRequest) (*Names, error)
 func Overview(ctx context.Context, d Deps, r OverviewRequest) (*OverviewAnswer, error) // report.Build's sections for one scope
-func Person(ctx context.Context, d Deps, r PersonRequest) (*report.Me, error) // Me without the AI-assisted share (ADR 0007)
+func Person(ctx context.Context, d Deps, r PersonRequest) (*report.Me, error) // Me without the AI-assisted share (ADR 0007); both build through one helper, so they cannot drift
 func Changes(ctx context.Context, d Deps, r ChangesRequest) (*ChangesAnswer, error) // landings with durable@1 and simplifying@1 clusters
 func Highlights(ctx context.Context, d Deps, r HighlightsRequest) (*HighlightsAnswer, error) // top tiers, lasted, removed
 func Diff(ctx context.Context, d Deps, r DiffRequest) (*DiffAnswer, error) // git diff-tree on the analysis profile; needs Deps.Git
@@ -870,7 +873,7 @@ Issues are built in parallel branches, so a shared package or file needs a rule 
 
 - **`collect` is shared by #4, #5, #6 and #7.** Each collector's unexported identifiers carry its prefix (`discover…`, `classify…`, `history…`, `blame…`). The readers every collector needs are in `scan.go` (`newScanner`, which allows long lines, `scanNUL` for `-z` output, and `nonBlank`, the one non-blank predicate that the history and blame collectors both count with), and the test helper in `collect_test.go` (`newRunner`, a real `gitcli.Runner`). The co-author reader `coAuthors` is in `coauthors.go`: #6 implements it, and #7 calls it for the commits blame attributes lines to, which can be older than any history window. The package has at most one `TestMain`, and it goes in `collect_test.go`.
 - **Files that belong to one issue.** #14: `domain/forge.go`, `internal/github`, `sqlite/forge.go`, `sqlite/migrations/0002_forge.sql`, `cli/forge.go`, `cli/sync.go`, `app/sync.go`, `metrics/reviews.go` (registered with one line in `metrics.All`). #15: `app/mcp.go`, `cli/mcp.go`, `internal/mcp`, `sqlite/readonly.go`, `docs/spec/mcp.md`, `plugins/stillhere`. #26: `identity/candidates.go`, `app/identities.go`, `report/identities.go`, `cli/identities.go`. #5: everything in `policy` but `types.go`, which is this file's contract. Where such a file shares a package with another issue's, its unexported identifiers carry a prefix, as in `collect`: `forge…` in `sqlite`, `reviews…` in `metrics`, `mcp…` in `app` and `readOnly…` in `sqlite`.
-- **A stub another branch calls.** The MCP server's `identity_candidates()` (#15) calls `app.Identities`, which returns `domain.ErrNotImplemented` until #26 lands; both are built in parallel against its signature here, and `report.Identities` is a `Document` from the start, so the server serves whatever #26 puts in it. `TestMCPTools` skips that one tool's subtest (`t.Skip("#26")`) while the stub stands, and the integrator removes the skip when both merge (Consumer-Driven Contracts: Ian Robinson, "Consumer-Driven Contracts: A Service Evolution Pattern", 2006).
+- **A stub another branch calls.** When one branch calls a use case another builds in parallel, the signature lands here first, as a stub that returns an error naming its issue, and the caller's test skips that one call until both merge. The MCP server's `identity_candidates()` (#15) was built this way against `app.Identities` (#26), and `report.Identities` was a `Document` from the start, so the server serves whatever #26 put in it (Consumer-Driven Contracts: Ian Robinson, "Consumer-Driven Contracts: A Service Evolution Pattern", 2006). The walking skeleton's last stub went with it, and so did `domain.ErrNotImplemented`.
 - **Shared documents.** Each issue edits only the sections its scope names: in [metrics.md](../metrics.md), the entries of the metrics it builds or derives oracles for; in this file, the signatures it changes; in [report-json.md](report-json.md), the shape (#11). Where two branches still touch the same lines, #13 resolves them when it merges, as it does `go.mod` and `go.sum`.
 
 ## Tests
@@ -881,7 +884,7 @@ Tests sit at stable boundaries, so a refactor does not rewrite them (Kent Beck, 
 | --- | --- | --- |
 | `TestWeekOracle` | `app` | the week table in the fixture spec, people and bots apart, and the `--days 1` window against `[week] days = 7`: `window.days` 1, `days_from` `cli`, `since` `2026-10-06T00:00:00Z`, and `history`, the window the run collected, equal to it |
 | `TestStillHereOracle` | `app` | the still-here table, people and bots apart, and the concentration walk |
-| `TestChangeOracles` | `app` | `durable@1` and `simplifying@1` per person and per landing, with their rank tables and eligibility, reverts and AI-assisted tags on both fixtures; `knowledge_loss@1` and `who_knows@1` on the main fixture; `surviving@1` credit on the sibling, where an agent's blamed lines go to its human co-author; and the regression guards: a backdated first-parent commit hides no landing below it; a rebased one lands, and is dated, by its committer time, and is credited to its author; and a revert merged with `--no-ff` is linked to the merge landing, which neither change metric counts, while `surviving@1` keeps the lines the revert restored |
+| `TestChangeOracles` | `app` | `durable@1` and `simplifying@1` per person and per landing, with their rank tables and eligibility, reverts and AI-assisted tags on both fixtures; `knowledge_loss@1` and `who_knows@1` on the main fixture; `surviving@1` credit on the sibling, where an agent's blamed lines go to its human co-author; and the regression guards: a backdated first-parent commit hides no landing below it; a rebased one lands, and is dated, by its committer time, and is credited to its author; and a revert merged with `--no-ff` is linked to the merge landing, which neither change metric counts, while `surviving@1` keeps the lines the revert restored; and the identity candidates of each fixture, without its mailmap and with it, whose mailmap form changes nothing in `git check-mailmap` until its lines are uncommented |
 | `TestDeterminism` | `app` | two scans of both fixtures as one group, into separate facts.db files, give byte-identical JSON without `timings`, and identical text and Markdown; `report` on the stored run reproduces the scan; a token planted in a URL given as a PATH, in its userinfo, query or fragment, is in no byte of facts.db or its `-wal` and `-shm`, no rendering and no log line; with the cli's Deps (the store as both ports) and a replica that holds the fixture's forge repository beside another organization's, the run keeps only its own repository's watermark, with its name and join, `reviews_given@1` counts its reviews in scope `all`, the group and the repository, a review 7 days before `Now` in week block 0 and one at the window's start in block 12, and `report` reproduces the scan after a later sync renamed the repository |
 | `TestDiscover` | `collect` | duplicates, bare repos, scp vs HTTPS remotes; a planted token appears in no output |
 | `TestCloneHealth` | `collect` | shallow and partial clones warn and lose only the facts they should |

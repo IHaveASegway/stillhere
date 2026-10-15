@@ -380,8 +380,6 @@ func (s *server) toolError(err error, c *call) *sdk.CallToolResult {
 	switch {
 	case errors.As(err, &usage), errors.Is(err, domain.ErrNotFound):
 		// Already says what to pass or run instead.
-	case errors.Is(err, domain.ErrNotImplemented):
-		msg = "not built yet in this stillhere: " + msg
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		msg = "the call was cancelled before it finished: " + msg
 	default:

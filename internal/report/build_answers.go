@@ -305,25 +305,29 @@ func NewMe(in *MeInput) *Me {
 	return m
 }
 
-// AnswerProvenance says where an answer that covers repos and reads metrics
-// comes from. run may be nil. It does not date GitHub data (Forge is nil):
-// the answers that show GitHub numbers build their provenance themselves.
-func AnswerProvenance(run *domain.Run, fs *domain.FactSet, metrics []string) Provenance {
-	var repos []*domain.RepoFacts
-	for i := range fs.Repos {
-		repos = append(repos, &fs.Repos[i])
+// AnswerProvenance says where an answer that covers every repository of fs
+// and reads metrics comes from, as every section of a report says for
+// itself: forge, the GitHub data the run read, dates its repositories
+// whether or not the answer shows a forge number (report-json.md's
+// provenance row), and a nil forge means the reader cannot tell. run may
+// be nil.
+func AnswerProvenance(run *domain.Run, fs *domain.FactSet, forge *ForgeRead, metrics []string) Provenance {
+	return datedProvenance(run, fs, forge, reposWith(fs, nil), metrics)
+}
+
+// ForgeCaveats says what could make the GitHub numbers of an answer over
+// every repository of fs wrong, when metrics name a forge metric, as a
+// report's rank table of one says. It is nil otherwise: a caveat goes where
+// the number it qualifies is.
+func ForgeCaveats(run *domain.Run, fs *domain.FactSet, forge *ForgeRead, metrics []string) []Caveat {
+	if !slices.ContainsFunc(metrics, forgeMetric) {
+		return nil
 	}
-	return answerProvenance(run, fs, repos, metrics)
+	return answerBuilder(run, fs, forge).forgeCaveats(reposWith(fs, nil))
 }
 
-// answerProvenance is the provenance of an answer that shows no number
-// computed from GitHub data, so its Forge is nil.
-func answerProvenance(run *domain.Run, fs *domain.FactSet, repos []*domain.RepoFacts, metrics []string) Provenance {
-	return datedProvenance(run, fs, nil, repos, metrics)
-}
-
-// datedProvenance is the provenance of an answer that may show GitHub
-// numbers, which forge, the GitHub data the run read, dates over repos.
+// datedProvenance is the provenance of an answer over repos, whose GitHub
+// data forge, what the run read, dates.
 func datedProvenance(run *domain.Run, fs *domain.FactSet, forge *ForgeRead, repos []*domain.RepoFacts, metrics []string) Provenance {
 	b := answerBuilder(run, fs, forge)
 	sorted := slices.Clone(repos)

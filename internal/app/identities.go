@@ -49,9 +49,13 @@ func Identities(ctx context.Context, d Deps, r IdentitiesRequest) (*report.Ident
 	if err != nil {
 		return nil, err
 	}
+	forge, err := readForge(ctx, d, run)
+	if err != nil {
+		return nil, err
+	}
 	survey := identity.Candidates(scoped, identity.New(fs, p))
 	d.Log.Debug("identity candidates", "run", run.ID, "addresses", survey.Addresses, "candidates", len(survey.Candidates))
-	return report.NewIdentities(&report.IdentitiesInput{Run: &run, Facts: scoped, Scope: scope, Survey: survey}), nil
+	return report.NewIdentities(&report.IdentitiesInput{Run: &run, Facts: scoped, Scope: scope, Survey: survey, Forge: forge}), nil
 }
 
 // identitiesScope returns the facts of the repositories a scope names: every
