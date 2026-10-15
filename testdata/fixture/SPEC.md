@@ -532,6 +532,69 @@ Wrong implementations this catches:
 - **Co-authors not canonicalised.** The 4 lines go to `81234567+piapair@users.noreply.github.com`, a second person, and Pia has 5.
 - **Crediting the first co-author whoever the author is.** L3, O4 and P2 give their lines to the agents in their trailers, and Q1 gives its 6 to Claude Dupont: Lena 34, Omar 33, Pia 7, Quinn 25.
 
+## Identity candidates (M2, #26)
+
+`stillhere identities` over a stored scan of each fixture, scanned on its own: `identity.Candidates` through `app.Identities` with the zero scope, under the rules of [identities.md](../../docs/spec/identities.md). These values were derived by hand from the two History tables, those rules and the packaged policy's `[bots]` and `[ai]` tables before any code computed them. Times are author times, UTC. Every address is in one repository (`local:fixture` or `local:sibling`), and the run's as-of time is `--now`, so the hand-off rule's earlier address must have no commit on or after 2026-07-09.
+
+| Scan | Addresses (people) | Bots and agents left out | Candidates |
+| --- | --- | --- | --- |
+| main fixture, no `--mailmap` | 11 | 1: `copilot@bot.example` | Ada (high); Gina → Hank (low, a guess) |
+| main fixture, `MailmapText` | 10 | 1 | Gina → Hank (low, a guess) |
+| sibling, no `--mailmap` | 7 | 3: `copilot@bot.example`, `noreply@anthropic.com`, `aider@aider.chat` | Pia (medium) |
+| sibling, `SiblingMailmapText` | 6 | 3 | none |
+
+The main fixture's people are Ada's two addresses (one with the mailmap), Bob, Cara, Dana, Erin, Frank, Gina, Hank, Ivy and Jules. The sibling's are Uma, whom only blame shows (U0 is older than the 365-day history), Lena, Omar, Pia, Quinn, and two addresses that only trailers name: Pia's GitHub noreply address (C1; `pia@example.com` with the mailmap) and Claude Dupont's (Q1). The agents in L3, O4 and P2's trailers are bots, as Copilot is.
+
+### Ada: high (main fixture, no mailmap)
+
+Rules `same-name` ("Ada Example", both addresses) and `same-local-part` (`ada`, at `example.com` and at `other.example`): two rules agree.
+
+| # | Address | Name | Commits | Co-authored | First | Last | Canonical |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 0 | `ada@example.com` | Ada Example | 2 (init, the `git mv`) | 0 | 2026-01-01 12:00 | 2026-01-05 12:00 | yes |
+| 1 | `ada@other.example` | Ada Example | 2 (gamma, `ada_week.py`) | 0 | 2026-01-02 12:00 | 2026-10-06 18:00 | |
+
+Neither address is a GitHub noreply address, and `example.com` is the domain of 10 of the run's 11 addresses, so `ada@example.com` is canonical. The suggested name is "Ada Example", and `--format mailmap` prints the line uncommented: `Ada Example <ada@example.com> <ada@other.example>`, which is `MailmapText` byte for byte.
+
+### Gina → Hank: low, a guess (main fixture, with or without the mailmap)
+
+Rule `hand-off`. Gina's only commit, on 2026-01-06 at 12:00, is her last, and she has none after 2026-07-09. Hank's first (and only) commit came 24 hours later, in `split.py`, the one file both touched. Gina has no other successor in a shared file within 30 days (Cara began on 2026-02-01, in `side.py`), and Hank has no other predecessor: Bob, and with the mailmap Ada, were still committing in October, and without it `ada@example.com`, whose last commit was on 2026-01-05 in other files, is in Ada's candidate, while a hand-off compares only addresses no other rule links.
+
+| # | Address | Name | Commits | Co-authored | First = Last | Canonical |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 | `gina@example.com` | Gina Split | 1 | 0 | 2026-01-06 12:00 | |
+| 1 | `hank@example.com` | Hank Split | 1 | 0 | 2026-01-07 12:00 | yes |
+
+A hand-off suggests the newer address, so the name is "Hank Split", and the mailmap form prints the line commented out: `# Hank Split <hank@example.com> <gina@example.com>`. Gina and Hank are two people, the 2/2 split of `split.py` in the [still-here oracle](#still-here-oracle-m1-teststillhereoracle): this is the hand-off rule's false positive, which the fixture keeps so that it stays a commented-out guess.
+
+### Pia: medium (sibling, no mailmap)
+
+Rule `same-name` ("Pia Pair") alone: the local parts are `pia` and the noreply login `piapair`.
+
+| # | Address | Name | Commits | Co-authored | First | Last | Canonical |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 0 | `81234567+piapair@users.noreply.github.com` | Pia Pair | 0 | 1 (C1) | 2026-02-02 12:00 | 2026-02-02 12:00 | |
+| 1 | `pia@example.com` | Pia Pair | 3 (P1, P2, T1) | 0 | 2026-02-16 12:00 | 2026-07-29 12:00 | yes |
+
+The noreply address is never preferred, so `pia@example.com` is canonical, and the mailmap form prints, uncommented, `SiblingMailmapText` byte for byte: `Pia Pair <pia@example.com> <81234567+piapair@users.noreply.github.com>`.
+
+The sibling has no hand-off. The only addresses with no commit since 2026-07-09 are Uma (U0, 2025-09-15: the next address to begin, Lena, began 49 days later), Claude Dupont (Q1, 2026-03-09: no address began in the 30 days after it, and none stopped in the 30 days before it) and, without the mailmap, Pia's noreply address, which Pia's candidate holds.
+
+### Wrong implementations this catches
+
+- **Co-authors not read.** The two noreply addresses and the agents appear only in trailers: the sibling has 5 addresses and 1 bot, and Pia's candidate is gone.
+- **Blamed commits older than the history not read.** Uma disappears: the sibling has 6 addresses without its mailmap, 5 with it.
+- **Bots and agents kept.** The main fixture has 12 and 11 addresses, the sibling 10 and 9.
+- **A name alone taken as certain.** Pia becomes high.
+- **The newest address as canonical** outside a hand-off. Ada's line becomes `Ada Example <ada@other.example> <ada@example.com>`, not `MailmapText`.
+- **A hand-off suggested as certain** (medium or high, or its line uncommented). The printed mailmap maps `gina@example.com` to Hank Split and merges two people.
+- **A hand-off without the shared file.** Gina then has two successors within 30 days (Hank and Cara) and Cara two predecessors (Gina and Hank), so the ambiguity rule keeps none: Gina → Hank disappears.
+- **A hand-off without the quiet period.** With the mailmap, Ada, whose last commit is on 2026-10-06 at 18:00, hands off to Ivy, whose first is an hour later in `tests/test_service.py`, which Ada's init created: a person still at work, read as one who left.
+
+### The TestChangeOracles row (for the integrator, #13)
+
+The [issue](https://github.com/IHaveASegway/stillhere/issues/26) adds no test of its own; this is the row `TestChangeOracles` gains. Scan each fixture into a fresh facts.db, once without its mailmap and once with it, and call `app.Identities` with the zero scope. Assert `addresses` and `bots` from the first table, and each candidate's confidence, guess flag, rules, suggested name, canonical address and addresses (email, commits, co-authored, first, last, repos) from the tables above; for Gina → Hank, a gap of 24 hours and one shared file, `split.py`. Then write `report.Mailmap`'s output for the scans without a mailmap to a file and run `git check-mailmap` in each fixture through `gitcli.Runner` with that file as `Config.MailmapFile`: `<ada@other.example>` gives `Ada Example <ada@example.com>`, `<81234567+piapair@users.noreply.github.com>` gives `Pia Pair <pia@example.com>`, and `<gina@example.com>` comes back unchanged.
+
 ## Tests that are not extra commits in this history
 
 Ada's oracle stays stable only if these cases stay out of the fixture repo.
