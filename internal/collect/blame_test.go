@@ -4,6 +4,7 @@ import (
 	"io"
 	"maps"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -103,11 +104,19 @@ func TestBlamePorcelain(t *testing.T) {
 			lines[o.Author.Email] += o.Lines
 		}
 
-		// --porcelain: the same blame, printed the other way.
+		// --porcelain: the same blame, printed the other way. Its arguments
+		// are the ones Blame runs with their one --line-porcelain replaced,
+		// so nothing else can differ between the two sides.
 		b := &blamer{git: git, repo: repo}
 		for _, path := range blameMainProdPaths {
+			args := b.args(path)
+			i := slices.Index(args, "--line-porcelain")
+			if i < 0 || slices.Contains(args[i+1:], "--line-porcelain") || slices.Contains(args, "--porcelain") {
+				t.Fatalf("%s: Blame runs %q, which needs exactly one --line-porcelain and no --porcelain for this comparison", path, args)
+			}
+			args[i] = "--porcelain"
 			var porcelain []domain.LineOwner
-			err := git.Stream(ctx, domain.GitCmd{Dir: dir, Args: b.args("--porcelain", path)}, func(r io.Reader) error {
+			err := git.Stream(ctx, domain.GitCmd{Dir: dir, Args: args}, func(r io.Reader) error {
 				var err error
 				porcelain, err = blameParse(r, path)
 				return err

@@ -268,7 +268,7 @@ func (b *blamer) all(ctx context.Context, paths []string, slots *BlameSlots, pro
 //     a missing file (docs/spec/git-invocation.md).
 func (b *blamer) file(ctx context.Context, path string) blameResult {
 	var owners []domain.LineOwner
-	err := b.git.Stream(ctx, domain.GitCmd{Dir: b.repo.Path, Args: b.args("--line-porcelain", path), Timeout: b.timeout},
+	err := b.git.Stream(ctx, domain.GitCmd{Dir: b.repo.Path, Args: b.args(path), Timeout: b.timeout},
 		func(r io.Reader) error {
 			var err error
 			owners, err = blameParse(r, path)
@@ -280,13 +280,12 @@ func (b *blamer) file(ctx context.Context, path string) blameResult {
 	return blameResult{owners: owners}
 }
 
-// args returns the arguments of path's blame in porcelain form form:
-// "--line-porcelain", which file runs, or "--porcelain", which
-// TestBlamePorcelain compares it with. Everything but the form is the same,
-// so the two forms are one blame printed two ways.
-func (b *blamer) args(form, path string) []string {
+// args returns the arguments of path's blame, which prints
+// "--line-porcelain". TestBlamePorcelain prints the same blame as
+// "--porcelain" by replacing that one argument.
+func (b *blamer) args(path string) []string {
 	args := []string{attrSource(b.repo.Head), "blame", "-w", "-M", "--no-textconv", "--indent-heuristic",
-		"--encoding=UTF-8", form, "--no-ignore-revs-file"}
+		"--encoding=UTF-8", "--line-porcelain", "--no-ignore-revs-file"}
 	if b.ignoreFile != "" {
 		args = append(args, "--ignore-revs-file", b.ignoreFile)
 	}
