@@ -124,9 +124,10 @@ func rankScopes(kind string, fs *domain.FactSet) []domain.Scope {
 // so that a rank the user asked for never disappears without a word (the
 // report says why). With subject given, only the tables subject is in are
 // kept: a person's own page needs only theirs. A stored table counts when it
-// lists subject, because the clusters of a metric that reads GitHub data
-// cannot be recomputed from a stored run. It returns the tables for the
-// report and the intervals to store.
+// lists subject, whatever the clusters say: the stored intervals are the
+// run's, and a run stored before it kept its GitHub data (ADR 0011) has no
+// clusters of a metric that reads it. It returns the tables for the report
+// and the intervals to store.
 func rankAll(in *metrics.Input, ms []rankedMetric, scopes []domain.Scope, stored []domain.RankInterval,
 	subject *domain.Subject) ([]report.RankSet, []domain.RankInterval, error) {
 	type key struct {
@@ -194,7 +195,7 @@ func people(data map[domain.Subject][]rank.Cluster, who *identity.Directory) map
 // metricInfo is a metric's published definition as reports print it.
 func metricInfo(def metrics.Definition) report.MetricInfo {
 	return report.MetricInfo{
-		ID: def.ID.String(), Question: def.Question, Unit: def.Unit, Ranked: def.Ranked,
+		ID: def.ID.String(), Question: def.Question, Unit: def.Unit, Ranked: def.Ranked, Forge: def.Forge,
 		Eligibility: def.Eligibility, BlindSpots: def.BlindSpots, Gaming: def.Gaming,
 		Oracle: def.Oracle, Validity: def.Validity,
 	}

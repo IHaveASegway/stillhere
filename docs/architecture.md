@@ -52,7 +52,7 @@ This is CQRS in its simplest form: jobs that write facts are separate from the s
 | Sources | repo, group, mirror, default branch | repos, heads | A forge inventory |
 | History | commit, landing, trailer | commits, landings, landing_commits, commit_files, trailers | Ownership |
 | Authorship | line owner, majority owner | line_owners (per run) | Activity |
-| Forge | pull request, review, team | forge_repos, forge_watermarks, forge_pull_requests, forge_pull_labels, forge_reviews (inline comments counted, not kept), forge_pull_commits; forge_run_watermarks per run | Git facts |
+| Forge | pull request, review, team | forge_repos, forge_watermarks, forge_pull_requests, forge_pull_labels, forge_reviews (inline comments counted, not kept), forge_pull_commits; per run, what it read: forge_run_watermarks and forge_run_repos (the join), and the forge_snapshot_* copy of its repositories and pull requests ([ADR 0011](adr/0011-a-run-keeps-the-github-facts-it-read.md)) | Git facts |
 | Identity | person, alias, login link | people, login_links (both derived) | A people database |
 | Metrics | metric@version, scope, window | metric_values, rank_intervals | Facts |
 | Presentation | page, highlight, tool | Nothing (read-only) | Measurement |
@@ -108,7 +108,7 @@ The core (classification, metrics, ranking) imports no adapter package: no `os/e
 - **runs**: run id, `--now`, tool version, policy hash, the HEAD of every repo, the forge sync watermark, and a status. A run is written as `running` and flips to `complete` (or `partial`) after its last row; readers select only complete and partial runs, so nobody sees half a run. WAL mode lets reads continue while a run writes.
 - **Git-derived facts are per run**: commits, landings, the landing map, file changes, reverts, path classes and line owners. The mailmap and the policy can change between runs, and every number in a run must come from one HEAD set, one policy and one mailmap. A force-push simply shows up in the next run's history. The cost is repeated rows across runs, bounded by retention.
 - **line_owners** are aggregated as (repo, path, commit, author, non-blank lines). That is roughly one row per file per contributing commit: about 250,000 rows for a 50,000-file organization.
-- **Forge facts** are not per run: they replicate GitHub, upserted by node id with a watermark per repo, and each run records the watermark it read.
+- **Forge facts** replicate GitHub, upserted by node id with a watermark per repo, in a replica that outlives runs. Each run keeps the part it read, as it keeps its git facts: its watermarks, the join of its repositories to the forge's, and a copy of their pull requests, which its readers compute over instead of the replica, so a later sync moves no stored run ([ADR 0011](adr/0011-a-run-keeps-the-github-facts-it-read.md)).
 - **Retention**: when a run finishes, the newest 8 runs plus the newest run of each of the 12 most recent months that have one, per kind (restic's `--keep-last 8 --keep-monthly 12`); configurable later.
 - **metric_values** and **rank_intervals** carry `metric@version`, scope, window and run id, so a new metric version can be computed over old facts and shown next to the old one.
 

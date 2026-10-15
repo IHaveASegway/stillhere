@@ -41,6 +41,11 @@ type cachedRun struct {
 	values []domain.MetricValue
 	ranks  []domain.RankInterval
 	loaded bool // values and ranks were read
+
+	watermarks []domain.RunWatermark
+	marked     bool // the watermarks were read
+	github     *domain.ForgeFacts
+	kept       bool // the GitHub data the run kept was read
 }
 
 func newCachedStore(s domain.FactStore) *cachedStore {
@@ -68,7 +73,7 @@ func (c *cachedStore) entry(id int64) *cachedRun {
 // forget drops an entry that holds nothing, after a failed read: an
 // unknown run id must not take a place in the cache. The caller holds mu.
 func (c *cachedStore) forget(id int64) {
-	if e := c.runs[id]; e != nil && e.run == nil && e.facts == nil && !e.loaded {
+	if e := c.runs[id]; e != nil && e.run == nil && e.facts == nil && !e.loaded && !e.marked && !e.kept {
 		delete(c.runs, id)
 		c.order = slices.DeleteFunc(c.order, func(x int64) bool { return x == id })
 	}
@@ -137,4 +142,50 @@ func (c *cachedStore) LoadMetrics(ctx context.Context, id int64) ([]domain.Metri
 		e.values, e.ranks, e.loaded = values, ranks, true
 	}
 	return e.values, e.ranks, nil
+}
+
+// cachedForge is the forge port over the same cache. What a published run
+// read of the replica, its watermarks and the GitHub data it kept, is as
+// immutable as its facts (ADR 0011), so it is read once per run too: an
+// agent's who_knows calls on a large organization read the pull requests
+// once, not on every call and twice in each (the run's names, then the
+// answer). The replica itself, which a sync moves on, and every write pass
+// through; no use case of the server reads or writes them.
+type cachedForge struct {
+	domain.ForgeStore
+	c *cachedStore
+}
+
+// RunWatermarks returns a published run's forge watermarks, read once.
+func (f *cachedForge) RunWatermarks(ctx context.Context, id int64) ([]domain.RunWatermark, error) {
+	c := f.c
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e := c.entry(id)
+	if !e.marked {
+		marks, err := f.ForgeStore.RunWatermarks(ctx, id)
+		if err != nil {
+			c.forget(id)
+			return nil, err
+		}
+		e.watermarks, e.marked = marks, true
+	}
+	return e.watermarks, nil
+}
+
+// RunForge returns the GitHub data a published run kept, read once.
+func (f *cachedForge) RunForge(ctx context.Context, id int64) (*domain.ForgeFacts, error) {
+	c := f.c
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	e := c.entry(id)
+	if !e.kept {
+		github, err := f.ForgeStore.RunForge(ctx, id)
+		if err != nil {
+			c.forget(id)
+			return nil, err
+		}
+		e.github, e.kept = github, true
+	}
+	return e.github, nil
 }

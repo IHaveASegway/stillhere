@@ -56,7 +56,8 @@ type view struct {
 	days    int   // landed@1's window: Input.Days, else the policy's [week] days
 	daysErr error // why days is unknown (Input.weekDays); only landed@1 needs it
 	who     *identity.Directory
-	repos   []*repoView // the repositories with facts, in FactSet order (by key)
+	repos   []*repoView     // the repositories with facts, in FactSet order (by key)
+	facts   *domain.FactSet // the facts projected, whose GitHub data (Forge) the review metrics read (reviews.go)
 }
 
 // repoView is one repository's indexes.
@@ -140,7 +141,7 @@ func newView(in *Input, keep func(*domain.RepoFacts) bool) (*view, error) {
 	if who == nil {
 		who = identity.New(in.Facts, in.Policy)
 	}
-	v := &view{now: in.Facts.Now, who: who}
+	v := &view{now: in.Facts.Now, who: who, facts: in.Facts}
 	v.days, v.daysErr = in.weekDays()
 	for i := range in.Facts.Repos {
 		f := &in.Facts.Repos[i]

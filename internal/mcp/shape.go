@@ -792,9 +792,10 @@ type whoKnowsOut struct {
 // the answer's rows.
 type whoKnowsRepo struct {
 	report.WhoKnowsRepo
-	MajorityOwnersTotal int `json:"majority_owners_total"`
-	RecentLandersTotal  int `json:"recent_landers_total"`
-	BotsTotal           int `json:"bots_total"`
+	MajorityOwnersTotal  int `json:"majority_owners_total"`
+	RecentLandersTotal   int `json:"recent_landers_total"`
+	RecentReviewersTotal int `json:"recent_reviewers_total"`
+	BotsTotal            int `json:"bots_total"`
 }
 
 func (s *shaper) whoKnowsAnswer(w *report.WhoKnows, repoName string) *whoKnowsOut {
@@ -808,6 +809,10 @@ func (s *shaper) whoKnowsAnswer(w *report.WhoKnows, repoName string) *whoKnowsOu
 		o := whoKnowsRepo{WhoKnowsRepo: r}
 		o.MajorityOwners, o.MajorityOwnersTotal = cut(r.MajorityOwners, s.f.rows)
 		o.RecentLanders, o.RecentLandersTotal = cut(r.RecentLanders, s.f.rows)
+		// Every list but the top authors, which are five at most, grows with
+		// the code's history: a hot file reviewed by hundreds of people must
+		// still fit the budget once its lists are cut to one row.
+		o.RecentReviewers, o.RecentReviewersTotal = cut(r.RecentReviewers, s.f.rows)
 		o.Bots, o.BotsTotal = cut(r.Bots, s.f.rows)
 		out.Repos = append(out.Repos, o)
 		n.key(r.Key)

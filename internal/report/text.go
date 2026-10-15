@@ -372,7 +372,7 @@ func textRanks(p *printer, t *RankTable) {
 // rankForgeAsOf dates a rank table of a metric that reads GitHub data, and
 // is "" for any other.
 func rankForgeAsOf(t *RankTable) string {
-	if !forgeMetric(t.Metric) {
+	if !forgeDated(t.Provenance) {
 		return ""
 	}
 	return forgeAsOf(t.Provenance.Forge)

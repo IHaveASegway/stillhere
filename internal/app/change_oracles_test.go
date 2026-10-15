@@ -74,6 +74,7 @@ func TestChangeOracles(t *testing.T) {
 		t.Parallel()
 		identityOracles(t)
 	})
+	t.Run("reviews", func(t *testing.T) { t.Parallel(); reviewOracles(t) })
 }
 
 // mainChangeOracles checks SPEC's change oracles on the main fixture.

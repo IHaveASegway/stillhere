@@ -1,6 +1,7 @@
 // Package identity answers who a canonical email is: the display name, whether
 // it is a bot, whether a change was AI-assisted, and who gets credit for it
-// (docs/spec/git-invocation.md#identity-mailmap-and-bots, ADR 0007).
+// (docs/spec/git-invocation.md#identity-mailmap-and-bots, ADR 0007); and who
+// a forge login is (Reviewer, ADR 0004).
 //
 // It is part of the functional core. git's mailmap is the only identity
 // store: by the time facts reach this package, git has already mapped every
@@ -36,12 +37,16 @@ import (
 //     Agents are bots everywhere (ADR 0007: agents are never ranked rows),
 //     and an agent's commit is credited to its first human co-author when
 //     it has one.
+//
+// A forge app account, the subject "@login[bot]" that Reviewer gives it, is
+// a bot too, whatever the policy's fragments say.
 type Directory struct {
 	names        map[string]string // canonical email → display name
 	kinds        map[string]kind   // canonical email → its classification, for every email in names
 	botFragments []string          // [bots] fragments, lowercased, never empty
 	agentEmails  map[string]bool   // [ai] coauthor_emails, lowercased
 	agentAuthors []string          // [ai] agent_authors fragments, lowercased, never empty
+	logins       map[string]string // forge login → canonical email (reviewer.go); nil without GitHub data
 }
 
 // kind is an identity's classification under the policy.
@@ -51,9 +56,11 @@ type kind struct {
 }
 
 // New builds the directory for a fact set under a policy's bot and AI
-// patterns. A nil policy has no patterns: nobody is a bot or an agent.
+// patterns. A nil policy has no patterns: nobody is a bot or an agent but a
+// forge app account. The fact set's GitHub data (FactSet.Forge) links forge
+// logins to its people (Reviewer).
 func New(fs *domain.FactSet, p *policy.Policy) *Directory {
-	d := &Directory{names: displayNames(fs)}
+	d := &Directory{names: displayNames(fs), logins: reviewerLogins(fs)}
 	if p != nil {
 		d.botFragments = fragments(p.Bots.Fragments)
 		d.agentAuthors = fragments(p.AI.AgentAuthors)
@@ -90,7 +97,8 @@ func (d *Directory) Name(email string) string {
 
 // Bot reports whether a canonical email belongs to a bot or an agent: a
 // [bots] fragment occurs in the email or the display name, or the identity
-// is an [ai] agent. Bots are separated in every table and never ranked.
+// is an [ai] agent. A forge app account's subject ("@login[bot]", Reviewer)
+// is a bot too. Bots are separated in every table and never ranked.
 func (d *Directory) Bot(email string) bool {
 	return d.kind(canonical(email)).bot
 }
@@ -149,12 +157,14 @@ func (d *Directory) kind(email string) kind {
 	return d.classify(email, "")
 }
 
-// classify applies the policy's patterns to one identity.
+// classify applies the policy's patterns to one identity. A forge app
+// account is a bot by its account type, which the forge reports, so no
+// fragment is needed for it.
 func (d *Directory) classify(email, name string) kind {
 	name = strings.ToLower(name)
 	agent := d.agentEmails[email] || containsAny(d.agentAuthors, email, name)
 	return kind{
-		bot:   agent || containsAny(d.botFragments, email, name),
+		bot:   agent || appAccount(email) || containsAny(d.botFragments, email, name),
 		agent: agent,
 	}
 }

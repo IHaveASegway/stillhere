@@ -28,14 +28,18 @@ import (
 // The answers are report types, which the command line renders and the MCP
 // server (#15) returns.
 //
-// GitHub data is not per run: the forge replica outlives runs, and a run
-// keeps only the watermarks it read, with the names and the join they were
-// read under (docs/spec/codebase.md#run-model). So the read side never
-// reads the replica. Its forge numbers are the values and ranks the scan
-// stored, which is why a scan ranks every ranked metric, and the
-// watermarks say when the GitHub data behind them was synced: a report of a
-// run from last month says last month's "as of" over last month's
-// repositories, whatever a sync did since.
+// GitHub data is not per run: the forge replica outlives runs, and a sync
+// replaces a pull request as a whole. So a run keeps what it read of it, the
+// watermarks, with the names and the join they were read under, and its
+// pull requests, whole (docs/spec/codebase.md#run-model, ADR 0011), and the
+// read side never reads the replica. A stored run's FactSet.Forge is the
+// run's own: what the read side computes from GitHub data (who_knows@1's
+// recent reviewers for any path, a newer metric version) comes from the
+// same snapshot as its git facts and stored numbers, and the watermarks say
+// when it was synced. A report of a run from last month says last month's
+// "as of" over last month's repositories and reviews, whatever a sync did
+// since; computing over today's replica would put two snapshots in one
+// answer.
 
 // stored is a run read back: the run, its own policy, its facts and its
 // values, and the GitHub data it read.
@@ -47,6 +51,10 @@ type stored struct {
 	values []domain.MetricValue
 	ranks  []domain.RankInterval
 	forge  *report.ForgeRead // nil without the replica port: the reader cannot tell
+	// unkept: the run read GitHub data but kept none of its pull requests,
+	// as a run stored before schema version 4 did, so a number computed
+	// from them when the run is read (who_knows@1's reviewers) is unknown.
+	unkept bool
 }
 
 // input is the metrics input over a stored run's facts.
@@ -81,25 +89,60 @@ func load(ctx context.Context, d Deps, runID int64) (*stored, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading run %d's metrics: %w", run.ID, err)
 	}
-	forge, err := readForge(ctx, d, run)
+	forge, watermarks, err := readForgeMarks(ctx, d, run)
 	if err != nil {
 		return nil, err
 	}
-	return &stored{run: run, policy: p, facts: fs, who: identity.New(fs, p), values: values, ranks: ranks, forge: forge}, nil
+	s := &stored{run: run, policy: p, facts: fs, values: values, ranks: ranks, forge: forge}
+	if len(watermarks) > 0 {
+		github, err := d.ForgeStore.RunForge(ctx, run.ID)
+		if err != nil {
+			return nil, fmt.Errorf("reading the GitHub data of run %d: %w", run.ID, err)
+		}
+		if github == nil {
+			// A run stored before facts.db kept the pull requests a run
+			// read (schema version 4). Its stored numbers stand, dated by
+			// the watermarks it kept; what is computed from the pull
+			// requests when it is read could only come from today's
+			// replica, another snapshot than its git facts, so it is
+			// unknown rather than half of it.
+			d.Log.Warn("the run was stored before stillhere kept the pull requests a run reads: its stored GitHub numbers "+
+				"stand, and who-knows lists no reviewers for it: scan again", "run", run.ID)
+			s.unkept = true
+		} else {
+			// A copy: a store may hand every reader the same facts (the MCP
+			// server caches them), which no use case changes.
+			c := *fs
+			c.Forge = github
+			s.facts = &c
+		}
+	}
+	// After the run's GitHub data: it links forge logins to the run's people.
+	s.who = identity.New(s.facts, p)
+	return s, nil
 }
 
-// readForge reads back the GitHub data a stored run read: the watermarks it
-// recorded (ForgeStore.RunWatermarks), each with the name and the join it
-// was read under, so nothing a later sync changed in the replica, a rename
-// included, reaches the run's pages. It returns nil without the replica
-// port, when the reader cannot tell.
+// readForge reads back how a stored run's GitHub data is dated, for a use
+// case that computes nothing from it: the watermarks alone, never the pull
+// requests the run kept.
 func readForge(ctx context.Context, d Deps, run domain.Run) (*report.ForgeRead, error) {
+	forge, _, err := readForgeMarks(ctx, d, run)
+	return forge, err
+}
+
+// readForgeMarks reads back the watermarks a stored run recorded
+// (ForgeStore.RunWatermarks), each with the name and the join it was read
+// under, and how they date the run's GitHub data. Nothing a later sync
+// changed in the replica, a rename included, reaches the run's pages. The
+// dating is nil without the replica port, when the reader cannot tell, and
+// the watermarks are nil when the run read no GitHub data, or kept no join.
+func readForgeMarks(ctx context.Context, d Deps, run domain.Run) (*report.ForgeRead, []domain.RunWatermark, error) {
 	if d.ForgeStore == nil {
-		return nil, nil
+		return nil, nil, nil
 	}
 	watermarks, err := d.ForgeStore.RunWatermarks(ctx, run.ID)
 	if err != nil {
-		return nil, fmt.Errorf("reading the forge watermarks of run %d: %w", run.ID, err)
+		return nil, nil, fmt.Errorf("reading the forge watermarks of run %d: %w", run.ID, err)
 	}
 	for _, wm := range watermarks {
 		if len(wm.Keys) == 0 {
@@ -110,10 +153,10 @@ func readForge(ctx context.Context, d Deps, run domain.Run) (*report.ForgeRead, 
 			// without the port.
 			d.Log.Warn("the run recorded its GitHub data without the repositories it dates, so its pages date none: scan again",
 				"run", run.ID)
-			return nil, nil
+			return nil, nil, nil
 		}
 	}
-	return forgeRead(watermarks), nil
+	return forgeRead(watermarks), watermarks, nil
 }
 
 // resolveRun finds the run a request names: its id, or the latest complete
@@ -319,10 +362,17 @@ func WhoKnows(ctx context.Context, d Deps, r WhoKnowsRequest) (*report.WhoKnows,
 	if err != nil {
 		return nil, fmt.Errorf("computing %s: %w", report.MetricWhoKnows, err)
 	}
+	forge := s.forge
+	if s.unkept {
+		// The reviewers are computed from the pull requests, which this run
+		// did not keep: the answer cannot tell, so it says nothing about
+		// GitHub rather than list no reviewers as if there were none.
+		forge = nil
+	}
 	run := s.run
 	return report.NewWhoKnows(&report.WhoKnowsInput{
 		Run: &run, Facts: underPrefix(s.facts, prefix, repo), Who: s.who, Path: prefix, Repo: repo, Values: values,
-		Forge: s.forge,
+		Forge: forge,
 	}), nil
 }
 

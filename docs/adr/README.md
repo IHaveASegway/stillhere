@@ -14,6 +14,7 @@ One file per decision that is hard to reverse. Format after Michael Nygard, "Doc
 | [0008](0008-apache-2-public.md) | Apache-2.0, public on a personal account | Accepted |
 | [0009](0009-default-branch-as-upstream-last-fetched.md) | A work tree's default branch is measured as upstream last fetched it | Proposed |
 | [0010](0010-rank-intervals-bootstrap-per-kind.md) | Rank intervals: a bootstrap per metric kind, reproducible by derived seeds | Proposed |
+| [0011](0011-a-run-keeps-the-github-facts-it-read.md) | A run keeps the GitHub facts it read | Proposed |
 
 Open decisions that have not reached an ADR yet are listed in [product.md](../product.md#open-decisions).
 

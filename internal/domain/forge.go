@@ -75,10 +75,12 @@ func RemoteRepo(remote string) (string, bool) {
 // every repository of the run whose origin names it (RemoteRepo of
 // Repo.Remote and of ForgeRepo.Key), sorted. A forge repository that no
 // repository of the run names is absent, and the result is nil when none
-// is named. reviews_given@1 counts the pull requests of the forge
-// repositories in it, and a scan records their watermarks
-// (ForgeStore.PutRunWatermarks), so the two can never disagree about which
-// GitHub data is a run's.
+// is named. A scan joins by it once: the forge repositories in it, their
+// watermarks and their pull requests are the run's GitHub data, which the
+// run keeps with the join itself (ForgeFacts.Join, RunWatermark.Keys), and
+// every metric that reads GitHub data counts by that kept join, so what a
+// run counts and what it dates can never disagree, and a later change to
+// this function moves no stored run.
 //
 // A repository whose collection failed (status error) joins nothing: a
 // failed repository adds nothing to a run's numbers, its GitHub ones
@@ -198,24 +200,37 @@ type ForgePage struct {
 	Updated      time.Time     // the new ForgeWatermark.Updated; never earlier than the one the pass started from
 }
 
-// ForgeFacts is the forge replica a run read: the repositories, their
-// watermarks, and the pull requests the run's metrics may use.
+// ForgeFacts is GitHub data as facts.db holds it: the repositories, their
+// watermarks, and their pull requests. LoadForge returns the replica's;
+// a scan run's FactSet.Forge is the run's own part of it, the forge
+// repositories ForgeJoin joins to the run's repositories with their
+// watermarks and pull requests, which the run keeps (PutRunForge) and its
+// readers read back (RunForge), so a stored run computes over what it read.
 type ForgeFacts struct {
 	Repos        []ForgeRepo      // sorted by Key, then ID
 	PullRequests []PullRequest    // sorted by Repo, then Number
 	Watermarks   []ForgeWatermark // sorted by Repo: the replica's, of which a run keeps those of its own repositories (RunWatermark)
+	// Join is the run's join of these forge repositories to its own
+	// repositories, as its scan made it with ForgeJoin and recorded it
+	// (RunWatermark.Keys): ForgeRepo.ID → the sorted Repo.Key of every
+	// repository of the run that it is. The metrics count by it, so a stored
+	// run keeps one owner of the join, its record, and a later stillhere
+	// whose ForgeJoin reads origins differently moves none of its numbers.
+	// It is nil for the replica LoadForge returns, which no run has joined:
+	// a metric over the replica itself joins it with ForgeJoin.
+	Join map[string][]string
 }
 
 // RunWatermark is the watermark of one of a scan run's forge repositories
 // (ForgeJoin) as the run read it, with the repository's name then and the
-// run's repositories it is. A run keeps these in place of the pull requests
-// (docs/spec/codebase.md#run-model), and all of it is the run's own: a
-// later sync that renames the repository, which the replica follows by node
-// id, or moves its watermark on, changes nothing a stored run shows.
-// Matching the watermark to the run's repositories again at read time,
-// against today's names, would let every later sync rewrite a stored run's
-// pages; what a run read is immutable, like its facts (Helland,
-// "Immutability Changes Everything", CIDR 2015).
+// run's repositories it is. A run keeps these beside the pull requests it
+// read (ForgeStore.PutRunForge, docs/spec/codebase.md#run-model), and all
+// of it is the run's own: a later sync that renames the repository, which
+// the replica follows by node id, or moves its watermark on, changes
+// nothing a stored run shows. Matching the watermark to the run's
+// repositories again at read time, against today's names, would let every
+// later sync rewrite a stored run's pages; what a run read is immutable,
+// like its facts (Helland, "Immutability Changes Everything", CIDR 2015).
 type RunWatermark struct {
 	ForgeWatermark          // Repo is the ForgeRepo.ID; zero times when the replica held no page of it
 	Name           string   // "owner/name" as the replica listed it
@@ -277,9 +292,11 @@ type ForgeSource interface {
 // per repository. It is a port of its own rather than more FactStore methods
 // because the two hold different kinds of data: FactStore holds per-run
 // snapshots of git facts, while forge facts are a replica that outlives
-// runs (docs/spec/codebase.md#run-model). Keeping them apart also leaves
-// FactStore and its implementation untouched (Interface Segregation
-// Principle).
+// runs (docs/spec/codebase.md#run-model), of which each run keeps the part
+// it read (its watermarks and its pull requests, ADR 0011). Keeping them
+// apart also leaves FactStore and its implementation untouched (Interface
+// Segregation Principle), and a reader without this port reads no GitHub
+// data at all, neither the dating nor the pull requests.
 type ForgeStore interface {
 	// PutForgeRepos upserts the repositories a sync is about to bring up to
 	// date, by ID.
@@ -314,4 +331,19 @@ type ForgeStore interface {
 	// unknown, running or failed. A watermark recorded before facts.db
 	// kept the join (schema version 3) has no Name and no Keys.
 	RunWatermarks(ctx context.Context, runID int64) ([]RunWatermark, error)
+	// PutRunForge records, for a running run, the GitHub data it computed
+	// over (FactSet.Forge): its forge repositories (ForgeJoin) as the
+	// replica listed them, and every pull request of them it read, whole,
+	// with its labels, reviews and commits (ADR 0011). A pull request of a
+	// repository not among repos is an error. Like the watermarks, which
+	// PutRunWatermarks records, they are deleted with the run.
+	PutRunForge(ctx context.Context, runID int64, repos []ForgeRepo, pulls []PullRequest) error
+	// RunForge returns the GitHub data a complete or partial run kept
+	// (PutRunForge), sorted as LoadForge sorts, with the watermarks it
+	// recorded (PutRunWatermarks) as Watermarks: what the run computed
+	// over, so a reader computes over it too, never over today's replica.
+	// It returns nil when the run kept none: a run with no forge
+	// repository, or one stored before facts.db kept them (schema version
+	// 4). ErrNotFound unless the run is complete or partial.
+	RunForge(ctx context.Context, runID int64) (*ForgeFacts, error)
 }

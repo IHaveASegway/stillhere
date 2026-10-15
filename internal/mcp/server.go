@@ -221,8 +221,9 @@ func (c *call) deps(ctx context.Context) (app.Deps, error) {
 	if fs, ok := s.store.FactStore.(domain.ForgeStore); ok {
 		// The forge replica in the same facts.db, as the command line
 		// hands it over: readers date a run's GitHub data by the
-		// watermarks it read (ADR 0004).
-		d.ForgeStore = fs
+		// watermarks it read (ADR 0004) and compute over the pull requests
+		// it kept (ADR 0011), both cached with the run.
+		d.ForgeStore = &cachedForge{ForgeStore: fs, c: s.store}
 	}
 	return d, nil
 }

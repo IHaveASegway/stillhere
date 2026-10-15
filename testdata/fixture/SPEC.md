@@ -710,6 +710,119 @@ The sibling has no hand-off. The only addresses with no commit since 2026-07-09 
 
 The [issue](https://github.com/IHaveASegway/stillhere/issues/26) adds no test of its own; this is what `TestChangeOracles`' identity candidates subtest checks. Scan each fixture into a fresh facts.db, once without its mailmap and once with it, and call `app.Identities` with the zero scope. Assert `addresses` and `bots` from the first table, `shared` and `oversized` 0, and each candidate's confidence, guess and commented flags (`commented` is true for all three), rules, suggested name, canonical address and addresses (email, name, domain kind, commits, co-authored, first, last, repos) from the tables above; Ada's `same-local-part` link has `from_name` true; for Gina → Hank, a gap of 24 hours and one shared file, `split.py`. Then write `report.Mailmap`'s output for the scans without a mailmap to a file. It holds the three lines `# Ada Example <ada@example.com> <ada@other.example>`, `# Hank Split <hank@example.com> <gina@example.com>` and `# Pia Pair <pia@example.com> <81234567+piapair@users.noreply.github.com>`, and no line that is not a comment. Run `git check-mailmap` in each fixture through `gitcli.Runner` with that file as `Config.MailmapFile`: `<ada@other.example>`, `<81234567+piapair@users.noreply.github.com>` and `<gina@example.com>` all come back unchanged, since adding the output unread merges nobody. With the `# ` removed from those three lines, `<ada@other.example>` gives `Ada Example <ada@example.com>`, `<81234567+piapair@users.noreply.github.com>` gives `Pia Pair <pia@example.com>`, and `<gina@example.com>` gives `Hank Split <hank@example.com>`.
 
+## Reviews in knowledge_loss@1 and who_knows@1 (main fixture)
+
+The [main fixture](#history), scanned alone with its mailmap and `--now 2026-10-07T00:00:00Z`, with an origin and a forge replica written by hand, as a sync stores one (`PutForgeRepos`, `PutForgePage`, `MarkForgeSynced`; the shapes are GitHub's, [testdata/github/README.md](../github/README.md)). The History table does not change, so every oracle above keeps its value in a scan without the replica, which `TestChangeOracles`' other subtests run. These values were derived by hand from the History table, the replica below and [metrics.md](../../docs/metrics.md#knowledge_loss1-per-area) as #38 amends it, before any code computed them. Times are UTC, 2026, and no review is within a day of a window's boundary (2026-04-10, 2026-07-09, 2026-10-07).
+
+- **Origin.** The fixture's local config gets `[remote "origin"] url = https://git.example.test/acme/fixture.git`, as `TestDeterminism` gives it one, so the repository's key is that URL, and the replica's forge repository `R_fixture` (`acme/fixture`, with that clone URL and default branch `main`) is the run's (`domain.ForgeJoin`).
+- **The replica.** One page holds the six pull requests below, with watermark 2026-10-06 16:00 (#6's update), and a sync that started 2026-10-06 22:00 brought it up to date. A merge commit is a landing of the run, named by its row in [Change facts per landing](#change-facts-per-landing-main-fixture), with the login of that row's author. A merged pull request lists its own commits as GitHub keeps them: #3, merged with a merge commit, has Cara's two commits, which are in the run; a squash merge's commits were never on `main`, so they carry SHAs that no run holds. Every review has a body of 0 characters and no inline comment.
+
+| # | Author | State | Merge commit | Its commits | Reviews: login, state, submitted |
+| --- | --- | --- | --- | --- | --- |
+| 1 | gina | merged 01-06 12:00, squash | row 5, Gina's `split.py`, login gina | 1, not in the run | hank approved 01-06 10:00 |
+| 2 | hank | merged 01-07 12:00, squash | row 6, Hank's `split.py`, login hank | 1, not in the run | none |
+| 3 | cara | merged 10-06 12:00, merge commit | row 8, Bob's merge, login bob | `e08df80` and `feb652b`, login cara | bob approved 10-02 10:00 |
+| 4 | bob | created 06-01, merged 10-06 13:00, squash | row 9, delta, login bob | 2, not in the run | frank commented 06-15 10:00 · zoe commented 09-30 10:00 · copilot-pull-request-reviewer (an app) commented 10-05 09:00 · bob commented 10-05 10:00 · cara approved 10-05 11:00 |
+| 5 | gina | open since 05-01 | none | 1, not in the run | gina commented 05-20 10:00, on her own pull request |
+| 6 | erin | created 10-04, merged 10-06 16:00, squash | row 12, Erin's rename, login erin | 2, not in the run | zoe approved 10-05 08:00 |
+
+**Who a login is** (`identity.Directory.Reviewer`, the rule `reviews_given@1` counts by): the run's mailmapped author of the commits GitHub attributes to the login. gina is `gina@example.com` (#1's merge commit), hank `hank@example.com` (#2's), cara `cara@example.com` (#3's two commits), bob `bob@example.com` (#3's and #4's merge commits) and erin `erin@example.com` (#6's). No commit of the replica is frank's or zoe's, so they are `@frank` and `@zoe`, although frank's own commit (row 13) is in the run: no pull request carries it. The copilot reviewer is an app account, `@copilot-pull-request-reviewer[bot]`, a bot.
+
+### knowledge_loss@1 with reviews
+
+A person is active when they landed (as [above](#knowledge_loss1-main-fixture)) or submitted a review in `[2026-04-10, 2026-10-07)` on any pull request of the run's repository, open, closed or merged, their own included:
+
+- **Gina is active**: she commented on #5 on 05-20, 140 days before `Now`, on her own pull request, still open. GitHub records a reply in a review thread of one's own pull request as a review, and it says she is still around, which is all activity asks. (#38's review made #5 Gina's own, so that the rule is pinned; it was Bob's, and the value is the same.)
+- **Hank stays inactive**: his only review, of #1 on 01-06, is before the window.
+- bob and cara landed anyway, and `@zoe` and `@frank` hold no line, so only a linked reviewer can move the value.
+
+| Surviving `prod` lines | Lines |
+| --- | --- |
+| Held by people | 34 |
+| Whose credited person has neither a landing nor a review in the window: Hank 2 | 2 |
+| **`knowledge_loss@1`** | **2 / 34 = 0.059** |
+
+`Detail`: `people` 8, `people_inactive` 1.
+
+Wrong implementations this catches:
+
+- **Reviews not counted.** Gina is inactive again: 4/34.
+- **`reviews_given@1`'s merged-only rule.** #5 is open, so Gina is inactive: 4/34.
+- **`reviews_given@1`'s rule that a review is someone else's.** #5 is Gina's own, so she is inactive: 4/34.
+- **A 90-day window, `who_knows@1`'s.** Gina's review is outside it: 4/34.
+- **No window.** Hank's January review counts: 0/34.
+- **Today's replica** (the later sync below): Hank is active, 0/34.
+
+### who_knows@1 with reviews
+
+Recent reviewers: a review submitted (approved, changes requested or commented) in `[2026-07-09, 2026-10-07)`, by someone other than the pull request's author, on a merged pull request whose landings changed a path under the query as a recent lander's change does. A pull request lands as its merge commit: #3 as row 8, whose map holds `e08df80` (`side.py`) and `feb652b` (`side_week.py`); #4 as row 9 alone, and #6 as row 12 alone. #4 and #6 have 2 commits each, but each merge commit's first parent was committed at another time (row 8 at 12:00 before row 9 at 13:00, row 11 at 15:00 before row 12 at 16:00): squashes, whose one landing is the merge commit, not rebase merges, whose commits share their committer time. Row 8 is also a merge, which no rebase merge puts on the branch; row 11 is not, so #6 alone shows the committer time deciding.
+
+| Path | Recent reviewers (pull requests) | Not listed |
+| --- | --- | --- |
+| `service.py` | `cara@example.com` (1: #4), `@zoe` (1: #4) | bob, #4's author; the copilot reviewer, a bot; `@frank`, on 06-15, before the window |
+| `side.py` | `bob@example.com` (1: #3) | |
+| `split.py` | none | hank, whose review of #1 on 01-06 is before the window |
+| `new_name.py` | `@zoe` (1: #6) | |
+| `kept.py` | none | `@zoe`: #6 did not land row 11, Dana's `kept.py` |
+
+The majority owners, top authors and recent landers of the first three paths are [those without reviews](#who_knows1-main-fixture). The bots list stays empty: the copilot reviewer holds no line.
+
+Wrong implementations this catches:
+
+- **No window, or `knowledge_loss@1`'s 180 days.** `@frank` reviews `service.py`; with no window, hank reviews `split.py` too.
+- **The author's own review counted.** bob reviews `service.py`.
+- **Bots among the reviewers.** `@copilot-pull-request-reviewer[bot]` reviews `service.py`.
+- **A squash of several commits taken for a rebase merge** (the merge commit's landing and the first-parent landings before it, up to the commit count, whatever their committer time). #6 also lands as row 11, so `@zoe` reviews `kept.py`; and if merge landings are not left out either, #4 also lands as row 8, so cara and `@zoe` review `side.py`.
+- **Pull requests mapped by their own commits, not the merge commit.** #4's commits are not in the run: `service.py` has no reviewer.
+- **The merge commit's own patch only.** Row 8 has none of its own: `side.py` has no reviewer.
+- **Unlinked logins dropped.** `@zoe` is missing from `service.py`.
+- **Today's replica** (the later sync below): hank reviews `side.py`.
+
+### A later sync changes nothing in the stored run
+
+After the scan, a sync stores #3 again, updated 10-12 with one more review, hank commented 10-03 10:00, inside both windows, and marks `acme/fixture` synced at 10-12. The stored run read #3 without it ([run model](../../docs/spec/codebase.md#run-model), [ADR 0011](../../docs/adr/0011-a-run-keeps-the-github-facts-it-read.md)): who-knows `side.py` still lists bob alone, with `provenance.forge.as_of` 2026-10-06 22:00, and `knowledge_loss@1` on the run's card is still 2/34. A reader that read today's replica would list hank, give 0/34 and date the answer 10-12.
+
+### reviews_given@1 over the same replica
+
+`[2026-07-09, 2026-10-07)`, merged pull requests only (scope `all`): `bob@example.com` 1 (#3), `cara@example.com` 1 (#4), `@zoe` 2 (#4, #6) and the bot `@copilot-pull-request-reviewer[bot]` 1 (#4); #1's review is outside the window, #5 is open, and bob's comment on #4 is the author's. The same logins name the same subjects as in `who_knows@1`: the three metrics read one rule.
+
+### Merge methods (`fixture.MergeMethods`)
+
+A pull request lands as its merge commit, and a rebase merge as the first-parent commits that share its committer second ([metrics.md](../../docs/metrics.md#who_knows1-per-path)): GitHub's `merge_commit_sha` is "the commit that the base branch was updated to", the last of the commits a rebase merge puts on the branch one by one, with new SHAs. The main fixture holds no two first-parent commits with one committer time, and adding them would move its oracles, so a repository of its own holds the cases (added in #38's review): `fixture.MergeMethods(t)`, a work tree named `merge-methods` on branch `main`. It is scanned alone, without a mailmap, with `--now 2026-10-07T00:00:00Z` and origin `https://git.example.test/acme/merge-methods.git`, and a replica written by hand as above. Every commit is at 12:00:00Z on the stated day, and `GitHub <noreply@github.com>` commits every merge, as its merge button does; each pull request's author wrote its commits. A file holds lines `<name>_<i> = <i>`, and the subject is `feat: add <file>`.
+
+| Row | Committed | Author | What |
+| --- | --- | --- | --- |
+| B0 | 09-01 | Ann Base `<ann@example.com>` | `base.py` (2 lines), the root commit, pushed to `main` with no pull request |
+| R1 | 10-01, authored 09-28 | Rob Rebase `<rob@example.com>`, committed by GitHub | `one.py` (2 lines): the first of #1's two commits, rebased onto `main` |
+| R2 | 10-01, authored 09-29 | Rob, committed by GitHub | `two.py` (2 lines): #1's last commit, its merge commit, in the same second as R1 |
+| S1 | 10-02 | Ali Squash `<ali@example.com>`, committed by GitHub | `a.py` (2 lines): #2's squash commit |
+| S2 | 10-02 | Bo Squash `<bo@example.com>`, committed by GitHub | `b.py` (2 lines): #3's squash commit, in the same second as S1, as a merge queue or a bot lands two pull requests |
+
+The replica is forge repository `R_merges` (`acme/merge-methods`), one page with watermark 10-02 12:00, which a sync that started 10-06 22:00 brought up to date. Every review has a body of 0 characters and no inline comment.
+
+| # | Author | Merged | Merge commit | Its commits | Reviews: login, state, submitted |
+| --- | --- | --- | --- | --- | --- |
+| 1 | rob | 10-01 12:00, rebase | R2, login rob | 2, as written before the rebase: not in the run | sam approved 10-01 09:00 |
+| 2 | ali | 10-02 12:00, squash | S1, login ali | 1, not in the run | rita approved 10-02 09:00 |
+| 3 | bo | 10-02 12:00, squash | S2, login bo | 2, not in the run | tess approved 10-02 10:00 |
+
+No commit of the replica is sam's, rita's or tess's, so they are `@sam`, `@rita` and `@tess`. #1 lands as R2 and R1: R1 is R2's first parent, shares its committer second and is no merge, and #1 has 2 commits. #3 has 2 commits too, and S1, its first parent, shares its committer second, but S1 is #2's merge commit: a landing that another pull request lands is not this one's, so #3 lands as S2 alone. #2 has 1 commit, so it lands as S1 alone.
+
+| Path | Recent reviewers (pull requests) | Not listed |
+| --- | --- | --- |
+| `base.py` | none | no pull request landed it |
+| `one.py` | `@sam` (1: #1) | |
+| `two.py` | `@sam` (1: #1) | |
+| `a.py` | `@rita` (1: #2) | `@tess`: #3 did not land S1 |
+| `b.py` | `@tess` (1: #3) | |
+
+Wrong implementations this catches:
+
+- **The merge commit alone**, with no walk back: `one.py` has no reviewer.
+- **A walk that passes another pull request's merge commit** (#38's first version): #3 also lands as S1, so `@tess` reviews `a.py`.
+
+**Not covered.** A commit pushed straight to the branch, with no pull request, in the same second as a squash of several commits and just before it, is taken for that pull request's: nothing in the history or the replica tells the two apart. `who_knows@1`'s blind spots say so. GitHub's `Commit.associatedPullRequests`, read at sync time, would map every commit exactly (a follow-up).
+
 ## Discovery fixture (`TestDiscover`)
 
 Two clones whose `origin` is `https://user:TOKENVALUE@github.com/example/widget.git`, plus a third clone with a different remote:
