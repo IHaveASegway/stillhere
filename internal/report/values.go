@@ -2,6 +2,9 @@ package report
 
 import (
 	"cmp"
+	"crypto/sha256"
+	"encoding/hex"
+	"math"
 	"slices"
 	"strings"
 
@@ -18,7 +21,7 @@ import (
 // The metric versions a report reads.
 const (
 	MetricLanded        = "landed@1"                  // week rows: Value is the landings credited; Detail lines_added, prod_lines_added
-	MetricSurviving     = "surviving@1"               // still-here rows: Value is prod non-blank lines; Detail majority_files, lines_<role>, repos, landings_365d
+	MetricSurviving     = "surviving@1"               // still-here rows: Value is prod non-blank lines; Detail majority_files, lines_<role>, repos, landings_365d; about a repository or group: Value prod lines, Detail prod_files, people, bot_share
 	MetricMajority      = "majority_owner@1"          // a person's majority files, when surviving@1 has no majority_files detail
 	MetricConcentration = "knowledge_concentration@1" // Value is authors_in_prefix; Detail files_with_majority, bots_in_prefix
 	MetricKnowledgeLoss = "knowledge_loss@1"          // Num is lines held by people gone quiet, Den lines held by people
@@ -43,7 +46,38 @@ const (
 	detailRecentLandings    = "recent_landings"
 	detailTopAuthor         = "top_author" // a top author's place, 1 to 5
 	detailProdFiles         = "prod_files"
+	detailPeople            = "people"    // surviving@1 about a repository or group: humans with surviving prod lines
+	detailBotShare          = "bot_share" // surviving@1 about a repository or group: bot-held lines over prod lines
 )
+
+// population is surviving@1's value about a repository's or a group's code
+// as a whole. A field is nil when the value does not carry it.
+type population struct {
+	prodLines *int   // Value: surviving prod non-blank lines
+	prodFiles *int   // Detail prod_files: prod files with surviving lines
+	people    *int   // Detail people
+	botShare  *Share // Detail bot_share, with the lines it is a share of
+}
+
+// populationOf reads a surviving@1 value about a repository or a group.
+// The bots' lines are bot_share times the prod lines, rounded: the metric
+// divided two counts, so the product is that count again.
+func populationOf(v domain.MetricValue) population {
+	lines := count(v.Value)
+	p := population{prodLines: &lines}
+	if n, ok := v.Detail[detailProdFiles]; ok {
+		files := count(n)
+		p.prodFiles = &files
+	}
+	if n, ok := v.Detail[detailPeople]; ok {
+		people := count(n)
+		p.people = &people
+	}
+	if share, ok := v.Detail[detailBotShare]; ok && lines > 0 && !math.IsNaN(share) {
+		p.botShare = &Share{Metric: MetricSurviving, Num: float64(count(share * float64(lines))), Den: float64(lines), Value: share}
+	}
+	return p
+}
 
 // valueIndex finds the values of one metric within one scope.
 type valueIndex map[string]map[domain.Scope][]domain.MetricValue
@@ -177,7 +211,8 @@ func compareValues(a, b domain.MetricValue) int {
 
 // Values converts metric values to the form a report prints, sorted by
 // metric, scope, subject and window, with display names for people. who
-// may be nil, in which case a person is named by their email.
+// may be nil, in which case a person gets the no-name placeholder
+// (displayName).
 func Values(values []domain.MetricValue, who People) []Value {
 	var out []Value
 	for _, v := range values {
@@ -219,7 +254,7 @@ func valueOf(v domain.MetricValue, who People) Value {
 }
 
 // SubjectOf converts a subject, naming a person by display name. who may be
-// nil, in which case a person is named by their email.
+// nil, in which case a person gets the no-name placeholder (displayName).
 func SubjectOf(s domain.Subject, who People) Subject {
 	out := Subject{Kind: s.Kind, Key: s.Key}
 	if s.Kind == domain.SubjectPerson {
@@ -243,16 +278,35 @@ type People interface {
 }
 
 // displayName is the name a person is shown by: the identity directory's
-// display name, else their email (a person with no name in the facts, which
-// the directory never returns once identity is built).
+// display name. A person the facts never show with a name (git allows an
+// empty author name) is shown as "(no name 1a2b3c)", with the start of the
+// email's SHA-256 so that two such people stay apart: text, Markdown and the
+// names an agent reads never carry an email, and JSON keeps it in its own
+// field.
 func displayName(who People, email string) string {
-	if who != nil {
-		if n := who.Name(email); n != "" {
-			return n
-		}
+	if n, ok := realName(who, email); ok {
+		return n
 	}
-	return email
+	sum := sha256.Sum256([]byte(email))
+	return "(no name " + hex.EncodeToString(sum[:3]) + ")"
 }
+
+// realName is the identity directory's display name for email, and whether
+// it has one.
+func realName(who People, email string) (string, bool) {
+	if who == nil {
+		return "", false
+	}
+	n := who.Name(email)
+	return n, n != ""
+}
+
+// OwnPageOnly reports whether a metric's values about a person are shown on
+// that person's own page only (stillhere me), and never in a report, a rank
+// table or an explanation that someone else may read: a person's own
+// AI-assisted share (ADR 0007). The MCP server's person tool (#15) follows
+// the same rule.
+func OwnPageOnly(metric domain.MetricID) bool { return metric.Name == "ai_assisted" }
 
 func isBot(who People, email string) bool {
 	return who != nil && who.Bot(email)

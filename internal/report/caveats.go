@@ -26,7 +26,7 @@ const (
 	codeNumstat       = "numstat-rename"
 	codeNoIgnoreRevs  = "no-ignore-revs"
 	codeExcluded      = "excluded-repo"
-	codeDuplicate     = "duplicate-repo"
+	codeDuplicate     = "duplicate-repo" // a repository's warning: another clone of its remote was skipped
 	codePathFailed    = "path-failed"
 	codeIdentities    = "unmerged-identities"
 	codeNoValues      = "no-values"
@@ -51,11 +51,12 @@ var caveatOrder = []string{
 var summaries = map[string]string{
 	codeFailed:        "These repositories failed and add nothing to these numbers.",
 	codeShallow:       "Shallow clones: blame did not run, so their surviving lines, ownership and durability are missing.",
-	codePartial:       "Partial clones have no line facts (no numstat, no blame): only their landings and commits count.",
+	codePartial:       "Partial clones have no line facts (no numstat, no blame): only their landings and commits count, and where their blobs are absent, no path is skipped as too big or generated.",
 	codeShallowWindow: "A shallow boundary falls inside the history window, so earlier landings are missing.",
 	codeBlameErrors:   "Blame failed on some files, so their lines are missing.",
 	codeNumstat:       "Some numstat rows could not be read and count 0 lines.",
 	codeNoIgnoreRevs:  "Large repositories without a .git-blame-ignore-revs: a formatting commit would take the credit for every line it touched.",
+	codeDuplicate:     "Clones of the same remote as these repositories were skipped as duplicates: each repository is counted once (see their warnings).",
 }
 
 func notFetched() Caveat {
@@ -81,7 +82,8 @@ func repoCaveats(rf *domain.RepoFacts) []Caveat {
 		add(codeShallow, "Shallow clone: blame did not run, so its surviving lines, ownership and durability are missing.")
 	}
 	if rf.Repo.Partial {
-		add(codePartial, "Partial clone: no line facts (no numstat, no blame), so only its landings and commits count.")
+		add(codePartial, "Partial clone: no line facts (no numstat, no blame), so only its landings and commits count; "+
+			"where its blobs are absent, path sizes and attributes are unknown, so no path is skipped as too big or generated.")
 	}
 	numstat := 0
 	for _, w := range rf.Warnings {
@@ -102,7 +104,7 @@ func repoCaveats(rf *domain.RepoFacts) []Caveat {
 	if n := len(rf.BlameErrors); n > 0 {
 		add(codeBlameErrors, "Blame failed on "+plural(n, "file", "files")+", so their lines are missing.")
 	}
-	if lines := sizeOf(rf).ProdLines; rf.LineFacts && rf.IgnoreRevs.Source == "" && lines >= largeRepoLines {
+	if lines := blamedProdLines(rf, nil); rf.LineFacts && rf.IgnoreRevs.Source == "" && lines >= largeRepoLines {
 		add(codeNoIgnoreRevs, "No .git-blame-ignore-revs in a repository with "+grouped(lines)+
 			" surviving prod lines: a formatting commit would take the credit for every line it touched.")
 	}
@@ -174,7 +176,10 @@ func (b *builder) scopeCaveats(members []*domain.RepoFacts, scope domain.Scope, 
 	return out
 }
 
-// runCaveats says what could make the whole report wrong.
+// runCaveats says what could make the whole report wrong. The run-level
+// warnings are excluded repositories and paths that gave no repository;
+// discovery's warnings about a repository, duplicate-repo among them, are
+// that repository's and reach here through its caveats.
 func (b *builder) runCaveats(m *Model) []Caveat {
 	out := []Caveat{notFetched()}
 	byCode := map[string][]domain.Warning{}
@@ -187,7 +192,8 @@ func (b *builder) runCaveats(m *Model) []Caveat {
 	}
 	slices.Sort(codes)
 	for _, code := range codes {
-		n := len(byCode[code])
+		ws := byCode[code]
+		n := len(ws)
 		var msg string
 		switch code {
 		case codeExcluded:
@@ -195,12 +201,15 @@ func (b *builder) runCaveats(m *Model) []Caveat {
 			if n > 1 {
 				msg = grouped(n) + " repositories were left out by --exclude-repo and are in none of these numbers (see warnings)."
 			}
-		case codeDuplicate:
-			msg = plural(n, "clone was", "clones were") + " skipped as a duplicate of another clone of the same remote (see warnings)."
 		case codePathFailed:
-			msg = plural(n, "path", "paths") + " gave no repository (neither a repository nor a group, or one git cannot read) and added nothing (see warnings)."
+			// The warning says why, which can be a typo, a directory git
+			// cannot read or a repository without a commit yet.
+			msg = "1 path gave no repository and added nothing: " + ws[0].Message + "."
+			if n > 1 {
+				msg = fmt.Sprintf("%s paths gave no repository and added nothing, such as %s (see warnings).", grouped(n), ws[0].Message)
+			}
 		default:
-			msg = byCode[code][0].Message
+			msg = ws[0].Message
 			if n > 1 {
 				msg = fmt.Sprintf("%s (and %d more like it; see warnings)", msg, n-1)
 			}
@@ -253,7 +262,7 @@ func (b *builder) identityCaveat(scope domain.Scope, members []*domain.RepoFacts
 	}
 	byName := map[string]int{}
 	for e := range emails {
-		if n := displayName(b.in.Who, e); n != e {
+		if n, ok := realName(b.in.Who, e); ok {
 			byName[n]++
 		}
 	}

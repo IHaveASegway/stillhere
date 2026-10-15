@@ -104,18 +104,14 @@ func mdCaveats(p *printer, level string, cs []Caveat, nested bool) {
 func mdOverview(p *printer, m *Model, o *Overview) {
 	t := o.Totals
 	p.blank()
-	p.line("## Group " + mdText(o.Scope.Key))
+	p.line("## " + overviewTitle(o.Scope, mdText))
 	p.blank()
 	repos := plural(t.Repos, "repository", "repositories") + fmt.Sprintf(" (%d ok", t.ReposOK)
 	if t.ReposFailed > 0 {
 		repos += fmt.Sprintf(", %d failed", t.ReposFailed)
 	}
-	p.line("- " + repos + ") · " + peopleSummary(t, o.People != nil))
-	size := grouped(t.ProdFiles) + " prod files"
-	if o.People != nil {
-		size = grouped(t.ProdLines) + " surviving prod lines in " + size
-	}
-	p.line("- " + size + " · " + landingsText(m, t.LandingsWindow, t.LandingsHistory))
+	p.line("- " + repos + ") · " + peopleSummary(t))
+	p.line("- " + sizeText(t.ProdLines, t.ProdFiles, t.ProdPaths) + " · " + landingsText(m, t.LandingsWindow, t.LandingsHistory))
 	if line := shareLine(o.KnowledgeLoss, o.AIAssisted, o.BotShare); line != "" {
 		p.line("- " + mdText(line))
 	}
@@ -126,8 +122,8 @@ func mdOverview(p *printer, m *Model, o *Overview) {
 		p.blank()
 		p.line("### Still here")
 		p.blank()
-		p.line(fmt.Sprintf("Surviving prod non-blank lines across the group (%s blamed).",
-			plural(o.People.FilesBlamed, "file", "files")))
+		p.line(fmt.Sprintf("Surviving prod non-blank lines across %s (%s blamed).",
+			across(o.Scope), plural(o.People.FilesBlamed, "file", "files")))
 		mdPeople(p, o.People)
 	}
 	if o.Week != nil {

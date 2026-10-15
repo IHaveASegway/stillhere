@@ -5,11 +5,14 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/IHaveASegway/stillhere/internal/domain"
 )
 
 // The text renderer: a report for a terminal, read top to bottom. What
-// could make the numbers wrong comes first, then each group's overview,
-// then the ranks asked for, then every repository's card and detail.
+// could make the numbers wrong comes first, then the overviews (every
+// repository, then each group), then the ranks asked for, then every
+// repository's card and detail.
 // Every untrusted string goes through clean, and no line is wider than
 // maxWidth, except a single word (a path, a URL) that cannot be broken.
 
@@ -158,19 +161,47 @@ func repoList(names []string, esc func(string) string) string {
 	return joinNames(out)
 }
 
+// overviewTitle names an overview's scope: "Group acme", or "Every
+// repository".
+func overviewTitle(s Scope, esc func(string) string) string {
+	if s.Kind == domain.ScopeAll {
+		return "Every repository"
+	}
+	return "Group " + esc(s.Key)
+}
+
+// across says what an overview's people rows add up: "the group", or
+// "every repository".
+func across(s Scope) string {
+	if s.Kind == domain.ScopeAll {
+		return "every repository"
+	}
+	return "the group"
+}
+
+// sizeText is "37 surviving prod lines in 10 prod files · 12 prod paths at
+// HEAD": the surviving part only when surviving@1 has its value.
+func sizeText(prodLines, prodFiles *int, prodPaths int) string {
+	paths := plural(prodPaths, "prod path", "prod paths") + " at HEAD"
+	if prodLines == nil {
+		return paths
+	}
+	s := grouped(*prodLines) + " surviving prod lines"
+	if prodFiles != nil {
+		s += " in " + plural(*prodFiles, "prod file", "prod files")
+	}
+	return s + " · " + paths
+}
+
 func textOverview(p *printer, m *Model, o *Overview) {
 	t := o.Totals
-	head := fmt.Sprintf("Group %s · %s (%d ok", clean(o.Scope.Key), plural(t.Repos, "repository", "repositories"), t.ReposOK)
+	head := fmt.Sprintf("%s · %s (%d ok", overviewTitle(o.Scope, clean), plural(t.Repos, "repository", "repositories"), t.ReposOK)
 	if t.ReposFailed > 0 {
 		head += fmt.Sprintf(", %d failed", t.ReposFailed)
 	}
-	p.line(head + ")")
-	p.wrapped("  ", "  ", peopleSummary(t, o.People != nil))
-	size := grouped(t.ProdFiles) + " prod files"
-	if o.People != nil {
-		size = grouped(t.ProdLines) + " surviving prod lines in " + size
-	}
-	p.wrapped("  ", "  ", size+" · "+landingsText(m, t.LandingsWindow, t.LandingsHistory))
+	p.wrapped("", "  ", head+")")
+	p.wrapped("  ", "  ", peopleSummary(t))
+	p.wrapped("  ", "  ", sizeText(t.ProdLines, t.ProdFiles, t.ProdPaths)+" · "+landingsText(m, t.LandingsWindow, t.LandingsHistory))
 	if line := shareLine(o.KnowledgeLoss, o.AIAssisted, o.BotShare); line != "" {
 		p.wrapped("  ", "  ", line)
 	}
@@ -179,8 +210,8 @@ func textOverview(p *printer, m *Model, o *Overview) {
 	}
 	if o.People != nil {
 		p.blank()
-		p.linef("  Still here: surviving prod non-blank lines, across the group (%s blamed)",
-			plural(o.People.FilesBlamed, "file", "files"))
+		p.linef("  Still here: surviving prod non-blank lines, across %s (%s blamed)",
+			across(o.Scope), plural(o.People.FilesBlamed, "file", "files"))
 		textPeople(p, "    ", o.People)
 	}
 	if o.Week != nil {
@@ -191,11 +222,11 @@ func textOverview(p *printer, m *Model, o *Overview) {
 }
 
 // peopleSummary is "8 people with surviving prod lines · 7 landed in the
-// window · 1 bot".
-func peopleSummary(t Totals, lineFacts bool) string {
+// window · 1 bot"; the first part only when surviving@1 has its value.
+func peopleSummary(t Totals) string {
 	var parts []string
-	if lineFacts {
-		parts = append(parts, plural(t.People, "person", "people")+" with surviving prod lines")
+	if t.People != nil {
+		parts = append(parts, plural(*t.People, "person", "people")+" with surviving prod lines")
 	}
 	parts = append(parts, plural(t.Landers, "person", "people")+" landed in the window", plural(t.Bots, "bot", "bots"))
 	return strings.Join(parts, " · ")
@@ -305,7 +336,7 @@ func withBots[R any](humans, bots []R, row func(R) []string, width int) [][]stri
 }
 
 func textRanks(p *printer, t *RankTable) {
-	p.linef("Ranks · %s · %s · %s", t.Metric, scopeText(t.Scope, clean, t.Provenance), interval(t.Window))
+	p.wrapped("", "  ", "Ranks · "+clean(t.Metric)+" · "+scopeText(t.Scope, clean, t.Provenance)+" · "+interval(t.Window))
 	if t.Question != "" {
 		p.wrapped("  ", "  ", clean(t.Question))
 	}
@@ -394,7 +425,7 @@ func textRepo(p *printer, m *Model, r *Repo) {
 		head += " · " + clean(r.Branch) + " @ " + short(r.Head)
 	}
 	head += " · " + clean(r.Status)
-	p.line(head)
+	p.wrapped("", "  ", head)
 	where := "path " + clean(r.Path)
 	if r.Remote != "" {
 		where += " · remote " + clean(r.Remote)
@@ -448,10 +479,24 @@ func cardFacts(m *Model, r *Repo) string {
 	if c.Age != nil {
 		facts = append(facts, fmt.Sprintf("age %s (first commit %s)", plural(c.Age.Days, "day", "days"), date(c.Age.FirstCommit)))
 	}
-	facts = append(facts, fmt.Sprintf("%s at HEAD, %d prod", plural(c.Size.Files, "file", "files"), c.Size.ProdFiles))
-	if r.LineFacts {
-		facts = append(facts, grouped(c.Size.ProdLines)+" surviving prod lines",
-			plural(c.People, "person", "people")+", "+plural(c.Bots, "bot", "bots"))
+	facts = append(facts, fmt.Sprintf("%s at HEAD, %s", plural(c.Size.Files, "file", "files"),
+		plural(c.Size.ProdPaths, "prod path", "prod paths")))
+	if c.Size.ProdLines != nil {
+		lines := grouped(*c.Size.ProdLines) + " surviving prod lines"
+		if c.Size.ProdFiles != nil {
+			lines += " in " + plural(*c.Size.ProdFiles, "prod file", "prod files")
+		}
+		facts = append(facts, lines)
+	}
+	if c.People != nil || c.Bots != nil {
+		var who []string
+		if c.People != nil {
+			who = append(who, plural(*c.People, "person", "people"))
+		}
+		if c.Bots != nil {
+			who = append(who, plural(*c.Bots, "bot", "bots"))
+		}
+		facts = append(facts, strings.Join(who, ", "))
 	}
 	facts = append(facts, landingsText(m, c.Landings.Window, c.Landings.History))
 	return strings.Join(facts, " · ")

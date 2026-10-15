@@ -21,10 +21,13 @@
 package report
 
 import (
+	"bytes"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
+	"errors"
 	"fmt"
 	"io"
+	"math"
 	"time"
 )
 
@@ -74,15 +77,40 @@ func Markdown(w io.Writer, d Document) error {
 // JSON renders d as indented JSON in a stable order: fields in declaration
 // order, map keys sorted, an empty list as [] and an empty map as {}, and an
 // absent section as null.
+//
+// Two inputs that encoding/json/v2 rejects by default are mapped instead,
+// so that one odd commit cannot cost a whole report. git does not guarantee
+// UTF-8: a commit written without an encoding header (cvs2git, early
+// git-svn, JGit) keeps its Latin-1 bytes, and --encoding=UTF-8 leaves them
+// as they are. Invalid UTF-8 becomes U+FFFD, as encoding/json v1 did. A
+// number that is not finite (NaN, an infinity) becomes null. The document
+// is encoded in memory and written only once it is whole, so a failure
+// never leaves half a document on w.
 func JSON(w io.Writer, d Document) error {
-	err := json.MarshalWrite(w, d, json.Deterministic(true), jsontext.WithIndent("  "))
-	if err == nil {
-		_, err = io.WriteString(w, "\n")
-	}
+	var buf bytes.Buffer
+	err := json.MarshalWrite(&buf, d,
+		json.Deterministic(true),
+		jsontext.WithIndent("  "),
+		jsontext.AllowInvalidUTF8(true),
+		json.WithMarshalers(json.MarshalToFunc(finiteOrNull)),
+	)
 	if err != nil {
+		return fmt.Errorf("report: encode JSON: %w", err)
+	}
+	buf.WriteByte('\n')
+	if _, err := buf.WriteTo(w); err != nil {
 		return fmt.Errorf("report: write JSON: %w", err)
 	}
 	return nil
+}
+
+// finiteOrNull encodes a NaN or an infinity as null and leaves every other
+// float64 to the default encoder.
+func finiteOrNull(enc *jsontext.Encoder, f float64) error {
+	if math.IsNaN(f) || math.IsInf(f, 0) {
+		return enc.WriteToken(jsontext.Null)
+	}
+	return errors.ErrUnsupported
 }
 
 // Model is one stillhere.report/v1 document: a week run, or a scan run as
@@ -101,7 +129,7 @@ type Model struct {
 	Groups    []Group     `json:"groups"`    // sorted by name
 	Warnings  []Warning   `json:"warnings"`  // run-level warnings, such as excluded-repo; repository warnings are on the repository
 	Caveats   []Caveat    `json:"caveats"`   // what could make this report wrong, across the run
-	Overviews []Overview  `json:"overviews"` // one per group: the platform view, read first
+	Overviews []Overview  `json:"overviews"` // the platform view, read first: every repository (with --scope all, or without groups), then one per group
 	Ranks     []RankTable `json:"ranks"`     // only for metrics named by --rank
 	Repos     []Repo      `json:"repos"`     // sorted by group, name and key
 	Timings   *Timings    `json:"timings"`   // wall-clock measurements: the only part two identical runs do not share
@@ -197,33 +225,37 @@ type Scope struct {
 	Key  string `json:"key"`  // Repo.Key, Group.Name, or ""
 }
 
-// Overview is the platform view of one group: what a lead or an agent reads
-// first about it.
+// Overview is the platform view of one scope, a group or every repository:
+// what a lead or an agent reads first about it.
 type Overview struct {
 	Scope         Scope          `json:"scope"`
 	Provenance    Provenance     `json:"provenance"`
 	Totals        Totals         `json:"totals"`
 	People        *StillHere     `json:"people"`         // survival, depth, breadth and activity per person; nil when no repository has line facts
 	Week          *WeekTable     `json:"week"`           // what landed in the window, summed per person
-	Concentration *Concentration `json:"concentration"`  // the walk re-run on the group's summed majority files
+	Concentration *Concentration `json:"concentration"`  // the walk re-run on the group's summed majority files; nil for every repository
 	KnowledgeLoss *Share         `json:"knowledge_loss"` // the share of human-held prod lines whose people have gone quiet
 	AIAssisted    *Share         `json:"ai_assisted"`    // the share of landings tagged AI-assisted: a lower bound
-	BotShare      *Share         `json:"bot_share"`      // the share of surviving prod lines held by bots
+	BotShare      *Share         `json:"bot_share"`      // surviving@1: the share of surviving prod lines held by bots
 	Caveats       []Caveat       `json:"caveats"`
 }
 
-// Totals are the sizes of a group.
+// Totals are the sizes of a scope. The counts of paths and landings are
+// facts; the surviving lines, the files that hold them and their people are
+// surviving@1's, and null when it has no value for the scope (no
+// repository has line facts).
 type Totals struct {
-	Repos           int `json:"repos"`
-	ReposOK         int `json:"repos_ok"`
-	ReposFailed     int `json:"repos_failed"`
-	ProdFiles       int `json:"prod_files"`       // prod paths at each HEAD
-	ProdLines       int `json:"prod_lines"`       // surviving prod non-blank lines; 0 without line facts
-	People          int `json:"people"`           // humans with surviving prod lines; 0 without line facts
-	Landers         int `json:"landers"`          // humans with a landing in the landed window
-	Bots            int `json:"bots"`             // bots with surviving prod lines or a landing in the window
-	LandingsWindow  int `json:"landings_window"`  // landings in the landed window
-	LandingsHistory int `json:"landings_history"` // landings in the history window
+	Repos           int  `json:"repos"`
+	ReposOK         int  `json:"repos_ok"`
+	ReposFailed     int  `json:"repos_failed"`
+	ProdPaths       int  `json:"prod_paths"`       // paths with role prod at each HEAD, whether or not they hold a line
+	ProdFiles       *int `json:"prod_files"`       // surviving@1: prod files with surviving lines
+	ProdLines       *int `json:"prod_lines"`       // surviving@1: surviving prod non-blank lines
+	People          *int `json:"people"`           // surviving@1: humans with surviving prod lines
+	Landers         int  `json:"landers"`          // humans with a landing in the landed window
+	Bots            int  `json:"bots"`             // bots with surviving prod lines or a landing in the window
+	LandingsWindow  int  `json:"landings_window"`  // landings in the landed window
+	LandingsHistory int  `json:"landings_history"` // landings in the history window
 }
 
 // StillHere is whose lines blame still attributes at HEAD: surviving@1.
@@ -315,8 +347,8 @@ type RepoCard struct {
 	Age           *Age           `json:"age"` // nil when the first commit is unknown, as in a shallow clone
 	Size          Size           `json:"size"`
 	MadeOf        []Author       `json:"made_of"` // the top five humans by surviving prod lines
-	People        int            `json:"people"`  // humans with surviving prod lines
-	Bots          int            `json:"bots"`    // bots with surviving prod lines
+	People        *int           `json:"people"`  // surviving@1: humans with surviving prod lines; nil without its value
+	Bots          *int           `json:"bots"`    // bots with surviving prod lines; nil without line facts
 	Concentration *Concentration `json:"concentration"`
 	KnowledgeLoss *Share         `json:"knowledge_loss"`
 	AIAssisted    *Share         `json:"ai_assisted"`
@@ -331,11 +363,14 @@ type Age struct {
 	Days        int       `json:"days"`         // whole days from FirstCommit to the as-of instant
 }
 
-// Size is how big a repository is at HEAD.
+// Size is how big a repository is at HEAD. Files and ProdPaths count the
+// classified paths; ProdFiles and ProdLines are surviving@1's, nil when it
+// has no value for the repository (no line facts).
 type Size struct {
-	Files     int `json:"files"`      // paths at HEAD
-	ProdFiles int `json:"prod_files"` // paths at HEAD with role prod
-	ProdLines int `json:"prod_lines"` // surviving prod non-blank lines; 0 without line facts
+	Files     int  `json:"files"`      // paths at HEAD
+	ProdPaths int  `json:"prod_paths"` // paths at HEAD with role prod, whether or not they hold a line
+	ProdFiles *int `json:"prod_files"` // surviving@1: prod files with surviving lines
+	ProdLines *int `json:"prod_lines"` // surviving@1: surviving prod non-blank lines
 }
 
 // Author is one of the people a repository is made of.

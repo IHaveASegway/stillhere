@@ -87,7 +87,7 @@ func Scan(ctx context.Context, d Deps, r ScanRequest) (*report.Model, error) {
 		finish(timings, started)
 		return report.Build(&report.Input{
 			Kind: report.KindScan, Tool: d.Version, Run: run, Facts: fs, Policy: d.Policy, Who: who,
-			Values: values, Ranks: sets, Landed: landed, History: window, Timings: timings,
+			Values: values, Ranks: sets, Landed: landed, History: window, Timings: timings, Scope: scope,
 		})
 	}
 	if !produced(fs) {

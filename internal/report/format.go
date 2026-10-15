@@ -67,11 +67,18 @@ type column struct {
 	right bool // numbers: right-aligned, so magnitudes line up
 }
 
+// minCell is the narrowest a text column is cut to.
+const minCell = 8
+
 // textTable prints rows under the column heads, padded with spaces: names
 // left-aligned and numbers right-aligned, two spaces apart. text/tabwriter
-// aligns every column one way, which is why this does not use it. When the
-// table would be wider than maxWidth, the widest left-aligned column (the
-// names) is cut to fit, ending in "…". Cells must already be clean.
+// aligns every column one way, which is why this does not use it. While
+// the table is wider than maxWidth, the widest left-aligned column (names,
+// titles, details) loses one character of width, never going below
+// minCell: the cut falls on the text with most to spare and evens out
+// across several wide columns, and cut cells end in "…". Numbers are never
+// cut. Only a table whose text columns are all at minCell can still be too
+// wide. Cells must already be clean.
 func (p *printer) textTable(indent string, cols []column, rows [][]string) {
 	widths := make([]int, len(cols))
 	for i, c := range cols {
@@ -86,16 +93,17 @@ func (p *printer) textTable(indent string, cols []column, rows [][]string) {
 	for _, w := range widths {
 		total += w
 	}
-	if over := total - maxWidth; over > 0 {
+	for over := total - maxWidth; over > 0; over-- {
 		cut := -1
 		for i, c := range cols {
-			if !c.right && (cut < 0 || widths[i] > widths[cut]) {
+			if !c.right && widths[i] > minCell && (cut < 0 || widths[i] > widths[cut]) {
 				cut = i
 			}
 		}
-		if cut >= 0 {
-			widths[cut] = max(widths[cut]-over, 8)
+		if cut < 0 {
+			break
 		}
+		widths[cut]--
 	}
 	head := make([]string, len(cols))
 	for i, c := range cols {
@@ -140,14 +148,15 @@ func truncate(s string, width int) string {
 // git message) safe to print on a terminal: control and format characters,
 // which include escape sequences and bidirectional overrides, are shown
 // escaped the way Go quotes them (\x1b, ‮), and runs of whitespace
-// become one space. Everything else is printed as it is.
+// become one space. Bytes that are not UTF-8 print as U+FFFD, as JSON
+// writes them. Everything else is printed as it is.
 func clean(s string) string {
 	var b strings.Builder
 	for _, r := range s {
 		switch {
 		case unicode.IsSpace(r):
 			b.WriteByte(' ')
-		case unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == utf8.RuneError:
+		case unicode.IsControl(r) || unicode.Is(unicode.Cf, r):
 			q := strconv.QuoteRuneToASCII(r)
 			b.WriteString(q[1 : len(q)-1])
 		default:
@@ -157,19 +166,34 @@ func clean(s string) string {
 	return strings.Join(strings.Fields(b.String()), " ")
 }
 
+// wordJoiner (U+2060) renders as nothing and joins nothing: put after an @
+// or a #, it breaks GitHub's mention and reference patterns.
+const wordJoiner = "\u2060"
+
 // mdText escapes untrusted text for Markdown prose and table cells. Every
 // ASCII punctuation character that Markdown or GitHub's inline HTML could
 // read as syntax is backslash-escaped, and & becomes &amp;, so a name such
 // as "<img src=x>" or "a | b" renders as the literal text. Parentheses and
 // "!" need no escape: they are syntax only next to a bracket, and brackets
 // are escaped. Control characters are escaped first, as for the terminal.
+//
+// A page is pasted into issues and pull requests, where GitHub links
+// "@name" as a mention, which notifies that account, and "#12" as a
+// reference, which posts a back-link on issue 12. A commit subject or a
+// display name does either at random ("thanks @alice", "fixes #12"), so @
+// and # are followed by a word joiner: the text reads the same and links
+// nobody.
 func mdText(s string) string {
 	var b strings.Builder
 	for _, r := range clean(s) {
 		switch r {
 		case '&':
 			b.WriteString("&amp;")
-		case '\\', '`', '*', '_', '[', ']', '<', '>', '#', '|', '~':
+		case '@':
+			b.WriteString("@" + wordJoiner)
+		case '#':
+			b.WriteString(`\#` + wordJoiner)
+		case '\\', '`', '*', '_', '[', ']', '<', '>', '|', '~':
 			b.WriteByte('\\')
 			b.WriteRune(r)
 		default:

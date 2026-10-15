@@ -244,17 +244,18 @@ func collectRepo(ctx context.Context, d Deps, job repoJob, opt collectOptions) (
 		FirstCommit: h.FirstCommit, History: opt.window,
 		Commits: h.Commits, Landings: h.Landings, Changes: h.Changes, Reverts: h.Reverts,
 	}
-	// A partial clone lacks the blobs that sizes, attributes and the header
-	// sniff read, and has no line facts to classify.
-	if !repo.Partial {
-		start = time.Now()
-		paths, err := collect.ClassifyPaths(ctx, d.Git, repo, d.Policy, touchedPaths(h))
-		t.ClassifyMS = time.Since(start).Milliseconds()
-		if err != nil {
-			return fail("classification", err)
-		}
-		rf.Paths = paths
+	// A partial clone is classified too: its tree lists every path at HEAD
+	// with lazy fetch off, and where its blobs are absent, ClassifyPaths
+	// reads sizes as unknown and finds no attributes or generated headers,
+	// which the partial-clone caveat says. Its history touched no paths: it
+	// has no line facts.
+	start = time.Now()
+	paths, err := collect.ClassifyPaths(ctx, d.Git, repo, d.Policy, touchedPaths(h))
+	t.ClassifyMS = time.Since(start).Milliseconds()
+	if err != nil {
+		return fail("classification", err)
 	}
+	rf.Paths = paths
 	// Blame credits every line older than a shallow boundary to the
 	// boundary commit, and a partial clone has no blobs to blame.
 	if opt.mode == collect.HistoryScan && !repo.Shallow && !repo.Partial {

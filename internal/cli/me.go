@@ -15,8 +15,9 @@ func (e *env) meCommand() *cobra.Command {
 		Use:   "me --email EMAIL",
 		Short: "Show your own page: what your changes did",
 		Long: `me shows one person's own page from a stored run, by default the latest
-complete one: their values and ranks for every metric. Each person sees
-exactly what their lead sees about them.`,
+complete one: their values and ranks for every metric. That is the facts their
+lead sees about them, plus their own AI-assisted share, which no report, rank
+table or explain shows.`,
 		Args: usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if err := checkRun(run); err != nil {

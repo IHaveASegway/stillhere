@@ -3,6 +3,7 @@ package report
 import (
 	"cmp"
 	"slices"
+	"strings"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
 	"github.com/IHaveASegway/stillhere/internal/rank"
@@ -92,7 +93,7 @@ func sortChanges(cs []Change) {
 // WhoKnowsInput is what NewWhoKnows builds a who-knows answer from.
 type WhoKnowsInput struct {
 	Run   *domain.Run
-	Facts *domain.FactSet // the run's facts, for provenance and caveats
+	Facts *domain.FactSet // the run's facts: provenance, caveats, and the line owners under Path that the no-values check reads
 	Who   People
 	Path  string // repo-relative prefix; "" for the whole repository
 	Repo  string // Repo.Key, or "" for every repository
@@ -181,7 +182,47 @@ func NewWhoKnows(in *WhoKnowsInput) *WhoKnows {
 	slices.SortFunc(w.Repos, func(a, b WhoKnowsRepo) int { return cmp.Or(cmp.Compare(a.Repo, b.Repo), cmp.Compare(a.Key, b.Key)) })
 	w.Provenance = answerProvenance(in.Run, in.Facts, asked, []string{MetricWhoKnows})
 	w.Caveats = answerCaveats(asked)
+	if c, ok := whoKnowsMissing(in.Path, asked, ix); ok {
+		w.Caveats = append(w.Caveats, c)
+	}
 	return w
+}
+
+// whoKnowsMissing is the no-values caveat of a who-knows answer: some
+// repository holds surviving prod lines under the path, yet who_knows@1 gave
+// no value there, although it always describes the path itself when it has
+// lines. An empty list would then pass for "nobody knows this code", so the
+// caveat says the answer is missing instead.
+func whoKnowsMissing(prefix string, asked []*domain.RepoFacts, ix valueIndex) (Caveat, bool) {
+	var repos []string
+	lines := 0
+	for _, rf := range asked {
+		if rf.Status != domain.RepoStatusOK || !rf.LineFacts {
+			continue
+		}
+		n := blamedProdLines(rf, func(p string) bool { return underPath(p, prefix) })
+		if n > 0 && len(ix[MetricWhoKnows][domain.Scope{Kind: domain.ScopeRepo, Key: rf.Repo.Key}]) == 0 {
+			repos = append(repos, rf.Repo.Name)
+			lines += n
+		}
+	}
+	if len(repos) == 0 {
+		return Caveat{}, false
+	}
+	slices.Sort(repos)
+	return Caveat{
+		Code: codeNoValues,
+		Message: MetricWhoKnows + " produced no values for this path although the run holds " + grouped(lines) +
+			" surviving prod lines under it, so this answer is missing, not a real \"nobody\".",
+		Repos: slices.Compact(repos),
+	}, true
+}
+
+// underPath reports whether path p is prefix itself or inside it, by whole
+// segments: "src" covers src/pay.go but not srcutil/x.go, and "" covers
+// every path.
+func underPath(p, prefix string) bool {
+	return prefix == "" || p == prefix || strings.HasPrefix(p, prefix+"/")
 }
 
 // MeInput is what NewMe builds a person's own page from.
@@ -300,8 +341,8 @@ func reposWith(fs *domain.FactSet, keys map[string]bool) []*domain.RepoFacts {
 // sameName says when another email in the run has the person's display
 // name: if they are one person, their numbers are split between the two.
 func sameName(fs *domain.FactSet, who People, email string) (Caveat, bool) {
-	name := displayName(who, email)
-	if name == email {
+	name, ok := realName(who, email)
+	if !ok {
 		return Caveat{}, false
 	}
 	seen := map[string]bool{email: true}
@@ -309,7 +350,7 @@ func sameName(fs *domain.FactSet, who People, email string) (Caveat, bool) {
 	check := func(e string) {
 		if !seen[e] {
 			seen[e] = true
-			if displayName(who, e) == name {
+			if n, ok := realName(who, e); ok && n == name {
 				others++
 			}
 		}

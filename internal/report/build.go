@@ -22,6 +22,10 @@ type Input struct {
 	Landed  Landed               // how the landed@1 window was set
 	History domain.Window        // the landing window the history covers
 	Timings *Timings
+	// Scope is the rank scope a scan was given: domain.ScopeAll adds an
+	// overview of every repository, which a run without groups gets too;
+	// "" (week) or domain.ScopeGroup keeps groups apart.
+	Scope string
 }
 
 // Landed is how the landed@1 window was set: by the command line, or by the
@@ -81,8 +85,14 @@ func Build(in *Input) *Model {
 	for _, rf := range b.repos {
 		m.Repos = append(m.Repos, b.repo(rf))
 	}
+	// Overviews keep groups apart, as ranks do, unless the run was asked to
+	// look across everything or has no groups to keep apart
+	// (docs/metrics.md#ranking-rules).
+	if len(b.repos) > 0 && (in.Scope == domain.ScopeAll || len(b.groups) == 0) {
+		m.Overviews = append(m.Overviews, b.overview(domain.Scope{Kind: domain.ScopeAll}, b.repos))
+	}
 	for _, g := range b.groups {
-		m.Overviews = append(m.Overviews, b.overview(g))
+		m.Overviews = append(m.Overviews, b.overview(domain.Scope{Kind: domain.ScopeGroup, Key: g.Name}, b.members(g.Repos)))
 	}
 	for _, rs := range in.Ranks {
 		m.Ranks = append(m.Ranks, b.rankTable(rs))
@@ -213,7 +223,7 @@ func (b *builder) repo(rf *domain.RepoFacts) Repo {
 func (b *builder) card(rf *domain.RepoFacts, still *StillHere) RepoCard {
 	scope := domain.Scope{Kind: domain.ScopeRepo, Key: rf.Repo.Key}
 	var used []string
-	c := RepoCard{Size: sizeOf(rf), Landings: b.landingsOf(rf)}
+	c := RepoCard{Size: headSize(rf), Landings: b.landingsOf(rf)}
 	if !rf.FirstCommit.IsZero() {
 		c.Age = &Age{FirstCommit: rf.FirstCommit, Days: int(b.in.Facts.Now.Sub(rf.FirstCommit) / (24 * time.Hour))}
 	}
@@ -227,23 +237,25 @@ func (b *builder) card(rf *domain.RepoFacts, still *StillHere) RepoCard {
 			total += r.ProdNonblankLines
 		}
 		for _, r := range still.Humans {
-			if r.ProdNonblankLines == 0 {
-				continue
-			}
-			c.People++
-			if len(c.MadeOf) < 5 {
+			if r.ProdNonblankLines > 0 && len(c.MadeOf) < 5 {
 				c.MadeOf = append(c.MadeOf, Author{
 					Email: r.Email, Name: r.Name, ProdLines: r.ProdNonblankLines,
 					Share: float64(r.ProdNonblankLines) / float64(total),
 				})
 			}
 		}
+		bots := 0
 		for _, r := range still.Bots {
 			if r.ProdNonblankLines > 0 {
-				c.Bots++
+				bots++
 			}
 		}
-		c.BotShare = botShare(still)
+		c.Bots = &bots
+	}
+	if p, ok := b.population(scope, []*domain.RepoFacts{rf}, still); ok {
+		used = append(used, MetricSurviving)
+		c.Size.ProdFiles, c.Size.ProdLines = p.prodFiles, p.prodLines
+		c.People, c.BotShare = p.people, p.botShare
 	}
 	if c.Concentration = b.concentration(scope); c.Concentration != nil {
 		used = append(used, MetricConcentration)
@@ -266,10 +278,9 @@ func (b *builder) card(rf *domain.RepoFacts, still *StillHere) RepoCard {
 	return c
 }
 
-// overview builds one group's platform view.
-func (b *builder) overview(g domain.Group) Overview {
-	scope := domain.Scope{Kind: domain.ScopeGroup, Key: g.Name}
-	members := b.members(g.Repos)
+// overview builds the platform view of a scope, a group or every
+// repository, over its member repositories.
+func (b *builder) overview(scope domain.Scope, members []*domain.RepoFacts) Overview {
 	o := Overview{Scope: scopeOf(scope), Totals: b.totals(members)}
 	var used []string
 	lineFacts, ok := false, false
@@ -285,8 +296,12 @@ func (b *builder) overview(g domain.Group) Overview {
 	}
 	if lineFacts {
 		o.People = b.stillHere(scope, blamed)
-		o.BotShare = botShare(o.People)
 		used = append(used, MetricSurviving)
+	}
+	if p, ok := b.population(scope, members, o.People); ok {
+		used = append(used, MetricSurviving)
+		o.Totals.ProdFiles, o.Totals.ProdLines, o.Totals.People = p.prodFiles, p.prodLines, p.people
+		o.BotShare = p.botShare
 	}
 	if o.Concentration = b.concentration(scope); o.Concentration != nil {
 		used = append(used, MetricConcentration)
@@ -299,11 +314,6 @@ func (b *builder) overview(g domain.Group) Overview {
 	}
 	bots := map[string]bool{}
 	if o.People != nil {
-		for _, r := range o.People.Humans {
-			if r.ProdNonblankLines > 0 {
-				o.Totals.People++
-			}
-		}
 		for _, r := range o.People.Bots {
 			if r.ProdNonblankLines > 0 {
 				bots[r.Email] = true
@@ -364,9 +374,7 @@ func (b *builder) totals(members []*domain.RepoFacts) Totals {
 		} else {
 			t.ReposFailed++
 		}
-		s := sizeOf(rf)
-		t.ProdFiles += s.ProdFiles
-		t.ProdLines += s.ProdLines
+		t.ProdPaths += headSize(rf).ProdPaths
 		l := b.landingsOf(rf)
 		t.LandingsWindow += l.Window
 		t.LandingsHistory += l.History
@@ -482,21 +490,57 @@ func (b *builder) share(metric string, scope domain.Scope, members []*domain.Rep
 	return &s
 }
 
-// botShare is the share of a scope's surviving prod lines held by bots.
-func botShare(t *StillHere) *Share {
-	s := Share{Metric: MetricSurviving}
-	for _, r := range t.Humans {
-		s.Den += float64(r.ProdNonblankLines)
+// population reads what surviving@1 says about a scope's code as a whole:
+// its value about the repository or the group itself (prod lines, the prod
+// files that hold them, their people and the bots' share). surviving@1 is
+// the one definition of those numbers, so the report counts none of them
+// from facts. A scope the metric has no such value for, such as every
+// repository, adds up its repositories' values, which is exact for lines,
+// files and bot lines because they are counts per repository; its people
+// are the humans among the scope's own surviving@1 rows (still), since one
+// person can hold lines in several repositories. ok is false when no value
+// applies: the scope has no line facts, or the metric gave none.
+func (b *builder) population(scope domain.Scope, members []*domain.RepoFacts, still *StillHere) (population, bool) {
+	if v, ok := b.ix.aggregate(MetricSurviving, scope); ok {
+		return populationOf(v), true
 	}
-	for _, r := range t.Bots {
-		s.Num += float64(r.ProdNonblankLines)
-		s.Den += float64(r.ProdNonblankLines)
+	if scope.Kind == domain.ScopeRepo {
+		return population{}, false
 	}
-	if s.Den == 0 {
-		return nil
+	lines, files, botLines, found := 0, 0, 0, false
+	for _, rf := range members {
+		v, ok := b.ix.aggregate(MetricSurviving, domain.Scope{Kind: domain.ScopeRepo, Key: rf.Repo.Key})
+		if !ok {
+			continue
+		}
+		p := populationOf(v)
+		found = true
+		lines += *p.prodLines
+		if p.prodFiles != nil {
+			files += *p.prodFiles
+		}
+		if p.botShare != nil {
+			botLines += count(p.botShare.Num)
+		}
 	}
-	s.Value = s.Num / s.Den
-	return &s
+	if !found {
+		return population{}, false
+	}
+	p := population{prodLines: &lines, prodFiles: &files}
+	if still != nil {
+		people := 0
+		for _, r := range still.Humans {
+			if r.ProdNonblankLines > 0 {
+				people++
+			}
+		}
+		p.people = &people
+	}
+	if lines > 0 {
+		p.botShare = &Share{Metric: MetricSurviving, Num: float64(botLines), Den: float64(lines),
+			Value: float64(botLines) / float64(lines)}
+	}
+	return p, true
 }
 
 // rankTable lays out one ranked metric in one scope.
@@ -552,6 +596,12 @@ func (b *builder) rankTable(rs RankSet) RankTable {
 	members := b.scopeMembers(rs.Scope)
 	t.Provenance = b.provenance(members, []string{rs.Metric.ID})
 	t.Caveats = b.scopeCaveats(members, rs.Scope, false)
+	if len(t.Ranked)+len(t.BelowMin)+len(t.Bots) == 0 {
+		// A table asked for is printed even when empty, so that a rank
+		// never disappears without a word.
+		t.Caveats = append(t.Caveats, Caveat{Code: codeNoValues,
+			Message: rs.Metric.ID + " counted no change in this scope, so nobody is ranked or listed."})
+	}
 	if rs.Metric.Validity != "" {
 		t.Caveats = append(t.Caveats, Caveat{Code: codeValidity, Message: "Validity: " + rs.Metric.Validity})
 	}
@@ -601,26 +651,42 @@ func filesBlamed(rf *domain.RepoFacts) int {
 	return n
 }
 
-// sizeOf measures a repository at HEAD from its facts.
-func sizeOf(rf *domain.RepoFacts) Size {
+// headSize counts a repository's classified paths at HEAD: a fact count
+// that needs no metric. The surviving lines and the files that hold them
+// are surviving@1's (population).
+func headSize(rf *domain.RepoFacts) Size {
 	var s Size
-	prod := map[string]bool{}
 	for _, pc := range rf.Paths {
 		if !pc.AtHead {
 			continue
 		}
 		s.Files++
 		if pc.Role == domain.RoleProd {
-			s.ProdFiles++
-			prod[pc.Path] = true
-		}
-	}
-	for _, o := range rf.Owners {
-		if prod[o.Path] {
-			s.ProdLines += o.Lines
+			s.ProdPaths++
 		}
 	}
 	return s
+}
+
+// blamedProdLines counts the lines blame attributes on prod paths at HEAD,
+// on the paths keep accepts (all of them when keep is nil). It is a fact
+// count for thresholds and consistency checks, such as the no-ignore-revs
+// caveat and who-knows' no-values check; the published number is
+// surviving@1's.
+func blamedProdLines(rf *domain.RepoFacts, keep func(path string) bool) int {
+	prod := map[string]bool{}
+	for _, pc := range rf.Paths {
+		if pc.AtHead && pc.Role == domain.RoleProd {
+			prod[pc.Path] = true
+		}
+	}
+	n := 0
+	for _, o := range rf.Owners {
+		if prod[o.Path] && (keep == nil || keep(o.Path)) {
+			n += o.Lines
+		}
+	}
+	return n
 }
 
 // landingsOf counts a repository's landings in the landed window and in the

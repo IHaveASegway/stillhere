@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+
+	"github.com/IHaveASegway/stillhere/internal/domain"
 )
 
 // Text and Markdown for the read commands' answers: explain, who-knows,
@@ -80,7 +82,7 @@ func subjectText(s Subject, esc func(string) string) string {
 // Explain.
 
 func (e *Explain) writeText(p *printer) {
-	p.linef("explain %s · %s · %s", e.Metric.ID, subjectText(e.Subject, clean), provenanceText(e.Provenance))
+	p.wrapped("", "  ", "explain "+clean(e.Metric.ID)+" · "+subjectText(e.Subject, clean)+" · "+provenanceText(e.Provenance))
 	if e.Metric.Question != "" {
 		p.wrapped("  ", "  ", clean(e.Metric.Question))
 	}
@@ -214,21 +216,32 @@ func landingCount(k Knower) string {
 	return "(" + plural(k.RecentLandings, "landing", "landings") + ")"
 }
 
+// noAnswer reports whether an answer's caveats say a metric it reads gave
+// no values although the run has their facts: the answer is then missing,
+// and must not read as an empty one.
+func noAnswer(cs []Caveat) bool {
+	return slices.ContainsFunc(cs, func(c Caveat) bool { return c.Code == codeNoValues })
+}
+
 func (w *WhoKnows) writeText(p *printer) {
 	path := w.Path
 	if path == "" {
 		path = "the whole repository"
 	}
-	p.linef("who knows %s · %s", clean(path), provenanceText(w.Provenance))
+	p.wrapped("", "  ", "who knows "+clean(path)+" · "+provenanceText(w.Provenance))
 	p.wrapped("  ", "  ", "a routing answer, not a rank: majority owners, the top authors of surviving prod lines, "+
 		"and recent landers (90 days)")
-	if len(w.Repos) == 0 {
+	switch {
+	case len(w.Repos) == 0 && noAnswer(w.Caveats):
+		p.blank()
+		p.line("  no answer: " + MetricWhoKnows + " produced no values for this path (see what could make this wrong)")
+	case len(w.Repos) == 0:
 		p.blank()
 		p.line("  nobody: no surviving lines or recent landings under this path")
 	}
 	for _, r := range w.Repos {
 		p.blank()
-		p.line("Repository " + clean(r.Repo) + " · " + pathTotals(r))
+		p.wrapped("", "  ", "Repository "+clean(r.Repo)+" · "+pathTotals(r))
 		p.wrapped("  majority owners  ", "                   ", knowers(r.MajorityOwners, clean, ownerCount))
 		p.wrapped("  top authors      ", "                   ", knowers(r.TopAuthors, clean, lineCount))
 		p.wrapped("  recent landers   ", "                   ", knowers(r.RecentLanders, clean, landingCount))
@@ -248,7 +261,11 @@ func (w *WhoKnows) writeMarkdown(p *printer) {
 	p.blank()
 	p.line("- " + provenanceText(w.Provenance))
 	p.line("- A routing answer, not a rank: majority owners, the top authors of surviving prod lines, and recent landers (90 days).")
-	if len(w.Repos) == 0 {
+	switch {
+	case len(w.Repos) == 0 && noAnswer(w.Caveats):
+		p.blank()
+		p.line("No answer: " + mdID(MetricWhoKnows) + " produced no values for this path (see what could make this wrong).")
+	case len(w.Repos) == 0:
 		p.blank()
 		p.line("Nobody: no surviving lines or recent landings under this path.")
 	}
@@ -290,16 +307,34 @@ func meRankText(r MeRank) (rank, estimate string) {
 		estimateText(r.Estimate, r.Percent) + " (" + intervalText(r.Lo, r.Hi, r.Percent) + ")"
 }
 
+// meIntro says what a person's own page holds, and that their AI-assisted
+// share is on no other page (ADR 0007).
+const meIntro = "every value and rank interval this run holds about you, including your own AI-assisted share, " +
+	"which no report, rank table or explanation shows (ADR 0007)"
+
+// ownPageLabel marks a metric whose values about a person only their own
+// page shows.
+const ownPageLabel = "shown only on your own page (ADR 0007)"
+
+// metricHeading is a metric's heading on the me page, labelled when only
+// that page shows it.
+func metricHeading(id string, esc func(string) string) string {
+	if OwnPageOnly(domain.MetricID{Name: metricName(id)}) {
+		return esc(id) + " · " + ownPageLabel
+	}
+	return esc(id)
+}
+
 func (m *Me) writeText(p *printer) {
-	p.linef("me · %s · %s", subjectText(m.Person, clean), provenanceText(m.Provenance))
-	p.line("  exactly what a lead sees about you: every value and rank interval this run holds")
+	p.wrapped("", "  ", "me · "+subjectText(m.Person, clean)+" · "+provenanceText(m.Provenance))
+	p.wrapped("  ", "  ", meIntro)
 	if len(m.Values) == 0 {
 		p.blank()
 		p.line("  no values in this run")
 	}
 	for _, group := range byMetric(m.Values) {
 		p.blank()
-		p.line(group[0].Metric)
+		p.line(metricHeading(group[0].Metric, clean))
 		for _, v := range group {
 			line := scopeText(v.Scope, clean, m.Provenance) + " · " + windowText(v.Window) + ": " + valueText(v, false)
 			if v.N > 0 {
@@ -329,14 +364,14 @@ func (m *Me) writeMarkdown(p *printer) {
 	p.line("# " + subjectText(m.Person, mdText))
 	p.blank()
 	p.line("- " + provenanceText(m.Provenance))
-	p.line("- Exactly what a lead sees about you: every value and rank interval this run holds.")
+	p.line("- " + strings.ToUpper(meIntro[:1]) + meIntro[1:] + ".")
 	if len(m.Values) == 0 {
 		p.blank()
 		p.line("No values in this run.")
 	}
 	for _, group := range byMetric(m.Values) {
 		p.blank()
-		p.line("## " + mdID(group[0].Metric))
+		p.line("## " + metricHeading(group[0].Metric, mdID))
 		p.blank()
 		cols := []column{{head: "Scope"}, {head: "Window"}, {head: "Value", right: true}, {head: "n", right: true}, {head: "Detail"}}
 		var rows [][]string

@@ -169,7 +169,7 @@ func Report(ctx context.Context, d Deps, r ReportRequest) (*report.Model, error)
 		Kind: report.KindScan, Tool: d.Version, Run: &run, Facts: s.facts, Policy: s.policy, Who: s.who,
 		Values: s.values, Ranks: sets,
 		Landed:  report.Landed{Days: s.policy.Week.Days, Sort: s.policy.Week.Sort},
-		History: historyOf(s.facts), Timings: timings,
+		History: historyOf(s.facts), Timings: timings, Scope: s.scope(),
 	}), nil
 }
 
@@ -185,11 +185,18 @@ func Explain(ctx context.Context, d Deps, r ExplainRequest) (*report.Explain, er
 	if err != nil {
 		return nil, err
 	}
+	def := m.Definition()
+	if r.Subject.Kind == domain.SubjectPerson && report.OwnPageOnly(def.ID) {
+		// Explain is what a lead reads; a person's own AI-assisted share is
+		// on their own page only. The command line cannot tell who asks, so
+		// it refuses for everyone (ADR 0007).
+		return nil, &domain.UsageError{Msg: fmt.Sprintf(
+			"%s about a person is shown only on their own page (ADR 0007): 'stillhere me --email EMAIL'", def.ID)}
+	}
 	s, err := load(ctx, d, r.RunID)
 	if err != nil {
 		return nil, err
 	}
-	def := m.Definition()
 	var values []domain.MetricValue
 	known := false
 	for _, v := range s.values {
@@ -338,7 +345,10 @@ func underPrefix(fs *domain.FactSet, prefix, repo string) *domain.FactSet {
 
 // Me returns one person's own page: every value the run holds about them,
 // and their place in each ranked metric's table within the run's rank
-// scope, which is exactly what a lead sees about them (ADR 0001).
+// scope. That is the facts a lead sees about them (ADR 0001), plus their
+// own AI-assisted share, which only this page shows (ADR 0007). Who may
+// open whose page is the web server's to enforce (M3): the command line
+// has no viewer identity.
 func Me(ctx context.Context, d Deps, r MeRequest) (*report.Me, error) {
 	d, err := d.ready("app.Me", false, false, true)
 	if err != nil {
@@ -359,6 +369,11 @@ func Me(ctx context.Context, d Deps, r MeRequest) (*report.Me, error) {
 			values = append(values, v)
 		}
 	}
+	// TODO(#13): the metrics branch (#9, PR #35) never stores a person's
+	// AI-assisted share; it answers it per query with
+	// metrics.PersonalAIShare(in, email), whose only caller is this page.
+	// Once both are merged, append its values here; NewMe and the
+	// renderers already label them (report.OwnPageOnly).
 	if len(values) == 0 {
 		return nil, fmt.Errorf("%s has no values in run %d (a person is named by their canonical email, after .mailmap): %w",
 			email, s.run.ID, domain.ErrNotFound)

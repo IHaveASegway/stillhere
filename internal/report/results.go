@@ -107,7 +107,9 @@ type Knower struct {
 }
 
 // Me is one person's own page: every value and rank interval the run holds
-// about them, which is exactly what a lead sees about them (ADR 0001).
+// about them. That is the facts a lead sees about them (ADR 0001), and also
+// their own AI-assisted share, which no other page shows (ADR 0007,
+// OwnPageOnly).
 type Me struct {
 	Provenance Provenance `json:"provenance"`
 	Person     Subject    `json:"person"`

@@ -171,9 +171,15 @@ func landingSHAs(fs *domain.FactSet) []string {
 	return slices.Compact(out)
 }
 
+// changeID reports whether s can name a change: a landing SHA or a prefix
+// of at least 7 hex digits, lowercased.
+func changeID(s string) bool {
+	return len(s) >= 7 && strings.Trim(s, "0123456789abcdef") == ""
+}
+
 // matchLanding finds the one landing whose SHA starts with prefix.
 func matchLanding(sorted []string, prefix string) (string, bool) {
-	if len(prefix) < 7 || strings.Trim(prefix, "0123456789abcdef") != "" {
+	if !changeID(prefix) {
 		return "", false
 	}
 	i, _ := slices.BinarySearch(sorted, prefix)
@@ -188,7 +194,10 @@ func matchLanding(sorted []string, prefix string) (string, bool) {
 
 // parseLabels reads a labels CSV: change id, label, and optionally the
 // labeller, one change per row, with an optional header row and # comments.
-// A malformed file is a usage error that names the line.
+// The first row is a header only when it names no change (its first field
+// is not a change id) and gives no label, so a misspelt label on the first
+// row is an error like on any other. A malformed file is a usage error that
+// names the line.
 func parseLabels(data []byte, name string) ([]label, error) {
 	if name == "" {
 		name = "labels"
@@ -217,8 +226,8 @@ func parseLabels(data []byte, name string) ([]label, error) {
 		switch l.value {
 		case labelMeaningful, labelRoutine, labelNoise:
 		default:
-			if first {
-				continue // a header row
+			if first && !changeID(l.change) {
+				continue // a header row, such as "change,label,labeller"
 			}
 			return nil, &domain.UsageError{Msg: fmt.Sprintf("%s:%d: label %q: want meaningful, routine or noise", name, line, rec[1])}
 		}

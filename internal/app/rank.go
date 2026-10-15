@@ -120,10 +120,11 @@ func rankScopes(kind string, fs *domain.FactSet) []domain.Scope {
 // rankAll ranks each metric within each scope. Intervals the run already
 // stored are used as they are, since the bootstrap is seeded from the
 // metric, scope and window and would give the same ones; the rest are
-// computed. A scope where nobody has a cluster is skipped, and so is one
-// without subject when subject is given (a person's own page needs only
-// their tables). It returns the tables for the report and the intervals to
-// store.
+// computed. A scope where nobody has a cluster still gets its table, empty,
+// so that a rank the user asked for never disappears without a word (the
+// report says why). With subject given, only the tables subject is in are
+// kept: a person's own page needs only theirs. It returns the tables for
+// the report and the intervals to store.
 func rankAll(in *metrics.Input, ms []rankedMetric, scopes []domain.Scope, stored []domain.RankInterval,
 	subject *domain.Subject) ([]report.RankSet, []domain.RankInterval, error) {
 	type key struct {
@@ -144,14 +145,11 @@ func rankAll(in *metrics.Input, ms []rankedMetric, scopes []domain.Scope, stored
 				return nil, nil, fmt.Errorf("ranking %s in %s %s: %w", m.def.ID, s.Kind, s.Key, err)
 			}
 			data := people(ri.Data, in.Who)
-			if len(data) == 0 {
-				continue
-			}
 			if subject != nil && len(data[*subject]) == 0 {
 				continue
 			}
 			intervals := prev[key{m.def.ID, s}]
-			if len(intervals) == 0 {
+			if len(intervals) == 0 && len(data) > 0 {
 				intervals = rank.Intervals(m.def.ID, s, ri.Window, ri.Kind, data, ri.Options)
 			}
 			sets = append(sets, report.RankSet{

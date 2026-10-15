@@ -456,11 +456,11 @@ func AUC(pos, neg []float64) float64
 
 // report: a view that computes no metric. values.go is the one place that maps each printed
 // number to the metric@version, subject, scope and Detail key it reads (spec/report-json.md#where-the-numbers-come-from).
-type Model struct{ /* stillhere.report/v1: overviews per group, repo cards, ranks, caveats and provenance on every section */ }
+type Model struct{ /* stillhere.report/v1: overviews (per group; every repository with --scope all or without groups), repo cards, ranks, caveats and provenance on every section */ }
 type Document interface{ /* sealed: *Model, *Explain, *WhoKnows, *Me, *Validation, *Catalog */ }
 func Text(w io.Writer, d Document) error     // a terminal: 100 columns, untrusted text escaped, no emails
-func Markdown(w io.Writer, d Document) error // GitHub-flavoured: untrusted text escaped, no emails or repository paths
-func JSON(w io.Writer, d Document) error     // stable order; empty lists [] and maps {}, absent sections null
+func Markdown(w io.Writer, d Document) error // GitHub-flavoured: untrusted text escaped, mentions and references unlinked, no emails or repository paths
+func JSON(w io.Writer, d Document) error     // stable order; empty lists [] and maps {}, absent sections null; invalid UTF-8 as U+FFFD, NaN and ±Inf as null; written only when whole
 type People interface{ Name(email string) string; Bot(email string) bool } // *identity.Directory implements it
 type Input struct {
 	Kind, Tool string // KindWeek or KindScan; the binary's version
@@ -473,7 +473,9 @@ type Input struct {
 	Landed     Landed    // landed@1's days and sort, and whether the command line set them
 	History    domain.Window
 	Timings    *Timings
+	Scope      string    // the scan's rank scope: domain.ScopeAll (or a run without groups) adds an overview of every repository
 }
+func OwnPageOnly(metric domain.MetricID) bool // a person's values only their own page shows: ai_assisted (ADR 0007); explain refuses them
 type RankSet struct { Metric MetricInfo; Scope domain.Scope; Window domain.Window; Percent bool; MinN int; Intervals []domain.RankInterval } // bots left out
 func Build(in *Input) *Model
 // The read commands' answers live here too, so the renderers and the MCP server share one shape.
