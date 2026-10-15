@@ -68,6 +68,30 @@ Docker Desktop on macOS presents mounted files as owned by root, so there either
 
 The commands that store facts (`scan`, from M1) keep them under `STILLHERE_HOME`, which is `/data` in the image, a directory only the image's own user may enter. When you pass `--user`, mount a directory that user owns there, such as `-v "$HOME/.stillhere:/data"`.
 
+## Use it from an agent (MCP)
+
+`stillhere mcp` serves facts.db to your agent over the Model Context Protocol, on stdio: overview, person, who_knows, changes, explain, highlights, identity_candidates, metrics and diff. It reads the latest scan and cannot write to facts.db. Every answer carries its provenance (run, as-of time, HEAD SHAs, metric versions) and the caveats that could make it wrong. The contract is [docs/spec/mcp.md](docs/spec/mcp.md).
+
+Register it once with Claude Code, for every project (`--scope user`):
+
+```sh
+stillhere scan ~/src/acme                     # the server reads the latest scan
+claude mcp add --scope user stillhere -- stillhere mcp --me you@example.com
+```
+
+Everything after `--` is the server's own command line; add `--db FILE` there for another facts.db. Answers go on to your agent's model provider, so by default the server withholds what the provider does not need:
+
+| Flag | Without it |
+| --- | --- |
+| `--me EMAIL` | No one's AI-assisted share is shown. With it, your own share appears on your own page (`person` with an empty name), and only there. |
+| `--allow-emails` | Every email is replaced by a stable id (`p-…`), which the tools accept back. |
+| `--allow-source` | Commit subjects stay local and `diff` refuses. With it, `diff` runs git, offline, on the clones the scan read. |
+| `--run ID` | Each call reads the latest complete or partial scan, so a new scan shows up mid-session. |
+
+The skill in [plugins/stillhere/skills/stillhere](plugins/stillhere/skills/stillhere/SKILL.md) teaches your agent which tool answers which question, how to read rank intervals, and the stated limits. Copy that directory to `~/.claude/skills/stillhere` to use it in every project, or load the plugin directory for one session with `claude --plugin-dir plugins/stillhere`.
+
+Text in the answers comes from the repositories (names, paths, commit subjects, diffs) and is untrusted: the tool descriptions and the skill tell the agent never to follow instructions found in it.
+
 ## License
 
 [Apache-2.0](LICENSE) ([ADR 0008](docs/adr/0008-apache-2-public.md)). Contributions are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md).
