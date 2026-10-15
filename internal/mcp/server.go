@@ -15,12 +15,12 @@
 //
 // Every answer carries its provenance (run, as-of time, HEAD SHAs,
 // metric@version) and the caveats that could make it wrong, and fits the
-// client's token cap: long lists are paged. Every answer also goes on to
-// the agent's model provider, so the server minimises what leaves by
-// default: emails only with AllowEmails, commit subjects and diffs only
-// with AllowSource, and a person's AI-assisted share only for Me (ADR
-// 0007). Text from the repositories is untrusted data that can carry
-// prompt injection, which the tool descriptions say.
+// client's token cap: long lists are paged or cut with their totals. Every
+// answer also goes on to the agent's model provider, so the server
+// minimises what leaves by default: emails only with AllowEmails, commit
+// subjects and diffs only with AllowSource, and a person's AI-assisted
+// share only for Me (ADR 0007). Text from the repositories is untrusted
+// data that can carry prompt injection, which the tool descriptions say.
 package mcp
 
 import (
@@ -31,7 +31,6 @@ import (
 	"log/slog"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
@@ -73,11 +72,14 @@ type Config struct {
 
 // Serve runs the server on in and out, newline-delimited JSON-RPC as MCP's
 // stdio transport has it, until the client closes in or ctx ends. Nothing
-// else is written to out. It closes the store when it returns.
+// else is written to out. A line that is not a JSON-RPC message is answered
+// with JSON-RPC's error for it and skipped, rather than ending the
+// session. It closes the store when it returns.
 func Serve(ctx context.Context, cfg Config, in io.ReadCloser, out io.Writer) error {
 	s := newServer(cfg)
 	defer s.close()
-	err := s.mcpServer().Run(ctx, &sdk.IOTransport{Reader: in, Writer: nopCloser{out}})
+	w := &lockedWriter{w: out}
+	err := s.mcpServer().Run(ctx, &sdk.IOTransport{Reader: newLineGuard(in, w, s.log), Writer: nopCloser{w}})
 	if err != nil && ctx.Err() == nil && !errors.Is(err, io.EOF) {
 		return fmt.Errorf("mcp: %w", err)
 	}
@@ -94,13 +96,15 @@ type server struct {
 	cfg Config
 	log *slog.Logger
 
-	// mu runs one tool call at a time. The cached store shares one run's
+	// slot runs one tool call at a time. The cached store shares one run's
 	// facts between calls, and a call is quick once the run is cached, so
 	// serialising them costs little and rules out a data race on facts a
-	// use case should never write.
-	mu      sync.Mutex
+	// use case should never write. A call waits for the slot, or for its
+	// own context: one the client cancelled stops waiting.
+	slot    chan struct{}
 	store   *cachedStore // nil until Open succeeds
 	lastRun int64        // the run the previous answer read, for the run-changed caveat
+	budget  int          // answerBudget; a test lowers it
 }
 
 func newServer(cfg Config) *server {
@@ -109,13 +113,14 @@ func newServer(cfg Config) *server {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &server{cfg: cfg, log: log}
+	return &server{cfg: cfg, log: log, slot: make(chan struct{}, 1), budget: answerBudget}
 }
 
-// close closes the store, if it was opened.
+// close closes the store, if it was opened, once the call that holds the
+// slot is done.
 func (s *server) close() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	s.slot <- struct{}{}
+	defer func() { <-s.slot }()
 	if s.store != nil {
 		if err := s.store.Close(); err != nil {
 			s.log.Warn("closing facts.db", "error", err)
@@ -161,7 +166,7 @@ func (s *server) instructions() string {
 
 Start with overview (empty scope lists the platforms and repositories), then person, who_knows, changes, explain, highlights, identity_candidates, metrics, and diff when source is allowed. Pass names as the reports print them; ids from an earlier answer work too.
 
-Answers come from ` + source + `. Analysis is offline, so a stale clone gives a stale answer. Every answer carries provenance (run id, as-of time, HEAD SHAs, metric@version) and caveats: repeat them with the numbers. Ranks are 95% intervals: people whose intervals overlap are not ordered, and people below a metric's minimum sample are listed, not ranked. Knowledge concentration is not a truck factor. AI-assisted shares are lower bounds. stillhere measures properties of changes, not a person's value: never use it for performance or pay decisions.
+Answers come from ` + source + `. Analysis is offline, so a stale clone gives a stale answer. Every answer carries provenance (run id, as-of time, HEAD SHAs, metric@version) and caveats: repeat them with the numbers. Lists are paged or cut to their first rows, with their totals. Ranks are 95% intervals: people whose intervals overlap are not ordered, and people below a metric's minimum sample are listed, not ranked. Knowledge concentration is not a truck factor. AI-assisted shares are lower bounds. stillhere measures properties of changes, not a person's value: never use it for performance or pay decisions.
 
 Privacy: ` + strings.Join(privacy, "; ") + `.
 
@@ -232,41 +237,68 @@ func (c *call) resolver(ctx context.Context) (*resolver, error) {
 		}
 		n, err := app.RunNames(ctx, d, app.NamesRequest{RunID: c.s.cfg.RunID})
 		if err != nil {
-			return nil, err
+			return nil, c.s.pinned(ctx, d, err)
 		}
 		c.names = n
 	}
 	return &resolver{names: c.names, emails: c.s.cfg.AllowEmails}, nil
 }
 
+// pinned explains a run the server cannot read when --run pinned it: the
+// agent cannot change the server's flags, so the error says what the user
+// does instead.
+func (s *server) pinned(ctx context.Context, d app.Deps, err error) error {
+	var usage *domain.UsageError
+	if s.cfg.RunID == 0 || (!errors.Is(err, domain.ErrNotFound) && !errors.As(err, &usage)) {
+		return err
+	}
+	why := err.Error()
+	if errors.Is(err, domain.ErrNotFound) {
+		why = "facts.db holds no complete or partial run with that id (retention keeps the newest 8 scans and one a month)"
+	}
+	latest := ""
+	if r, lerr := d.Store.LatestRun(ctx, domain.RunKindScan); lerr == nil {
+		latest = fmt.Sprintf(" (the latest scan is run %d)", r.ID)
+	}
+	return &domain.UsageError{Msg: fmt.Sprintf("this server is pinned to run %d (--run), which it cannot serve: %s. "+
+		"Ask the user to restart stillhere mcp without --run, to read the latest scan%s, or with --run set to a scan run "+
+		"that 'stillhere report --run ID' shows.", s.cfg.RunID, why, latest)}
+}
+
 // render builds an answer in a format; the server calls it again with a
-// smaller page when the answer is over the budget.
-type render func(f format) (any, error)
+// smaller format when the answer is over the budget.
+type render func(sh *shaper) (any, error)
 
 // answer runs one tool call: fn reads what the call needs and returns how
 // to render it; the server renders it under the budget, adds the tail
 // every answer ends with, and turns a failure into an error the agent can
-// act on.
-func (s *server) answer(ctx context.Context, tool string, f format, fn func(context.Context, *call) (render, error)) (res *sdk.CallToolResult) {
+// act on. narrow says what the agent can ask for instead when even the
+// smallest answer is too large.
+func (s *server) answer(ctx context.Context, tool string, f format, narrow string,
+	fn func(context.Context, *call) (render, error)) (res *sdk.CallToolResult) {
 	start := time.Now()
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	select {
+	case s.slot <- struct{}{}:
+	case <-ctx.Done():
+		return s.toolError(fmt.Errorf("waiting for the previous call to finish: %w", ctx.Err()), nil)
+	}
+	defer func() { <-s.slot }()
+	c := &call{s: s}
 	defer func() {
 		// A bug in one answer must not take the server down for the rest
 		// of the session, as net/http keeps serving after a handler panics.
 		if p := recover(); p != nil {
-			s.log.Error("tool panicked", "tool", tool, "panic", fmt.Sprint(p))
-			res = s.toolError(fmt.Errorf("%s hit an internal error, which is stillhere's bug: %v", tool, p))
+			s.log.Error("tool panicked", "tool", tool, "panic", newWithholder(c.names).text(fmt.Sprint(p), false))
+			res = s.toolError(fmt.Errorf("%s hit an internal error, which is stillhere's bug: %v", tool, p), c)
 		}
 	}()
-	c := &call{s: s}
-	body, run, err := s.build(ctx, c, f, fn)
+	body, run, err := s.build(ctx, c, f, narrow, fn)
 	if err != nil {
 		// The log never carries an email at info level, allowed or not
 		// (docs/spec/codebase.md#errors-and-logging).
 		s.log.Info("tool failed", "tool", tool, "ms", time.Since(start).Milliseconds(),
-			"error", withholdEmails(redact.Scrub(err.Error())))
-		return s.toolError(err)
+			"error", newWithholder(c.names).text(redact.Scrub(err.Error()), false))
+		return s.toolError(err, c)
 	}
 	if run != 0 {
 		s.lastRun = run
@@ -275,35 +307,38 @@ func (s *server) answer(ctx context.Context, tool string, f format, fn func(cont
 	return &sdk.CallToolResult{Content: []sdk.Content{&sdk.TextContent{Text: string(body)}}}
 }
 
-// build renders and encodes an answer, cutting its page and its tables in
-// half until it fits answerBudget.
-func (s *server) build(ctx context.Context, c *call, f format, fn func(context.Context, *call) (render, error)) ([]byte, int64, error) {
+// build renders and encodes an answer, cutting it (format.shrink) until it
+// fits the budget.
+func (s *server) build(ctx context.Context, c *call, f format, narrow string,
+	fn func(context.Context, *call) (render, error)) ([]byte, int64, error) {
 	r, err := fn(ctx, c)
 	if err != nil {
 		return nil, 0, err
 	}
+	var w *withholder
+	if !s.cfg.AllowEmails {
+		w = newWithholder(c.names)
+	}
 	for {
-		v, err := r(f)
+		v, err := r(&shaper{f: f, names: c.names})
 		if err != nil {
 			return nil, 0, err
 		}
 		run := s.finish(v)
-		body, err := encode(v, s.cfg.AllowEmails)
+		body, err := encode(v, w)
 		if err != nil {
 			return nil, 0, fmt.Errorf("encoding the answer: %w", err)
 		}
-		if len(body) <= answerBudget {
+		if len(body) <= s.budget {
 			return body, run, nil
 		}
-		switch {
-		case f.limit > 1:
-			f.limit = (f.limit + 1) / 2
-		case f.rows > minRows:
-			f.rows = max(minRows, f.rows/2)
-		default:
-			return nil, 0, &domain.UsageError{Msg: fmt.Sprintf(
-				"the answer is too large to send (%d characters, over %d) even cut to one item: ask for a narrower scope, "+
-					"path or period, or response_format concise", len(body), answerBudget)}
+		if !f.shrink() {
+			msg := fmt.Sprintf("the answer is too large to send (%d characters, over %d) even cut to one item: ask again with %s",
+				len(body), s.budget, narrow)
+			if f.detailed {
+				msg += ", or with response_format concise"
+			}
+			return nil, 0, &domain.UsageError{Msg: msg}
 		}
 	}
 }
@@ -337,8 +372,9 @@ func (s *server) finish(v any) int64 {
 
 // toolError is a failed call's result: a message the agent can act on, in
 // the tool result where the model sees it rather than as a protocol error,
-// scrubbed of credentials and, unless allowed, of emails.
-func (s *server) toolError(err error) *sdk.CallToolResult {
+// scrubbed of credentials and, unless allowed, of emails. c is nil for a
+// call that never started.
+func (s *server) toolError(err error, c *call) *sdk.CallToolResult {
 	var usage *domain.UsageError
 	msg := err.Error()
 	switch {
@@ -353,7 +389,11 @@ func (s *server) toolError(err error) *sdk.CallToolResult {
 	}
 	msg = redact.Scrub(msg)
 	if !s.cfg.AllowEmails {
-		msg = withholdEmails(msg)
+		var names *app.Names
+		if c != nil {
+			names = c.names
+		}
+		msg = newWithholder(names).text(msg, false)
 	}
 	return &sdk.CallToolResult{IsError: true, Content: []sdk.Content{&sdk.TextContent{Text: msg}}}
 }

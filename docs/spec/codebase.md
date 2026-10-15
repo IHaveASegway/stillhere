@@ -660,8 +660,11 @@ func Sync(ctx context.Context, d Deps, r SyncRequest) error // #14
 // app/mcp.go (#15): the MCP server's own read use cases (ADR 0006), answered from #11's report model and the ranked
 // metrics' clusters, as explain reads them; their answers' JSON shape is docs/spec/mcp.md. Unexported names carry mcp….
 type NamesRequest struct { RunID int64 }
-type Names struct { Run domain.Run; Groups []NamedGroup; Repos []NamedRepo; People []NamedPerson } // what names resolve against
-type NamedRepo struct { Key, Name, Group, Path string }
+type Names struct { Run domain.Run; Groups []NamedGroup; Repos []NamedRepo; People []NamedPerson; AIPeople int } // what names resolve against
+type NamedGroup struct { Name string; Repos []string; AIPeople int }
+type NamedRepo struct { Key, Name, Group, Path string; AIPeople int }
+// AIPeople: the humans behind a scope's AI-assisted share, credited with a non-merge commit of a landing in its
+// ai_assisted@1 value's window (0 without one): the MCP server sends the share only when they are three or more.
 type NamedPerson struct { Key, Name string; Bot bool; Repos []string; Lines int } // Key: canonical email, or "@login"
 type OverviewRequest struct { RunID int64; Scope domain.Scope; Rank []domain.MetricID } // zero Scope: the whole run
 type OverviewAnswer struct { Provenance report.Provenance; Run report.Run; Scope domain.Scope; Overviews []report.Overview;
@@ -672,6 +675,8 @@ type HighlightsRequest struct { RunID int64; Scope domain.Scope; Since time.Time
 type DiffRequest struct { RunID int64; Repo, Change, Path string; MaxBytes int } // Change: a landing SHA or 7+ hex digits
 // ChangesAnswer, HighlightsAnswer and DiffAnswer, and their Change, ChangePerson, Contribution, TopTier,
 // HighlightChange and DiffFile, carry their JSON names: what no report shows, in the shape docs/spec/mcp.md gives.
+// TopTier: Of eligible people, PeopleTotal whose 95% rank interval reaches first place, People them by name unless
+// they are more than a third of Of (no one stands out: a no-standout caveat).
 func RunNames(ctx context.Context, d Deps, r NamesRequest) (*Names, error)
 func Overview(ctx context.Context, d Deps, r OverviewRequest) (*OverviewAnswer, error) // report.Build's sections for one scope
 func Person(ctx context.Context, d Deps, r PersonRequest) (*report.Me, error) // Me without the AI-assisted share (ADR 0007)
@@ -690,7 +695,8 @@ type Config struct {
 	Version     string
 	Log         *slog.Logger     // stderr
 }
-func Serve(ctx context.Context, cfg Config, in io.ReadCloser, out io.Writer) error // stdio until in closes or ctx ends; only protocol on out
+func Serve(ctx context.Context, cfg Config, in io.ReadCloser, out io.Writer) error // stdio until in closes or ctx ends; only protocol on out;
+                                                                                   // a line on in that is no JSON-RPC message gets JSON-RPC's error and is skipped
 
 // cli
 type Build struct{ Version, Commit, Date string } // from -ldflags -X main.version, main.commit, main.date

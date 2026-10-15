@@ -83,10 +83,12 @@ Everything after `--` is the server's own command line; add `--db FILE` there fo
 
 | Flag | Without it |
 | --- | --- |
-| `--me EMAIL` | No one's AI-assisted share is shown. With it, your own share appears on your own page (`person` with an empty name), and only there. |
+| `--me EMAIL` | No one's AI-assisted share is shown. With it, your own share appears on your own page (`person` with an empty name), and only there. Pass your canonical email, the one the reports key you by after `.mailmap`. |
 | `--allow-emails` | Every email is replaced by a stable id (`p-…`), which the tools accept back. |
 | `--allow-source` | Commit subjects stay local and `diff` refuses. With it, `diff` runs git, offline, on the clones the scan read. |
 | `--run ID` | Each call reads the latest complete or partial scan, so a new scan shows up mid-session. |
+
+Whatever the flags, a repository's or group's AI-assisted share is sent only when at least three people landed in it: with fewer, it would be close to one person's own share.
 
 The skill in [plugins/stillhere/skills/stillhere](plugins/stillhere/skills/stillhere/SKILL.md) teaches your agent which tool answers which question, how to read rank intervals, and the stated limits. Copy that directory to `~/.claude/skills/stillhere` to use it in every project, or load the plugin directory for one session with `claude --plugin-dir plugins/stillhere`.
 

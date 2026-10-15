@@ -58,18 +58,25 @@ type NamesRequest struct {
 
 // Names is a stored run's vocabulary: the groups, repositories and people
 // an inbound adapter resolves an agent's names against, so that an agent
-// can ask about "Lena Lead" or "payments" rather than an email or a key.
+// can ask about "Lena Lead" or "payments" rather than an email or a key,
+// and what it needs to decide what may leave the machine.
 type Names struct {
 	Run    domain.Run
 	Groups []NamedGroup  // by name
 	Repos  []NamedRepo   // by group, name and key, as reports list them
 	People []NamedPerson // by name, then key
+	// AIPeople counts the humans behind the whole run's AI-assisted share,
+	// as NamedRepo.AIPeople does for one repository.
+	AIPeople int
 }
 
 // NamedGroup is one group of a run.
 type NamedGroup struct {
 	Name  string
 	Repos []string // Repo.Key of its repositories, sorted
+	// AIPeople counts the humans behind the group's AI-assisted share, as
+	// NamedRepo.AIPeople does for one repository.
+	AIPeople int
 }
 
 // NamedRepo is one repository of a run.
@@ -77,6 +84,12 @@ type NamedRepo struct {
 	Key, Name string
 	Group     string // "" when the repository was named directly
 	Path      string // the absolute path the run read it at, for resolving an absolute path inside it
+	// AIPeople counts the humans behind the repository's AI-assisted share:
+	// those credited with a non-merge commit of a landing in the window of
+	// its ai_assisted@1 value; 0 when it has none. With one or two, the
+	// share is close to one person's own, which ADR 0007 shows only to
+	// that person.
+	AIPeople int
 }
 
 // NamedPerson is someone a run knows: an author, a co-author, or anyone a
@@ -163,7 +176,64 @@ func RunNames(ctx context.Context, d Deps, r NamesRequest) (*Names, error) {
 		n.People = append(n.People, a.p)
 	}
 	slices.SortFunc(n.People, func(a, b NamedPerson) int { return cmp.Or(cmp.Compare(a.Name, b.Name), cmp.Compare(a.Key, b.Key)) })
+
+	behind := mcpAIPeople(s)
+	all := map[string]bool{}
+	for i := range n.Repos {
+		n.Repos[i].AIPeople = len(behind[n.Repos[i].Key])
+		maps.Copy(all, behind[n.Repos[i].Key])
+	}
+	n.AIPeople = len(all)
+	for i := range n.Groups {
+		group := map[string]bool{}
+		for _, key := range n.Groups[i].Repos {
+			maps.Copy(group, behind[key])
+		}
+		n.Groups[i].AIPeople = len(group)
+	}
 	return n, nil
+}
+
+// mcpAIPeople returns, per repository with an ai_assisted@1 value, the
+// humans credited with a non-merge commit of a landing in that value's
+// window: the people its AI-assisted share is made of. The window is the
+// stored value's, so this restates none of the metric's definition.
+func mcpAIPeople(s *stored) map[string]map[string]bool {
+	windows := map[string]domain.Window{}
+	for _, v := range s.values {
+		if v.Metric.String() == report.MetricAIAssisted && v.Subject.Kind == domain.SubjectRepo {
+			windows[v.Subject.Key] = v.Window
+		}
+	}
+	out := map[string]map[string]bool{}
+	for i := range s.facts.Repos {
+		rf := &s.facts.Repos[i]
+		w, ok := windows[rf.Repo.Key]
+		if !ok {
+			continue
+		}
+		commits := make(map[string]*domain.Commit, len(rf.Commits))
+		for j := range rf.Commits {
+			commits[rf.Commits[j].SHA] = &rf.Commits[j]
+		}
+		people := map[string]bool{}
+		for _, l := range rf.Landings {
+			if !w.Contains(l.Time) {
+				continue
+			}
+			for _, sha := range mcpLandingCommits(l) {
+				c := commits[sha]
+				if c == nil || len(c.Parents) > 1 {
+					continue
+				}
+				if p := s.who.Credit(c.Author, c.CoAuthors); !s.who.Bot(p) {
+					people[p] = true
+				}
+			}
+		}
+		out[rf.Repo.Key] = people
+	}
+	return out
 }
 
 // mcpPersonNamed names one person of a stored run as the reports do. A
@@ -509,7 +579,7 @@ func mcpChangeClusters(s *stored, repos []*domain.RepoFacts) (mcpClusters, error
 			}
 			ri, err := ranked.Clusters(in, domain.Scope{Kind: domain.ScopeRepo, Key: rf.Repo.Key})
 			if err != nil {
-				return ix, fmt.Errorf("reading %s's clusters in %s: %w", m.id, rf.Repo.Name, err)
+				return ix, fmt.Errorf("reading %s's clusters in %q: %w", m.id, rf.Repo.Name, err)
 			}
 			for sub, cs := range ri.Data {
 				for _, c := range cs {
@@ -691,7 +761,9 @@ type HighlightsAnswer struct {
 	Period     report.Interval   `json:"period"`
 	// TopTier holds, per ranked metric and rank scope, the people whose 95%
 	// rank interval reaches first place: everyone who could be first.
-	// Their intervals overlap, so they are not ordered among themselves.
+	// Their intervals overlap, so they are not ordered among themselves,
+	// and a tier that holds more than a third of a table's eligible people
+	// singles no one out: it is not listed, and a caveat says so.
 	TopTier []TopTier `json:"top_tier"`
 	// Lasted holds durable@1's cohort clusters that kept the most lines:
 	// changes 90 to 365 days old whose lines blame still attributes to
@@ -708,15 +780,24 @@ type HighlightsAnswer struct {
 // TopTier is one rank table's top: the people whose rank interval includes
 // first place.
 type TopTier struct {
-	Metric   string           `json:"metric"`
-	Question string           `json:"question"`
-	Scope    report.Scope     `json:"scope"`
-	Window   report.Interval  `json:"window"`
-	Percent  bool             `json:"percent"` // a ratio: estimates are shares
-	MinN     int              `json:"min_n"`   // the eligibility threshold
-	Of       int              `json:"of"`      // eligible people in the table
-	People   []report.RankRow `json:"people"`
+	Metric   string          `json:"metric"`
+	Question string          `json:"question"`
+	Scope    report.Scope    `json:"scope"`
+	Window   report.Interval `json:"window"`
+	Percent  bool            `json:"percent"` // a ratio: estimates are shares
+	MinN     int             `json:"min_n"`   // the eligibility threshold
+	Of       int             `json:"of"`      // eligible people in the table
+	// PeopleTotal counts the eligible people whose 95% rank interval
+	// reaches first place.
+	PeopleTotal int `json:"people_total"`
+	// People lists them by name, unless they are more than a third of Of:
+	// then no one stands out, People is empty and a caveat says so.
+	People []report.RankRow `json:"people"`
 }
+
+// mcpTierShare is the share of a table's eligible people above which its top
+// tier singles no one out: more than one in mcpTierShare reach first place.
+const mcpTierShare = 3
 
 // HighlightChange is one person's cluster in one landing, picked for a
 // highlight.
@@ -773,6 +854,7 @@ func Highlights(ctx context.Context, d Deps, r HighlightsRequest) (*HighlightsAn
 		return nil, err
 	}
 	used := []string{mcpDurable, mcpSimplifying}
+	var wide []string // the tiers that single no one out
 	for _, set := range sets {
 		t := TopTier{
 			Metric: set.Metric.ID, Question: set.Metric.Question, Scope: report.Scope{Kind: set.Scope.Kind, Key: set.Scope.Key},
@@ -792,8 +874,16 @@ func Highlights(ctx context.Context, d Deps, r HighlightsRequest) (*HighlightsAn
 		if len(t.People) == 0 {
 			continue
 		}
+		t.PeopleTotal = len(t.People)
+		if mcpTierShare*t.PeopleTotal > t.Of {
+			// When most of the table could be first, listing them would
+			// read as a podium the intervals do not support (ADR 0001).
+			t.People = nil
+			wide = append(wide, fmt.Sprintf("%s in %s: %d of %d", t.Metric, mcpScopeText(set.Scope), t.PeopleTotal, t.Of))
+		}
+		// Not ordered among themselves: by name only.
 		slices.SortFunc(t.People, func(x, y report.RankRow) int {
-			return cmp.Or(cmp.Compare(x.RankHi, y.RankHi), cmp.Compare(x.Name, y.Name), cmp.Compare(x.Email, y.Email))
+			return cmp.Or(cmp.Compare(x.Name, y.Name), cmp.Compare(x.Email, y.Email))
 		})
 		a.TopTier = append(a.TopTier, t)
 		used = append(used, set.Metric.ID)
@@ -811,9 +901,26 @@ func Highlights(ctx context.Context, d Deps, r HighlightsRequest) (*HighlightsAn
 	run := s.run
 	a.Provenance = report.AnswerProvenance(&run, scoped, used)
 	a.Caveats = append(report.AnswerCaveats(scoped), report.Caveat{Code: "highlights",
-		Message: "Highlights are rule-based picks for recognition, not a ranking of people: the top tier lists everyone " +
-			"whose 95% rank interval reaches first place, and the change lists are single changes with their numbers."})
+		Message: "Highlights are rule-based picks for recognition, not a ranking of people: the top tier counts everyone " +
+			"whose 95% rank interval reaches first place and names them when they are a third of the table or fewer, and " +
+			"the change lists are single changes with their numbers."})
+	if len(wide) > 0 {
+		if len(wide) > mcpHighlightsTop {
+			wide = append(wide[:mcpHighlightsTop], fmt.Sprintf("and %d more tables", len(wide)-mcpHighlightsTop))
+		}
+		a.Caveats = append(a.Caveats, report.Caveat{Code: "no-standout", Message: "No one stands out where more than a " +
+			"third of a table's eligible people have a 95% rank interval that reaches first place, so these top tiers are " +
+			"not listed (could be first, of eligible): " + strings.Join(wide, "; ") + "."})
+	}
 	return a, nil
+}
+
+// mcpScopeText names a rank scope in a sentence.
+func mcpScopeText(s domain.Scope) string {
+	if s.Kind == domain.ScopeAll || s.Kind == "" {
+		return "the whole run"
+	}
+	return s.Kind + " " + strconv.Quote(s.Key)
 }
 
 // mcpHighlightChanges picks a metric's clusters with the largest Num, at most
@@ -866,6 +973,12 @@ const (
 	mcpDiffMaxBytes  = 24000 // the default cut of a patch: room, in an MCP answer, for the JSON escapes of its tabs and newlines
 	mcpDiffMaxFiles  = 1000  // paths named to git for one patch, so its command line stays short
 	mcpDiffMinPrefix = 7     // hex digits a change id needs, as git's short ids
+	// mcpDiffTimeout bounds each git command of a diff. An agent waits for
+	// the answer, and the server answers one call at a time, so a diff
+	// that git cannot produce quickly (a huge change, a cold clone on a
+	// slow disk) fails with what to narrow rather than holding every
+	// other call for git's default of minutes.
+	mcpDiffTimeout = 30 * time.Second
 )
 
 // errMCPPatchFull stops git once a patch has reached its cut.
@@ -960,13 +1073,16 @@ func Diff(ctx context.Context, d Deps, r DiffRequest) (*DiffAnswer, error) {
 		spec = []string{"--", ":(literal)" + a.Path}
 	}
 	args := append(append([]string{"diff-tree", "-r", "-M", "--no-commit-id", "--numstat", "-z"}, trees...), spec...)
-	out, err := d.Git.Run(ctx, domain.GitCmd{Dir: rf.Repo.Path, Args: args, Profile: domain.Analysis})
+	out, err := d.Git.Run(ctx, domain.GitCmd{Dir: rf.Repo.Path, Args: args, Timeout: mcpDiffTimeout, Profile: domain.Analysis})
 	if err != nil {
-		return nil, fmt.Errorf("git could not read landing %s in %s, which run %d scanned: the clone may have moved or "+
+		if mcpGitTimedOut(ctx, err) {
+			return nil, mcpDiffTooSlow(l, rf)
+		}
+		return nil, fmt.Errorf("git could not read landing %s in %q, which run %d scanned: the clone may have moved or "+
 			"rewritten its history since; scan again: %w", mcpShort(l.SHA), rf.Repo.Name, s.run.ID, err)
 	}
 	if a.Files, err = mcpParseNumstat(out); err != nil {
-		return nil, fmt.Errorf("reading the files of landing %s in %s: %w", mcpShort(l.SHA), rf.Repo.Name, err)
+		return nil, fmt.Errorf("reading the files of landing %s in %q: %w", mcpShort(l.SHA), rf.Repo.Name, err)
 	}
 	classes := make(map[string]domain.PathClass, len(rf.Paths))
 	for _, pc := range rf.Paths {
@@ -1005,7 +1121,8 @@ func Diff(ctx context.Context, d Deps, r DiffRequest) (*DiffAnswer, error) {
 	if len(paths) > 0 {
 		args := append(append([]string{"diff-tree", "-r", "-M", "-p", "--no-commit-id", "--no-color", "--no-ext-diff",
 			"--no-textconv", "-U3"}, trees...), append([]string{"--"}, paths...)...)
-		err = d.Git.Stream(ctx, domain.GitCmd{Dir: rf.Repo.Path, Args: args, Profile: domain.Analysis}, func(rd io.Reader) error {
+		cmd := domain.GitCmd{Dir: rf.Repo.Path, Args: args, Timeout: mcpDiffTimeout, Profile: domain.Analysis}
+		err = d.Git.Stream(ctx, cmd, func(rd io.Reader) error {
 			b, err := io.ReadAll(io.LimitReader(rd, int64(limit)+1))
 			if err != nil {
 				return err
@@ -1022,8 +1139,12 @@ func Diff(ctx context.Context, d Deps, r DiffRequest) (*DiffAnswer, error) {
 			a.Patch = string(b)
 			return nil
 		})
-		if err != nil && !errors.Is(err, errMCPPatchFull) {
-			return nil, fmt.Errorf("git could not diff landing %s in %s: %w", mcpShort(l.SHA), rf.Repo.Name, err)
+		switch {
+		case err == nil, errors.Is(err, errMCPPatchFull):
+		case mcpGitTimedOut(ctx, err):
+			return nil, mcpDiffTooSlow(l, rf)
+		default:
+			return nil, fmt.Errorf("git could not diff landing %s in %q: %w", mcpShort(l.SHA), rf.Repo.Name, err)
 		}
 	}
 	scoped := mcpScopedFacts(s.facts, []*domain.RepoFacts{rf})
@@ -1041,6 +1162,19 @@ func Diff(ctx context.Context, d Deps, r DiffRequest) (*DiffAnswer, error) {
 			"The patch was cut at %s bytes: ask for a path under the change to see the rest of it.", strconv.Itoa(limit))})
 	}
 	return a, nil
+}
+
+// mcpGitTimedOut reports whether a git command failed on its own timeout,
+// rather than on the caller's context ending.
+func mcpGitTimedOut(ctx context.Context, err error) bool {
+	var ge *domain.GitError
+	return ctx.Err() == nil && errors.As(err, &ge) && errors.Is(ge.Err, context.DeadlineExceeded)
+}
+
+// mcpDiffTooSlow is the error of a diff git could not produce in time.
+func mcpDiffTooSlow(l domain.Landing, rf *domain.RepoFacts) error {
+	return &domain.UsageError{Msg: fmt.Sprintf("git took more than %d seconds to diff landing %s in %q: ask for a path "+
+		"under the change, or a smaller max_chars", int(mcpDiffTimeout/time.Second), mcpShort(l.SHA), rf.Repo.Name)}
 }
 
 // mcpFindLanding finds the landing a change id names: one of the run's
@@ -1066,7 +1200,7 @@ func mcpFindLanding(s *stored, repo, change string) (*domain.RepoFacts, domain.L
 	case 1:
 		if found[0].rf.Status != domain.RepoStatusOK {
 			return nil, domain.Landing{}, &domain.UsageError{Msg: fmt.Sprintf(
-				"repository %s failed in run %d, so its landings cannot be read", found[0].rf.Repo.Name, s.run.ID)}
+				"repository %q failed in run %d, so its landings cannot be read", found[0].rf.Repo.Name, s.run.ID)}
 		}
 		return found[0].rf, found[0].l, nil
 	case 0:
@@ -1075,7 +1209,7 @@ func mcpFindLanding(s *stored, repo, change string) (*domain.RepoFacts, domain.L
 	}
 	var names []string
 	for _, m := range found {
-		names = append(names, m.rf.Repo.Name+" "+mcpShort(m.l.SHA))
+		names = append(names, strconv.Quote(m.rf.Repo.Name)+" "+mcpShort(m.l.SHA))
 	}
 	slices.Sort(names)
 	return nil, domain.Landing{}, &domain.UsageError{Msg: fmt.Sprintf(

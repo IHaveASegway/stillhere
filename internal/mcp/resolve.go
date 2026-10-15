@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/IHaveASegway/stillhere/internal/app"
@@ -82,7 +83,7 @@ func (r *resolver) person(query string) (app.NamedPerson, *report.Caveat, error)
 				return p, nil, nil
 			}
 		}
-		return app.NamedPerson{}, nil, notFoundf("%s is no one's email or login in run %d: people are keyed by their "+
+		return app.NamedPerson{}, nil, notFoundf("%q is no one's email or login in run %d: people are keyed by their "+
 			"canonical email, after .mailmap. Pass a display name instead.", lower, run)
 	}
 	want := norm(q)
@@ -107,7 +108,7 @@ func (r *resolver) person(query string) (app.NamedPerson, *report.Caveat, error)
 	case len(partial) == 1:
 		p := partial[0]
 		return p, &report.Caveat{Code: "name-match", Message: fmt.Sprintf(
-			"%q matched %s by the start of each word: pass the full name to be exact.", q, p.Name)}, nil
+			"%q matched %q by the start of each word: pass the full name to be exact.", q, p.Name)}, nil
 	case len(partial) > 1:
 		return app.NamedPerson{}, nil, &domain.UsageError{Msg: fmt.Sprintf(
 			"%q could be %d people in run %d: %s. Call again with name set to a full name or an id.",
@@ -185,7 +186,9 @@ func levenshtein(a, b string) int {
 }
 
 // listPeople describes candidates so an agent can tell them apart and
-// pick one: the name, the id to pass, and what they hold.
+// pick one: the name, the id to pass, and what they hold. Names come from
+// the repositories, so each is quoted: in the server's own sentence,
+// repository text stays data (docs/spec/mcp.md#errors).
 func (r *resolver) listPeople(people []app.NamedPerson) string {
 	var parts []string
 	for i, p := range people {
@@ -206,9 +209,9 @@ func (r *resolver) listPeople(people []app.NamedPerson) string {
 			if len(repos) > 3 {
 				repos, more = repos[:3], fmt.Sprintf(" and %d more", len(p.Repos)-3)
 			}
-			about = append(about, "in "+strings.Join(repos, ", ")+more)
+			about = append(about, "in "+quoteAll(repos)+more)
 		}
-		parts = append(parts, fmt.Sprintf("%s (%s)", p.Name, strings.Join(about, ", ")))
+		parts = append(parts, fmt.Sprintf("%q (%s)", p.Name, strings.Join(about, ", ")))
 	}
 	return strings.Join(parts, "; ")
 }
@@ -249,7 +252,7 @@ func (r *resolver) scope(query string) (domain.Scope, error) {
 	var parts []string
 	for _, sc := range found {
 		if sc.Kind == domain.ScopeGroup {
-			parts = append(parts, "group "+sc.Key)
+			parts = append(parts, fmt.Sprintf("group %q", sc.Key))
 			continue
 		}
 		parts = append(parts, r.describeRepo(sc.Key))
@@ -338,12 +341,12 @@ func (r *resolver) describeRepo(key string) string {
 	for _, rp := range r.names.Repos {
 		if rp.Key == key {
 			if rp.Group != "" {
-				return fmt.Sprintf("repository %s in group %s (key %s)", rp.Name, rp.Group, rp.Key)
+				return fmt.Sprintf("repository %q in group %q (key %q)", rp.Name, rp.Group, rp.Key)
 			}
-			return fmt.Sprintf("repository %s (key %s)", rp.Name, rp.Key)
+			return fmt.Sprintf("repository %q (key %q)", rp.Name, rp.Key)
 		}
 	}
-	return "repository " + key
+	return fmt.Sprintf("repository %q", key)
 }
 
 // listScopes says which scopes the run has, for an error about one it has
@@ -360,9 +363,9 @@ func (r *resolver) listScopes() string {
 	repos = slices.Compact(repos)
 	cut := func(names []string) string {
 		if len(names) > 20 {
-			return strings.Join(names[:20], ", ") + fmt.Sprintf(" and %d more", len(names)-20)
+			return quoteAll(names[:20]) + fmt.Sprintf(" and %d more", len(names)-20)
 		}
-		return strings.Join(names, ", ")
+		return quoteAll(names)
 	}
 	switch {
 	case len(groups) == 0:
@@ -370,6 +373,15 @@ func (r *resolver) listScopes() string {
 	default:
 		return "Its groups: " + cut(groups) + ". Its repositories: " + cut(repos) + "."
 	}
+}
+
+// quoteAll quotes each name of a list, for a sentence.
+func quoteAll(names []string) string {
+	quoted := make([]string, len(names))
+	for i, n := range names {
+		quoted[i] = strconv.Quote(n)
+	}
+	return strings.Join(quoted, ", ")
 }
 
 // scopeName is the name an answer gives a scope: the group's, the

@@ -1,7 +1,12 @@
 package mcp
 
 import (
+	"bytes"
+	"cmp"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -15,10 +20,13 @@ import (
 // cases in internal/app return whole answers in the report types; this
 // file decides what an agent gets of them: everything with
 // response_format "detailed", the numbers an agent needs to answer with
-// "concise" (the default), and in either form a page of each long list
-// (Anthropic, "Writing effective tools for agents", 2025: names rather than
-// ids, concise or detailed, paging under the client's token cap). It
-// computes no number: it only selects and trims.
+// "concise" (the default), and in either form a page of the answer's main
+// list and the first rows of every other list, with its total (Anthropic,
+// "Writing effective tools for agents", 2025: names rather than ids,
+// concise or detailed, paging under the client's token cap). No list in an
+// answer grows with the platform unbounded: a list is paged, cut to rows
+// with a *_total, or bounded by the registry. It computes no number: it
+// only selects and trims.
 
 // formatDetailed is the response_format that asks for every field; the
 // other one, "concise", is the default.
@@ -31,28 +39,99 @@ const (
 	// at 10,000 tokens, under the 50,000 characters past which it saves a
 	// result to a file instead of showing it, and far under its default
 	// cap of 25,000 tokens (MAX_MCP_OUTPUT_TOKENS), so the estimate may be
-	// off by half and still fit. An answer over it is cut to a smaller
-	// page.
+	// off by half and still fit. An answer over it is cut until it fits.
 	answerBudget = 40000
-	maxLimit     = 100 // the largest page a call may ask for
-	minRows      = 3   // the shortest list an answer cuts a table to
+	maxLimit     = 100  // the largest page a call may ask for
+	minRows      = 3    // the shortest list an answer cuts a table to
+	minPatch     = 1000 // the smallest patch the budget cuts a diff to, in bytes
+	// headsAlways is how many repositories an answer covers before its
+	// provenance lists only the HEADs of those it names.
+	headsAlways = 10
 )
 
 // format is how much of an answer to give: the page of the answer's main
-// list and the rows of each table inside it.
+// list, the rows of every other list inside it, and the parts the budget
+// can cut.
 type format struct {
 	detailed bool
-	offset   int // the first item of the page
-	limit    int // items in the page
-	rows     int // rows of each table inside an item, such as an overview's people
+	offset   int  // the first item of the page
+	limit    int  // items in the page
+	rows     int  // rows of each other list, such as an overview's people
+	allHeads bool // provenance lists every repository's HEAD (detailed), until the budget needs the room
+	patch    int  // diff: the bytes of patch the answer holds; 0 for the use case's own cut
+}
+
+// shrink cuts f for an answer over the budget, the least useful part
+// first: the HEADs of repositories the answer does not name, then the
+// patch, then the page, then the rows of each list. It reports false when
+// nothing is left to cut.
+func (f *format) shrink() bool {
+	switch {
+	case f.allHeads:
+		f.allHeads = false
+	case f.patch > minPatch:
+		f.patch = max(minPatch, f.patch/2)
+	case f.limit > 1:
+		f.limit = (f.limit + 1) / 2
+	case f.rows > minRows:
+		f.rows = max(minRows, f.rows/2)
+	default:
+		return false
+	}
+	return true
+}
+
+// provenanceOut is a section's provenance as an answer gives it: the
+// report's, with the HEADs cut to the repositories the answer names once
+// it covers more than headsAlways, and their count and digest, so the list
+// never grows with the platform and the HEAD set stays checkable.
+type provenanceOut struct {
+	report.Provenance
+	// HeadsTotal counts every repository the section's numbers cover;
+	// heads lists them all in a detailed answer, and in any answer that
+	// covers headsAlways or fewer.
+	HeadsTotal int `json:"heads_total"`
+	// HeadsSHA256 digests all of them, as "repo key branch sha" lines in
+	// heads order, so two answers can be checked against one HEAD set.
+	HeadsSHA256 string `json:"heads_sha256"`
+}
+
+// named is the set of repositories an answer names, by key or by name.
+type named struct{ keys, names map[string]bool }
+
+func newNamed() named { return named{keys: map[string]bool{}, names: map[string]bool{}} }
+
+func (n named) key(k string)  { n.keys[k] = true }
+func (n named) name(s string) { n.names[s] = true }
+
+// provenance shapes a section's provenance for an answer that names the
+// repositories in n.
+func (f format) provenance(pv report.Provenance, n named) provenanceOut {
+	out := provenanceOut{Provenance: pv, HeadsTotal: len(pv.Heads)}
+	var lines bytes.Buffer
+	for _, h := range pv.Heads {
+		fmt.Fprintf(&lines, "%s %s %s %s\n", h.Repo, h.Key, h.Branch, h.SHA)
+	}
+	sum := sha256.Sum256(lines.Bytes())
+	out.HeadsSHA256 = hex.EncodeToString(sum[:])
+	if f.allHeads || len(pv.Heads) <= headsAlways {
+		return out
+	}
+	out.Heads = nil
+	for _, h := range pv.Heads {
+		if n.keys[h.Key] || n.names[h.Repo] {
+			out.Heads = append(out.Heads, h)
+		}
+	}
+	return out
 }
 
 // head opens every answer about a run: where its numbers come from.
 type head struct {
-	Provenance report.Provenance `json:"provenance"`
+	Provenance provenanceOut `json:"provenance"`
 }
 
-func (h *head) provenance() *report.Provenance { return &h.Provenance }
+func (h *head) provenance() *report.Provenance { return &h.Provenance.Provenance }
 
 // tail closes every answer: the page, what could make it wrong, and what
 // the server withheld.
@@ -148,6 +227,52 @@ func scopeOf(sc domain.Scope, name string) scopeOut {
 	return scopeOut{Kind: sc.Kind, Key: sc.Key, Name: name}
 }
 
+// The AI-assisted shares of repositories and groups. A share over the
+// landings of one or two people is close to one person's own share, which
+// ADR 0007 shows only to that person, so it does not leave the machine:
+// the egress is stricter than the local report, as it is for emails.
+
+// minAIPeople is the fewest humans whose landings an AI-assisted share
+// reaching the agent may be made of.
+const minAIPeople = 3
+
+// aiCaveat says that an answer withheld the AI-assisted share of scopes
+// made of too few people.
+func aiCaveat(scopes []string) report.Caveat {
+	scopes = slices.Compact(slices.Sorted(slices.Values(scopes)))
+	if len(scopes) > maxCandidates {
+		scopes = append(scopes[:maxCandidates], fmt.Sprintf("%d more", len(scopes)-maxCandidates))
+	}
+	return report.Caveat{Code: "ai-few-people", Message: fmt.Sprintf(
+		"The AI-assisted share of %s is withheld: fewer than %d people landed in its window, so it would be close to one "+
+			"person's own share, which only that person sees (ADR 0007).", strings.Join(scopes, ", "), minAIPeople)}
+}
+
+// aiPeople is how many people a scope's AI-assisted share is made of; 0,
+// which withholds it, when the run's vocabulary is not known.
+func aiPeople(names *app.Names, sc report.Scope) int {
+	if names == nil {
+		return 0
+	}
+	switch sc.Kind {
+	case domain.ScopeRepo:
+		for _, r := range names.Repos {
+			if r.Key == sc.Key {
+				return r.AIPeople
+			}
+		}
+	case domain.ScopeGroup:
+		for _, g := range names.Groups {
+			if g.Name == sc.Key {
+				return g.AIPeople
+			}
+		}
+	case domain.ScopeAll, "":
+		return names.AIPeople
+	}
+	return 0
+}
+
 // The overview tool.
 
 type overviewOut struct {
@@ -158,6 +283,9 @@ type overviewOut struct {
 	Repos     any              `json:"repos"` // concise: []repoSummary; detailed: []report.Repo
 	Ranks     []rankTableOut   `json:"ranks"`
 	Warnings  []report.Warning `json:"warnings"`
+	// WarningsTotal counts the run's warnings, of which warnings holds the
+	// first rows.
+	WarningsTotal int `json:"warnings_total"`
 	tail
 }
 
@@ -172,7 +300,7 @@ type runOut struct {
 // overviewItem is one overview: a group's, or every repository's.
 type overviewItem struct {
 	Scope         report.Scope          `json:"scope"`
-	Provenance    *report.Provenance    `json:"provenance,omitzero"` // detailed only: the answer's covers it
+	Provenance    *provenanceOut        `json:"provenance,omitzero"` // detailed only: the answer's covers it
 	Totals        report.Totals         `json:"totals"`
 	People        *stillHereOut         `json:"people"`
 	Week          *weekOut              `json:"week"`
@@ -221,14 +349,45 @@ func weekOf(t *report.WeekTable, rows int) *weekOut {
 	return out
 }
 
-func overviewOf(o report.Overview, f format) overviewItem {
+// shaper shapes the answers of one call: its format, the run's vocabulary
+// (nil for an answer that reads no run) and what the answer withheld.
+type shaper struct {
+	f          format
+	names      *app.Names
+	aiWithheld []string // the scopes whose AI-assisted share was withheld
+}
+
+// share returns a scope's AI-assisted share as it may leave: nil, noted
+// for the caveat, when too few people made it.
+func (s *shaper) share(sh *report.Share, sc report.Scope, name string) *report.Share {
+	if sh == nil || aiPeople(s.names, sc) >= minAIPeople {
+		return sh
+	}
+	s.aiWithheld = append(s.aiWithheld, name)
+	return nil
+}
+
+// scopeName names a scope in a caveat.
+func scopeName(sc report.Scope, repoName string) string {
+	switch sc.Kind {
+	case domain.ScopeGroup:
+		return "group " + strconv.Quote(sc.Key)
+	case domain.ScopeRepo:
+		return "repository " + strconv.Quote(repoName)
+	}
+	return "the whole run"
+}
+
+func (s *shaper) overview(o report.Overview, n named) overviewItem {
+	f := s.f
 	item := overviewItem{
 		Scope: o.Scope, Totals: o.Totals,
 		People: stillHereOf(o.People, f.rows), Week: weekOf(o.Week, f.rows),
-		Concentration: o.Concentration, KnowledgeLoss: o.KnowledgeLoss, AIAssisted: o.AIAssisted, BotShare: o.BotShare,
+		Concentration: o.Concentration, KnowledgeLoss: o.KnowledgeLoss, BotShare: o.BotShare,
+		AIAssisted: s.share(o.AIAssisted, o.Scope, scopeName(o.Scope, "")),
 	}
 	if f.detailed {
-		pv := o.Provenance
+		pv := f.provenance(o.Provenance, n)
 		item.Provenance, item.Caveats = &pv, o.Caveats
 	}
 	return item
@@ -262,36 +421,39 @@ type madeOf struct {
 	Share float64 `json:"share"` // of the repository's surviving prod lines
 }
 
-func summaryOf(r report.Repo, rows int) repoSummary {
+func (s *shaper) summary(r report.Repo) repoSummary {
 	c := r.Card
-	s := repoSummary{
+	sc := report.Scope{Kind: domain.ScopeRepo, Key: r.Key}
+	out := repoSummary{
 		Name: r.Name, Key: r.Key, Group: r.Group, Status: r.Status, Error: r.Error, LineFacts: r.LineFacts,
 		Size: c.Size, People: c.People, Bots: c.Bots,
-		KnowledgeLoss: c.KnowledgeLoss, AIAssisted: c.AIAssisted, BotShare: c.BotShare, Landings: c.Landings,
+		KnowledgeLoss: c.KnowledgeLoss, AIAssisted: s.share(c.AIAssisted, sc, scopeName(sc, r.Name)), BotShare: c.BotShare,
+		Landings: c.Landings,
 	}
 	if c.Age != nil {
 		days := c.Age.Days
-		s.AgeDays = &days
+		out.AgeDays = &days
 	}
 	if c.Concentration != nil {
 		n := c.Concentration.AuthorsInPrefix
-		s.Concentration = &n
+		out.Concentration = &n
 	}
-	authors, _ := cut(c.MadeOf, min(rows, 3))
+	authors, _ := cut(c.MadeOf, min(s.f.rows, 3))
 	for _, a := range authors {
-		s.MadeOf = append(s.MadeOf, madeOf{Name: a.Name, Email: a.Email, Share: a.Share})
+		out.MadeOf = append(out.MadeOf, madeOf{Name: a.Name, Email: a.Email, Share: a.Share})
 	}
 	for _, cv := range c.Caveats {
 		if cv.Code != "not-fetched" && cv.Code != "ai-lower-bound" {
-			s.Caveats = append(s.Caveats, cv.Code)
+			out.Caveats = append(out.Caveats, cv.Code)
 		}
 	}
-	return s
+	return out
 }
 
 // repoDetail is one repository whole, as the report has it, with its
-// tables cut to the answer's rows.
-func repoDetail(r report.Repo, rows int) report.Repo {
+// lists cut to the answer's rows.
+func (s *shaper) repoDetail(r report.Repo) report.Repo {
+	rows := s.f.rows
 	if r.StillHere != nil {
 		t := *r.StillHere
 		t.Humans, _ = cut(t.Humans, rows)
@@ -304,6 +466,10 @@ func repoDetail(r report.Repo, rows int) report.Repo {
 		t.Bots, _ = cut(t.Bots, rows)
 		r.Week = &t
 	}
+	sc := report.Scope{Kind: domain.ScopeRepo, Key: r.Key}
+	r.Card.AIAssisted = s.share(r.Card.AIAssisted, sc, scopeName(sc, r.Name))
+	r.Card.MadeOf, _ = cut(r.Card.MadeOf, rows)
+	r.Warnings, _ = cut(r.Warnings, rows)
 	r.Errors.Blame, _ = cut(r.Errors.Blame, rows)
 	r.IgnoreRevs.Revs, _ = cut(r.IgnoreRevs.Revs, rows)
 	return r
@@ -313,103 +479,135 @@ func repoDetail(r report.Repo, rows int) report.Repo {
 // interval, the people below the minimum sample, and bots apart, each list
 // cut to the answer's rows.
 type rankTableOut struct {
-	Metric        string             `json:"metric"`
-	Question      string             `json:"question"`
-	Scope         report.Scope       `json:"scope"`
-	Window        report.Interval    `json:"window"`
-	Percent       bool               `json:"percent"`
-	MinN          int                `json:"min_n"`
-	Provenance    *report.Provenance `json:"provenance,omitzero"` // detailed only
-	Ranked        []report.RankRow   `json:"ranked"`
-	RankedTotal   int                `json:"ranked_total"`
-	BelowMin      []report.RankRow   `json:"below_min"`
-	BelowMinTotal int                `json:"below_min_total"`
-	Bots          []report.RankRow   `json:"bots"`
-	BotsTotal     int                `json:"bots_total"`
-	Caveats       []report.Caveat    `json:"caveats"`
+	Metric        string           `json:"metric"`
+	Question      string           `json:"question"`
+	Scope         report.Scope     `json:"scope"`
+	Window        report.Interval  `json:"window"`
+	Percent       bool             `json:"percent"`
+	MinN          int              `json:"min_n"`
+	Provenance    *provenanceOut   `json:"provenance,omitzero"` // detailed only
+	Ranked        []report.RankRow `json:"ranked"`
+	RankedTotal   int              `json:"ranked_total"`
+	BelowMin      []report.RankRow `json:"below_min"`
+	BelowMinTotal int              `json:"below_min_total"`
+	Bots          []report.RankRow `json:"bots"`
+	BotsTotal     int              `json:"bots_total"`
+	Caveats       []report.Caveat  `json:"caveats"`
 }
 
-func rankTableOf(t report.RankTable, f format) rankTableOut {
+func (s *shaper) rankTable(t report.RankTable, n named) rankTableOut {
 	out := rankTableOut{
 		Metric: t.Metric, Question: t.Question, Scope: t.Scope, Window: t.Window, Percent: t.Percent, MinN: t.MinN,
 		Caveats: t.Caveats,
 	}
-	if f.detailed {
-		pv := t.Provenance
+	if s.f.detailed {
+		pv := s.f.provenance(t.Provenance, n)
 		out.Provenance = &pv
 	}
-	out.Ranked, out.RankedTotal = cut(t.Ranked, f.rows)
-	out.BelowMin, out.BelowMinTotal = cut(t.BelowMin, f.rows)
-	out.Bots, out.BotsTotal = cut(t.Bots, f.rows)
+	out.Ranked, out.RankedTotal = cut(t.Ranked, s.f.rows)
+	out.BelowMin, out.BelowMinTotal = cut(t.BelowMin, s.f.rows)
+	out.Bots, out.BotsTotal = cut(t.Bots, s.f.rows)
 	return out
 }
 
-func overviewAnswer(a *app.OverviewAnswer, sc scopeOut, f format) *overviewOut {
+// overviewAnswer shapes an overview. One repository is answered whole; a
+// group pages its repositories; the whole run is an index that pages its
+// groups, then its repositories, as one list, with the rank tables of the
+// groups on the page.
+func (s *shaper) overviewAnswer(a *app.OverviewAnswer, sc scopeOut) *overviewOut {
+	f := s.f
 	out := &overviewOut{
-		head:     head{Provenance: a.Provenance},
-		Scope:    sc,
-		Run:      runOut{ID: a.Run.ID, Status: a.Run.Status, ToolVersion: a.Run.ToolVersion},
-		Warnings: a.Warnings,
-		tail:     tail{Caveats: a.Caveats},
+		Scope: sc,
+		Run:   runOut{ID: a.Run.ID, Status: a.Run.Status, ToolVersion: a.Run.ToolVersion},
 	}
+	out.Warnings, out.WarningsTotal = cut(a.Warnings, f.rows)
 	if f.detailed {
 		out.Run.Options = a.Run.Options
 	}
-	for _, o := range a.Overviews {
-		item := overviewOf(o, f)
-		if sc.Kind == domain.ScopeAll && o.Scope.Kind == domain.ScopeGroup && !f.detailed {
-			// The whole run is an index of its platforms: each group's
-			// totals and shares, and its people in overview of the group.
+	var repos []report.Repo
+	var overviews []report.Overview // the overviews the answer holds, in the report's order
+	var groups map[string]bool      // the groups an index page holds; nil when the scope is not the whole run
+	switch sc.Kind {
+	case domain.ScopeAll:
+		// One list of the run's groups, then its repositories; its overview
+		// of every repository (with --scope all, or without groups) is on
+		// every page.
+		type entry struct {
+			group *report.Overview
+			repo  *report.Repo
+		}
+		var entries []entry
+		for i := range a.Overviews {
+			if a.Overviews[i].Scope.Kind == domain.ScopeGroup {
+				entries = append(entries, entry{group: &a.Overviews[i]})
+			} else {
+				overviews = append(overviews, a.Overviews[i])
+			}
+		}
+		for i := range a.Repos {
+			entries = append(entries, entry{repo: &a.Repos[i]})
+		}
+		pageEntries, pg := paginate(entries, f, a.Run.ID)
+		out.Page = pg
+		groups = map[string]bool{}
+		for _, e := range pageEntries {
+			if e.repo != nil {
+				repos = append(repos, *e.repo)
+				continue
+			}
+			groups[e.group.Scope.Key] = true
+			overviews = append(overviews, *e.group)
+		}
+	case domain.ScopeRepo:
+		repos = a.Repos
+	default:
+		var pg *page
+		repos, pg = paginate(a.Repos, f, a.Run.ID)
+		out.Page = pg
+		overviews = a.Overviews
+	}
+	n := newNamed()
+	for _, r := range repos {
+		n.key(r.Key)
+	}
+	for _, o := range overviews {
+		item := s.overview(o, n)
+		if groups != nil && o.Scope.Kind == domain.ScopeGroup && !f.detailed {
+			// The index of the platforms: each group's totals and shares,
+			// and its people in overview of the group.
 			item.People, item.Week = nil, nil
 		}
 		out.Overviews = append(out.Overviews, item)
 	}
 	for _, t := range a.Ranks {
-		out.Ranks = append(out.Ranks, rankTableOf(t, f))
+		if groups != nil && t.Scope.Kind == domain.ScopeGroup && !groups[t.Scope.Key] {
+			continue // the index holds the tables of its page's groups
+		}
+		out.Ranks = append(out.Ranks, s.rankTable(t, n))
 	}
-	repos, pg := paginate(a.Repos, f, a.Run.ID)
-	out.Page = pg
 	if f.detailed || sc.Kind == domain.ScopeRepo {
-		// One repository is answered whole: its card and its tables.
+		// A repository is answered whole: its card and its tables.
 		var detail []report.Repo
 		for _, r := range repos {
-			detail = append(detail, repoDetail(r, f.rows))
+			detail = append(detail, s.repoDetail(r))
 		}
 		out.Repos = detail
-		if sc.Kind == domain.ScopeRepo {
-			out.Page = nil
-		}
 	} else {
 		var summary []repoSummary
 		for _, r := range repos {
-			summary = append(summary, summaryOf(r, f.rows))
+			summary = append(summary, s.summary(r))
 		}
 		out.Repos = summary
+	}
+	out.head = head{Provenance: f.provenance(a.Provenance, n)}
+	out.tail = tail{Page: out.Page, Caveats: a.Caveats}
+	if len(s.aiWithheld) > 0 {
+		out.Caveats = append(slices.Clip(out.Caveats), aiCaveat(s.aiWithheld))
 	}
 	return out
 }
 
-// The person tool.
-
-type personOut struct {
-	head
-	Person personRef `json:"person"`
-	// OwnPage is true when the person is the user the server runs for
-	// (--me): the answer is their own page and holds their own
-	// AI-assisted share, which no one else's answer shows (ADR 0007).
-	OwnPage bool            `json:"own_page"`
-	Values  []valueOut      `json:"values"`
-	Ranks   []report.MeRank `json:"ranks"`
-	tail
-}
-
-// personRef names the person an answer is about.
-type personRef struct {
-	Name  string   `json:"name"`
-	Key   string   `json:"key"` // the canonical email (an id, p-…, unless --allow-emails), or "@login"
-	Bot   bool     `json:"bot"`
-	Repos []string `json:"repos"` // the repositories they wrote in or hold a value about
-}
+// The values of an answer about one subject.
 
 // valueOut is one metric value about the answer's subject.
 type valueOut struct {
@@ -423,38 +621,57 @@ type valueOut struct {
 	Detail map[string]float64 `json:"detail"`
 }
 
-func valuesOf(vs []report.Value) []valueOut {
-	var out []valueOut
-	for _, v := range vs {
-		out = append(out, valueOut{Metric: v.Metric, Scope: v.Scope, Window: v.Window, Value: v.Value, Num: v.Num,
-			Den: v.Den, N: v.N, Detail: v.Detail})
+// values selects the values an answer shows about its subject, in the
+// report's order: those about the whole run, unless they repeat the one
+// group's (the subject holds code in one group and nowhere else); per
+// metric, the rows group values with the largest numbers; and with repos,
+// as many repository values. It returns how many there were in all, and
+// names the repositories it shows in n.
+func (s *shaper) values(vs []report.Value, repos bool, n named) ([]valueOut, int) {
+	byKind := map[[2]string][]int{} // metric and scope kind → indexes into vs
+	for i, v := range vs {
+		k := [2]string{v.Metric, v.Scope.Kind}
+		byKind[k] = append(byKind[k], i)
 	}
-	return out
-}
-
-// wideValues keeps the values a concise person answer needs: those about
-// the run's groups, and those about the whole run unless they repeat the
-// one group's (the person holds code in one group and nowhere else).
-// Per-repository values are the detailed answer's.
-func wideValues(vs []report.Value) []report.Value {
-	inGroups := map[string][]report.Value{} // metric → its values in group scopes
-	for _, v := range vs {
-		if v.Scope.Kind == domain.ScopeGroup {
-			inGroups[v.Metric] = append(inGroups[v.Metric], v)
-		}
-	}
-	var out []report.Value
-	for _, v := range vs {
-		switch v.Scope.Kind {
-		case domain.ScopeGroup:
-			out = append(out, v)
+	keep := map[int]bool{}
+	for k, idx := range byKind {
+		switch k[1] {
 		case domain.ScopeAll:
-			if g := inGroups[v.Metric]; len(g) != 1 || !sameNumbers(g[0], v) {
-				out = append(out, v)
+			for _, i := range idx {
+				if g := byKind[[2]string{k[0], domain.ScopeGroup}]; len(g) != 1 || !sameNumbers(vs[g[0]], vs[i]) {
+					keep[i] = true
+				}
+			}
+		case domain.ScopeGroup, domain.ScopeRepo:
+			if k[1] == domain.ScopeRepo && !repos {
+				continue
+			}
+			// The scopes that carry most of the number: the largest
+			// denominator (the lines or changes a ratio is over), then
+			// the largest numerator.
+			ranked := slices.Clone(idx)
+			slices.SortFunc(ranked, func(a, b int) int {
+				return cmp.Or(cmp.Compare(vs[b].Den, vs[a].Den), cmp.Compare(vs[b].Num, vs[a].Num),
+					cmp.Compare(vs[b].N, vs[a].N), cmp.Compare(vs[a].Scope.Key, vs[b].Scope.Key))
+			})
+			ranked, _ = cut(ranked, s.f.rows)
+			for _, i := range ranked {
+				keep[i] = true
 			}
 		}
 	}
-	return out
+	var out []valueOut
+	for i, v := range vs {
+		if !keep[i] {
+			continue
+		}
+		if v.Scope.Kind == domain.ScopeRepo {
+			n.key(v.Scope.Key)
+		}
+		out = append(out, valueOut{Metric: v.Metric, Scope: v.Scope, Window: v.Window, Value: v.Value, Num: v.Num,
+			Den: v.Den, N: v.N, Detail: v.Detail})
+	}
+	return out, len(vs)
 }
 
 // sameNumbers reports whether two values of one metric say the same.
@@ -463,20 +680,87 @@ func sameNumbers(a, b report.Value) bool {
 		a.Window.Since.Equal(b.Window.Since) && a.Window.Until.Equal(b.Window.Until)
 }
 
-func personAnswer(me *report.Me, p app.NamedPerson, own bool, f format) *personOut {
+// The person tool.
+
+type personOut struct {
+	head
+	Person personRef `json:"person"`
+	// OwnPage is true when the person is the user the server runs for
+	// (--me): the answer is their own page and holds their own
+	// AI-assisted share, which no one else's answer shows (ADR 0007).
+	OwnPage bool       `json:"own_page"`
+	Values  []valueOut `json:"values"`
+	// ValuesTotal counts every value the run holds about the person:
+	// values holds those about the whole run and the largest per group,
+	// and in a detailed answer the largest per repository too.
+	ValuesTotal int             `json:"values_total"`
+	Ranks       []report.MeRank `json:"ranks"`
+	RanksTotal  int             `json:"ranks_total"`
+	tail
+}
+
+// personRef names the person an answer is about.
+type personRef struct {
+	Name       string   `json:"name"`
+	Key        string   `json:"key"` // the canonical email (an id, p-…, unless --allow-emails), or "@login"
+	Bot        bool     `json:"bot"`
+	Repos      []string `json:"repos"` // the repositories they wrote in or hold a value about, the first rows
+	ReposTotal int      `json:"repos_total"`
+}
+
+func (s *shaper) personAnswer(me *report.Me, p app.NamedPerson, own bool) *personOut {
+	n := newNamed()
 	out := &personOut{
-		head:    head{Provenance: me.Provenance},
-		Person:  personRef{Name: me.Person.Name, Key: me.Person.Key, Bot: me.Person.Bot, Repos: p.Repos},
+		Person:  personRef{Name: me.Person.Name, Key: me.Person.Key, Bot: me.Person.Bot},
 		OwnPage: own,
-		Ranks:   me.Ranks,
 		tail:    tail{Caveats: me.Caveats},
 	}
-	values := me.Values
-	if !f.detailed {
-		values = wideValues(values)
+	out.Person.Repos, out.Person.ReposTotal = cut(p.Repos, s.f.rows)
+	for _, r := range out.Person.Repos {
+		n.name(r)
 	}
-	out.Values = valuesOf(values)
+	out.Values, out.ValuesTotal = s.values(me.Values, s.f.detailed, n)
+	out.Ranks, out.RanksTotal = s.ranks(me.Ranks)
+	out.head = head{Provenance: s.f.provenance(me.Provenance, n)}
 	return out
+}
+
+// ranks keeps, per metric, the person's places in the rows tables with the
+// most eligible people, in the report's order.
+func (s *shaper) ranks(rs []report.MeRank) ([]report.MeRank, int) {
+	byMetric := map[string][]int{}
+	for i, r := range rs {
+		byMetric[r.Metric] = append(byMetric[r.Metric], i)
+	}
+	keep := map[int]bool{}
+	for _, idx := range byMetric {
+		ranked := slices.Clone(idx)
+		slices.SortFunc(ranked, func(a, b int) int {
+			x, y := rs[a], rs[b]
+			return cmp.Or(compareBool(y.Eligible, x.Eligible), cmp.Compare(y.Of, x.Of), cmp.Compare(x.Scope.Key, y.Scope.Key))
+		})
+		ranked, _ = cut(ranked, s.f.rows)
+		for _, i := range ranked {
+			keep[i] = true
+		}
+	}
+	var out []report.MeRank
+	for i, r := range rs {
+		if keep[i] {
+			out = append(out, r)
+		}
+	}
+	return out, len(rs)
+}
+
+func compareBool(a, b bool) int {
+	switch {
+	case a == b:
+		return 0
+	case a:
+		return 1
+	}
+	return -1
 }
 
 // The who_knows tool.
@@ -498,19 +782,22 @@ type whoKnowsRepo struct {
 	BotsTotal           int `json:"bots_total"`
 }
 
-func whoKnowsAnswer(w *report.WhoKnows, repoName string, f format) *whoKnowsOut {
-	out := &whoKnowsOut{head: head{Provenance: w.Provenance}, Path: w.Path, Repo: repoName, tail: tail{Caveats: w.Caveats}}
-	repos, pg := paginate(w.Repos, f, w.Provenance.RunID)
+func (s *shaper) whoKnowsAnswer(w *report.WhoKnows, repoName string) *whoKnowsOut {
+	out := &whoKnowsOut{Path: w.Path, Repo: repoName, tail: tail{Caveats: w.Caveats}}
+	repos, pg := paginate(w.Repos, s.f, w.Provenance.RunID)
 	if pg.Total > 1 || pg.NextCursor != nil {
 		out.Page = pg
 	}
+	n := newNamed()
 	for _, r := range repos {
 		o := whoKnowsRepo{WhoKnowsRepo: r}
-		o.MajorityOwners, o.MajorityOwnersTotal = cut(r.MajorityOwners, f.rows)
-		o.RecentLanders, o.RecentLandersTotal = cut(r.RecentLanders, f.rows)
-		o.Bots, o.BotsTotal = cut(r.Bots, f.rows)
+		o.MajorityOwners, o.MajorityOwnersTotal = cut(r.MajorityOwners, s.f.rows)
+		o.RecentLanders, o.RecentLandersTotal = cut(r.RecentLanders, s.f.rows)
+		o.Bots, o.BotsTotal = cut(r.Bots, s.f.rows)
 		out.Repos = append(out.Repos, o)
+		n.key(r.Key)
 	}
+	out.head = head{Provenance: s.f.provenance(w.Provenance, n)}
 	return out
 }
 
@@ -521,21 +808,29 @@ type changesOut struct {
 	Scope   scopeOut        `json:"scope"`
 	Window  report.Interval `json:"window"` // [since, the run's as-of)
 	Person  string          `json:"person,omitempty"`
-	Changes any             `json:"changes"` // concise: []changeBrief; detailed: []app.Change
+	Changes any             `json:"changes"` // concise: []changeBrief; detailed: []changeDetail
 	tail
 }
 
 // changeBrief is one landing in a concise list.
 type changeBrief struct {
-	Repo       string        `json:"repo"`
-	Landing    string        `json:"landing"` // its first 12 hex digits
-	Time       time.Time     `json:"time"`
-	Merge      bool          `json:"merge,omitzero"`
-	Title      string        `json:"title,omitempty"` // only with --allow-source
-	People     []personBrief `json:"people"`
-	MergedBy   string        `json:"merged_by,omitempty"` // name
-	Reverts    []string      `json:"reverts,omitzero"`
-	RevertedBy []string      `json:"reverted_by,omitzero"`
+	Repo        string        `json:"repo"`
+	Landing     string        `json:"landing"` // its first 12 hex digits
+	Time        time.Time     `json:"time"`
+	Merge       bool          `json:"merge,omitzero"`
+	Title       string        `json:"title,omitempty"` // only with --allow-source
+	People      []personBrief `json:"people"`
+	PeopleTotal int           `json:"people_total"`
+	MergedBy    string        `json:"merged_by,omitempty"` // name
+	Reverts     []string      `json:"reverts,omitzero"`
+	RevertedBy  []string      `json:"reverted_by,omitzero"`
+}
+
+// changeDetail is one landing in a detailed list: the use case's whole,
+// with its people cut to the answer's rows.
+type changeDetail struct {
+	app.Change
+	PeopleTotal int `json:"people_total"`
 }
 
 // personBrief is one person's part in a change, in a concise list.
@@ -568,16 +863,24 @@ func shortSHAs(shas []string) []string {
 	return out
 }
 
-func changesAnswer(a *app.ChangesAnswer, sc scopeOut, person string, f format) *changesOut {
-	out := &changesOut{head: head{Provenance: a.Provenance}, Scope: sc, Window: a.Window, Person: person,
-		tail: tail{Caveats: a.Caveats}}
+func (s *shaper) changesAnswer(a *app.ChangesAnswer, sc scopeOut, person string) *changesOut {
+	f := s.f
+	out := &changesOut{Scope: sc, Window: a.Window, Person: person, tail: tail{Caveats: a.Caveats}}
 	changes, pg := paginate(a.Changes, f, a.Provenance.RunID)
 	out.Page = pg
+	n := newNamed()
+	for _, c := range changes {
+		n.key(c.RepoKey)
+	}
+	out.head = head{Provenance: f.provenance(a.Provenance, n)}
 	if f.detailed {
-		out.Changes = changes
-		if changes == nil {
-			out.Changes = []app.Change{}
+		detail := []changeDetail{}
+		for _, c := range changes {
+			d := changeDetail{Change: c}
+			d.People, d.PeopleTotal = cut(c.People, f.rows)
+			detail = append(detail, d)
 		}
+		out.Changes = detail
 		return out
 	}
 	brief := []changeBrief{}
@@ -587,7 +890,9 @@ func changesAnswer(a *app.ChangesAnswer, sc scopeOut, person string, f format) *
 		if c.MergedBy != nil {
 			b.MergedBy = c.MergedBy.Name
 		}
-		for _, p := range c.People {
+		people, total := cut(c.People, f.rows)
+		b.PeopleTotal = total
+		for _, p := range people {
 			pb := personBrief{Name: p.Person.Name, Key: p.Person.Key, Bot: p.Person.Bot, AIAssisted: p.AIAssisted}
 			if p.Durable != nil {
 				pb.Durable = &kept{Kept: p.Durable.Num, Added: p.Durable.Den}
@@ -608,10 +913,14 @@ func changesAnswer(a *app.ChangesAnswer, sc scopeOut, person string, f format) *
 
 type explainOut struct {
 	head
-	Metric  any             `json:"metric"` // concise: metricBrief; detailed: report.MetricInfo
-	Subject report.Subject  `json:"subject"`
-	Values  []valueOut      `json:"values"`
-	Changes []report.Change `json:"changes"` // a ranked metric's counted changes for a person, newest last
+	Metric  any            `json:"metric"` // concise: metricBrief; detailed: report.MetricInfo
+	Subject report.Subject `json:"subject"`
+	Values  []valueOut     `json:"values"`
+	// ValuesTotal counts the subject's values of the metric: values holds
+	// those about the whole run and, per kind of scope, the largest groups'
+	// and repositories'.
+	ValuesTotal int             `json:"values_total"`
+	Changes     []report.Change `json:"changes"` // a ranked metric's counted changes for a person, newest last
 	tail
 }
 
@@ -632,9 +941,11 @@ func briefOf(m report.MetricInfo, unit bool) metricBrief {
 	return b
 }
 
-func explainAnswer(e *report.Explain, allowSource bool, f format) *explainOut {
-	out := &explainOut{head: head{Provenance: e.Provenance}, Subject: e.Subject, Values: valuesOf(e.Values),
-		tail: tail{Caveats: e.Caveats}}
+func (s *shaper) explainAnswer(e *report.Explain, allowSource bool) *explainOut {
+	f := s.f
+	out := &explainOut{Subject: e.Subject, tail: tail{Caveats: e.Caveats}}
+	n := newNamed()
+	out.Values, out.ValuesTotal = s.values(e.Values, true, n)
 	if f.detailed {
 		out.Metric = e.Metric
 	} else {
@@ -652,7 +963,9 @@ func explainAnswer(e *report.Explain, allowSource bool, f format) *explainOut {
 			c.Landing = shortSHA(c.Landing)
 		}
 		out.Changes = append(out.Changes, c)
+		n.key(c.RepoKey)
 	}
+	out.head = head{Provenance: f.provenance(e.Provenance, n)}
 	return out
 }
 
@@ -660,17 +973,21 @@ func explainAnswer(e *report.Explain, allowSource bool, f format) *explainOut {
 
 type highlightsOut struct {
 	head
-	Scope   scopeOut              `json:"scope"`
-	Period  report.Interval       `json:"period"`
-	TopTier []app.TopTier         `json:"top_tier"`
-	Lasted  []app.HighlightChange `json:"lasted"`
-	Removed []app.HighlightChange `json:"removed"`
+	Scope  scopeOut        `json:"scope"`
+	Period report.Interval `json:"period"`
+	// TopTier holds the first rows of the tables' top tiers; TopTierTotal
+	// counts them all, one per ranked metric and rank scope.
+	TopTier      []app.TopTier         `json:"top_tier"`
+	TopTierTotal int                   `json:"top_tier_total"`
+	Lasted       []app.HighlightChange `json:"lasted"`
+	Removed      []app.HighlightChange `json:"removed"`
 	tail
 }
 
-func highlightsAnswer(h *app.HighlightsAnswer, sc scopeOut, f format) *highlightsOut {
-	out := &highlightsOut{head: head{Provenance: h.Provenance}, Scope: sc, Period: h.Period, TopTier: h.TopTier,
-		tail: tail{Caveats: h.Caveats}}
+func (s *shaper) highlightsAnswer(h *app.HighlightsAnswer, sc scopeOut) *highlightsOut {
+	f := s.f
+	out := &highlightsOut{Scope: sc, Period: h.Period, tail: tail{Caveats: h.Caveats}}
+	n := newNamed()
 	shorten := func(cs []app.HighlightChange) []app.HighlightChange {
 		var o []app.HighlightChange
 		for _, c := range cs {
@@ -678,13 +995,18 @@ func highlightsAnswer(h *app.HighlightsAnswer, sc scopeOut, f format) *highlight
 				c.Landing = shortSHA(c.Landing)
 			}
 			o = append(o, c)
+			n.key(c.RepoKey)
 		}
 		return o
 	}
 	out.Lasted, out.Removed = shorten(h.Lasted), shorten(h.Removed)
-	for i := range out.TopTier {
-		out.TopTier[i].People, _ = cut(out.TopTier[i].People, f.rows)
+	tiers, total := cut(h.TopTier, f.rows)
+	out.TopTierTotal = total
+	for _, t := range tiers {
+		t.People, _ = cut(t.People, f.rows)
+		out.TopTier = append(out.TopTier, t)
 	}
+	out.head = head{Provenance: f.provenance(h.Provenance, n)}
 	return out
 }
 
@@ -765,20 +1087,36 @@ type diffOut struct {
 	tail
 }
 
-func diffAnswer(d *app.DiffAnswer, f format) *diffOut {
-	out := &diffOut{head: head{Provenance: d.Provenance}, Repo: d.Repo, RepoKey: d.RepoKey, Landing: d.Landing,
-		Time: d.Time, Merge: d.Merge, Title: d.Title, Base: d.Base, Path: d.Path, Patch: d.Patch, Truncated: d.Truncated,
-		tail: tail{Caveats: d.Caveats}}
+func (s *shaper) diffAnswer(d *app.DiffAnswer) *diffOut {
+	f := s.f
+	n := newNamed()
+	n.key(d.RepoKey)
+	out := &diffOut{head: head{Provenance: f.provenance(d.Provenance, n)}, Repo: d.Repo, RepoKey: d.RepoKey,
+		Landing: d.Landing, Time: d.Time, Merge: d.Merge, Title: d.Title, Base: d.Base, Path: d.Path, Patch: d.Patch,
+		Truncated: d.Truncated, tail: tail{Caveats: d.Caveats}}
 	out.Files, out.FilesTotal = cut(d.Files, f.limit)
+	if f.patch > 0 && len(out.Patch) > f.patch {
+		// The patch's JSON escapes made the answer too large: cut it at
+		// the last whole line inside the room the budget leaves.
+		p := out.Patch[:f.patch]
+		if i := strings.LastIndexByte(p, '\n'); i >= 0 {
+			p = p[:i+1]
+		}
+		out.Patch, out.Truncated = p, true
+		out.Caveats = append(slices.Clip(out.Caveats), report.Caveat{Code: "truncated", Message: fmt.Sprintf(
+			"The patch was cut at %d bytes so the answer fits: ask for a path under the change to see the rest of it.", len(p))})
+	}
 	return out
 }
 
 // The identity_candidates tool serves report.Identities as #26 builds it,
-// whole: its shape is #26's, so this server needs no change when the
-// candidates and their evidence land.
+// whole but for its provenance, whose HEADs are cut as every answer's are:
+// its shape is #26's, so this server needs no change when the candidates
+// and their evidence land.
 type identitiesOut struct {
+	Provenance provenanceOut `json:"provenance"` // in place of the report's own
 	*report.Identities
 	Withheld []string `json:"withheld"`
 }
 
-func (o *identitiesOut) provenance() *report.Provenance { return &o.Provenance }
+func (o *identitiesOut) provenance() *report.Provenance { return &o.Provenance.Provenance }

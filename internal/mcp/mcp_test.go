@@ -1,15 +1,21 @@
 package mcp
 
 import (
+	"bufio"
 	"context"
 	"encoding/json/v2"
+	"io"
+	"maps"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -24,26 +30,40 @@ import (
 
 // TestMCPTools asks every tool what an agent would, through the SDK's own
 // client over its in-memory transport, of a facts.db that holds one scan
-// of both fixtures as one platform (testdata/fixture/SPEC.md). It checks
-// the oracle numbers an answer shows, that names resolve as the reports
-// print them and an ambiguous one lists its candidates, and the privacy
-// rules: no email without --allow-emails, no commit subject or diff
-// without --allow-source, and the AI-assisted share only on the --me
-// person's own page. Every answer must fit Claude Code's 25,000-token cap
-// at 4 characters a token.
+// of both fixtures as one platform (testdata/fixture/SPEC.md), and then a
+// second scan that adds a repository whose people have emails of every odd
+// shape. It checks the oracle numbers an answer shows, that names resolve
+// as the reports print them and an ambiguous one lists its candidates,
+// paging, cursors and the size budget, and the privacy rules: no email of
+// the run without --allow-emails, whatever its shape, no commit subject or
+// diff without --allow-source, the AI-assisted share only on the --me
+// person's own page and never for a repository of fewer than three people.
+// Every answer must fit Claude Code's 25,000-token cap at 4 characters a
+// token.
 func TestMCPTools(t *testing.T) {
 	ctx := t.Context()
-	db, git := scanPlatform(t)
+	db, git, platform, mailmap := scanPlatform(t)
+	// Every email of every run in facts.db: no answer may hold one.
+	emails := runEmails(t, db, 1)
+	leak := func(text string) string {
+		lower := strings.ToLower(text)
+		for _, e := range emails {
+			if strings.Contains(lower, e) {
+				return e
+			}
+		}
+		return ""
+	}
 	// The default server: no emails, no source, and the user is Lena.
-	cs := connect(t, Config{Open: openDB(db), Me: "lena@example.com", Version: "test"})
+	cs := connect(t, Config{Open: openDB(db), Me: "lena@example.com", Version: "test"}, 0)
 	ask := func(t *testing.T, tool string, args map[string]any) string {
 		t.Helper()
 		text, isErr := callTool(t, cs, tool, args)
 		if isErr {
 			t.Fatalf("%s(%v) failed: %s", tool, args, text)
 		}
-		if loc := emailPattern.FindStringIndex(text); loc != nil {
-			t.Errorf("%s(%v) holds an email without --allow-emails: %q", tool, args, text[loc[0]:loc[1]])
+		if e := leak(text); e != "" {
+			t.Errorf("%s(%v) holds %q without --allow-emails: %s", tool, args, e, text)
 		}
 		return text
 	}
@@ -53,11 +73,12 @@ func TestMCPTools(t *testing.T) {
 		if !isErr {
 			t.Fatalf("%s(%v) answered, want an error: %s", tool, args, text)
 		}
-		if emailPattern.MatchString(text) {
-			t.Errorf("%s(%v)'s error holds an email: %s", tool, args, text)
+		if e := leak(text); e != "" {
+			t.Errorf("%s(%v)'s error holds %q: %s", tool, args, e, text)
 		}
 		return text
 	}
+	var runOneCursor string // a cursor of run 1, which the second run must refuse
 
 	t.Run("tools", func(t *testing.T) {
 		res, err := cs.ListTools(ctx, nil)
@@ -82,6 +103,8 @@ func TestMCPTools(t *testing.T) {
 	})
 
 	t.Run("overview", func(t *testing.T) {
+		// The whole run is an index: its groups, then its repositories, as
+		// one paged list.
 		var run struct {
 			Overviews []struct {
 				Scope  report.Scope  `json:"scope"`
@@ -93,20 +116,22 @@ func TestMCPTools(t *testing.T) {
 			Page     page     `json:"page"`
 			Withheld []string `json:"withheld"`
 		}
-		decode(t, ask(t, "overview", map[string]any{"limit": 1}), &run)
+		decode(t, ask(t, "overview", map[string]any{"limit": 2}), &run)
 		if len(run.Overviews) != 1 || run.Overviews[0].Scope != (report.Scope{Kind: "group", Key: "platform"}) ||
 			run.Overviews[0].Totals.Repos != 2 {
 			t.Errorf("overviews %+v, want the platform group with its 2 repositories", run.Overviews)
 		}
-		if len(run.Repos) != 1 || run.Repos[0].Name != "fixture" || run.Page.Total != 2 || run.Page.NextCursor == nil {
-			t.Fatalf("first page %+v of %+v, want fixture and a cursor to the second of 2", run.Repos, run.Page)
+		if len(run.Repos) != 1 || run.Repos[0].Name != "fixture" || run.Page.Total != 3 || run.Page.NextCursor == nil {
+			t.Fatalf("first page %+v of %+v, want the group, fixture and a cursor to the third of 3", run.Repos, run.Page)
 		}
 		if !slices.Equal(run.Withheld, []string{"emails", "source"}) {
 			t.Errorf("withheld %v, want emails and source", run.Withheld)
 		}
-		decode(t, ask(t, "overview", map[string]any{"limit": 1, "cursor": *run.Page.NextCursor}), &run)
-		if len(run.Repos) != 1 || run.Repos[0].Name != "sibling" || run.Page.NextCursor != nil {
-			t.Errorf("second page %+v of %+v, want sibling and no cursor", run.Repos, run.Page)
+		runOneCursor = *run.Page.NextCursor
+		run.Overviews, run.Repos = nil, nil
+		decode(t, ask(t, "overview", map[string]any{"limit": 2, "cursor": runOneCursor}), &run)
+		if len(run.Overviews) != 0 || len(run.Repos) != 1 || run.Repos[0].Name != "sibling" || run.Page.NextCursor != nil {
+			t.Errorf("second page %+v %+v of %+v, want sibling alone and no cursor", run.Overviews, run.Repos, run.Page)
 		}
 
 		// The main fixture's card and still-here table (SPEC: still-here
@@ -128,7 +153,7 @@ func TestMCPTools(t *testing.T) {
 			"Ada Example": {10, 3}, "Cara Dev": {9, 2}, "Bob Builder": {7, 1}, "Frank & Sons": {2, 1}, "Gina Split": {2, 1},
 			"Hank Split": {2, 1}, "Dana Dev": {1, 1}, "Erin Editor": {1, 0}, "GitHub Copilot": {3, 1},
 		}
-		if !mapsEqual(got, want) {
+		if !maps.Equal(got, want) {
 			t.Errorf("fixture still-here rows (lines, majority files) %v, want %v", got, want)
 		}
 		if len(r.StillHere.Bots) != 1 || r.StillHere.Bots[0].Name != "GitHub Copilot" {
@@ -141,9 +166,10 @@ func TestMCPTools(t *testing.T) {
 		if l := r.Card.KnowledgeLoss; l == nil || l.Num != 4 || l.Den != 34 {
 			t.Errorf("fixture knowledge_loss %+v, want 4 of 34", l)
 		}
-		if repo.Provenance.RunID != 1 || len(repo.Provenance.Heads) != 1 || len(repo.Provenance.Heads[0].SHA) != 40 ||
-			!slices.Contains(repo.Provenance.Metrics, "surviving@1") {
-			t.Errorf("fixture provenance %+v, want run 1, its HEAD and the metric versions", repo.Provenance)
+		pv := repo.Provenance
+		if pv.RunID != 1 || len(pv.Heads) != 1 || len(pv.Heads[0].SHA) != 40 || pv.HeadsTotal != 1 || len(pv.HeadsSHA256) != 64 ||
+			!slices.Contains(pv.Metrics, "surviving@1") {
+			t.Errorf("fixture provenance %+v, want run 1, its HEAD, the digest and the metric versions", pv)
 		}
 
 		// The sibling's surviving@1 credit, and the platform's durable@1
@@ -153,7 +179,7 @@ func TestMCPTools(t *testing.T) {
 		for _, row := range repo.Repos[0].StillHere.Humans {
 			got[row.Name] = [2]int{row.ProdNonblankLines}
 		}
-		if want := map[string][2]int{"Lena Lead": {37}, "Omar Ops": {36}, "Quinn Squash": {31}, "Pia Pair": {9}, "Uma Legacy": {7}}; !mapsEqual(got, want) {
+		if want := map[string][2]int{"Lena Lead": {37}, "Omar Ops": {36}, "Quinn Squash": {31}, "Pia Pair": {9}, "Uma Legacy": {7}}; !maps.Equal(got, want) {
 			t.Errorf("sibling surviving@1 %v, want %v", got, want)
 		}
 		if b := repo.Repos[0].Card.BotShare; b == nil || b.Num != 0 || b.Den != 120 {
@@ -170,13 +196,13 @@ func TestMCPTools(t *testing.T) {
 		if lena.Name != "Lena Lead" || lena.RankLo != 1 || lena.RankHi != 1 || lena.N != 10 || !near(lena.Estimate, 26.0/30) {
 			t.Errorf("platform durable@1 rank %+v, want Lena Lead 1-1, 26/30, n 10", lena)
 		}
-		if strings.HasPrefix(lena.Email, "p-") == false {
-			t.Errorf("Lena's key %q, want an id in place of her email", lena.Email)
+		if lena.Email != pseudonym("lena@example.com") {
+			t.Errorf("Lena's key %q, want her id in place of her email", lena.Email)
 		}
 
 		text := refused(t, "overview", map[string]any{"scope": "nowhere"})
-		if !strings.Contains(text, "platform") || !strings.Contains(text, "sibling") {
-			t.Errorf("an unknown scope's error does not list the run's scopes: %s", text)
+		if !strings.Contains(text, `"platform"`) || !strings.Contains(text, `"sibling"`) {
+			t.Errorf("an unknown scope's error does not list the run's scopes, quoted: %s", text)
 		}
 	})
 
@@ -208,12 +234,35 @@ func TestMCPTools(t *testing.T) {
 		if slices.ContainsFunc(p.Values, func(v valueOut) bool { return v.Metric == "ai_assisted@1" }) {
 			t.Error("Omar's answer holds his AI-assisted share, which only his own page may show")
 		}
-		if text := refused(t, "person", map[string]any{"name": "Split"}); !strings.Contains(text, "Gina Split") ||
-			!strings.Contains(text, "Hank Split") || !strings.Contains(text, "id p-") {
-			t.Errorf("an ambiguous name's error does not list both candidates with their ids: %s", text)
+		// Names from the repositories are quoted in the server's sentences.
+		if text := refused(t, "person", map[string]any{"name": "Split"}); !strings.Contains(text, `"Gina Split" (id p-`) ||
+			!strings.Contains(text, `"Hank Split" (id p-`) {
+			t.Errorf("an ambiguous name's error does not list both candidates, quoted, with their ids: %s", text)
 		}
-		if text := refused(t, "person", map[string]any{"name": "Lenna Lead"}); !strings.Contains(text, "Lena Lead") {
+		if text := refused(t, "person", map[string]any{"name": "Lenna Lead"}); !strings.Contains(text, `"Lena Lead"`) {
 			t.Errorf("a misspelt name's error does not suggest Lena Lead: %s", text)
+		}
+	})
+
+	// A lead's view of a person and the person's own page differ only by
+	// the person's own AI-assisted share: app.Person and app.Me must not
+	// drift apart (provenance, caveats, ranks and every other value).
+	t.Run("person and own page", func(t *testing.T) {
+		lead := connect(t, Config{Open: openDB(db), Version: "test"}, 0)
+		args := map[string]any{"name": "Lena Lead", "response_format": "detailed"}
+		var own, theirs personOut
+		decode(t, ask(t, "person", args), &own)
+		text, isErr := callTool(t, lead, "person", args)
+		if isErr {
+			t.Fatalf("person(Lena Lead) without --me failed: %s", text)
+		}
+		decode(t, text, &theirs)
+		notAI := func(v valueOut) bool { return v.Metric != "ai_assisted@1" }
+		own.Values = slices.DeleteFunc(own.Values, func(v valueOut) bool { return !notAI(v) })
+		own.Provenance.Metrics = slices.DeleteFunc(own.Provenance.Metrics, func(m string) bool { return m == "ai_assisted@1" })
+		own.OwnPage, own.ValuesTotal, theirs.ValuesTotal = false, 0, 0
+		if !reflect.DeepEqual(own, theirs) {
+			t.Errorf("Lena's own page, without her AI-assisted share,\n%+v\ndiffers from a lead's view of her\n%+v", own, theirs)
 		}
 	})
 
@@ -228,6 +277,13 @@ func TestMCPTools(t *testing.T) {
 			names(r.RecentLanders) != "Bob Builder" {
 			t.Errorf("who_knows(service.py): owners %q, top authors %q, recent landers %q; want Ada; Ada 6, Bob 2; Bob",
 				names(r.MajorityOwners), withLines(r.TopAuthors), names(r.RecentLanders))
+		}
+		// An absolute path inside a scanned clone names its repository.
+		var abs whoKnowsOut
+		decode(t, ask(t, "who_knows", map[string]any{"path": filepath.Join(platform, "fixture", "service.py")}), &abs)
+		if abs.Repo != "fixture" || abs.Path != "service.py" || !reflect.DeepEqual(abs.Repos, w.Repos) {
+			t.Errorf("who_knows(absolute service.py) answered %q in %q with %+v, want the fixture's service.py as above",
+				abs.Path, abs.Repo, abs.Repos)
 		}
 		decode(t, ask(t, "who_knows", map[string]any{"path": "split.py"}), &w)
 		if len(w.Repos) != 1 || names(w.Repos[0].MajorityOwners) != "Gina Split, Hank Split" || len(w.Repos[0].RecentLanders) != 0 {
@@ -286,21 +342,27 @@ func TestMCPTools(t *testing.T) {
 		if len(e.Values) != 1 || e.Values[0].Num != 4 || e.Values[0].Den != 34 {
 			t.Errorf("explain(knowledge_loss, fixture) %+v, want 4 of 34", e.Values)
 		}
+		// A repository of many people shows its AI-assisted share.
+		decode(t, ask(t, "explain", map[string]any{"metric": "ai_assisted", "subject": "sibling", "subject_kind": "repo"}), &e)
+		if len(e.Values) != 1 {
+			t.Errorf("explain(ai_assisted, sibling) %+v, want the sibling's share", e.Values)
+		}
 	})
 
 	t.Run("highlights", func(t *testing.T) {
 		var h highlightsOut
 		decode(t, ask(t, "highlights", map[string]any{"period": "quarter"}), &h)
+		// Lena is the only eligible person in both tables, so first place
+		// singles no one out: each tier is counted, not listed.
 		tiers := map[string]string{}
 		for _, tt := range h.TopTier {
-			var ns []string
-			for _, p := range tt.People {
-				ns = append(ns, p.Name)
-			}
-			tiers[tt.Metric] = strings.Join(ns, ", ")
+			tiers[tt.Metric] = strconv.Itoa(tt.PeopleTotal) + " of " + strconv.Itoa(tt.Of) + ", " + strconv.Itoa(len(tt.People)) + " listed"
 		}
-		if tiers["durable@1"] != "Lena Lead" || tiers["simplifying@1"] != "Lena Lead" {
-			t.Errorf("top tiers %v, want Lena Lead alone for durable@1 and simplifying@1", tiers)
+		if want := map[string]string{"durable@1": "1 of 1, 0 listed", "simplifying@1": "1 of 1, 0 listed"}; !maps.Equal(tiers, want) {
+			t.Errorf("top tiers %v, want %v", tiers, want)
+		}
+		if !slices.ContainsFunc(h.Caveats, func(c report.Caveat) bool { return c.Code == "no-standout" }) {
+			t.Errorf("highlights caveats %v, want no-standout for tiers of everyone eligible", h.Caveats)
 		}
 		if len(h.Removed) < 2 || h.Removed[0].Person.Name != "Lena Lead" || h.Removed[0].Num != 22 ||
 			h.Removed[1].Person.Name != "Omar Ops" || h.Removed[1].Num != 21 {
@@ -319,8 +381,8 @@ func TestMCPTools(t *testing.T) {
 		if isErr {
 			t.Fatalf("identity_candidates failed: %s", text)
 		}
-		if emailPattern.MatchString(text) {
-			t.Errorf("identity_candidates holds an email without --allow-emails: %s", text)
+		if e := leak(text); e != "" {
+			t.Errorf("identity_candidates holds %q without --allow-emails: %s", e, text)
 		}
 		var ids struct {
 			head
@@ -354,10 +416,38 @@ func TestMCPTools(t *testing.T) {
 		}
 	})
 
+	// An answer over the budget is cut to a smaller page, and the cursor
+	// still leads to the rest.
+	t.Run("budget", func(t *testing.T) {
+		// A budget a hundred characters short of the whole answer: room
+		// for one repository's summary, not two.
+		whole := ask(t, "overview", map[string]any{"scope": "platform"})
+		budget := len(whole) - 100
+		small := connect(t, Config{Open: openDB(db), Me: "lena@example.com", Version: "test"}, budget)
+		var o struct {
+			Repos []repoSummary `json:"repos"`
+			Page  page          `json:"page"`
+		}
+		text, isErr := callTool(t, small, "overview", map[string]any{"scope": "platform"})
+		if isErr || len(text) > budget {
+			t.Fatalf("overview(platform) under a %d-character budget: %d characters, error %v: %s", budget, len(text), isErr, text)
+		}
+		decode(t, text, &o)
+		if o.Page.Limit >= overviewLimit || len(o.Repos) != 1 || o.Repos[0].Name != "fixture" || o.Page.NextCursor == nil {
+			t.Fatalf("overview(platform) under the budget: %d repositories, page %+v; want fixture alone on a halved page with a cursor",
+				len(o.Repos), o.Page)
+		}
+		text, _ = callTool(t, small, "overview", map[string]any{"scope": "platform", "cursor": *o.Page.NextCursor})
+		decode(t, text, &o)
+		if len(o.Repos) != 1 || o.Repos[0].Name != "sibling" || o.Page.NextCursor != nil {
+			t.Errorf("the next page under the budget %+v, page %+v; want sibling and the end", o.Repos, o.Page)
+		}
+	})
+
 	// A server the user lets show emails and source: the diff tool runs
 	// git, and subjects and emails reach the agent.
 	t.Run("allow source and emails", func(t *testing.T) {
-		ss := connect(t, Config{Open: openDB(db), Git: git, AllowSource: true, AllowEmails: true, Version: "test"})
+		ss := connect(t, Config{Open: openDB(db), Git: git, AllowSource: true, AllowEmails: true, Version: "test"}, 0)
 		var c struct {
 			Changes []changeBrief `json:"changes"`
 		}
@@ -379,28 +469,317 @@ func TestMCPTools(t *testing.T) {
 			t.Errorf("diff of S1: files %+v, patch %q; want legacy_a.py (prod, 22 removed) in the patch", d.Files, d.Patch)
 		}
 	})
+
+	// A flag the agent cannot change, set wrong, is an error that says what
+	// the user does about it.
+	t.Run("flags", func(t *testing.T) {
+		pinned := connect(t, Config{Open: openDB(db), RunID: 99, Version: "test"}, 0)
+		if text, isErr := callTool(t, pinned, "overview", nil); !isErr || !strings.Contains(text, "pinned to run 99 (--run)") ||
+			!strings.Contains(text, "the latest scan is run 1") {
+			t.Errorf("a server pinned to a run facts.db lacks answered %q, want what the user restarts it with", text)
+		}
+		alias := connect(t, Config{Open: openDB(db), Me: "ada@other.example", Version: "test"}, 0)
+		if text, isErr := callTool(t, alias, "person", nil); !isErr || !strings.Contains(text, "canonical email") {
+			t.Errorf("person() for a --me no one has answered %q, want that --me must be the canonical email", text)
+		}
+		var p personOut
+		text, _ := callTool(t, alias, "person", map[string]any{"name": "Ada Example"})
+		decode(t, text, &p)
+		if p.OwnPage || !slices.ContainsFunc(p.Caveats, func(c report.Caveat) bool { return c.Code == "me-not-in-run" }) {
+			t.Errorf("person(Ada Example) for a --me no one has: own page %v, caveats %v; want a me-not-in-run caveat",
+				p.OwnPage, p.Caveats)
+		}
+	})
+
+	// A bug in one answer is that call's error, as net/http keeps serving
+	// after a handler panics: the next call is answered.
+	t.Run("panic", func(t *testing.T) {
+		s := newServer(Config{Version: "test"})
+		res := s.answer(ctx, "boom", format{}, "", func(context.Context, *call) (render, error) { panic("boom") })
+		if text := res.Content[0].(*sdk.TextContent).Text; !res.IsError || !strings.Contains(text, "stillhere's bug") {
+			t.Errorf("a panicking call answered %q, want an error that says it is stillhere's bug", text)
+		}
+		if res := s.metrics(ctx, metricsIn{}); res.IsError {
+			t.Errorf("the call after a panic failed: %v", res.Content)
+		}
+	})
+
+	// One line on stdin that is not a message is answered as JSON-RPC
+	// asks, and the session goes on.
+	t.Run("stdio", func(t *testing.T) {
+		inR, inW := io.Pipe()
+		outR, outW := io.Pipe()
+		done := make(chan error, 1)
+		go func() {
+			done <- Serve(ctx, Config{Version: "test"}, inR, outW)
+			_ = outW.Close()
+		}()
+		lines := bufio.NewScanner(outR)
+		lines.Buffer(nil, 1<<20)
+		send := func(line string) {
+			t.Helper()
+			if _, err := io.WriteString(inW, line+"\n"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		next := func() map[string]any {
+			t.Helper()
+			if !lines.Scan() {
+				t.Fatalf("the server wrote nothing more: %v", lines.Err())
+			}
+			var m map[string]any
+			decode(t, lines.Text(), &m)
+			return m
+		}
+		send(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"test","version":"0"}}}`)
+		if m := next(); m["id"] != 1.0 || m["result"] == nil {
+			t.Fatalf("initialize answered %v", m)
+		}
+		send(`{"jsonrpc":"2.0","method":"notifications/initialized"}`)
+		send(`this is not json`)
+		if m := next(); m["id"] != nil || m["error"] == nil || m["error"].(map[string]any)["code"] != -32700.0 {
+			t.Errorf("a line that is not JSON was answered %v, want a parse error (-32700) with a null id", m)
+		}
+		send(`{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"metrics","arguments":{}}}`)
+		if m := next(); m["id"] != 2.0 || m["result"] == nil {
+			t.Errorf("the call after the stray line was answered %v, want metrics' answer", m)
+		}
+		_ = inW.Close()
+		if err := <-done; err != nil {
+			t.Errorf("Serve ended with %v after stdin closed, want nil", err)
+		}
+	})
+
+	// A second scan adds two repositories: one whose people have emails of
+	// every odd shape, a version pin in a path and an email in a commit
+	// subject, and one of a single person.
+	odd, solo := filepath.Join(platform, "odd"), filepath.Join(platform, "solo")
+	buildRepo(t, odd, []testCommit{
+		{"dev", "dev@build-box", "2026-03-02", "init by dev", "src/app.py", numbered("dev", 20)},
+		{"Ip Literal", "ip@[10.0.0.1]", "2026-03-05", "feat: ip", "src/ip.py", numbered("ip", 12)},
+		{"Jürgen Müller", "jürgen@firma.de", "2026-03-09", "feat: jürgen", "src/jurgen.py", numbered("jurgen", 15)},
+		{"Root", "root@localhost", "2026-04-01", "feat: root", "src/root.py", numbered("root", 9)},
+		{"Colon Person", "colon@corp.example", "2026-08-20", "feat: g by colon@corp.example: fixed", "src/g.py", numbered("g", 8)},
+		{"Pat O'Brien", "o'brien@corp.example", "2026-08-25", "pins: lodash@4.17.21 from bar@v1.2.3",
+			"src/pins/lodash@4.17.21/index.py", "pin = 'github.com/foo/bar@v1.2.3'\n" + numbered("pins", 5)},
+		// Every byte of it is escaped in JSON, so its patch is twice as long
+		// in an answer as in the file.
+		{"dev", "dev@build-box", "2026-09-10", "feat: quotes", "src/quotes.py", strings.Repeat(`q = "\"\"\"\"\"\"\"\"\"\"\"\""`+"\n", 1000)},
+	})
+	buildRepo(t, solo, []testCommit{
+		{"Solo Dev", "solo@corp.example", "2026-05-02", "init", "main.py", numbered("solo", 10)},
+		{"Solo Dev", "solo@corp.example", "2026-08-02", "feat: more", "more.py", numbered("more", 10)},
+	})
+	scan(t, db, mailmap, platform)
+	emails = append(emails, runEmails(t, db, 2)...)
+	for _, e := range []string{"dev@build-box", "ip@[10.0.0.1]", "jürgen@firma.de", "root@localhost", "o'brien@corp.example"} {
+		if !slices.Contains(emails, e) {
+			t.Fatalf("run 2 does not know %s: its people are %v", e, emails)
+		}
+	}
+
+	t.Run("second run", func(t *testing.T) {
+		// The first answer that reads the new run says so, and a cursor of
+		// the old run is refused rather than paging another list.
+		var o struct {
+			head
+			tail
+		}
+		decode(t, ask(t, "overview", nil), &o)
+		if o.Provenance.RunID != 2 || !slices.ContainsFunc(o.Caveats, func(c report.Caveat) bool { return c.Code == "run-changed" }) {
+			t.Errorf("the first answer of run 2: run %d, caveats %v; want a run-changed caveat", o.Provenance.RunID, o.Caveats)
+		}
+		if text := refused(t, "overview", map[string]any{"limit": 2, "cursor": runOneCursor}); !strings.Contains(text, "belongs to run 1") {
+			t.Errorf("a cursor of run 1 was refused with %q, want one that names its run", text)
+		}
+
+		// Every odd email is withheld (ask checks every answer), and each
+		// id is the one person resolves.
+		var repo struct {
+			Repos []report.Repo `json:"repos"`
+		}
+		decode(t, ask(t, "overview", map[string]any{"scope": "odd"}), &repo)
+		if len(repo.Repos) != 1 || len(repo.Repos[0].Card.MadeOf) == 0 {
+			t.Fatalf("overview(odd) %+v, want its card", repo.Repos)
+		}
+		for _, a := range repo.Repos[0].Card.MadeOf {
+			var p personOut
+			decode(t, ask(t, "person", map[string]any{"name": a.Email}), &p)
+			if p.Person.Name != a.Name || p.Person.Key != a.Email {
+				t.Errorf("person(%s), the id overview gave %s, is %+v", a.Email, a.Name, p.Person)
+			}
+		}
+		for _, args := range []map[string]any{
+			{"scope": "odd", "response_format": "detailed"}, {"scope": "platform", "rank": "durable"},
+		} {
+			ask(t, "overview", args)
+		}
+		for _, name := range []string{"dev", "Ip Literal", "Jürgen Müller", "Root", "Pat O'Brien"} {
+			ask(t, "person", map[string]any{"name": name, "response_format": "detailed"})
+			ask(t, "explain", map[string]any{"metric": "surviving", "subject": name, "response_format": "detailed"})
+		}
+		ask(t, "changes", map[string]any{"scope": "odd", "since": "365d", "response_format": "detailed"})
+		ask(t, "highlights", map[string]any{"period": "quarter", "response_format": "detailed"})
+		ask(t, "who_knows", map[string]any{"path": "src", "repo": "odd", "response_format": "detailed"})
+		if text, isErr := callTool(t, cs, "identity_candidates", nil); !isErr || !strings.Contains(text, domain.ErrNotImplemented.Error()) {
+			// Once #26 lands: its addresses are emails too.
+			if isErr {
+				t.Errorf("identity_candidates failed: %s", text)
+			}
+			if e := leak(text); e != "" {
+				t.Errorf("identity_candidates holds %q without --allow-emails: %s", e, text)
+			}
+		}
+
+		// A path with a version pin in it is the repository's path, which
+		// the agent can pass back.
+		const pin = "src/pins/lodash@4.17.21/index.py"
+		var w whoKnowsOut
+		decode(t, ask(t, "who_knows", map[string]any{"path": pin, "repo": "odd"}), &w)
+		if w.Path != pin || len(w.Repos) != 1 || names(w.Repos[0].TopAuthors) != "Pat O'Brien" {
+			t.Errorf("who_knows(%s) answered %q with %+v, want the path as it is and Pat O'Brien", pin, w.Path, w.Repos)
+		}
+		decode(t, ask(t, "who_knows", map[string]any{"path": w.Path, "repo": "odd"}), &w)
+		if w.Path != pin || len(w.Repos) != 1 {
+			t.Errorf("who_knows of the path an answer gave, %q, answered %q", pin, w.Path)
+		}
+
+		// The share of a repository one person landed in is that person's
+		// own: it does not leave (ADR 0007).
+		var s struct {
+			Repos []report.Repo `json:"repos"`
+			tail
+		}
+		decode(t, ask(t, "overview", map[string]any{"scope": "solo"}), &s)
+		if len(s.Repos) != 1 || s.Repos[0].Card.AIAssisted != nil ||
+			!slices.ContainsFunc(s.Caveats, func(c report.Caveat) bool { return c.Code == "ai-few-people" }) {
+			t.Errorf("overview(solo) shows the share %+v with caveats %v, want it withheld and said so", s.Repos[0].Card.AIAssisted, s.Caveats)
+		}
+		if text := refused(t, "explain", map[string]any{"metric": "ai_assisted", "subject": "solo", "subject_kind": "repo"}); !strings.Contains(text, "withheld") {
+			t.Errorf("explain(ai_assisted, solo) was refused with %q, want the share withheld", text)
+		}
+
+		// With source allowed and emails not: a subject keeps its version
+		// pins and loses its email, and a diff keeps its paths and code.
+		ss := connect(t, Config{Open: openDB(db), Git: git, AllowSource: true, Version: "test"}, 0)
+		var c struct {
+			Changes []changeBrief `json:"changes"`
+		}
+		text, _ := callTool(t, ss, "changes", map[string]any{"scope": "odd", "since": "365d"})
+		if e := leak(text); e != "" {
+			t.Errorf("changes with source holds %q: %s", e, text)
+		}
+		decode(t, text, &c)
+		titles := map[string]string{}
+		for _, ch := range c.Changes {
+			titles[ch.Title] = ch.Landing
+		}
+		pinned, ok := titles["pins: lodash@4.17.21 from bar@v1.2.3"]
+		if _, colon := titles["feat: g by "+pseudonym("colon@corp.example")+": fixed"]; !ok || !colon {
+			t.Errorf("subjects %v, want the pins one whole and colon's email as its id", slices.Sorted(maps.Keys(titles)))
+		}
+		var d diffOut
+		text, isErr := callTool(t, ss, "diff", map[string]any{"change": pinned})
+		if isErr {
+			t.Fatalf("diff(%s) failed: %s", pinned, text)
+		}
+		decode(t, text, &d)
+		if len(d.Files) != 1 || d.Files[0].Path != pin || !strings.Contains(d.Patch, "+++ b/"+pin) ||
+			!strings.Contains(d.Patch, "github.com/foo/bar@v1.2.3") {
+			t.Errorf("diff of the pins change: files %+v, patch %q; want the path and the code as they are", d.Files, d.Patch)
+		}
+		// A patch whose JSON escapes put the answer over the budget is cut
+		// further, on a line, and the answer says so.
+		d = diffOut{}
+		text, isErr = callTool(t, ss, "diff", map[string]any{"change": titles["feat: quotes"]})
+		if isErr {
+			t.Fatalf("diff of the quotes change failed: %s", text)
+		}
+		decode(t, text, &d)
+		if !d.Truncated || len(d.Patch) >= 24000 || !strings.HasSuffix(d.Patch, "\n") ||
+			!slices.ContainsFunc(d.Caveats, func(c report.Caveat) bool { return strings.Contains(c.Message, "so the answer fits") }) {
+			t.Errorf("diff of the quotes change: %d bytes of patch, truncated %v, caveats %v; want it cut on a line to fit",
+				len(d.Patch), d.Truncated, d.Caveats)
+		}
+	})
+
+	// The egress filter, case by case: an email the run does not know is
+	// withheld by where it is (a member named email, a person's key) or by
+	// how it looks in free text, and nothing else that has an @ changes.
+	t.Run("egress", func(t *testing.T) {
+		type doc struct {
+			Rows    []report.StillHereRow `json:"rows"`
+			Subject report.Subject        `json:"subject"`
+			Scope   report.Scope          `json:"scope"`
+			Path    string                `json:"path"`
+			Texts   []string              `json:"texts"`
+		}
+		in := doc{
+			Rows:    []report.StillHereRow{{Email: "who@intranet", Name: "Who"}},
+			Subject: report.Subject{Kind: domain.SubjectPerson, Key: "who@[192.168.0.1]"},
+			Scope:   report.Scope{Kind: domain.ScopeRepo, Key: "git@github.com:o/r.git"},
+			Path:    "deps/bob@corp.example/x.py",
+			Texts: []string{
+				"mail 'bob@corp.example' or Alice@Corp.Example.",
+				"feat: g by colon@corp.example: fixed",
+				"lodash@4.17.21, actions/setup-go@v5.0.1, durable@1, x@latest and github.com/foo/bar@v1.2.3",
+				"git@github.com:o/r.git and jürgen@firma.de",
+			},
+		}
+		want := doc{
+			Rows:    []report.StillHereRow{{Email: pseudonym("who@intranet"), Name: "Who"}},
+			Subject: report.Subject{Kind: domain.SubjectPerson, Key: pseudonym("who@[192.168.0.1]")},
+			Scope:   in.Scope,
+			Path:    in.Path,
+			Texts: []string{
+				"mail '" + pseudonym("bob@corp.example") + "' or " + pseudonym("alice@corp.example") + ".",
+				"feat: g by " + pseudonym("colon@corp.example") + ": fixed",
+				in.Texts[2],
+				"git@github.com:o/r.git and " + pseudonym("jürgen@firma.de"),
+			},
+		}
+		b, err := encode(in, newWithholder(nil))
+		if err != nil {
+			t.Fatal(err)
+		}
+		w, err := encode(want, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(b) != string(w) {
+			t.Errorf("the egress filter gave\n%s\nwant\n%s", b, w)
+		}
+	})
 }
 
 // scanPlatform builds both fixtures in one directory, a platform of two
-// repositories, and records one scan of it in a new facts.db through
-// app.Scan, with the adapters internal/cli builds: a gitcli.Runner with
-// both fixtures' mailmap lines, the packaged policy and a sqlite.Store. It
-// returns the database and the runner.
-func scanPlatform(t *testing.T) (string, *gitcli.Runner) {
+// repositories, and records one scan of it in a new facts.db. It returns
+// the database, the runner, the platform's directory and the mailmap.
+func scanPlatform(t *testing.T) (db string, git *gitcli.Runner, platform, mailmap string) {
 	t.Helper()
 	ctx := t.Context()
 	root := t.TempDir()
-	platform := filepath.Join(root, "platform")
+	platform = filepath.Join(root, "platform")
 	if err := fixture.BuildContext(ctx, filepath.Join(platform, "fixture")); err != nil {
 		t.Fatal(err)
 	}
 	if err := fixture.BuildSiblingContext(ctx, filepath.Join(platform, "sibling")); err != nil {
 		t.Fatal(err)
 	}
-	mailmap := filepath.Join(root, "mailmap")
+	mailmap = filepath.Join(root, "mailmap")
 	if err := os.WriteFile(mailmap, []byte(fixture.MailmapText+fixture.SiblingMailmapText), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	db = filepath.Join(root, "facts.db")
+	return db, scan(t, db, mailmap, platform), platform, mailmap
+}
+
+// scan records one scan of platform in db through app.Scan, with the
+// adapters internal/cli builds: a gitcli.Runner with the mailmap, the
+// packaged policy and a sqlite.Store. It returns the runner.
+func scan(t *testing.T, db, mailmap, platform string) *gitcli.Runner {
+	t.Helper()
+	ctx := t.Context()
 	git, err := gitcli.New(ctx, gitcli.Config{MailmapFile: mailmap})
 	if err != nil {
 		t.Fatal(err)
@@ -409,7 +788,6 @@ func scanPlatform(t *testing.T) (string, *gitcli.Runner) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	db := filepath.Join(root, "facts.db")
 	store, err := sqlite.Open(ctx, db)
 	if err != nil {
 		t.Fatal(err)
@@ -423,7 +801,94 @@ func scanPlatform(t *testing.T) (string, *gitcli.Runner) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return db, git
+	return git
+}
+
+// runEmails returns every email one run of db knows, as app.RunNames
+// reads them from the run: what no answer may hold without --allow-emails.
+func runEmails(t *testing.T, db string, run int64) []string {
+	t.Helper()
+	st, err := sqlite.OpenReadOnly(t.Context(), db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := st.Close(); err != nil {
+			t.Error(err)
+		}
+	}()
+	n, err := app.RunNames(t.Context(), app.Deps{Store: st}, app.NamesRequest{RunID: run})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []string
+	for _, p := range n.People {
+		if strings.Contains(p.Key, "@") && !strings.HasPrefix(p.Key, "@") {
+			out = append(out, p.Key)
+		}
+	}
+	return out
+}
+
+// testCommit is one commit of a repository buildRepo makes: one file.
+type testCommit struct {
+	name, email, day, subject, path, content string
+}
+
+// buildRepo makes a git repository in dir from commits, with git run as
+// internal/fixture runs it: without the machine's global and system
+// configuration, the installation's template, the per-user ignore and
+// attribute files and any inherited GIT_ variable, so the history is the
+// same on every machine. Each commit lands at noon UTC on its day.
+func buildRepo(t *testing.T, dir string, commits []testCommit) {
+	t.Helper()
+	var env []string
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "GIT_") {
+			env = append(env, kv)
+		}
+	}
+	env = append(env, "GIT_CONFIG_GLOBAL=/dev/null", "GIT_CONFIG_NOSYSTEM=1", "GIT_ATTR_NOSYSTEM=1")
+	git := func(who []string, args ...string) {
+		t.Helper()
+		cmd := exec.CommandContext(t.Context(), "git",
+			append([]string{"-c", "core.excludesFile=/dev/null", "-c", "core.attributesFile=/dev/null"}, args...)...)
+		cmd.Dir, cmd.Env = dir, append(slices.Clone(env), who...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	git(nil, "init", "--quiet", "--template=", "--initial-branch=main", "--object-format=sha1")
+	for _, c := range commits {
+		when, err := time.Parse(time.DateOnly, c.day)
+		if err != nil {
+			t.Fatal(err)
+		}
+		date := strconv.FormatInt(when.Add(12*time.Hour).Unix(), 10) + " +0000"
+		full := filepath.Join(dir, filepath.FromSlash(c.path))
+		if err := os.MkdirAll(filepath.Dir(full), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(c.content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		git(nil, "add", "--", c.path)
+		git([]string{"GIT_AUTHOR_NAME=" + c.name, "GIT_AUTHOR_EMAIL=" + c.email, "GIT_AUTHOR_DATE=" + date,
+			"GIT_COMMITTER_NAME=" + c.name, "GIT_COMMITTER_EMAIL=" + c.email, "GIT_COMMITTER_DATE=" + date},
+			"commit", "--quiet", "--message", c.subject)
+	}
+}
+
+// numbered returns n distinct non-blank lines, as the fixture's files are.
+func numbered(name string, n int) string {
+	var b strings.Builder
+	for i := 1; i <= n; i++ {
+		b.WriteString(name + "_" + strconv.Itoa(i) + " = " + strconv.Itoa(i) + "\n")
+	}
+	return b.String()
 }
 
 // openDB opens db as cli's mcp command does: read-only.
@@ -438,11 +903,15 @@ func openDB(db string) func(context.Context) (domain.FactStore, error) {
 }
 
 // connect serves cfg on one end of an in-memory transport and returns an
-// SDK client session on the other.
-func connect(t *testing.T, cfg Config) *sdk.ClientSession {
+// SDK client session on the other. A budget other than 0 replaces the
+// server's answer budget.
+func connect(t *testing.T, cfg Config, budget int) *sdk.ClientSession {
 	t.Helper()
 	ctx := t.Context()
 	s := newServer(cfg)
+	if budget != 0 {
+		s.budget = budget
+	}
 	st, ct := sdk.NewInMemoryTransports()
 	ss, err := s.mcpServer().Connect(ctx, st, nil)
 	if err != nil {
@@ -490,18 +959,6 @@ func decode(t *testing.T, text string, v any) {
 }
 
 func near(a, b float64) bool { return math.Abs(a-b) < 1e-9 }
-
-func mapsEqual(a, b map[string][2]int) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for k, v := range a {
-		if b[k] != v {
-			return false
-		}
-	}
-	return true
-}
 
 // names lists knowers by name.
 func names(ks []report.Knower) string {

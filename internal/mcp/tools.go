@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -68,7 +69,7 @@ type common struct {
 func (c common) format(limit, rows, detailedRows int) (format, int64, error) {
 	f := format{detailed: c.ResponseFormat == formatDetailed, limit: limit, rows: rows}
 	if f.detailed {
-		f.rows = detailedRows
+		f.rows, f.allHeads = detailedRows, true
 	}
 	if c.Limit > 0 {
 		f.limit = min(c.Limit, maxLimit)
@@ -152,7 +153,8 @@ func (s *server) addTools(srv *sdk.Server) {
 		s.explain)
 	tool(srv, "highlights", "Highlights for recognition",
 		"Highlights of a period, for recognition: per ranked metric the top tier, everyone whose 95% rank interval reaches "+
-			"first place (they are not ordered among themselves); the cohort changes whose lines lasted the most (durable@1, "+
+			"first place (not ordered among themselves), counted, and named only when they are at most a third of the "+
+			"table, since otherwise no one stands out; the cohort changes whose lines lasted the most (durable@1, "+
 			"changes 90 to 365 days old, whatever the period); and the period's largest removals of prod lines that were not "+
 			"reverted (simplifying@1). Rule-based picks from the metrics, never a score of a person."+untrusted,
 		schema(nil,
@@ -187,15 +189,30 @@ func (s *server) addTools(srv *sdk.Server) {
 		s.diff)
 }
 
-// Default page and table sizes: items per page, then rows per table in
+// Default page and table sizes: items per page, then rows per list in
 // concise and in detailed answers.
 const (
 	overviewLimit, overviewRows, overviewDetailedRows = 20, 10, 50
+	personRows, personDetailedRows                    = 10, 50
 	whoKnowsLimit, whoKnowsRows, whoKnowsDetailedRows = 10, 5, 25
-	changesLimit                                      = 20
-	explainLimit                                      = 25
+	changesLimit, changesRows, changesDetailedRows    = 20, 10, 50
+	explainLimit, explainRows, explainDetailedRows    = 25, 10, 50
 	highlightRows, highlightDetailedRows              = 10, 50
 	diffFiles                                         = 200
+)
+
+// What each tool's agent can ask for instead when even the smallest answer
+// is over the budget: the tool's own arguments.
+const (
+	narrowOverview   = "a narrower scope: a group, or one repository"
+	narrowPerson     = "explain for one metric of theirs"
+	narrowWhoKnows   = "a longer path, or repo for one repository"
+	narrowChanges    = "a narrower scope, a later since, or a person"
+	narrowExplain    = "subject_kind repo or group, or a narrower subject"
+	narrowHighlights = "a narrower scope: a group, or one repository"
+	narrowIdentities = "a narrower scope: a group, or one repository"
+	narrowMetrics    = "metric, for one definition"
+	narrowDiff       = "a smaller max_chars, or path for part of the change"
 )
 
 type overviewIn struct {
@@ -207,9 +224,9 @@ type overviewIn struct {
 func (s *server) overview(ctx context.Context, in overviewIn) *sdk.CallToolResult {
 	f, cursorRun, err := in.format(overviewLimit, overviewRows, overviewDetailedRows)
 	if err != nil {
-		return s.toolError(err)
+		return s.toolError(err, nil)
 	}
-	return s.answer(ctx, "overview", f, func(ctx context.Context, c *call) (render, error) {
+	return s.answer(ctx, "overview", f, narrowOverview, func(ctx context.Context, c *call) (render, error) {
 		r, err := c.resolver(ctx)
 		if err != nil {
 			return nil, err
@@ -243,7 +260,7 @@ func (s *server) overview(ctx context.Context, in overviewIn) *sdk.CallToolResul
 			a.Ranks = nil
 		}
 		so := scopeOf(sc, r.scopeName(sc))
-		return func(f format) (any, error) { return overviewAnswer(a, so, f), nil }, nil
+		return func(sh *shaper) (any, error) { return sh.overviewAnswer(a, so), nil }, nil
 	})
 }
 
@@ -253,8 +270,8 @@ type personIn struct {
 }
 
 func (s *server) person(ctx context.Context, in personIn) *sdk.CallToolResult {
-	f, _, _ := common{ResponseFormat: in.ResponseFormat}.format(0, 0, 0)
-	return s.answer(ctx, "person", f, func(ctx context.Context, c *call) (render, error) {
+	f, _, _ := common{ResponseFormat: in.ResponseFormat}.format(0, personRows, personDetailedRows)
+	return s.answer(ctx, "person", f, narrowPerson, func(ctx context.Context, c *call) (render, error) {
 		p, caveat, err := s.whom(ctx, c, in.Name)
 		if err != nil {
 			return nil, err
@@ -273,7 +290,7 @@ func (s *server) person(ctx context.Context, in personIn) *sdk.CallToolResult {
 			me, err = app.Person(ctx, d, app.PersonRequest{RunID: c.run(), Email: p.Key})
 		}
 		if errors.Is(err, domain.ErrNotFound) {
-			return nil, notFoundf("%s is in run %d as an author or a co-author, but holds no value: none of their changes "+
+			return nil, notFoundf("%q is in run %d as an author or a co-author, but holds no value: none of their changes "+
 				"left a surviving prod line or landed in a window a metric reads.", p.Name, c.run())
 		}
 		if err != nil {
@@ -282,7 +299,10 @@ func (s *server) person(ctx context.Context, in personIn) *sdk.CallToolResult {
 		if caveat != nil {
 			me.Caveats = append(me.Caveats, *caveat)
 		}
-		return func(f format) (any, error) { return personAnswer(me, p, own, f), nil }, nil
+		if cv, ok := s.meUnknown(c); ok {
+			me.Caveats = append(me.Caveats, cv)
+		}
+		return func(sh *shaper) (any, error) { return sh.personAnswer(me, p, own), nil }, nil
 	})
 }
 
@@ -293,14 +313,34 @@ func (s *server) whom(ctx context.Context, c *call, name string) (app.NamedPerso
 	if err != nil {
 		return app.NamedPerson{}, nil, err
 	}
-	if strings.TrimSpace(name) == "" {
-		if s.cfg.Me == "" {
-			return app.NamedPerson{}, nil, &domain.UsageError{Msg: "name a person: the server runs without --me, so an " +
-				"empty name names no one (the user can restart it with stillhere mcp --me EMAIL)"}
-		}
-		name = s.cfg.Me
+	if strings.TrimSpace(name) != "" {
+		return r.person(name)
 	}
-	return r.person(name)
+	if s.cfg.Me == "" {
+		return app.NamedPerson{}, nil, &domain.UsageError{Msg: "name a person: the server runs without --me, so an " +
+			"empty name names no one (the user can restart it with stillhere mcp --me EMAIL)"}
+	}
+	p, caveat, err := r.person(s.cfg.Me)
+	if errors.Is(err, domain.ErrNotFound) {
+		return app.NamedPerson{}, nil, &domain.UsageError{Msg: fmt.Sprintf("the user this server runs for (--me) is no "+
+			"one in run %d: --me must be their canonical email, the one the reports key them by after .mailmap, not "+
+			"another address of theirs. Ask the user to restart stillhere mcp with --me set to that email; meanwhile, "+
+			"pass name, their display name (their answer is then not their own page).", c.run())}
+	}
+	return p, caveat, err
+}
+
+// meUnknown is the caveat of a person answer when the user the server runs
+// for (--me) is no one in the run: no answer is then their own page.
+func (s *server) meUnknown(c *call) (report.Caveat, bool) {
+	if s.cfg.Me == "" || c.names == nil || slices.ContainsFunc(c.names.People, func(p app.NamedPerson) bool {
+		return p.Key == s.cfg.Me
+	}) {
+		return report.Caveat{}, false
+	}
+	return report.Caveat{Code: "me-not-in-run", Message: fmt.Sprintf("The user this server runs for (--me) is no one in "+
+		"run %d, so no answer is their own page and own_page is false for everyone: --me must be their canonical email "+
+		"after .mailmap. The user can restart stillhere mcp with it.", c.run())}, true
 }
 
 type whoKnowsIn struct {
@@ -312,9 +352,9 @@ type whoKnowsIn struct {
 func (s *server) whoKnows(ctx context.Context, in whoKnowsIn) *sdk.CallToolResult {
 	f, cursorRun, err := in.format(whoKnowsLimit, whoKnowsRows, whoKnowsDetailedRows)
 	if err != nil {
-		return s.toolError(err)
+		return s.toolError(err, nil)
 	}
-	return s.answer(ctx, "who_knows", f, func(ctx context.Context, c *call) (render, error) {
+	return s.answer(ctx, "who_knows", f, narrowWhoKnows, func(ctx context.Context, c *call) (render, error) {
 		r, err := c.resolver(ctx)
 		if err != nil {
 			return nil, err
@@ -332,10 +372,11 @@ func (s *server) whoKnows(ctx context.Context, in whoKnowsIn) *sdk.CallToolResul
 			inside, rel, ok := r.within(path)
 			switch {
 			case !ok:
-				return nil, &domain.UsageError{Msg: fmt.Sprintf("%s is inside no repository of run %d as the scan read it: "+
+				return nil, &domain.UsageError{Msg: fmt.Sprintf("%q is inside no repository of run %d as the scan read it: "+
 					"pass a repo-relative path and the repository's name as repo", path, c.run())}
 			case repo.Key != "" && repo.Key != inside.Key:
-				return nil, &domain.UsageError{Msg: fmt.Sprintf("%s is inside repository %s, not %s", path, inside.Name, repo.Name)}
+				return nil, &domain.UsageError{Msg: fmt.Sprintf("%q is inside repository %q, not %q",
+					path, inside.Name, repo.Name)}
 			}
 			repo, path = inside, rel
 		}
@@ -350,7 +391,7 @@ func (s *server) whoKnows(ctx context.Context, in whoKnowsIn) *sdk.CallToolResul
 		if err := checkCursor(cursorRun, w.Provenance.RunID); err != nil {
 			return nil, err
 		}
-		return func(f format) (any, error) { return whoKnowsAnswer(w, repo.Name, f), nil }, nil
+		return func(sh *shaper) (any, error) { return sh.whoKnowsAnswer(w, repo.Name), nil }, nil
 	})
 }
 
@@ -362,11 +403,11 @@ type changesIn struct {
 }
 
 func (s *server) changes(ctx context.Context, in changesIn) *sdk.CallToolResult {
-	f, cursorRun, err := in.format(changesLimit, 0, 0)
+	f, cursorRun, err := in.format(changesLimit, changesRows, changesDetailedRows)
 	if err != nil {
-		return s.toolError(err)
+		return s.toolError(err, nil)
 	}
-	return s.answer(ctx, "changes", f, func(ctx context.Context, c *call) (render, error) {
+	return s.answer(ctx, "changes", f, narrowChanges, func(ctx context.Context, c *call) (render, error) {
 		r, err := c.resolver(ctx)
 		if err != nil {
 			return nil, err
@@ -404,7 +445,7 @@ func (s *server) changes(ctx context.Context, in changesIn) *sdk.CallToolResult 
 			a.Caveats = append(a.Caveats, *caveat)
 		}
 		so := scopeOf(sc, r.scopeName(sc))
-		return func(f format) (any, error) { return changesAnswer(a, so, who, f), nil }, nil
+		return func(sh *shaper) (any, error) { return sh.changesAnswer(a, so, who), nil }, nil
 	})
 }
 
@@ -439,11 +480,11 @@ type explainIn struct {
 }
 
 func (s *server) explain(ctx context.Context, in explainIn) *sdk.CallToolResult {
-	f, cursorRun, err := in.format(explainLimit, 0, 0)
+	f, cursorRun, err := in.format(explainLimit, explainRows, explainDetailedRows)
 	if err != nil {
-		return s.toolError(err)
+		return s.toolError(err, nil)
 	}
-	return s.answer(ctx, "explain", f, func(ctx context.Context, c *call) (render, error) {
+	return s.answer(ctx, "explain", f, narrowExplain, func(ctx context.Context, c *call) (render, error) {
 		id, err := domain.ParseMetricID(strings.TrimSpace(in.Metric))
 		if err != nil {
 			return nil, err
@@ -486,7 +527,9 @@ func (s *server) explain(ctx context.Context, in explainIn) *sdk.CallToolResult 
 						"path as one directory name, such as src, not %q; who_knows answers any path", in.Path)}
 				}
 				subject = domain.Subject{Kind: domain.SubjectArea, Key: rp.Key + ":" + dir + "/"}
-				area = rp.Name + " " + dir + "/"
+				area = fmt.Sprintf("%q %s/", rp.Name, dir)
+			} else if err := fewPeople(id, rp.AIPeople, fmt.Sprintf("repository %q", rp.Name)); err != nil {
+				return nil, err
 			}
 		case domain.SubjectGroup:
 			sc, err := r.scope("group:" + in.Subject)
@@ -494,6 +537,10 @@ func (s *server) explain(ctx context.Context, in explainIn) *sdk.CallToolResult 
 				return nil, err
 			}
 			subject = domain.Subject{Kind: domain.SubjectGroup, Key: sc.Key}
+			if err := fewPeople(id, aiPeople(c.names, report.Scope{Kind: sc.Kind, Key: sc.Key}),
+				fmt.Sprintf("group %q", sc.Key)); err != nil {
+				return nil, err
+			}
 		default:
 			return nil, &domain.UsageError{Msg: fmt.Sprintf("subject_kind %q: want person, repo, group or area", in.SubjectKind)}
 		}
@@ -504,7 +551,7 @@ func (s *server) explain(ctx context.Context, in explainIn) *sdk.CallToolResult 
 		e, err := app.Explain(ctx, d, app.ExplainRequest{RunID: c.run(), Metric: id, Subject: subject})
 		switch {
 		case errors.Is(err, domain.ErrNotFound) && who != "":
-			return nil, notFoundf("%s holds no value in run %d: none of their changes left a surviving prod line or "+
+			return nil, notFoundf("%q holds no value in run %d: none of their changes left a surviving prod line or "+
 				"landed in a window a metric reads.", who, c.run())
 		case errors.Is(err, domain.ErrNotFound) && area != "":
 			return nil, notFoundf("area %s holds no value in run %d: areas are top-level directories that hold surviving "+
@@ -518,8 +565,20 @@ func (s *server) explain(ctx context.Context, in explainIn) *sdk.CallToolResult 
 		if caveat != nil {
 			e.Caveats = append(e.Caveats, *caveat)
 		}
-		return func(f format) (any, error) { return explainAnswer(e, s.cfg.AllowSource, f), nil }, nil
+		return func(sh *shaper) (any, error) { return sh.explainAnswer(e, s.cfg.AllowSource), nil }, nil
 	})
+}
+
+// fewPeople refuses the AI-assisted share of a repository or a group whose
+// landings are those of fewer than minAIPeople people: it would be close to
+// one person's own share (ADR 0007).
+func fewPeople(id domain.MetricID, people int, scope string) error {
+	if !report.OwnPageOnly(id) || people >= minAIPeople {
+		return nil
+	}
+	return &domain.UsageError{Msg: fmt.Sprintf("the %s share of %s is withheld: fewer than %d people landed in its "+
+		"window, so it would be close to one person's own share, which only that person sees (ADR 0007). A group's or "+
+		"the whole run's share may answer instead (overview).", id.Name, scope, minAIPeople)}
 }
 
 type highlightsIn struct {
@@ -545,9 +604,9 @@ func (s *server) highlights(ctx context.Context, in highlightsIn) *sdk.CallToolR
 	f, _, _ := common{ResponseFormat: in.ResponseFormat}.format(0, highlightRows, highlightDetailedRows)
 	days, ok := periodDays(in.Period)
 	if !ok {
-		return s.toolError(&domain.UsageError{Msg: fmt.Sprintf("period %q: want week, month or quarter", in.Period)})
+		return s.toolError(&domain.UsageError{Msg: fmt.Sprintf("period %q: want week, month or quarter", in.Period)}, nil)
 	}
-	return s.answer(ctx, "highlights", f, func(ctx context.Context, c *call) (render, error) {
+	return s.answer(ctx, "highlights", f, narrowHighlights, func(ctx context.Context, c *call) (render, error) {
 		r, err := c.resolver(ctx)
 		if err != nil {
 			return nil, err
@@ -566,7 +625,7 @@ func (s *server) highlights(ctx context.Context, in highlightsIn) *sdk.CallToolR
 			return nil, err
 		}
 		so := scopeOf(sc, r.scopeName(sc))
-		return func(f format) (any, error) { return highlightsAnswer(h, so, f), nil }, nil
+		return func(sh *shaper) (any, error) { return sh.highlightsAnswer(h, so), nil }, nil
 	})
 }
 
@@ -575,7 +634,7 @@ type identitiesIn struct {
 }
 
 func (s *server) identities(ctx context.Context, in identitiesIn) *sdk.CallToolResult {
-	return s.answer(ctx, "identity_candidates", format{}, func(ctx context.Context, c *call) (render, error) {
+	return s.answer(ctx, "identity_candidates", format{}, narrowIdentities, func(ctx context.Context, c *call) (render, error) {
 		r, err := c.resolver(ctx)
 		if err != nil {
 			return nil, err
@@ -592,7 +651,9 @@ func (s *server) identities(ctx context.Context, in identitiesIn) *sdk.CallToolR
 		if err != nil {
 			return nil, err
 		}
-		return func(format) (any, error) { return &identitiesOut{Identities: ids}, nil }, nil
+		return func(sh *shaper) (any, error) {
+			return &identitiesOut{Provenance: sh.f.provenance(ids.Provenance, newNamed()), Identities: ids}, nil
+		}, nil
 	})
 }
 
@@ -603,11 +664,11 @@ type metricsIn struct {
 
 func (s *server) metrics(ctx context.Context, in metricsIn) *sdk.CallToolResult {
 	f, _, _ := common{ResponseFormat: in.ResponseFormat}.format(0, 0, 0)
-	return s.answer(ctx, "metrics", f, func(context.Context, *call) (render, error) {
+	return s.answer(ctx, "metrics", f, narrowMetrics, func(context.Context, *call) (render, error) {
 		// The registry is code: this answer reads no run, so it needs no
 		// facts database.
 		catalog := app.Metrics()
-		return func(f format) (any, error) { return metricsAnswer(catalog, s.cfg.Version, in.Metric, f) }, nil
+		return func(sh *shaper) (any, error) { return metricsAnswer(catalog, s.cfg.Version, in.Metric, sh.f) }, nil
 	})
 }
 
@@ -622,10 +683,16 @@ func (s *server) diff(ctx context.Context, in diffIn) *sdk.CallToolResult {
 	if !s.cfg.AllowSource {
 		return s.toolError(&domain.UsageError{Msg: "diff is off: this server was started without --allow-source, so no " +
 			"source code leaves the machine for the model provider. If the user wants diffs, they restart the server with " +
-			"'stillhere mcp --allow-source'. changes and explain answer without source."})
+			"'stillhere mcp --allow-source'. changes and explain answer without source."}, nil)
 	}
-	f := format{limit: diffFiles, rows: minRows}
-	return s.answer(ctx, "diff", f, func(ctx context.Context, c *call) (render, error) {
+	limit := in.MaxChars
+	if limit <= 0 || limit > 24000 {
+		limit = 24000
+	}
+	// The patch is cut at limit bytes first; its JSON escapes can make the
+	// answer larger still, and the budget then cuts the patch further.
+	f := format{limit: diffFiles, rows: minRows, patch: limit}
+	return s.answer(ctx, "diff", f, narrowDiff, func(ctx context.Context, c *call) (render, error) {
 		if s.cfg.Git == nil {
 			return nil, errors.New("mcp: the diff tool has no git runner")
 		}
@@ -643,14 +710,10 @@ func (s *server) diff(ctx context.Context, in diffIn) *sdk.CallToolResult {
 		if err != nil {
 			return nil, err
 		}
-		limit := in.MaxChars
-		if limit <= 0 || limit > 24000 {
-			limit = 24000
-		}
 		a, err := app.Diff(ctx, d, app.DiffRequest{RunID: c.run(), Repo: repo.Key, Change: in.Change, Path: in.Path, MaxBytes: limit})
 		if err != nil {
 			return nil, err
 		}
-		return func(f format) (any, error) { return diffAnswer(a, f), nil }, nil
+		return func(sh *shaper) (any, error) { return sh.diffAnswer(a), nil }, nil
 	})
 }
