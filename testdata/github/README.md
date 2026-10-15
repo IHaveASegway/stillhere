@@ -118,7 +118,7 @@ One page, watermark 2026-10-08T09:00:00Z (#8).
 
 ## reviews_given@1
 
-The replica after both passes, read as of the fixture's `Now`, 2026-10-07T00:00:00Z. The window is [2026-07-09T00:00:00Z, 2026-10-07T00:00:00Z). The policy holds the packaged `[bots]` fragments (`copilot`, `gpt-engineer`, `dependabot`, `renovate`, `[bot]`), and the input has no `identity.Directory`, as `metrics.Compute` may pass it, so the metric builds one.
+The replica after both passes, stored in a facts.db as sync stores it (`sqlite.Open`, `PutForgeRepos`, `PutForgePage`) and read back as scan reads it (`LoadForge` from a year before `Now`), which returns each pull request as the last page that carried it said; read as of the fixture's `Now`, 2026-10-07T00:00:00Z. The window is [2026-07-09T00:00:00Z, 2026-10-07T00:00:00Z). The policy holds the packaged `[bots]` fragments (`copilot`, `gpt-engineer`, `dependabot`, `renovate`, `[bot]`), and the input has no `identity.Directory`, as `metrics.Compute` may pass it, so the metric builds one.
 
 **The run** scanned widget through a user's own SSH clone, origin `git@<git URL's host>:acme/widget.git`, in group `acme`, not through the managed mirror. The replica keys widget by its HTTPS clone URL, and the two name the same host, owner and name. The clone's history holds the squash commits f01, f02, f03, f04, f05, f07 and f09 with their mailmapped authors (f03 and f05 as `erin@example.com`); f08 landed after `Now`.
 
