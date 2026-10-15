@@ -39,6 +39,7 @@ func NewExplain(in *ExplainInput) *Explain {
 		if v.Scope.Kind == domain.ScopeRepo {
 			involved[v.Scope.Key] = true
 		}
+		forgeScope(in.Facts, involved, v.Metric.String(), v.Scope)
 	}
 	for i := range in.Facts.Repos {
 		rf := &in.Facts.Repos[i]
@@ -261,6 +262,7 @@ func NewMe(in *MeInput) *Me {
 		if v.Scope.Kind == domain.ScopeRepo {
 			involved[v.Scope.Key] = true
 		}
+		forgeScope(in.Facts, involved, v.Metric.String(), v.Scope)
 	}
 	for _, rs := range in.Ranks {
 		of := 0
@@ -277,6 +279,7 @@ func NewMe(in *MeInput) *Me {
 			continue
 		}
 		metrics[rs.Metric.ID] = true
+		forgeScope(in.Facts, involved, rs.Metric.ID, rs.Scope)
 		m.Ranks = append(m.Ranks, MeRank{
 			Metric: rs.Metric.ID, Scope: scopeOf(rs.Scope), Window: intervalOf(rs.Window),
 			Percent: rs.Percent, MinN: rs.MinN, Eligible: mine.Eligible,
@@ -345,6 +348,35 @@ func answerCaveats(repos []*domain.RepoFacts) []Caveat {
 		all = append(all, repoCaveats(rf)...)
 	}
 	return append(out, summarize(all)...)
+}
+
+// forgeScope adds to involved the repositories behind a number of metric in
+// scope when the metric reads GitHub data: its value in a group, or in
+// every repository, counts the reviews in each repository of the scope, a
+// review missing from any of them included, so the answer must list and
+// date all of them (forgeProvenance), not only those the person has code
+// in. A git metric's number is left to its repository-scope values, which
+// name the repositories the person's changes are in.
+func forgeScope(fs *domain.FactSet, involved map[string]bool, metric string, scope domain.Scope) {
+	if !forgeMetric(metric) {
+		return
+	}
+	switch scope.Kind {
+	case domain.ScopeRepo:
+		involved[scope.Key] = true
+	case domain.ScopeGroup:
+		for _, g := range fs.Groups {
+			if g.Name == scope.Key {
+				for _, key := range g.Repos {
+					involved[key] = true
+				}
+			}
+		}
+	case domain.ScopeAll:
+		for i := range fs.Repos {
+			involved[fs.Repos[i].Repo.Key] = true
+		}
+	}
 }
 
 // reposWith returns the run's repositories whose keys are in keys, or every

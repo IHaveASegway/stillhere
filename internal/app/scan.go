@@ -96,9 +96,10 @@ func Scan(ctx context.Context, d Deps, r ScanRequest) (*report.Model, error) {
 	fs := factSet(r.Now, d.Policy, pl, results)
 	fs.Forge = replica
 	var forge *report.ForgeRead // nil without the replica port: the scan cannot speak for the replica, as a reader without it cannot
-	var watermarks []domain.ForgeWatermark
+	var watermarks []domain.RunWatermark
 	if d.ForgeStore != nil {
-		forge, watermarks = runForge(fs)
+		watermarks = runWatermarks(fs)
+		forge = forgeRead(watermarks)
 	}
 	who := identity.New(fs, d.Policy)
 	landed := report.Landed{Days: d.Policy.Week.Days, Sort: d.Policy.Week.Sort}
@@ -210,7 +211,7 @@ func scanOptions(r ScanRequest, d Deps, pl *plan, jobs int, scope string, ranked
 // when ctx was cancelled. The forge watermarks the run read are recorded
 // while it is still running, so no reader sees the run without them.
 func storeRun(ctx context.Context, d Deps, run domain.Run, fs *domain.FactSet,
-	values []domain.MetricValue, ranks []domain.RankInterval, watermarks []domain.ForgeWatermark) (int64, error) {
+	values []domain.MetricValue, ranks []domain.RankInterval, watermarks []domain.RunWatermark) (int64, error) {
 	s := d.Store
 	status := run.Status
 	run.Status = domain.RunStatusRunning
@@ -270,86 +271,57 @@ func loadReplica(ctx context.Context, d Deps, since time.Time) (*domain.ForgeFac
 	return f, nil
 }
 
-// runForge returns the GitHub data the run read: the watermark of each
-// forge repository whose clone URL names the same host, owner and name as
-// the origin of one of the run's repositories (domain.RemoteRepo, the join
-// reviews_given@1 counts by), for the report and for the store, where they
-// date the run's forge numbers (ForgeStore.PutRunWatermarks). The replica's
-// other repositories, such as another organization's, are none of the run's
-// business. A forge repository the replica holds no watermark for gets a
-// zero one: the run read none of its pull requests.
-func runForge(fs *domain.FactSet) (*report.ForgeRead, []domain.ForgeWatermark) {
-	read := &report.ForgeRead{}
+// runWatermarks returns what the run keeps of the GitHub data it read
+// (ForgeStore.PutRunWatermarks): the watermark of each of its forge
+// repositories, those domain.ForgeJoin joins to one of its repositories
+// (the join reviews_given@1 counts by), with the repository's name and the
+// run's repositories it joined. The replica's other repositories, such as
+// another organization's, are none of the run's business, and neither is a
+// repository whose collection failed. A forge repository the replica holds
+// no watermark for gets a zero one: the run read none of its pull requests.
+func runWatermarks(fs *domain.FactSet) []domain.RunWatermark {
 	if fs.Forge == nil {
-		return read, nil
+		return nil
 	}
-	origins := originsOf(fs.Repos)
+	join := domain.ForgeJoin(fs.Repos, fs.Forge.Repos)
 	marks := make(map[string]domain.ForgeWatermark, len(fs.Forge.Watermarks))
 	for _, wm := range fs.Forge.Watermarks {
 		marks[wm.Repo] = wm
 	}
-	var watermarks []domain.ForgeWatermark
+	var out []domain.RunWatermark
 	for _, r := range fs.Forge.Repos {
-		name, ok := domain.RemoteRepo(r.Key)
-		if !ok || len(origins[name]) == 0 {
+		keys := join[r.ID]
+		if len(keys) == 0 {
 			continue
 		}
 		wm, ok := marks[r.ID]
 		if !ok {
 			wm = domain.ForgeWatermark{Repo: r.ID}
 		}
-		watermarks = append(watermarks, wm)
+		out = append(out, domain.RunWatermark{ForgeWatermark: wm, Name: r.Owner + "/" + r.Name, Keys: keys})
 	}
-	slices.SortFunc(watermarks, func(a, b domain.ForgeWatermark) int { return cmp.Compare(a.Repo, b.Repo) })
-	read.Repos = forgeSyncs(fs.Repos, fs.Forge.Repos, watermarks)
-	return read, watermarks
+	slices.SortFunc(out, func(a, b domain.RunWatermark) int { return cmp.Compare(a.Repo, b.Repo) })
+	return out
 }
 
-// forgeSyncs dates a run's GitHub data for the report: one ForgeSync for
-// each watermark and each of the run's repositories whose origin names the
-// watermark's forge repository in listing, sorted by forge repository, then
-// key. A watermark whose forge repository no repository of the run names
-// any more, as after a rename on the forge since the run read it, gets one
-// with no key: it still dates the run, though no section can claim it.
-func forgeSyncs(repos []domain.RepoFacts, listing []domain.ForgeRepo, watermarks []domain.ForgeWatermark) []report.ForgeSync {
-	origins := originsOf(repos)
-	byID := make(map[string]domain.ForgeRepo, len(listing))
-	for _, r := range listing {
-		byID[r.ID] = r
-	}
-	var out []report.ForgeSync
+// forgeRead dates a run's GitHub data for the report: one ForgeSync for
+// each watermark the run kept and each of its repositories the watermark
+// joined, sorted by forge repository, then key. The scan and every reader
+// of the stored run build it from the same watermarks, the run's own, so a
+// stored run dates its GitHub data exactly as its scan did, whatever a
+// later sync renamed.
+func forgeRead(watermarks []domain.RunWatermark) *report.ForgeRead {
+	read := &report.ForgeRead{}
 	for _, wm := range watermarks {
-		name, keys := wm.Repo, []string(nil) // the node id, when the replica no longer lists it
-		if r, ok := byID[wm.Repo]; ok {
-			name = r.Owner + "/" + r.Name
-			if remote, ok := domain.RemoteRepo(r.Key); ok {
-				keys = origins[remote]
-			}
-		}
-		if len(keys) == 0 {
-			keys = []string{""}
-		}
-		for _, key := range keys {
-			out = append(out, report.ForgeSync{Repo: name, Key: key, Updated: instant(wm.Updated), Synced: instant(wm.Synced)})
+		for _, key := range wm.Keys {
+			read.Repos = append(read.Repos, report.ForgeSync{Repo: wm.Name, Key: key,
+				Updated: instant(wm.Updated), Synced: instant(wm.Synced)})
 		}
 	}
-	slices.SortFunc(out, func(a, b report.ForgeSync) int { return cmp.Or(cmp.Compare(a.Repo, b.Repo), cmp.Compare(a.Key, b.Key)) })
-	return out
-}
-
-// originsOf maps each repository a run's origins name (domain.RemoteRepo)
-// to the keys of the run's repositories with that origin: one, unless the
-// run scanned two clones of it, such as an SSH and an HTTPS one. A
-// repository without an origin, or with a local one, names none.
-func originsOf(repos []domain.RepoFacts) map[string][]string {
-	out := map[string][]string{}
-	for i := range repos {
-		r := &repos[i].Repo
-		if name, ok := domain.RemoteRepo(r.Remote); ok {
-			out[name] = append(out[name], r.Key)
-		}
-	}
-	return out
+	slices.SortFunc(read.Repos, func(a, b report.ForgeSync) int {
+		return cmp.Or(cmp.Compare(a.Repo, b.Repo), cmp.Compare(a.Key, b.Key))
+	})
+	return read
 }
 
 // instant is t in UTC, or nil for the zero time, which a watermark uses for

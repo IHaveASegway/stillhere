@@ -32,26 +32,31 @@ func forgeMetric(id string) bool { return id == metricReviewsGiven }
 
 // ForgeRead is the GitHub data a scan run read from the forge replica: the
 // watermark of each forge repository that the origin of one of the run's
-// repositories names (domain.RemoteRepo). The use case builds it: at scan
-// time from the replica it loaded, and for a stored run from the
-// watermarks the run recorded (domain.ForgeStore.RunWatermarks). A nil
+// repositories names (domain.ForgeJoin). The use case builds it from the
+// watermarks the run keeps (domain.RunWatermark), at scan time and for a
+// stored run alike, so a later sync changes nothing in it. A nil
 // *ForgeRead means the reader cannot tell, as in a week report, and leaves
 // the GitHub provenance and caveats out.
 type ForgeRead struct {
 	Repos []ForgeSync // sorted by Repo, then Key; nil when the run read no GitHub data
 }
 
-// ForgeSync is one forge repository's watermark as a run read it: how far
-// its pull requests reached in the replica, and when they were last synced.
+// ForgeSync is one forge repository's watermark as a run read it, for one
+// of the run's repositories: how far its pull requests reached in the
+// replica, and when they were last synced.
 type ForgeSync struct {
-	Repo string `json:"repo"` // the forge repository, "owner/name"
-	// Key is the Repo.Key of the run's repository whose origin names the
-	// forge repository; "" when none does any more, as after a rename on the
-	// forge since the run.
-	Key     string     `json:"key"`
+	Repo    string     `json:"repo"`    // the forge repository, "owner/name", as the run read it
+	Key     string     `json:"key"`     // the Repo.Key of the run's repository whose origin named it when the run read it
 	Updated *time.Time `json:"updated"` // every pull request last updated before this was in the replica; null before its first page
 	Synced  *time.Time `json:"synced"`  // when the last sync that brought it up to date started: its "as of"; null until a sync finished
 }
+
+// hasData reports whether the replica held any GitHub data for the
+// repository when the run read it: a page, or a finished sync. A forge
+// repository a sync listed but never stored a page of has neither, and
+// every part of a report treats it the same way: no GitHub data, so out of
+// the provenance, and in the forge-not-synced caveat.
+func (s ForgeSync) hasData() bool { return s.Updated != nil || s.Synced != nil }
 
 // ForgeProvenance is the GitHub data behind a section: the watermarks the
 // run read for the section's repositories.
@@ -64,7 +69,11 @@ type ForgeProvenance struct {
 }
 
 // forgeProvenance is the GitHub data the run read for repos: nil when it
-// read none for them, or when the reader cannot tell.
+// read none for them, or when the reader cannot tell. Its AsOf is the
+// oldest Synced among them, because a number over several repositories is
+// only as current as its stalest input, as a dataflow operator's output
+// watermark is the minimum of its inputs' (Akidau et al., "The Dataflow
+// Model", VLDB 2015).
 func (b *builder) forgeProvenance(repos []*domain.RepoFacts) *ForgeProvenance {
 	f := b.in.Forge
 	if f == nil {
@@ -77,7 +86,7 @@ func (b *builder) forgeProvenance(repos []*domain.RepoFacts) *ForgeProvenance {
 	var p ForgeProvenance
 	synced := true
 	for _, s := range f.Repos {
-		if !keys[s.Key] {
+		if !keys[s.Key] || !s.hasData() {
 			continue
 		}
 		p.Repos = append(p.Repos, s)
@@ -97,16 +106,20 @@ func (b *builder) forgeProvenance(repos []*domain.RepoFacts) *ForgeProvenance {
 	return &p
 }
 
-// forgeCaveats says what could make a section's GitHub numbers wrong: some
-// of its repositories have no GitHub data, or only part of it, so the forge
-// metrics count none, or only some, of their reviews. A failed repository is
-// left out: its own caveat says it adds nothing.
+// forgeCaveats says what could make the GitHub numbers of a section that
+// shows them wrong: some of its repositories have no GitHub data, or only
+// part of it, so the forge metrics count none, or only some, of their
+// reviews. Only a section that shows a forge metric's numbers calls it (a
+// rank table of one, me, explain of one): elsewhere the caveat would
+// qualify no number. A failed repository is left out: its own caveat says
+// it adds nothing, and no GitHub data of it counts (domain.ForgeJoin).
 func (b *builder) forgeCaveats(members []*domain.RepoFacts) []Caveat {
 	f := b.in.Forge
 	if f == nil {
 		return nil
 	}
 	var ok, missing, partial []string
+	syncable := false // a repository without GitHub data has an origin on a forge, which a sync can copy it from
 	for _, rf := range members {
 		if rf.Status != domain.RepoStatusOK {
 			continue
@@ -115,13 +128,15 @@ func (b *builder) forgeCaveats(members []*domain.RepoFacts) []Caveat {
 		data, synced := false, false
 		for _, s := range f.Repos {
 			if s.Key == rf.Repo.Key {
-				data = data || s.Updated != nil || s.Synced != nil
+				data = data || s.hasData()
 				synced = synced || s.Synced != nil
 			}
 		}
 		switch {
 		case !data:
 			missing = append(missing, rf.Repo.Name)
+			_, onForge := domain.RemoteRepo(rf.Repo.Remote)
+			syncable = syncable || onForge
 		case !synced:
 			partial = append(partial, rf.Repo.Name)
 		}
@@ -129,10 +144,13 @@ func (b *builder) forgeCaveats(members []*domain.RepoFacts) []Caveat {
 	switch {
 	case len(ok) == 0:
 		return nil
-	case len(missing) == len(ok):
+	case len(missing) == len(ok) && syncable:
 		return []Caveat{{Code: codeForgeNotSynced, Message: "GitHub data not synced: " + metricReviewsGiven +
 			" has no values. 'stillhere sync github --org ORG' copies an organization's pull requests and reviews into " +
 			"facts.db, and the next scan reads them."}}
+	case len(missing) == len(ok):
+		return []Caveat{{Code: codeForgeNotSynced, Message: "No GitHub data: " + metricReviewsGiven +
+			" has no values, and no repository here has an origin on a forge that a sync could copy it from."}}
 	}
 	var out []Caveat
 	if len(missing) > 0 {

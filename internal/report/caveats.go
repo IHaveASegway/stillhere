@@ -179,7 +179,10 @@ func (b *builder) scopeCaveats(members []*domain.RepoFacts, scope domain.Scope, 
 // runCaveats says what could make the whole report wrong. The run-level
 // warnings are excluded repositories and paths that gave no repository;
 // discovery's warnings about a repository, duplicate-repo among them, are
-// that repository's and reach here through its caveats.
+// that repository's and reach here through its caveats. GitHub data has no
+// caveat here: the report's overviews and cards show no number computed
+// from it, and each section that does (a rank table of reviews_given@1)
+// carries its own, so a git-only report says nothing about GitHub.
 func (b *builder) runCaveats(m *Model) []Caveat {
 	out := []Caveat{notFetched()}
 	byCode := map[string][]domain.Warning{}
@@ -225,7 +228,6 @@ func (b *builder) runCaveats(m *Model) []Caveat {
 		out = append(out, c)
 	}
 	out = append(out, b.noValues()...)
-	out = append(out, b.forgeCaveats(b.repos)...)
 	if aiShown(m) {
 		out = append(out, aiLowerBound())
 	}

@@ -21,7 +21,10 @@ import (
 // LoadFacts(PutRepoFacts(x)) is reflect.DeepEqual to x, with lists in the
 // order they were put, nil for empty, times in UTC whatever zone they were
 // put in, and a zero as +0; Run(id) returns the run as begun and finished,
-// policy source included; and readers never see a running or failed run.
+// policy source included; RunWatermarks returns the forge watermarks the
+// run read as they were last put, each with its name and the run's
+// repositories it joined (domain.RunWatermark); and readers never see a
+// running or failed run.
 func TestStoreRoundTrip(t *testing.T) {
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "home", "facts.db") // Open creates the directory
@@ -67,6 +70,22 @@ func TestStoreRoundTrip(t *testing.T) {
 	}
 	if err := s.PutMetrics(ctx, id, values[2:], nil); err != nil {
 		t.Fatal(err)
+	}
+	// The forge watermarks the run read, each with its name and the run's
+	// repositories it joined. A second call replaces the first, join rows
+	// included, and a watermark that joins nothing is refused.
+	if err := s.PutRunWatermarks(ctx, id, []domain.RunWatermark{
+		{ForgeWatermark: domain.ForgeWatermark{Repo: "R_api"}, Name: "acme/old-api", Keys: []string{"local:api"}},
+		{ForgeWatermark: domain.ForgeWatermark{Repo: "R_gone"}, Name: "acme/gone", Keys: []string{"local:gone"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	marks := sampleRunWatermarks(zone)
+	if err := s.PutRunWatermarks(ctx, id, marks); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.PutRunWatermarks(ctx, id, []domain.RunWatermark{{ForgeWatermark: domain.ForgeWatermark{Repo: "R_api"}}}); err == nil {
+		t.Error("PutRunWatermarks took a watermark that joins none of the run's repositories")
 	}
 	before := time.Now().UTC()
 	if err := s.FinishRun(ctx, id, domain.RunStatusComplete); err != nil {
@@ -131,6 +150,17 @@ func TestStoreRoundTrip(t *testing.T) {
 		wantEqual(t, "LoadMetrics ranks", ranks, gotRanks)
 	})
 
+	t.Run("RunWatermarks returns the watermarks as put", func(t *testing.T) {
+		got, err := s.RunWatermarks(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantEqual(t, "RunWatermarks", sampleRunWatermarks(time.UTC), got)
+		if err := s.PutRunWatermarks(ctx, id, marks); err == nil {
+			t.Error("PutRunWatermarks changed a published run")
+		}
+	})
+
 	t.Run("a failed run is invisible, and a partial one is published", func(t *testing.T) {
 		later := run
 		later.Now = run.Now.Add(24 * time.Hour)
@@ -170,6 +200,9 @@ func TestStoreRoundTrip(t *testing.T) {
 			t.Fatal(err)
 		}
 		wantEqual(t, "LoadFacts of a run without facts", &domain.FactSet{Now: later.Now, Policy: later.Policy}, got)
+		if marks, err := s.RunWatermarks(ctx, partial); err != nil || marks != nil {
+			t.Errorf("RunWatermarks of a run that read no GitHub data = %v, %v; want nil", marks, err)
+		}
 		wantNotFound(t, s, partial+1000)
 	})
 
@@ -203,6 +236,28 @@ func wantNotFound(t *testing.T, s *sqlite.Store, id int64) {
 	if _, _, err := s.LoadMetrics(ctx, id); !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("LoadMetrics(%d) = %v, want ErrNotFound", id, err)
 	}
+	if _, err := s.RunWatermarks(ctx, id); !errors.Is(err, domain.ErrNotFound) {
+		t.Errorf("RunWatermarks(%d) = %v, want ErrNotFound", id, err)
+	}
+}
+
+// sampleRunWatermarks are the forge watermarks of the sample run, with
+// times in zone: one forge repository that two clones of the run name, and
+// one the replica held no page of, whose times are zero.
+func sampleRunWatermarks(zone *time.Location) []domain.RunWatermark {
+	return []domain.RunWatermark{{
+		ForgeWatermark: domain.ForgeWatermark{
+			Repo:    "R_api",
+			Updated: time.Date(2026, time.October, 6, 18, 0, 0, 123456789, time.UTC).In(zone),
+			Synced:  time.Date(2026, time.October, 6, 22, 0, 0, 0, time.UTC).In(zone),
+		},
+		Name: "acme/api",
+		Keys: []string{"git@github.com:acme/api.git", "https://github.com/acme/api"},
+	}, {
+		ForgeWatermark: domain.ForgeWatermark{Repo: "R_docs"},
+		Name:           "acme/docs",
+		Keys:           []string{"https://github.com/acme/docs"},
+	}}
 }
 
 // wantEqual fails the test unless got is reflect.DeepEqual to want, naming

@@ -289,25 +289,45 @@ func TestGitHubSync(t *testing.T) {
 // reviewsGivenOracle stores the pages the two passes returned in a real
 // facts.db, as sync does (sqlite.Open, PutForgeRepos, PutForgePage), reads
 // the replica back as scan does (LoadForge, from a year before the
-// fixture's Now), and checks reviews_given@1 over what LoadForge returns
-// against the values derived by hand in testdata/github/README.md#reviews_given1.
+// fixture's Now) and from a time between the passes, and checks
+// reviews_given@1 over what LoadForge returns against the values derived by
+// hand in testdata/github/README.md#reviews_given1.
 func reviewsGivenOracle(t *testing.T, repos []domain.ForgeRepo, pages []domain.ForgePage, gitURL string) {
 	ctx := t.Context()
 	// The replica outlives runs: an earlier sync of another organization
 	// left other-org/secret in it, with a merged pull request bob approved
 	// in the window. This run did not scan that repository, so it counts in
-	// no scope.
+	// no scope. cara's comment, submitted first, has the larger review ID,
+	// so the round trip tells submission order from ID order.
 	secret := domain.ForgeRepo{ID: "R_secret", Key: gitURL + "/other-org/secret.git", Owner: "other-org", Name: "secret", DefaultBranch: "main"}
 	secretPull := domain.PullRequest{
 		ID: "PR_s1", Repo: "R_secret", Number: 1, Title: "feat: a secret", Author: user("dana"),
 		State: domain.PullMerged, BaseBranch: "main", Created: ts("2026-09-28T09:00:00Z"),
 		Updated: ts("2026-09-30T12:00:00Z"), Closed: ts("2026-09-30T12:00:00Z"), Merged: ts("2026-09-30T12:00:00Z"),
 		MergeCommit: commit("5e00000000000000000000000000000000000001", "dana@example.com", "dana"),
-		Reviews:     []domain.Review{review("PRR_s1a", user("bob"), domain.ReviewApproved, "2026-09-30T11:00:00Z", 0, 0)},
-		Commits:     []domain.ForgeCommit{commit("5e00000000000000000000000000000000000002", "dana@example.com", "dana")},
+		Reviews: []domain.Review{
+			review("PRR_s1b", user("cara"), domain.ReviewCommented, "2026-09-30T10:00:00Z", 12, 0),
+			review("PRR_s1a", user("bob"), domain.ReviewApproved, "2026-09-30T11:00:00Z", 0, 0),
+		},
+		Commits: []domain.ForgeCommit{commit("5e00000000000000000000000000000000000002", "dana@example.com", "dana")},
 	}
-	pages = append(pages, domain.ForgePage{Repo: "R_secret", PullRequests: []domain.PullRequest{secretPull}, Updated: secretPull.Updated})
-	repos = append(slices.Clone(repos), secret)
+	// The run also scanned acme/sprocket, whose collection failed: a failed
+	// repository adds nothing to any number, so its pull request, which bob
+	// approved in the window, counts in no scope either, its group's
+	// included.
+	sprocket := domain.ForgeRepo{ID: "R_sprocket", Key: gitURL + "/acme/sprocket.git", Owner: "acme", Name: "sprocket", DefaultBranch: "main"}
+	sprocketPull := domain.PullRequest{
+		ID: "PR_p1", Repo: "R_sprocket", Number: 1, Title: "fix: a sprocket", Author: user("dana"),
+		State: domain.PullMerged, BaseBranch: "main", Created: ts("2026-09-28T09:00:00Z"),
+		Updated: ts("2026-09-29T12:00:00Z"), Closed: ts("2026-09-29T12:00:00Z"), Merged: ts("2026-09-29T12:00:00Z"),
+		MergeCommit: commit("6e00000000000000000000000000000000000001", "dana@example.com", "dana"),
+		Reviews:     []domain.Review{review("PRR_p1a", user("bob"), domain.ReviewApproved, "2026-09-29T10:00:00Z", 0, 0)},
+		Commits:     []domain.ForgeCommit{commit("6e00000000000000000000000000000000000002", "dana@example.com", "dana")},
+	}
+	pages = append(pages,
+		domain.ForgePage{Repo: "R_secret", PullRequests: []domain.PullRequest{secretPull}, Updated: secretPull.Updated},
+		domain.ForgePage{Repo: "R_sprocket", PullRequests: []domain.PullRequest{sprocketPull}, Updated: sprocketPull.Updated})
+	repos = append(slices.Clone(repos), secret, sprocket)
 
 	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "facts.db"))
 	if err != nil {
@@ -351,29 +371,60 @@ func reviewsGivenOracle(t *testing.T, repos []domain.ForgeRepo, pages []domain.F
 	})
 	wantRepos := slices.Clone(repos)
 	slices.SortFunc(wantRepos, func(a, b domain.ForgeRepo) int { return cmp.Or(cmp.Compare(a.Key, b.Key), cmp.Compare(a.ID, b.ID)) })
+	wantMarks := []domain.ForgeWatermark{
+		{Repo: "R_secret", Updated: marks["R_secret"]},
+		{Repo: "R_sprocket", Updated: marks["R_sprocket"]},
+		{Repo: "R_widget", Updated: marks["R_widget"]},
+	}
 	equal(t, "LoadForge after PutForgePage", replica, &domain.ForgeFacts{
 		Repos:        wantRepos,
 		PullRequests: wantPulls,
-		Watermarks: []domain.ForgeWatermark{
-			{Repo: "R_secret", Updated: marks["R_secret"]},
-			{Repo: "R_widget", Updated: marks["R_widget"]},
-		},
+		Watermarks:   wantMarks,
+	})
+	// LoadForge's since, which a scan sets to a year before Now: from #10's
+	// update, which the later pass read again, it returns the pull requests
+	// updated at or after it, #10 itself included, each with its children,
+	// and every repository and watermark.
+	since := ts("2026-10-01T11:58:00Z")
+	var wantRecent []domain.PullRequest
+	var recentIDs []string
+	for _, pr := range wantPulls {
+		if !pr.Updated.Before(since) {
+			wantRecent = append(wantRecent, pr)
+			recentIDs = append(recentIDs, pr.ID)
+		}
+	}
+	equal(t, "the pull requests updated at or after #10's update", recentIDs, []string{"PR_05", "PR_08", "PR_10"})
+	recent, err := store.LoadForge(ctx, since)
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "LoadForge from #10's update", recent, &domain.ForgeFacts{
+		Repos:        wantRepos,
+		PullRequests: wantRecent,
+		Watermarks:   wantMarks,
 	})
 	// The run scanned widget through a user's own SSH clone, not the managed
 	// mirror: the replica keys widget by its HTTPS clone URL, and the two
-	// join by host, owner and name.
+	// join by host, owner and name. sprocket's collection failed.
 	u, err := url.Parse(gitURL)
 	if err != nil {
 		t.Fatal(err)
 	}
 	clone := "git@" + u.Hostname() + ":acme/widget.git"
+	sprocketClone := "git@" + u.Hostname() + ":acme/sprocket.git"
 	person := func(name, email string) domain.Person { return domain.Person{Name: name, Email: email} }
 	landed := func(sha string, who domain.Person) domain.Commit { return domain.Commit{SHA: sha, Author: who} }
 	ada, bob, erin := person("Ada Example", "ada@example.com"), person("Bob", "bob@example.com"), person("Erin", "erin@example.com")
 	facts := &domain.FactSet{
 		Now:    fixture.Now,
-		Groups: []domain.Group{{Name: "acme", Path: "/src/acme", Repos: []string{clone}}},
+		Groups: []domain.Group{{Name: "acme", Path: "/src/acme", Repos: []string{sprocketClone, clone}}},
 		Repos: []domain.RepoFacts{{
+			Repo: domain.Repo{Key: sprocketClone, Name: "sprocket", Group: "acme", Path: "/src/acme/sprocket",
+				Remote: sprocketClone, Branch: "main"},
+			Status: domain.RepoStatusError,
+			Error:  "history: collect.History: sprocket: reading landings: git log: exit 128",
+		}, {
 			Repo:   domain.Repo{Key: clone, Name: "widget", Group: "acme", Path: "/src/acme/widget", Remote: clone, Branch: "main"},
 			Status: domain.RepoStatusOK,
 			// The landings the scan saw (mailmapped by git), as of Now: the
@@ -427,8 +478,11 @@ func reviewsGivenOracle(t *testing.T, repos []domain.ForgeRepo, pages []domain.F
 		{"bob@example.com", 4, 5, 4, 3, 3, 1},
 		{"erin@example.com", 1, 1, 0, 1, 0, 0},
 	}
+	// The same values in every scope that holds widget: all, its group, and
+	// its own repository scope, in which a scan ranks a repository named
+	// directly; none in sprocket's.
 	var want []domain.MetricValue
-	for _, scope := range []domain.Scope{{Kind: domain.ScopeAll}, {Kind: domain.ScopeGroup, Key: "acme"}} {
+	for _, scope := range []domain.Scope{{Kind: domain.ScopeAll}, {Kind: domain.ScopeGroup, Key: "acme"}, {Kind: domain.ScopeRepo, Key: clone}} {
 		for _, r := range rows {
 			detail := map[string]float64{
 				"reviews":              float64(r.reviews),

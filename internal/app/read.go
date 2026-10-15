@@ -29,12 +29,13 @@ import (
 // server (#15) returns.
 //
 // GitHub data is not per run: the forge replica outlives runs, and a run
-// keeps only the watermarks it read (docs/spec/codebase.md#run-model). So
-// the read side never computes over the replica. Its forge numbers are the
-// values and ranks the scan stored, which is why a scan ranks every ranked
-// metric, and the watermarks say when the GitHub data behind them was
-// synced: a report of a run from last month says last month's "as of",
-// whatever a sync did since.
+// keeps only the watermarks it read, with the names and the join they were
+// read under (docs/spec/codebase.md#run-model). So the read side never
+// reads the replica. Its forge numbers are the values and ranks the scan
+// stored, which is why a scan ranks every ranked metric, and the
+// watermarks say when the GitHub data behind them was synced: a report of a
+// run from last month says last month's "as of" over last month's
+// repositories, whatever a sync did since.
 
 // stored is a run read back: the run, its own policy, its facts and its
 // values, and the GitHub data it read.
@@ -80,7 +81,7 @@ func load(ctx context.Context, d Deps, runID int64) (*stored, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading run %d's metrics: %w", run.ID, err)
 	}
-	forge, err := readForge(ctx, d, run, fs)
+	forge, err := readForge(ctx, d, run)
 	if err != nil {
 		return nil, err
 	}
@@ -88,11 +89,11 @@ func load(ctx context.Context, d Deps, runID int64) (*stored, error) {
 }
 
 // readForge reads back the GitHub data a stored run read: the watermarks it
-// recorded (ForgeStore.RunWatermarks), each joined to the run's
-// repositories through the replica's list of forge repositories, which
-// names them. It returns nil without the replica port, when the reader
-// cannot tell.
-func readForge(ctx context.Context, d Deps, run domain.Run, fs *domain.FactSet) (*report.ForgeRead, error) {
+// recorded (ForgeStore.RunWatermarks), each with the name and the join it
+// was read under, so nothing a later sync changed in the replica, a rename
+// included, reaches the run's pages. It returns nil without the replica
+// port, when the reader cannot tell.
+func readForge(ctx context.Context, d Deps, run domain.Run) (*report.ForgeRead, error) {
 	if d.ForgeStore == nil {
 		return nil, nil
 	}
@@ -100,24 +101,19 @@ func readForge(ctx context.Context, d Deps, run domain.Run, fs *domain.FactSet) 
 	if err != nil {
 		return nil, fmt.Errorf("reading the forge watermarks of run %d: %w", run.ID, err)
 	}
-	read := &report.ForgeRead{}
-	if len(watermarks) == 0 {
-		return read, nil
+	for _, wm := range watermarks {
+		if len(wm.Keys) == 0 {
+			// Only a run stored before facts.db kept the join (schema
+			// version 3) has such a watermark. Which of its repositories it
+			// dates is unknown, and matching it against today's replica
+			// could date the wrong ones, so the reader cannot tell, as
+			// without the port.
+			d.Log.Warn("the run recorded its GitHub data without the repositories it dates, so its pages date none: scan again",
+				"run", run.ID)
+			return nil, nil
+		}
 	}
-	// Only the names of the forge repositories are needed. LoadForge returns
-	// the pull requests updated at or after since, and no pull request is
-	// updated after the last day facts.db can store, so this reads the
-	// repositories and watermarks alone.
-	listing, err := d.ForgeStore.LoadForge(ctx, time.Date(9999, time.December, 31, 0, 0, 0, 0, time.UTC))
-	if err != nil {
-		return nil, fmt.Errorf("reading the forge repositories of run %d: %w", run.ID, err)
-	}
-	var repos []domain.ForgeRepo
-	if listing != nil {
-		repos = listing.Repos
-	}
-	read.Repos = forgeSyncs(fs.Repos, repos, watermarks)
-	return read, nil
+	return forgeRead(watermarks), nil
 }
 
 // resolveRun finds the run a request names: its id, or the latest complete
