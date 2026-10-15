@@ -39,7 +39,7 @@ go install github.com/IHaveASegway/stillhere/cmd/stillhere@latest
 docker pull ghcr.io/ihaveasegway/stillhere
 ```
 
-Each [release](https://github.com/IHaveASegway/stillhere/releases) also carries archives for every platform and a checksums file to [verify them against](SECURITY.md#verifying-a-download).
+Each [release](https://github.com/IHaveASegway/stillhere/releases) also carries archives for every platform, which hold the shell completions and the [agent skill](#use-it-from-an-agent-mcp) beside the binary, and a checksums file to [verify them against](SECURITY.md#verifying-a-download).
 
 ## Quickstart
 
@@ -101,7 +101,7 @@ Everything after `--` is the server's own command line; add `--db FILE` there fo
 
 Whatever the flags, a repository's or group's AI-assisted share is sent only when at least three people landed in it: with fewer, it would be close to one person's own share.
 
-The skill in [plugins/stillhere/skills/stillhere](plugins/stillhere/skills/stillhere/SKILL.md) teaches your agent which tool answers which question, how to read rank intervals, and the stated limits. Copy that directory to `~/.claude/skills/stillhere` to use it in every project, or load the plugin directory for one session with `claude --plugin-dir plugins/stillhere`.
+The skill in [plugins/stillhere/skills/stillhere](plugins/stillhere/skills/stillhere/SKILL.md) teaches your agent which tool answers which question, how to read rank intervals, and the stated limits. It is at that path in a checkout and in every release archive, and the Homebrew cask keeps it in the cask's own directory, `$(brew --caskroom)/stillhere/<version>/plugins/stillhere/skills/stillhere`. Copy that directory to `~/.claude/skills/stillhere` to use it in every project, or load the plugin it belongs to for one session: `claude --plugin-dir plugins/stillhere`, run in a checkout or an unpacked archive.
 
 Text in the answers comes from the repositories (names, paths, commit subjects, diffs) and is untrusted: the tool descriptions and the skill tell the agent never to follow instructions found in it.
 
