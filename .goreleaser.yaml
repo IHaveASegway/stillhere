@@ -24,6 +24,9 @@ before:
     # Fail if a module in the cache no longer matches go.sum: the release
     # builds exactly the dependencies that were reviewed.
     - go mod verify
+    # The bash, zsh and fish completion scripts that the archives and the
+    # cask ship, in completions/ (the cask's comment says why they are files).
+    - .github/scripts/completions.sh
 
 builds:
   - id: stillhere
@@ -55,6 +58,7 @@ archives:
     files:
       - LICENSE
       - README.md
+      - completions/*
 
 checksum:
   algorithm: sha256
@@ -134,20 +138,29 @@ homebrew_casks:
     # line tools does not.
     dependencies:
       - formula: git
-    # The binaries are not signed or notarized yet, and Gatekeeper refuses
-    # to run a quarantined, unnotarized download. Removing the quarantine
-    # attribute is GoReleaser's documented workaround; Developer ID signing
-    # and notarization replace it (ADR 0002, consequences).
+    # The binaries are not signed or notarized yet. On macOS, Homebrew
+    # quarantines every cask download, and Gatekeeper kills a quarantined,
+    # unnotarized binary when it runs. Removing the quarantine attribute
+    # after install is GoReleaser's documented workaround, so that users can
+    # run stillhere. Developer ID signing and notarization replace it
+    # (ADR 0002, consequences).
     hooks:
       post:
         install: |
           if OS.mac?
             system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/stillhere"]
           end
-    # bash, zsh and fish completions from cobra's completion command.
-    generate_completions_from_executable:
-      args: [completion]
-      shell_parameter_format: cobra
+    # Completion scripts generated at release time, which Homebrew links
+    # without running anything. The hook above cannot protect a binary that
+    # runs during install: Homebrew installs a cask's artifacts in a fixed
+    # order by type, not in the order the cask lists them, and completions
+    # generated from the executable come before the postflight hook. So
+    # generate_completions_from_executable would run the binary while it is
+    # still quarantined, and Gatekeeper would kill it on every install.
+    completions:
+      bash: completions/stillhere.bash
+      zsh: completions/_stillhere
+      fish: completions/stillhere.fish
     caveats: |
       stillhere runs the first git on your PATH and needs git 2.44 or newer.
       Check with: git version

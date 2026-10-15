@@ -3,17 +3,21 @@
 # dist/ against what a release promises, so ci.yml finds a broken release on
 # the change that broke it rather than on the next tag:
 #
-#   - an archive per OS and architecture, each holding the binary, LICENSE
-#     and README.md, each matching the checksums file;
-#   - a cask that depends on Homebrew's git;
-#   - a binary for this machine that prints its version and the shell
-#     completions the cask generates at install;
+#   - an archive per OS and architecture, each holding the binary, LICENSE,
+#     README.md and the bash, zsh and fish completion scripts, each matching
+#     the checksums file;
+#   - a cask that depends on Homebrew's git and links the archived
+#     completion scripts instead of running the binary at install
+#     (.goreleaser.yaml says why);
+#   - a binary for this machine that prints its version;
 #   - an image per platform that runs "stillhere version", as a non-root
 #     user, with git 2.44 or newer.
 #
 # Run it from the repository root after a snapshot. It needs jq and, for
 # the images, docker (with QEMU for a platform that is not the host's).
 set -euo pipefail
+# Byte order for sort, so archive listings compare the same in every locale.
+export LC_ALL=C
 
 fail() {
 	echo "smoke-release: FAIL: $*" >&2
@@ -31,6 +35,7 @@ version=$(jq -r .version dist/metadata.json)
 artifacts() { jq -r --arg type "$1" '.[] | select(.type == $type) | .name' dist/artifacts.json; }
 
 # Archives and checksums.
+completions="completions/_stillhere completions/stillhere.bash completions/stillhere.fish"
 checksums=$(artifacts Checksum)
 [[ -n $checksums ]] || fail "no checksums file"
 for os in darwin linux windows; do
@@ -49,8 +54,8 @@ for os in darwin linux windows; do
 		else
 			contents=$(tar -tzf "dist/$archive" | sort | tr '\n' ' ')
 		fi
-		[[ $contents == "LICENSE README.md $bin " ]] ||
-			fail "$archive holds [$contents], want [LICENSE README.md $bin]"
+		want="LICENSE README.md $completions $bin "
+		[[ $contents == "$want" ]] || fail "$archive holds [$contents], want [$want]"
 	done
 done
 if command -v sha256sum >/dev/null; then
@@ -58,13 +63,32 @@ if command -v sha256sum >/dev/null; then
 else
 	(cd dist && shasum -a 256 --check --quiet "$checksums")
 fi
-ok "6 archives, each with the binary, LICENSE and README.md, all matching $checksums"
+# The completion scripts are the same files in every archive. In one copy,
+# each must register itself for the stillhere command, as its shell expects.
+sample=dist/stillhere_${version}_linux_amd64.tar.gz
+zsh=$(tar -xOzf "$sample" completions/_stillhere)
+[[ ${zsh%%$'\n'*} == "#compdef stillhere" ]] || fail "completions/_stillhere does not start with '#compdef stillhere'"
+bash=$(tar -xOzf "$sample" completions/stillhere.bash)
+[[ $bash == *"-F __start_stillhere stillhere"* ]] || fail "completions/stillhere.bash does not register __start_stillhere"
+fish=$(tar -xOzf "$sample" completions/stillhere.fish)
+[[ $fish == *"complete -c stillhere "* ]] || fail "completions/stillhere.fish does not register completions for stillhere"
+ok "6 archives, each with the binary, LICENSE, README.md and bash, zsh and fish completions, all matching $checksums"
 
 # The cask.
 cask=dist/homebrew/Casks/stillhere.rb
 [[ -f $cask ]] || fail "missing $cask"
 grep -A1 'depends_on formula:' "$cask" | grep -q '"git"' || fail "$cask does not depend on git"
-ok "the cask depends on Homebrew's git"
+for stanza in 'bash_completion "completions/stillhere.bash"' 'zsh_completion "completions/_stillhere"' \
+	'fish_completion "completions/stillhere.fish"'; do
+	grep -qF "$stanza" "$cask" || fail "$cask has no $stanza"
+done
+# Homebrew generates completions from an executable before the postflight
+# hook removes the quarantine attribute, so on macOS Gatekeeper would kill
+# the binary on every install.
+if grep -q generate_completions_from_executable "$cask"; then
+	fail "$cask runs the binary at install to generate completions"
+fi
+ok "the cask depends on Homebrew's git and links the archived completions"
 
 # The binary for this machine.
 goos=$(go env GOOS)
@@ -74,10 +98,7 @@ native=$(jq -r --arg os "$goos" --arg arch "$goarch" \
 [[ -x $native ]] || fail "no $goos/$goarch binary in dist"
 first=$("$native" version | head -n 1)
 [[ $first == "stillhere $version" ]] || fail "$native version printed '$first', want 'stillhere $version'"
-for shell in bash zsh fish; do
-	"$native" completion "$shell" | grep -q stillhere || fail "$native completion $shell printed no completion"
-done
-ok "$native prints 'stillhere $version' and bash, zsh and fish completions"
+ok "$native prints 'stillhere $version'"
 
 # The images: one per platform, loaded into the local daemon by the snapshot.
 for platform in linux/amd64 linux/arm64; do
