@@ -36,7 +36,7 @@ import (
 // first-parent diff, which would credit a merged branch's lines to the
 // person who merged it. -w drops whitespace-only changes, so a re-indent
 // adds and removes nothing, as blame -w already gives those lines to their
-// earlier author. The diff is pinned like numstat's (historyConfig,
+// earlier author. The diff is pinned like numstat's (attrSource,
 // historyDiffArgs), so the two queries read every file the same way.
 func (h *historyRun) readPatches(ctx context.Context) error {
 	var want []string
@@ -56,7 +56,7 @@ func (h *historyRun) readPatches(ctx context.Context) error {
 	}
 	slices.Sort(want)
 
-	args := append(historyConfig(), "log", "--no-walk", "--stdin", "--diff-merges=off", "-p", "-U0", "-w")
+	args := []string{attrSource(h.repo.Head), "log", "--no-walk", "--stdin", "--diff-merges=off", "-p", "-U0", "-w"}
 	args = append(args, historyDiffArgs()...)
 	args = append(args, "--no-color", "--no-ext-diff", "--default-prefix", "--pretty=format:%x00%H", "--")
 

@@ -17,9 +17,11 @@ import (
 // from its own log streams and canonicalises them with coAuthorCanonical;
 // blame calls coAuthors for the commits it attributes lines to, which can be
 // older than any history window. coAuthors reads the same format
-// (historyLogFormat) under the same pinned config (historyConfig) with the
-// same parser (historyParseLog) as History's logs, so both give one commit
-// the same co-authors, in the same order.
+// (historyLogFormat) with the same parser (historyParseLog) as History's
+// logs, and both run under the runner's common prefix, which pins how git
+// parses trailers (core.commentChar, trailer.separators;
+// docs/spec/git-invocation.md), so both give one commit the same
+// co-authors, in the same order.
 
 // coAuthorFormat is the log placeholder for a commit's Co-authored-by trailer
 // values, separated by U+001E. Git matches the key in any case, so
@@ -52,8 +54,8 @@ func coAuthors(ctx context.Context, git domain.GitRunner, repo domain.Repo, shas
 	}
 
 	raw := make(map[string][]domain.Person)
-	args := append(historyConfig(), "log", "--no-walk", "--stdin", "-z", "--no-color", "--encoding=UTF-8",
-		"--pretty=format:"+historyLogFormat, "--")
+	args := []string{"log", "--no-walk", "--stdin", "-z", "--no-color", "--encoding=UTF-8",
+		"--pretty=format:" + historyLogFormat, "--"}
 	cmd := domain.GitCmd{Dir: repo.Path, Args: args, Stdin: historyStdin(want)}
 	err := git.Stream(ctx, cmd, func(r io.Reader) error {
 		return historyParseLog(r, func(rec *historyRecord) error {

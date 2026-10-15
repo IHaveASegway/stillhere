@@ -82,16 +82,19 @@ type HistoryFacts struct {
 // streams git's output into facts (docs/spec/week-collector.md).
 //
 // Every git command names commits by SHA (repo.Head, or SHAs git printed),
-// never by branch, and pins what the repository's own config would change
-// in what it prints: -M and -l1000 for rename detection, --root for the
-// root commit's diff, --diff-algorithm=myers, --no-textconv (no program the
-// repository names runs, and lines are counted on stored content),
-// --ignore-submodules=none and --submodule=short for gitlinks, --no-color,
-// --default-prefix and --encoding=UTF-8, and, as -c settings ahead of the
-// subcommand, core.bigFileThreshold, core.commentChar and
-// trailer.separators (historyConfig). Numstat is read with -z, so every
-// path, including a rename's two paths, arrives exactly as stored, however
-// odd it is.
+// never by branch, and pins what the repository's own config or checkout
+// would change in what it prints: -M and -l1000 for rename detection,
+// --root for the root commit's diff, --diff-algorithm=myers, --no-textconv
+// (no program the repository names runs, and lines are counted on stored
+// content), --ignore-submodules=none and --submodule=short for gitlinks,
+// --no-color, --default-prefix and --encoding=UTF-8. Every log that can
+// print a diff reads .gitattributes at Head (attrSource, scan.go), as
+// classification does, so whether a file is binary does not depend on what
+// is checked out. The runner's common prefix pins what no option can:
+// core.bigFileThreshold, core.commentChar and trailer.separators
+// (docs/spec/git-invocation.md). Numstat is read with -z, so every path,
+// including a rename's two paths, arrives exactly as stored, however odd it
+// is.
 //
 // In HistoryWeek it runs one first-parent log. HistoryScan adds:
 //
@@ -209,24 +212,6 @@ func (h *historyRun) run(ctx context.Context) error {
 	return h.canonicalise(ctx)
 }
 
-// historyConfig pins the repository settings that change the diff or the
-// trailers a log prints and that no log option overrides. A -c ahead of the
-// subcommand beats the repository's own config, and each value here is
-// git's default (each verified on 2.50.1 by setting it in the repository's
-// config). Above core.bigFileThreshold every blob is binary, with no
-// numstat counts and no patch lines. git's trailer parser skips comment
-// lines, so core.commentChar=C (or core.commentString, the same setting)
-// hides every Co-authored-by line, and without ":" in trailer.separators
-// no line is a trailer at all. Every history log that prints a diff or
-// trailers starts with these; domain.GitSubcommand skips the -c pairs.
-func historyConfig() []string {
-	return []string{
-		"-c", "core.bigFileThreshold=512m",
-		"-c", "core.commentChar=#",
-		"-c", "trailer.separators=:",
-	}
-}
-
 // historyDiffArgs pin the diff that numstat and the own patches count, so
 // that repository config cannot change it (each verified on 2.50.1):
 // rename detection is git's default, where diff.renames=false would turn a
@@ -238,7 +223,12 @@ func historyConfig() []string {
 // attributes and config name runs, which log -p otherwise does; and a
 // gitlink change is shown, as a one-line hunk, where
 // diff.ignoreSubmodules=all would hide it and diff.submodule=log or diff
-// would print a summary with no hunk to count.
+// would print a summary with no hunk to count. These stay options, not -c
+// settings in the runner's prefix: only an option beats the more specific
+// config, and -c diff.ignoreSubmodules=none still let a
+// submodule.<name>.ignore=all in the repository's config, or in its
+// checked-out .gitmodules, hide the gitlink, where --ignore-submodules=none
+// did not.
 func historyDiffArgs() []string {
 	return []string{
 		"-M", "-l1000", "--root", "--diff-algorithm=myers", "--no-textconv",
@@ -270,7 +260,7 @@ func (h *historyRun) windowArgs() []string {
 // detection then reads blobs the clone does not have (verified on 2.50.1:
 // "could not fetch ... from promisor remote" under GIT_NO_LAZY_FETCH).
 func (h *historyRun) readLandings(ctx context.Context) error {
-	args := append(historyConfig(), "log", "--first-parent")
+	args := []string{attrSource(h.repo.Head), "log", "--first-parent"}
 	if h.lines {
 		args = append(args, "--diff-merges=first-parent")
 	}
@@ -356,7 +346,7 @@ func (h *historyRun) readBroughtIn(ctx context.Context) error {
 	}
 	slices.Sort(want)
 
-	args := append(historyConfig(), "log", "--no-walk", "--stdin", "--diff-merges=off", "-z")
+	args := []string{attrSource(h.repo.Head), "log", "--no-walk", "--stdin", "--diff-merges=off", "-z"}
 	if h.lines {
 		args = append(args, "--numstat")
 		args = append(args, historyDiffArgs()...)
