@@ -61,7 +61,7 @@ func (reviewsGiven) Definition() Definition {
 // them (reviews, review_comments, approvals, approvals_no_comment, and
 // no_comment_share when there are approvals).
 func (m reviewsGiven) Compute(in *Input) ([]domain.MetricValue, error) {
-	rv := newReviewsView(in)
+	rv := newReviewsView(in, domain.Scope{Kind: domain.ScopeAll})
 	if rv == nil {
 		return nil, nil
 	}
@@ -133,7 +133,7 @@ func (m reviewsGiven) Clusters(in *Input, scope domain.Scope) (RankInput, error)
 		Window:  window,
 		Options: rank.Options{MinN: reviewsGivenMinN, Blocks: window.Weeks()},
 	}
-	rv := newReviewsView(in)
+	rv := newReviewsView(in, scope)
 	if rv == nil {
 		return ri, nil
 	}
@@ -202,8 +202,12 @@ type reviewsView struct {
 // here, as it adds nothing to any number.
 //
 // A review counts when reviewsByOthers counts it, on a pull request merged
-// before Now.
-func newReviewsView(in *Input) *reviewsView {
+// before Now. Only the pull requests of scope's repositories are read past
+// the join (inScope still picks a scope's own): a rank in each repository
+// of a run is one call per repository, and resolving every review of every
+// repository's pull requests in each would cost the repositories times the
+// pull requests, seconds on a large organization.
+func newReviewsView(in *Input, scope domain.Scope) *reviewsView {
 	if in == nil || in.Facts == nil || in.Facts.Forge == nil {
 		return nil
 	}
@@ -220,7 +224,8 @@ func newReviewsView(in *Input) *reviewsView {
 	for i := range fs.Forge.PullRequests {
 		p := &fs.Forge.PullRequests[i]
 		keys := rv.join[p.Repo]
-		if len(keys) == 0 || p.State != domain.PullMerged || p.Merged.IsZero() || !p.Merged.Before(fs.Now) {
+		if len(keys) == 0 || !rv.covers(keys, scope) || p.State != domain.PullMerged || p.Merged.IsZero() ||
+			!p.Merged.Before(fs.Now) {
 			continue
 		}
 		byPerson := map[domain.Subject]*reviewsPull{}
@@ -262,14 +267,23 @@ func (rv *reviewsView) inScope(scope domain.Scope) []reviewsPull {
 	}
 	var out []reviewsPull
 	for _, r := range rv.all {
-		if slices.ContainsFunc(r.repos, func(key string) bool {
-			return scope.Kind == domain.ScopeRepo && key == scope.Key ||
-				scope.Kind == domain.ScopeGroup && rv.inGroup(key, scope.Key)
-		}) {
+		if rv.covers(r.repos, scope) {
 			out = append(out, r)
 		}
 	}
 	return out
+}
+
+// covers reports whether scope holds one of the repositories with keys:
+// every one of the run's for scope all, one of a group's, or the one.
+func (rv *reviewsView) covers(keys []string, scope domain.Scope) bool {
+	if scope.Kind == domain.ScopeAll {
+		return true
+	}
+	return slices.ContainsFunc(keys, func(key string) bool {
+		return scope.Kind == domain.ScopeRepo && key == scope.Key ||
+			scope.Kind == domain.ScopeGroup && rv.inGroup(key, scope.Key)
+	})
 }
 
 // inGroup reports whether the repository with repoKey is in the group.
