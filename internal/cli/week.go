@@ -6,6 +6,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/IHaveASegway/stillhere/internal/app"
+	"github.com/IHaveASegway/stillhere/internal/policy"
 )
 
 func (e *env) weekCommand() *cobra.Command {
@@ -38,8 +39,8 @@ stale clone gives a stale answer, and it stores nothing.`,
 				Sort:        sort,
 				SortFromCLI: flags.Changed("week-sort"),
 			}
-			if req.DaysFromCLI && days < 1 {
-				return usagef("invalid --days %d: want 1 or more", days)
+			if req.DaysFromCLI && (days < 1 || days > policy.MaxWeekDays) {
+				return usagef("invalid --days %d: want 1 to %d", days, policy.MaxWeekDays)
 			}
 			if req.SortFromCLI && sort != "lines_added" && sort != "commits" {
 				return usagef("invalid --week-sort %q: want lines_added or commits", sort)

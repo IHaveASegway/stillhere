@@ -27,7 +27,7 @@ type Group struct {
 // Warning is a condition that degraded a run without failing it, such as a
 // duplicate or shallow clone.
 type Warning struct {
-	Code    string // duplicate-repo, shallow-clone, shallow-window, partial-clone, numstat-rename, excluded-repo, ignore-revs, ...
+	Code    string // duplicate-repo, shallow-clone, shallow-window, partial-clone, ignore-revs, excluded-repo, path-failed, ...
 	Message string // already scrubbed
 	Repo    string // Repo.Key; "" for run-level warnings
 }

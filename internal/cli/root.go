@@ -261,11 +261,8 @@ func (e *env) loadPolicy() (*policy.Policy, error) {
 	data, err := os.ReadFile(name)
 	switch {
 	case err == nil:
-		p, err := policy.Parse(name, data)
-		if err != nil {
-			return nil, fmt.Errorf("policy %s: %w", name, err)
-		}
-		return p, nil
+		// Parse's errors already name the file.
+		return policy.Parse(name, data)
 	case e.policyPath == "" && errors.Is(err, fs.ErrNotExist):
 		p, err := policy.Default()
 		if err != nil {

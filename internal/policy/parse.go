@@ -16,9 +16,10 @@ import (
 // schemaVersion is the only policy schema version this stillhere reads.
 const schemaVersion = 1
 
-// maxWeekDays bounds [week] days: a century, far beyond any history,
-// and small enough that no day arithmetic on the window can overflow.
-const maxWeekDays = 36500
+// MaxWeekDays bounds [week] days, and --days with it: a century, far
+// beyond any history, and small enough that no day arithmetic on the window
+// can overflow.
+const MaxWeekDays = 36500
 
 // The values the schema allows for [headline] metric and [week] sort.
 const (
@@ -199,8 +200,8 @@ func build(name string, tomlText, denyText []byte, from origin) (*Policy, []stri
 	if f.Headline.Metric != headlineProdNonblank {
 		c.problemf("[headline] metric %q: the only headline is %q", f.Headline.Metric, headlineProdNonblank)
 	}
-	if f.Week.Days < 1 || f.Week.Days > maxWeekDays {
-		c.problemf("[week] days = %d: want 1 to %d", f.Week.Days, maxWeekDays)
+	if f.Week.Days < 1 || f.Week.Days > MaxWeekDays {
+		c.problemf("[week] days = %d: want 1 to %d", f.Week.Days, MaxWeekDays)
 	}
 	if f.Week.Sort != sortLinesAdded && f.Week.Sort != sortCommits {
 		c.problemf("[week] sort %q: want %q or %q", f.Week.Sort, sortLinesAdded, sortCommits)

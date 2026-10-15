@@ -13,6 +13,7 @@ import (
 	"github.com/IHaveASegway/stillhere/internal/metrics"
 	"github.com/IHaveASegway/stillhere/internal/policy"
 	"github.com/IHaveASegway/stillhere/internal/rank"
+	"github.com/IHaveASegway/stillhere/internal/redact"
 	"github.com/IHaveASegway/stillhere/internal/report"
 )
 
@@ -250,37 +251,29 @@ func WhoKnows(ctx context.Context, d Deps, r WhoKnowsRequest) (*report.WhoKnows,
 	if err != nil {
 		return nil, err
 	}
-	if r.Repo != "" && !hasRepo(s.facts, r.Repo) {
-		return nil, &domain.UsageError{Msg: fmt.Sprintf(
-			"--repo %q is not a repository of run %d: it takes a repository key, as 'stillhere report --format json' lists them", r.Repo, s.run.ID)}
+	repo := r.Repo
+	if repo != "" && !hasRepo(s.facts, repo) {
+		// A remote pasted with its credentials names its scrubbed key. The
+		// error quotes only the scrubbed form: it is printed and may be
+		// logged (docs/spec/git-invocation.md#url-scrubbing).
+		repo = redact.URL(repo)
+		if !hasRepo(s.facts, repo) {
+			return nil, &domain.UsageError{Msg: fmt.Sprintf(
+				"--repo %q is not a repository of run %d: it takes a repository key, as 'stillhere report --format json' lists them", repo, s.run.ID)}
+		}
 	}
 	prefix := cleanPrefix(r.Path)
-	values, err := whoKnowsValues(s, r.Repo, prefix)
+	// who_knows@1 is answered per query, for any prefix down to one file,
+	// and never stored: a value for every directory of every repository
+	// would outnumber the facts.
+	values, err := metrics.WhoKnows(s.input(), repo, prefix)
 	if err != nil {
 		return nil, fmt.Errorf("computing %s: %w", report.MetricWhoKnows, err)
 	}
 	run := s.run
 	return report.NewWhoKnows(&report.WhoKnowsInput{
-		Run: &run, Facts: underPrefix(s.facts, prefix, r.Repo), Who: s.who, Path: prefix, Repo: r.Repo, Values: values,
+		Run: &run, Facts: underPrefix(s.facts, prefix, repo), Who: s.who, Path: prefix, Repo: repo, Values: values,
 	}), nil
-}
-
-// whoKnowsValues computes who_knows@1 for the code under prefix: per
-// query, because a value for every directory of every repository would
-// outnumber the facts. With the metric contract on main, that is the
-// metric's Compute over the run's facts under the prefix.
-//
-// TODO(#13): the metrics branch (#9, PR #35) answers a prefix itself with
-// metrics.WhoKnows(in, repo, prefix), and its who_knows@1 Compute returns
-// no values. Once both are merged, this body is
-// metrics.WhoKnows(s.input(), repo, prefix); NewWhoKnows already reads that
-// layout (docs/spec/report-json.md#where-the-numbers-come-from).
-func whoKnowsValues(s *stored, repo, prefix string) ([]domain.MetricValue, error) {
-	m, err := lookupMetric(report.MetricWhoKnows)
-	if err != nil {
-		return nil, err
-	}
-	return m.Compute(&metrics.Input{Facts: underPrefix(s.facts, prefix, repo), Policy: s.policy, Who: s.who, Days: s.policy.Week.Days})
 }
 
 func hasRepo(fs *domain.FactSet, key string) bool {
@@ -369,11 +362,14 @@ func Me(ctx context.Context, d Deps, r MeRequest) (*report.Me, error) {
 			values = append(values, v)
 		}
 	}
-	// TODO(#13): the metrics branch (#9, PR #35) never stores a person's
-	// AI-assisted share; it answers it per query with
-	// metrics.PersonalAIShare(in, email), whose only caller is this page.
-	// Once both are merged, append its values here; NewMe and the
-	// renderers already label them (report.OwnPageOnly).
+	// A person's own AI-assisted share is never stored: it is computed for
+	// this page alone (ADR 0007), and NewMe and the renderers label it
+	// (report.OwnPageOnly).
+	share, err := metrics.PersonalAIShare(s.input(), email)
+	if err != nil {
+		return nil, fmt.Errorf("computing the AI-assisted share: %w", err)
+	}
+	values = append(values, share...)
 	if len(values) == 0 {
 		return nil, fmt.Errorf("%s has no values in run %d (a person is named by their canonical email, after .mailmap): %w",
 			email, s.run.ID, domain.ErrNotFound)

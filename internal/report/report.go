@@ -186,7 +186,7 @@ type Group struct {
 // Warning is a condition a collector recorded that degraded the run
 // without failing it.
 type Warning struct {
-	Code    string `json:"code"` // duplicate-repo, shallow-clone, shallow-window, partial-clone, numstat-rename, excluded-repo, path-failed
+	Code    string `json:"code"` // duplicate-repo, shallow-clone, shallow-window, partial-clone, ignore-revs, excluded-repo, path-failed
 	Message string `json:"message"`
 }
 

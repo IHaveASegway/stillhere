@@ -256,23 +256,33 @@ func collectRepo(ctx context.Context, d Deps, job repoJob, opt collectOptions) (
 		return fail("classification", err)
 	}
 	rf.Paths = paths
-	// Blame credits every line older than a shallow boundary to the
-	// boundary commit, and a partial clone has no blobs to blame.
-	if opt.mode == collect.HistoryScan && !repo.Shallow && !repo.Partial {
-		start = time.Now()
-		bf, err := collect.Blame(ctx, d.Git, repo, collect.BlameOptions{
-			Paths:          blamePaths(rf.Paths),
+	if opt.mode == collect.HistoryScan {
+		// Blame credits every line older than a shallow boundary to the
+		// boundary commit, and a partial clone has no blobs to blame, so
+		// neither gets line facts. Blame still runs for them with no paths:
+		// that resolves only the ignore-revs list, which durable@1 and
+		// simplifying@1 exclude whether or not lines were blamed, and turns
+		// a bad --ignore-revs-file into a usage error
+		// (collect.BlameOptions.Paths).
+		lineFacts := !repo.Shallow && !repo.Partial
+		bopt := collect.BlameOptions{
 			IgnoreRevsFile: opt.ignoreRevsFile,
 			Slots:          opt.slots,
 			Timeout:        blameTimeout,
 			Progress:       blameProgress(d.Log, repo.Name),
-		})
+		}
+		if lineFacts {
+			bopt.Paths = blamePaths(rf.Paths)
+		}
+		start = time.Now()
+		bf, err := collect.Blame(ctx, d.Git, repo, bopt)
 		t.BlameMS = time.Since(start).Milliseconds()
 		if err != nil {
 			return fail("blame", err)
 		}
-		rf.LineFacts = true
+		rf.LineFacts = lineFacts
 		rf.Owners, rf.IgnoreRevs, rf.BlameErrors = bf.Owners, bf.IgnoreRevs, bf.Errors
+		rf.Warnings = repoWarnings(repo, rf.Warnings, bf.Warnings)
 		for i, e := range bf.Errors {
 			if i == 8 {
 				d.Log.Warn("more blame failures", "repo", repo.Name, "files", len(bf.Errors)-8)

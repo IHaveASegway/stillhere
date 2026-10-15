@@ -27,7 +27,7 @@ type Discovery struct {
 	Repos    []domain.Repo      // health-checked, duplicates removed, sorted by Key
 	Groups   []domain.Group     // sorted by Name
 	Warnings []domain.Warning   // duplicate-repo, shallow-clone, partial-clone; sorted by Repo, Code, Message
-	Failed   []domain.FileError // paths that gave no repository, each once, sorted by Path: a PATH slot that is neither a repo nor a group, or a repo git cannot read or whose default branch has no commit; the use cases report each as a run-level discover-failed warning and mark the run partial
+	Failed   []domain.FileError // paths that gave no repository, each once, sorted by Path: a PATH slot that is neither a repo nor a group, or a repo git cannot read or whose default branch has no commit; the use cases report each as a run-level path-failed warning and mark the run partial
 }
 
 // The warning codes discovery emits (docs/spec/report-json.md).
