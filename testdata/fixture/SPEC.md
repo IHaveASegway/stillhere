@@ -1,6 +1,6 @@
 # Fixture repository and oracles
 
-Status: carried over from the 2026-10-07 plan, change oracles and the sibling fixture added 2026-10-14 · the week oracle becomes `go test` in M0, still-here and change oracles in M1, web escaping in M3
+Status: carried over from the 2026-10-07 plan, change oracles and the sibling fixture added 2026-10-14, regression guards added 2026-10-14 (#13) · the week, still-here and change oracles run as `go test` in `internal/app` (`TestWeekOracle`, `TestStillHereOracle`, `TestChangeOracles`, `TestDeterminism`, #13), web escaping in M3
 
 `internal/fixture` builds this repository (`fixture.Main`), the [sibling fixture](#sibling-fixture) (`fixture.Sibling`) and the [regression guards](#regression-guards-testchangeoracles)' two repositories (`fixture.Backdated`, `fixture.MergedRevert`) in temporary directories for `go test`. Every number below is an oracle: a change that moves one fails CI. Each oracle exists so that one specific wrong implementation fails, and that implementation is named next to it.
 
@@ -173,6 +173,7 @@ Why each row is what it is:
 - **Ivy, 4 and 0.** `tests/test_service.py` matches the segment pattern `(^|/)tests(/|$)`, but the substring `/tests/` does not occur in it. `notes.csv` is unclassified and adds 0, yet the commit still counts.
 - **Jules, 0.** A commit that touches only an unclassified path still makes a row.
 - **One Ada row.** Her in-window commit is authored as `ada@other.example` while `log.mailmap=false`. `%aN`/`%aE` give one row at `ada@example.com`; `%an`/`%ae` would give a second row.
+- **`--days 1`.** Against `[week].days = 7`, the report writes `window.days` 1, `days_from` `cli`, and `since` `2026-10-06T00:00:00Z`; an override the report ignores leaves `window.days` at 7. The rows do not move: every week landing is on 2026-10-06, inside both windows.
 
 ## Still-here oracle (M1, `TestStillHereOracle`)
 
@@ -611,21 +612,21 @@ Ada's oracle stays stable only if these cases stay out of the fixture repo.
 - **Rename paths** (`TestNumstatRename`, a small repository built with `git fast-import`): the collector reads numstat with `-z` ([week-collector.md](../../docs/spec/week-collector.md#parsing)), so each form git would print without it gives the true destination and source, in week and scan runs alike. `dir/{old => new}/file.py` gives `dir/new/file.py`; `x/{y => }/z.py` gives `x/z.py`, not `x//z.py`; `a => b => c` gives `b => c` renamed from `a`, with no warning; a modified file named `{x => y}.py` keeps its name and is not a rename; quoted and octal-escaped names keep their own bytes. Scan runs add each file's non-blank lines from its own patch, so a blank line added in a rename counts in numstat only.
 - **Policy** (`TestPolicy`):
   - A user file that omits `[bots]` exits 2 and names `bots`.
-  - `--days 1` against `[week].days = 7` writes `window.days` 1, `days_from` `cli`, and `since` `2026-10-06T00:00:00Z`.
   - `policy.sha256` stays the hash of the file.
+  - The deny list loads: a `generated_paths.txt` line that `regexp.Compile` rejects, such as a lookahead `(?=…)` (RE2 has none), fails the test. The real file's header names RE2, Linguist (MIT), and the upstream commit that was read. (This was `TestDenyListLoads`; it is part of `TestPolicy`.)
+  - The `--days 1` override of `[week].days` is the [week oracle](#week-oracle-m0-testweekoracle)'s, in `TestWeekOracle`.
 - **Attributes** (`TestAttributes`, a tiny second repo):
   - A packaged deny plus `-linguist-generated` is not denied.
   - No deny plus `linguist-generated` is denied.
   - A deny with one attribute unset and the other set stays denied.
   - Repeat all three against a bare clone of that repo; without `--source` every case would read `unspecified`.
-- **Loader** (`TestDenyListLoads`): a `generated_paths.txt` line that `regexp.Compile` rejects, such as a lookahead `(?=…)` (RE2 has none), fails the test. The real file's header names RE2, Linguist (MIT), and the upstream commit that was read.
 - **Clone health** (`TestCloneHealth`):
   - A `--depth 1` clone warns `shallow-clone` and has no blame facts.
   - A `--filter=blob:none` clone warns `partial-clone`, and has commit facts but no line facts.
   - With a fake promisor URL, assert that nothing connects under the Analysis profile (`GIT_NO_LAZY_FETCH=1` and `GIT_ALLOW_PROTOCOL=none`). The 2.45 floor means the assertion is never skipped, and neither variable is ever unset.
-- **Ignore-revs** (`TestIgnoreRevs`): a root `.git-blame-ignore-revs` at the scanned SHA is used and recorded; `--ignore-revs-file` on a multi-repo run exits 2.
-- **Prefix with odd M** (`TestConcentrationOddM`): three authors with `majority_files` 1 each, so M = 3 and half is 1.5, with equal lines on two of them. The walk stops at ≥ 1.5, and the email tie-break decides who the second author is.
-- **Display name** (`TestDisplayName`): one email, no mailmap name, two names with equal counts. The newer committer timestamp wins; equal timestamps fall through to UTF-8 bytes ascending.
+- **Ignore-revs** (no test of its own: the [sibling](#sibling-fixture) oracles cover it, in `TestChangeOracles`): a root `.git-blame-ignore-revs` at the scanned SHA is used and recorded. Blame looks through F, so L5 keeps 3 of 3 in `durable@1`; F is no `simplifying@1` cluster; and the run records `blame_ignore_revs` with source `root` and F's full ID. `--ignore-revs-file` on a multi-repo run is a usage error ([report-json.md](../../docs/spec/report-json.md#exit-codes)) that no test asserts yet.
+- **Prefix with odd M** (no test yet: [codebase.md](../../docs/spec/codebase.md#tests) lists none): three authors with `majority_files` 1 each, so M = 3 and half is 1.5, with equal lines on two of them. The walk stops at ≥ 1.5, and the email tie-break decides who the second author is.
+- **Display name** (no test yet: [codebase.md](../../docs/spec/codebase.md#tests) lists none): one email, no mailmap name, two names with equal counts. The newer committer timestamp wins; equal timestamps fall through to UTF-8 bytes ascending.
 - **Cache** (`TestCacheAmend`, only if open decision #3 is approved): blame the fixture, then amend a blamed commit away without `git gc`. `git cat-file -e` of the old HEAD still exits 0, and the next scan misses every blame fact.
 - **Hotspots** (only with open decision #1):
   - Option A: with the jar absent, `hotspots.status = skipped`, `reason = jar-not-found`, and still-here rows are unchanged. CSV fixtures under `testdata/maat_csv/` cover an ambiguous display name and a path that no longer exists, with `ownership` as a 0–1 ratio and `degree` as an integer percent.
