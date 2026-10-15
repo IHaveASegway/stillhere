@@ -317,22 +317,25 @@ type Config struct {
 func New(ctx context.Context, cfg Config) (*Runner, error) // git older than 2.44 → *domain.UsageError
 func (r *Runner) Version() string                          // *Runner implements domain.GitRunner
 
-// policy: the model (types.go) is frozen; #5 implements the functions.
+// policy: the model (types.go) is frozen; #5 implements the functions, and added only Paths' unexported prefilter.
 // Every key of a required table is required: nothing is filled in from the packaged default,
 // whose default.toml holds the values the specs call defaults ([blame] max_bytes 400000).
 type Policy struct {
 	Name     string
 	Version  int    // the file's own schema version
 	SHA256   string // hex digest of Source
-	Source   []byte // the TOML, a length prefix and the deny list: exactly what SHA256 hashes; a run stores it
+	Source   []byte // "<byte length of the TOML, decimal>\n<TOML><deny list text>": exactly what SHA256 hashes; a run stores it.
+	                // The deny list text is generated_paths.txt for the packaged policy and empty for a user file, whose
+	                // deny list is in the TOML; the prefix makes the split unambiguous, so no edit moves bytes across it
+	                // and keeps the hash
 	Headline Headline // [headline] Metric string
-	Week     Week     // [week] Days int; Sort string
+	Week     Week     // [week] Days int, 1 to 36500 (--days should hold to the same bound); Sort string
 	Blame    Blame    // [blame] MaxBytes int64
 	Bots     Bots     // [bots] Fragments []string, lowercased
 	AI       AI       // [ai] Version int; CoauthorEmails, AgentAuthors []string. Matches co-author emails and agent
 	                  // authors only: a rule on another trailer (Made-with:) needs a collector field and a new ai_assisted version
-	Roles    Roles    // [roles] Extensions, Names map[string]domain.Role; Path []PathRule
-	Paths    Paths    // [paths] Deny []*regexp.Regexp; Source "package:generated_paths.txt" or "policy"
+	Roles    Roles    // [roles] Extensions (one dot each: classify reads the last dot suffix), Names map[string]domain.Role; Path []PathRule
+	Paths    Paths    // [paths] Deny []*regexp.Regexp, matched with Denies; Source "package:generated_paths.txt" or "policy"
 }
 type PathRule struct {
 	Role    domain.Role
@@ -340,14 +343,18 @@ type PathRule struct {
 	When    []domain.Role  // empty: any path; else only paths whose extension or name role is one of these
 } // tried in order: the first whose Pattern matches and whose When admits the extension or name role wins
 func Default() (*Policy, error)                             // embedded default.toml + generated_paths.txt
-func Parse(name string, data []byte) (*Policy, error)       // *domain.UsageError for a missing table or key, or a bad pattern
-func FromSource(name string, source []byte) (*Policy, error) // rebuilds a run's policy from Run.PolicySource; same Ref
+func Parse(name string, data []byte) (*Policy, error)       // *domain.UsageError for a missing table or key, an unknown key, or a bad pattern or value
+func FromSource(name string, source []byte) (*Policy, error) // rebuilds a run's policy from Run.PolicySource alone, never today's packaged files; same Ref; a plain error, not a usage error
 func (p *Policy) Ref() domain.PolicyRef
+func (ps *Paths) Denies(path string) bool                   // any Deny pattern matches path. Default, Parse and FromSource also store, unexported in
+                                                            // Paths, the literals each pattern needs (FilteredRE2's prefilter): a path tries a
+                                                            // handful of the ~240 packaged patterns, not all; a pattern added by hand is always tried
 
 // classify
 type Input struct {
 	Path      string
 	AtHead    bool   // the path exists at HEAD; false for a path only the history touched
+	NotFile   bool   // HEAD holds a symbolic link or a submodule at the path: no role, so unclassified unless denied
 	Size      int64  // bytes at HEAD, else at the commit that touched the path; -1 when unknown: no too_big check
 	Generated string // linguist-generated at HEAD: "unspecified", "unset", "set" or a value
 	Vendored  string // linguist-vendored at HEAD
@@ -365,9 +372,11 @@ type Discovery struct {
 	Failed   []domain.FileError // PATH slots that were neither a repo nor a group
 }
 type PathAt struct{ Commit, Path string } // a path in the tree of a commit that touched it
-// ClassifyPaths: every path at Head, plus each touched path Head no longer has, sized at its Commit.
-// touched: every path the history touched (week and scan), one entry per path at the newest commit that
-// added lines to it; later duplicates are ignored. Returns one PathClass per distinct path, sorted by Path.
+// ClassifyPaths: every path at Head, symbolic links and submodules included (they get no role), plus each touched
+// path Head no longer has, sized at its Commit. touched: every path the history touched (week and scan), one entry
+// per path at the newest commit that added lines to it; later duplicates are ignored. Returns one PathClass per
+// distinct path, sorted by Path, so a path the history touched has a class; a consumer may treat a missing one
+// as an error.
 func ClassifyPaths(ctx context.Context, git domain.GitRunner, repo domain.Repo, p *policy.Policy, touched []PathAt) ([]domain.PathClass, error)
 type HistoryMode int // HistoryWeek or HistoryScan
 type HistoryOptions struct {
@@ -608,17 +617,17 @@ Tests sit at stable boundaries, so a refactor does not rewrite them (Kent Beck, 
 
 | Test | Package | Asserts |
 | --- | --- | --- |
-| `TestWeekOracle` | `app` | the week table in the fixture spec |
+| `TestWeekOracle` | `app` | the week table in the fixture spec, and the `--days 1` window against `[week] days = 7`: `window.days` 1, `days_from` `cli`, `since` `2026-10-06T00:00:00Z` |
 | `TestStillHereOracle` | `app` | the still-here table and the concentration walk |
 | `TestChangeOracles` | `app` | `durable@1`, `simplifying@1`, reverts and AI-assisted tags on both fixtures; `knowledge_loss@1` and `who_knows@1` on the main fixture |
 | `TestDeterminism` | `app` | two scans of the fixture give byte-identical JSON without `timings` |
 | `TestDiscover` | `collect` | duplicates, bare repos, scp vs HTTPS remotes; a planted token appears in no output |
 | `TestCloneHealth` | `collect` | shallow and partial clones warn and lose only the facts they should |
-| `TestAttributes` | `collect` | `check-attr --source` on a work tree and a bare clone |
+| `TestAttributes` | `collect` | `check-attr --source` on a work tree and a bare clone: the scanned commit's attributes, not the checked-out ones, matched case-sensitively under `core.ignorecase=true`; an empty value is on; an attribute that settles a generated header; a deleted path classified by Head's attributes; a header sniff that no attribute changes (`-diff`, `binary`, an uncommitted edit), with each of its rules, prose and a generator program that stay `prod`, and the line-40 limit; a symbolic link and a submodule unclassified |
 | `TestNumstatRename` | `collect` | the rename path forms |
 | `TestBlamePorcelain` | `collect` | `--line-porcelain` and `--porcelain` parse to the same counts |
-| `TestClassify` | `classify` | roles, role precedence, `too_big`, segment matching |
-| `TestPolicy` | `policy` | a missing table or key exits 2; `--days` overrides; the hash covers the deny list; `FromSource(p.Source)` has `p.Ref()` |
+| `TestClassify` | `classify` | roles, role precedence, test directories for code and configuration only, `too_big`, segment matching, the deny list's minimum contents and what it leaves out, Linguist's attribute values, no role for a link or a submodule |
+| `TestPolicy` | `policy` | a missing table or key exits 2; `[week] days` is the file's, in its hash, and 1 to 36500 (the `--days` override itself is `TestWeekOracle`'s); an extension holds one dot; the hash covers the deny list, and the packaged files hold no CR; `FromSource(p.Source)` has `p.Ref()`; every deny line compiles and the file names RE2, Linguist (MIT) and the upstream commit; the deny prefilter never changes an answer |
 | `TestRankIntervals` | `rank` | reproducible intervals; ineligible subjects unranked |
 | `TestRedact` | `redact` | no credential survives `URL`, `Scrub` or `Message` (userinfo, scp-like and malformed remotes, query strings, quotes, the 180-rune cut); text that holds none is unchanged |
 | `TestRunner` | `gitcli` | per-user and system attributes change neither numstat nor `check-attr`; no askpass, signature or external diff program runs; an inherited `GIT_DIR` changes nothing; a timeout or cancellation kills git's process group and is reported as such even when the reader fails first on the truncated output; a helper that left the group cannot hold `Stream` |
