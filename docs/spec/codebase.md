@@ -193,7 +193,7 @@ type MetricID struct {
 	Version int
 } // String() is "durable@1"; ParseMetricID accepts "durable@1" and "durable" (latest)
 
-type Subject struct{ Kind, Key string } // person (canonical email), area (repo key + ":" + path prefix), repo, change (landing SHA or PR id)
+type Subject struct{ Kind, Key string } // person (canonical email), area (repo key + ":" + path prefix), repo, group (Group.Name: a group's own numbers), change (landing SHA or PR id)
 type Scope struct{ Kind, Key string }   // repo (Repo.Key), group (Group.Name), all ("")
 
 type MetricValue struct {
@@ -414,8 +414,8 @@ type BlameFacts struct {
 // identity
 func New(fs *domain.FactSet, p *policy.Policy) *Directory
 func (d *Directory) Name(email string) string           // display name rule, spec/git-invocation.md#identity-mailmap-and-bots
-func (d *Directory) Bot(email string) bool
-func (d *Directory) AIAssisted(c *domain.Commit) bool    // ADR 0007
+func (d *Directory) Bot(email string) bool              // a [bots] fragment in the email or display name, or an [ai] agent: agents are never people (ADR 0007)
+func (d *Directory) AIAssisted(c *domain.Commit) bool    // ADR 0007; only a commit credited to a human
 func (d *Directory) Credit(author domain.Person, coAuthors []domain.Person) string // the author, or an agent's first human co-author (ADR 0007); commits and blamed lines alike
 
 // metrics
@@ -426,10 +426,10 @@ type Definition struct {
 	Eligibility, BlindSpots, Gaming, Oracle, Validity        string
 }
 type Input struct {
-	Facts  *domain.FactSet
-	Policy *policy.Policy
-	Who    *identity.Directory
-	Days   int // landed@1 window
+	Facts  *domain.FactSet     // required, with Now
+	Policy *policy.Policy      // nil: no bot or AI patterns and no [week] days, so Days must be set
+	Who    *identity.Directory // nil: identity.New(Facts, Policy)
+	Days   int                 // landed@1 window, at least 1; 0: the policy's [week] days. Compute checks it before any metric runs
 }
 type Metric interface {
 	Definition() Definition
@@ -445,11 +445,20 @@ type RankInput struct {
 	Kind    rank.Kind
 	Window  domain.Window // the metric's window for Facts.Now (durable@1: [now-365d, now-90d)); joins ranks to MetricValue.Window
 	Options rank.Options  // MinN from the eligibility rule; Blocks for Sum; Replicates 0 = 1000
-	Data    map[domain.Subject][]rank.Cluster
+	Data    map[domain.Subject][]rank.Cluster // each person's clusters, sorted by Change; bots left out; nil when empty
 }
-func All() []Metric                                    // stable order
-func Lookup(id string) (Metric, error)
-func Compute(in *Input) ([]domain.MetricValue, error) // every metric, sorted
+func All() []Metric                                    // stable order: the registry, one list (a new metric is one file plus one line)
+func Lookup(id string) (Metric, error)                 // an unknown id is a *domain.UsageError
+func Compute(in *Input) ([]domain.MetricValue, error) // every metric, sorted: what a scan stores
+// WhoKnows answers who_knows@1 for the code under a repo-relative path prefix ("" is the root) in one repository,
+// or in all when repo is ""; per query, never stored by a scan. A repo that is no key is matched by its
+// redact.URL form, so a remote pasted with credentials finds its repository; a repo that matches no key either
+// way wraps domain.ErrNotFound, and the error quotes only the scrubbed form.
+func WhoKnows(in *Input, repo, prefix string) ([]domain.MetricValue, error)
+// PersonalAIShare answers ai_assisted@1's share for one person (email: canonical) in every scope they have a
+// cluster in; per query, never part of Compute or stored by a scan, because ADR 0007 shows it only to that
+// person: app.Me is its only caller. A bot, or an email without clusters, gets no values.
+func PersonalAIShare(in *Input, email string) ([]domain.MetricValue, error)
 
 // rank
 type Kind int // Ratio or Sum
