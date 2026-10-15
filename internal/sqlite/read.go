@@ -19,10 +19,6 @@ import (
 // published is the condition that makes a run visible to readers.
 const published = `status IN ('complete', 'partial')`
 
-// newestFirst orders runs from the latest snapshot instant (Run.Now) to the
-// earliest, and runs with the same instant from the last begun.
-const newestFirst = `ORDER BY now DESC, id DESC`
-
 // Run returns a complete or partial run by id, as BeginRun recorded it,
 // with its final status and finish time, or domain.ErrNotFound.
 func (s *Store) Run(ctx context.Context, id int64) (domain.Run, error) {
@@ -38,15 +34,17 @@ func (s *Store) Run(ctx context.Context, id int64) (domain.Run, error) {
 	return r, nil
 }
 
-// LatestRun returns the newest complete or partial run of the kind, or
-// domain.ErrNotFound. The newest is the run with the latest Now, the
-// snapshot instant, and of runs with the same Now the last one begun: a
-// backfilled snapshot of last year does not displace today's.
+// LatestRun returns the newest complete or partial run of the kind, the
+// one begun last (run ids only grow), or domain.ErrNotFound. Begin order,
+// not Run.Now: the read commands' default is the run the user made last, a
+// run made with an earlier --now included, until the next run of the kind.
+// Ordered by Now, one --now mistyped into the future would stay the default
+// for good, since retention, which orders by Now, never deletes the newest.
 func (s *Store) LatestRun(ctx context.Context, kind domain.RunKind) (domain.Run, error) {
 	var r domain.Run
 	err := s.read(ctx, func(tx *sql.Tx) error {
 		var err error
-		r, err = readRun(ctx, tx, `WHERE kind = ? AND `+published+` `+newestFirst+` LIMIT 1`, string(kind))
+		r, err = readRun(ctx, tx, `WHERE kind = ? AND `+published+` ORDER BY id DESC LIMIT 1`, string(kind))
 		return err
 	})
 	if err != nil {

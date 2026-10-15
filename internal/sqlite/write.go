@@ -30,12 +30,14 @@ const (
 // times, tool version, policy reference, policy source and options; the id,
 // status and finish time are the store's: Run reports the run as begun,
 // with the id BeginRun returned, its final status, and the time FinishRun
-// recorded.
+// recorded. Until FinishRun, every write of this Store renews the run's
+// lease (see leases).
 func (s *Store) BeginRun(ctx context.Context, r domain.Run) (int64, error) {
 	id, err := s.beginRun(ctx, &r)
 	if err != nil {
 		return 0, fmt.Errorf("sqlite.BeginRun: %w", err)
 	}
+	s.leases.hold(id)
 	return id, nil
 }
 
@@ -337,6 +339,9 @@ func (s *Store) FinishRun(ctx context.Context, runID int64, status domain.RunSta
 	default:
 		return fmt.Errorf("sqlite.FinishRun: run %d: %q is not a final status", runID, status)
 	}
+	// Whatever the outcome, this Store stops renewing the run's lease: it is
+	// finished, gone, or left to a retry of FinishRun, whose claim renews it.
+	defer s.leases.release(runID)
 	finished, err := encodeTime(time.Now())
 	if err != nil {
 		return fmt.Errorf("sqlite.FinishRun: run %d: %w", runID, err)

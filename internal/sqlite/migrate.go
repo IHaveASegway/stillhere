@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"strconv"
+	"strings"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
 )
@@ -80,22 +81,36 @@ func migrationVersion(file string) (int, bool) {
 	return v, err == nil && v > 0
 }
 
-// migrate brings the database to the newest embedded version. It refuses,
-// with a *domain.UsageError and without writing, a file that is not a facts
-// database and one that a newer stillhere migrated past this binary's last
-// migration.
+// migrate makes db a facts database at the newest embedded version. It
+// first reads the file's header and refuses, with a *domain.UsageError, a
+// file that is not a facts database and one that a newer stillhere migrated
+// past this binary's last migration. It refuses before it changes the file
+// and without waiting for another process's lock, which is safe because
+// neither verdict can be undone: a foreign file never becomes a facts
+// database, and user_version never goes down. Then it turns on WAL mode
+// (walMode) and applies the migrations the file lacks.
 func migrate(ctx context.Context, db *sql.DB) error {
 	ms, err := migrations()
 	if err != nil {
 		return err
 	}
-	// The common case, an up-to-date file, needs no write lock.
-	version, app, err := header(ctx, db)
+	var h fileHeader
+	err = retryBusy(ctx, func() error {
+		var err error
+		h, err = readHeader(ctx, db)
+		return err
+	})
 	if err != nil {
 		return err
 	}
-	if version == len(ms) && app == applicationID {
-		return nil
+	if err := h.check(len(ms)); err != nil {
+		return err
+	}
+	if err := walMode(ctx, db); err != nil {
+		return err
+	}
+	if h.version == len(ms) {
+		return nil // the common case, an up-to-date file, takes no write lock
 	}
 	for {
 		done, err := migrateOnce(ctx, db, ms)
@@ -103,6 +118,29 @@ func migrate(ctx context.Context, db *sql.DB) error {
 			return err
 		}
 	}
+}
+
+// walMode turns on write-ahead logging, a property of the file that every
+// later connection inherits, so readers see one snapshot while a run is
+// written and never block the writer. It runs after the header check, so a
+// file that Open refuses is never converted, and before the migrations, so
+// they run in WAL mode, where synchronous=NORMAL is safe. Leaving
+// rollback-journal mode needs the write lock after a read, which SQLite
+// refuses at once with SQLITE_BUSY while another connection holds it, so
+// the switch is retried (retryBusy); on a file already in WAL mode it
+// changes nothing.
+func walMode(ctx context.Context, db *sql.DB) error {
+	var mode string
+	err := retryBusy(ctx, func() error {
+		return db.QueryRowContext(ctx, `PRAGMA journal_mode = WAL`).Scan(&mode)
+	})
+	switch {
+	case err != nil:
+		return fmt.Errorf("turning on WAL mode: %w", err)
+	case !strings.EqualFold(mode, "wal"):
+		return fmt.Errorf("turning on WAL mode: the database stayed in %s mode", mode)
+	}
+	return nil
 }
 
 // migrateOnce applies the next migration, or reports that none is left. It
@@ -118,17 +156,17 @@ func migrateOnce(ctx context.Context, db *sql.DB, ms []migration) (done bool, er
 			err = errors.Join(err, rollback(tx))
 		}
 	}()
-	version, app, err := header(ctx, tx)
+	h, err := readHeader(ctx, tx)
 	if err != nil {
 		return false, err
 	}
-	if err := checkHeader(ctx, tx, version, app, len(ms)); err != nil {
+	if err := h.check(len(ms)); err != nil {
 		return false, err
 	}
-	if version == len(ms) {
+	if h.version == len(ms) {
 		return true, tx.Commit()
 	}
-	m := ms[version]
+	m := ms[h.version]
 	if _, err := tx.ExecContext(ctx, m.sql); err != nil {
 		return false, fmt.Errorf("migration %s: %w", m.name, err)
 	}
@@ -145,51 +183,55 @@ func migrateOnce(ctx context.Context, db *sql.DB, ms []migration) (done bool, er
 	return m.version == len(ms), nil
 }
 
-// checkHeader refuses a file this binary must not migrate: another
-// application's database, and a facts database newer than this binary.
-func checkHeader(ctx context.Context, tx *sql.Tx, version, app, latest int) error {
-	if app != applicationID && (app != 0 || version != 0) {
-		// Another application's id, or a schema version without ours.
-		return notFacts()
-	}
-	if version > latest {
-		return &domain.UsageError{Msg: fmt.Sprintf(
-			"schema version %d is newer than this stillhere, which knows versions up to %d: upgrade stillhere or use another database file",
-			version, latest)}
-	}
-	if version == 0 {
-		// A new, empty file, or another program's database that set
-		// neither header field: only the first may be migrated.
-		var n int
-		if err := tx.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_schema`).Scan(&n); err != nil {
-			return err
-		}
-		if n > 0 {
-			return notFacts()
-		}
-	}
-	return nil
+// fileHeader is what migrate reads of a file before it changes anything.
+type fileHeader struct {
+	version int // PRAGMA user_version: the last migration applied
+	app     int // PRAGMA application_id: applicationID in a facts database
+	objects int // the schema's tables, indexes, views and triggers: none in a new file
 }
 
-// notFacts is the refusal of a SQLite file that another program owns. Open
+// check refuses a file this binary must not migrate: another program's
+// database, and a facts database newer than this binary, which knows the
+// versions up to latest.
+func (h fileHeader) check(latest int) error {
+	switch {
+	case h.app != applicationID && (h.app != 0 || h.version != 0):
+		return notFacts() // another program's id, or a schema version without ours
+	case h.version > latest:
+		return &domain.UsageError{Msg: fmt.Sprintf(
+			"schema version %d is newer than this stillhere, which knows versions up to %d: upgrade stillhere or use another database file",
+			h.version, latest)}
+	case h.version == 0 && h.objects > 0:
+		return notFacts() // another program's database that set neither header field
+	}
+	return nil // a new, empty file, or a facts database this binary can migrate
+}
+
+// notFacts is the refusal of a file that another program owns. Open
 // prefixes the path.
 func notFacts() error {
 	return &domain.UsageError{Msg: "not a stillhere facts database: use another file"}
 }
 
-// querier is what header needs of a *sql.DB or a *sql.Tx.
+// querier is what readHeader needs of a *sql.DB or a *sql.Tx.
 type querier interface {
 	QueryRowContext(ctx context.Context, query string, args ...any) *sql.Row
 }
 
-// header reads the schema version (PRAGMA user_version) and the
-// application id from the database header.
-func header(ctx context.Context, q querier) (version, app int, err error) {
-	if err := q.QueryRowContext(ctx, `PRAGMA user_version`).Scan(&version); err != nil {
-		return 0, 0, fmt.Errorf("reading the schema version: %w", err)
+// readHeader reads the header in one statement, so its fields come from one
+// snapshot even while another process migrates the file. A file that is not
+// a SQLite database at all is refused like another program's database.
+func readHeader(ctx context.Context, q querier) (fileHeader, error) {
+	var h fileHeader
+	err := q.QueryRowContext(ctx, `
+		SELECT (SELECT user_version FROM pragma_user_version()),
+			(SELECT application_id FROM pragma_application_id()),
+			(SELECT count(*) FROM sqlite_schema)`).Scan(&h.version, &h.app, &h.objects)
+	switch {
+	case notADatabase(err):
+		return fileHeader{}, notFacts()
+	case err != nil:
+		return fileHeader{}, fmt.Errorf("reading the database header: %w", err)
 	}
-	if err := q.QueryRowContext(ctx, `PRAGMA application_id`).Scan(&app); err != nil {
-		return 0, 0, fmt.Errorf("reading the application id: %w", err)
-	}
-	return version, app, nil
+	return h, nil
 }

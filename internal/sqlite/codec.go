@@ -59,17 +59,24 @@ func decodeTime(v sql.NullString) (time.Time, error) {
 	return t, nil
 }
 
-// encodeFloat returns f, or nil (NULL) for NaN, which SQLite cannot store:
-// it would turn a NaN into NULL anyway, and a NOT NULL column would then
-// reject the row.
+// encodeFloat returns f as facts.db stores it: nil (NULL) for NaN, which
+// SQLite cannot store (it would turn a NaN into NULL anyway, and a NOT NULL
+// column would then reject the row), and +0 for either zero. SQLite writes
+// a REAL with no fractional part as an integer, which has no sign, so a -0
+// would load as +0 anyway; canonicalising it here states that rather than
+// leaving it to the file format. Every other value, infinities and
+// subnormals included, loads back bit for bit.
 func encodeFloat(f float64) any {
-	if math.IsNaN(f) {
+	switch {
+	case math.IsNaN(f):
 		return nil
+	case f == 0:
+		return 0.0 // +0 for -0 too: see above
 	}
 	return f
 }
 
-// decodeFloat is the inverse of encodeFloat.
+// decodeFloat is the inverse of encodeFloat, a zero loading as +0.
 func decodeFloat(v sql.NullFloat64) float64 {
 	if !v.Valid {
 		return math.NaN()

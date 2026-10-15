@@ -12,7 +12,9 @@
 --   (2026-10-07T00:00:00.000000000Z): exact to the nanosecond, sortable as
 --   text, and understood by SQLite's date functions. NULL is the zero time.
 -- - A bool is INTEGER 0 or 1. A float is REAL, and NULL stands for NaN,
---   which SQLite cannot store.
+--   which SQLite cannot store. A zero loads as +0: SQLite writes a REAL
+--   with no fractional part as an integer, which has no sign, so the store
+--   writes -0 as +0.
 -- - Child rows reference their run or repository ON DELETE CASCADE, so
 --   deleting a run (retention, or a run a crash left running) deletes
 --   everything it holds.
@@ -22,9 +24,9 @@
 -- transaction and then sets PRAGMA user_version.
 
 -- One row per run. status is the publication state: readers select
--- complete and partial runs only. heartbeat is the writer's last write, a
--- lease: Open deletes a run left running only once its lease has expired,
--- so it never deletes a run another process is still writing.
+-- complete and partial runs only. heartbeat is a lease, renewed by every
+-- write of the store that began the run: Open deletes a run left running
+-- only once its lease has expired, a day after that store last wrote.
 CREATE TABLE runs (
 	id             INTEGER PRIMARY KEY AUTOINCREMENT, -- never reused: a run id printed once keeps meaning that run
 	kind           TEXT    NOT NULL,                  -- scan, sync

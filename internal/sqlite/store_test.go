@@ -19,9 +19,9 @@ import (
 // (docs/spec/codebase.md#run-model, docs/spec/codebase.md#tests): every
 // field of a run's facts and metrics loads back exactly as it was put, so
 // LoadFacts(PutRepoFacts(x)) is reflect.DeepEqual to x, with lists in the
-// order they were put, nil for empty, and times in UTC whatever zone they
-// were put in; Run(id) returns the run as begun and finished, policy source
-// included; and readers never see a running or failed run.
+// order they were put, nil for empty, times in UTC whatever zone they were
+// put in, and a zero as +0; Run(id) returns the run as begun and finished,
+// policy source included; and readers never see a running or failed run.
 func TestStoreRoundTrip(t *testing.T) {
 	ctx := t.Context()
 	path := filepath.Join(t.TempDir(), "home", "facts.db") // Open creates the directory
@@ -116,6 +116,13 @@ func TestStoreRoundTrip(t *testing.T) {
 				t.Errorf("NaN loaded as Value %v, Detail[ratio] %v", last.Value, last.Detail["ratio"])
 			}
 			last.Value, last.Detail["ratio"] = 0, 0
+		}
+		// -0 == +0, so reflect.DeepEqual cannot see the sign either: the
+		// store writes a -0 as +0 (SQLite keeps a whole REAL as an integer,
+		// which has none), and the who_knows value's Den, put as -0, must
+		// load as +0.
+		if len(gotValues) > 2 && math.Signbit(gotValues[2].Den) {
+			t.Errorf("Den put as -0 loaded as %v, want +0", gotValues[2].Den)
 		}
 		wantValues := slices.Clone(values)
 		last := &wantValues[len(wantValues)-1]
@@ -396,7 +403,7 @@ func sampleMetrics(repo string, now time.Time) ([]domain.MetricValue, []domain.R
 		{
 			Metric: domain.MetricID{Name: "who_knows", Version: 1}, Scope: domain.Scope{Kind: domain.ScopeAll},
 			Subject: domain.Subject{Kind: domain.SubjectArea, Key: repo + ":cmd/"}, Value: math.Inf(1),
-			Num: math.Inf(-1), Den: math.Copysign(0, -1), N: 0, // no window: zero times
+			Num: math.Inf(-1), Den: math.Copysign(0, -1), N: 0, // -0 loads as +0; no window: zero times
 		},
 		{
 			Metric: durable, Scope: group, Subject: bob, Window: cohort, Value: math.NaN(), Num: 0, Den: 0,
