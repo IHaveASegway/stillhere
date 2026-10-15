@@ -22,9 +22,10 @@ type cluster struct {
 	landing *landingView
 	person  string
 	// added and removed are non-blank prod lines in the commits' own
-	// patches; surviving is what blame attributes to those commits at HEAD.
-	// traced is the part of added on paths blame read, the denominator
-	// durable@1 divides surviving by (untracedPaths).
+	// patches. traced is the part of added whose fate blame can tell, the
+	// denominator durable@1 divides surviving by, and surviving is what
+	// blame attributes to those commits at HEAD, the untraced lines left
+	// out of both alike (untracedLines).
 	added, removed, traced, surviving int
 }
 
@@ -42,7 +43,9 @@ func (c *commitView) counts() bool {
 // out every commit of a reverted landing while durable@1 keeps it (its lines
 // are gone, so it already scores nothing). needLines also skips repositories
 // without blame, whose surviving lines are unknown; within a repository with
-// blame, the lines on a file whose blame failed are left out through traced.
+// blame, the lines whose survival blame cannot tell (on a file whose blame
+// failed, or of a change git took for binary) are left out of traced and
+// surviving alike.
 func changeClusters(v *view, w domain.Window, needLines, dropReverted bool) []*cluster {
 	var out []*cluster
 	for _, r := range v.repos {

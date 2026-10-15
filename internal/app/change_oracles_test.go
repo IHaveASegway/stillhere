@@ -70,6 +70,7 @@ func TestChangeOracles(t *testing.T) {
 		t.Parallel()
 		mergedRevertGuard(t)
 	})
+	t.Run("binary files", binaryGuard)
 	t.Run("identity candidates", func(t *testing.T) {
 		t.Parallel()
 		identityOracles(t)

@@ -10,8 +10,10 @@ import (
 // commits at HEAD. It is a Ratio metric: the bootstrap resamples a person's
 // clusters (their counted commits in one landing), because lines inside one
 // change are not independent. Both sides of the ratio cover the same lines:
-// those on files blame read (cluster.traced), so a file whose blame failed
-// leaves the ratio instead of scoring its lines as lost.
+// those whose survival blame can tell (untracedLines), so a file whose blame
+// failed leaves the ratio instead of scoring its lines as lost, and a change
+// git took for binary, whose added lines are unknown, leaves it instead of
+// scoring its blamed lines as kept beyond what was added.
 type durableV1 struct{}
 
 var durableID = domain.MetricID{Name: "durable", Version: 1}
@@ -22,12 +24,13 @@ func (durableV1) Definition() Definition {
 		ID:       durableID,
 		Question: "Did the code a person wrote last?",
 		Unit: "Σ surviving / Σ added per person over their clusters in the cohort, landings in [now - 365d, now - 90d), per " +
-			"repository, group and all. added: non-blank prod lines of each counted commit's own -U0 -w patch, on files blame " +
-			"read; surviving: the non-blank prod lines blame -w -M (with the repository's ignore-revs file) attributes to it at " +
-			"HEAD. Lines added to a file whose blame failed, or to a path the history renamed into one, have unknown survival and " +
-			"are in neither part. A cluster is one person's counted commits in one landing and needs at least one added line. " +
-			"Merge commits, ignore-revs commits and revert landings are excluded; a reverted landing stays and scores what blame " +
-			"gives it. Detail: reverted_landings.",
+			"repository, group and all. added: non-blank prod lines of each counted commit's own -U0 -w patch; surviving: the " +
+			"non-blank prod lines blame -w -M (with the repository's ignore-revs file) attributes to it at HEAD. Lines whose " +
+			"survival blame cannot tell are in neither part: those of a file whose blame failed, or of a path the history renamed " +
+			"into one, and those of a change git took for binary (its added lines are unknown), followed through the file's " +
+			"renames to its path at HEAD. A cluster is one person's counted commits in one landing and needs at least one added " +
+			"line in the ratio. Merge commits, ignore-revs commits and revert landings are excluded; a reverted landing stays and " +
+			"scores what blame gives it. Detail: reverted_landings.",
 		Ranked:      true,
 		Eligibility: "At least 10 clusters in the cohort (open decision 5).",
 		BlindSpots: "A planned replacement of correct code looks not durable. Moves across files credit the mover; a move inside " +
@@ -84,10 +87,11 @@ func (durableV1) Clusters(in *Input, scope domain.Scope) (RankInput, error) {
 	}, nil
 }
 
-// durableClusters returns the cohort's clusters that added a prod line on a
-// file blame read: a landing that adds none (a pure rename, a
+// durableClusters returns the cohort's clusters that added a prod line
+// whose survival blame can tell: a landing that adds none (a pure rename, a
 // whitespace-only or a test-only change) says nothing about durability, and
-// neither does one whose added lines are all on files whose blame failed.
+// neither does one whose added lines are all untraced (on files whose blame
+// failed, or in changes git took for binary).
 func durableClusters(v *view) []*cluster {
 	var out []*cluster
 	for _, k := range changeClusters(v, v.window(cohortFrom, cohortTo), true, false) {

@@ -1,8 +1,8 @@
 # Fixture repository and oracles
 
-Status: carried over from the 2026-10-07 plan, change oracles and the sibling fixture added 2026-10-14, regression guards added 2026-10-14 (#13) · the week, still-here and change oracles run as `go test` in `internal/app` (`TestWeekOracle`, `TestStillHereOracle`, `TestChangeOracles`, `TestDeterminism`, #13), web escaping in M3
+Status: carried over from the 2026-10-07 plan, change oracles and the sibling fixture added 2026-10-14, regression guards added 2026-10-14 (#13), the binary-file guard 2026-10-14 (#54) · the week, still-here and change oracles run as `go test` in `internal/app` (`TestWeekOracle`, `TestStillHereOracle`, `TestChangeOracles`, `TestDeterminism`, #13), web escaping in M3
 
-`internal/fixture` builds this repository (`fixture.Main`), the [sibling fixture](#sibling-fixture) (`fixture.Sibling`) and the [regression guards](#regression-guards-testchangeoracles)' two repositories (`fixture.Backdated`, `fixture.MergedRevert`) in temporary directories for `go test`. Every number below is an oracle: a change that moves one fails CI. Each oracle exists so that one specific wrong implementation fails, and that implementation is named next to it.
+`internal/fixture` builds this repository (`fixture.Main`), the [sibling fixture](#sibling-fixture) (`fixture.Sibling`) and the [regression guards](#regression-guards-testchangeoracles)' three repositories (`fixture.Backdated`, `fixture.MergedRevert`, `fixture.Binary`) in temporary directories for `go test`. Every number below is an oracle: a change that moves one fails CI. Each oracle exists so that one specific wrong implementation fails, and that implementation is named next to it.
 
 CI runs real git; porcelain output is never faked. The `GitRunner` port exists so git flags live in one place, not so tests can avoid running git.
 
@@ -535,10 +535,10 @@ Wrong implementations this catches:
 
 ## Regression guards (`TestChangeOracles`)
 
-Two small repositories hold history shapes that once broke the history collector (the review of #37) and that neither fixture may hold, because each would move its oracles: `fixture.Backdated(t)` and `fixture.MergedRevert(t)`. Each is its own repository, so a guard that fails names its own cause.
+Three small repositories hold history shapes that neither fixture may hold, because each would move its oracles: two that once broke the history collector (the review of #37), `fixture.Backdated(t)` and `fixture.MergedRevert(t)`, and one that broke `durable@1` (#54), `fixture.Binary(t)`. Each is its own repository, so a guard that fails names its own cause.
 
 - **Setup.** Each is scanned alone with `--now 2026-10-07T00:00:00Z`, no mailmap and the packaged policy, so the windows are those of the [change oracles](#change-oracles-m1-testchangeoracles). Every commit is at 12:00:00Z on the stated day, with the same author and committer except the backdated guard's A2, which was authored and committed on different days by different people; no date is within a day of a window boundary. Where a row gives only a line count, the file holds lines `<name>_<i> = <i>` and the subject is `feat: add <file>`. Commit IDs are stable, as in the sibling, and are for debugging only.
-- **Derivation.** The values below were derived by hand from the History tables and [metrics.md](../../docs/metrics.md#change-facts-shared-by-durable1-and-simplifying1), then confirmed with plain git 2.50.1 through `gitcli.Runner` (`log --first-parent` with `--since` and with `--since-as-filter`, `rev-list M^1..M`, `log --no-walk --stdin --grep`, `blame -w -M`). The commands and their output are in the pull request for #13 that added them.
+- **Derivation.** The values below were derived by hand from the History tables and [metrics.md](../../docs/metrics.md#change-facts-shared-by-durable1-and-simplifying1), then confirmed with plain git 2.50.1 through `gitcli.Runner` (`log --first-parent` with `--since` and with `--since-as-filter`, `rev-list M^1..M`, `log --no-walk --stdin --grep`, `blame -w -M`; for the binary guard, `log --numstat` and `log -p -U0 -w` with History's diff options). The commands and their output are in the pull requests for #13 and #54 that added them.
 
 ### Backdated first-parent commit (`fixture.Backdated`)
 
@@ -612,6 +612,46 @@ Wrong implementations this catches:
 - **Revert detection on the first-parent walk** (`git log --first-parent --grep`, which reads only the landings' own messages). It finds no revert here. M1 then credits Rex with R1's 4 restored lines, which blame gives to R1: `durable@1` 4/4, N 1. X2 stays in, so Wes has a `simplifying@1` cluster, 0 removed, N 1; and M2 credits Rex with R2's 20 removed lines: `simplifying@1` 20, N 1, with a simplifying landing (net −20).
 - **Revert links at commit grain** (`Revert.SHA` set to the revert commit, not to the landing whose map holds it). R1 and R2 are no landings, so M1 and M2 are not revert landings: Rex has `durable@1` 4/4 and `simplifying@1` 20. D1 and X2 are still reverted, so Wes has no value.
 - **Leaving a revert landing's commits out of `surviving@1`**, as the change metrics leave revert landings out. Rex then holds nothing, and the people's lines at HEAD sum to 6, not 10.
+
+### Binary files (`fixture.Binary`)
+
+git takes a file for binary when a NUL byte is in its first 8,000 bytes. In a diff whose old or new side is binary, numstat prints `-` `-` and the own patch says `Binary files ... differ` with no hunks, so History gives the change no lines; blame makes no such check and attributes every line of the file ([week-collector.md](../../docs/spec/week-collector.md#attributes-none-from-any-tree)). Before #54, `durable@1` counted those lines in Σ surviving and not in Σ added. B1 is the issue's case: Ann adds a binary `prod` file beside a text one, in the cohort. `flip.py` is text at T1, binary at T2 and text again from T3, so the guard also holds a file that is binary at some commits only.
+
+| Row | When | Author | What | Commit |
+| --- | --- | --- | --- | --- |
+| B1 | 2026-02-02 | Ann Binary `<ann@example.com>` | `feat: add bin.py and core.py`, the root commit: `bin.py` (3 lines; the second, `bin_2 = 2`, ends in a NUL byte) and `core.py` (2 lines) | `f3b4481` |
+| T1 | 2026-03-02 | Flo Flip `<flo@example.com>` | `flip.py` (4 lines) | `e059268` |
+| T2 | 2026-04-06 | Flo | `feat: change flip.py and add flo.py`: in `flip.py`, `flip_2 = 2` gets a NUL byte at its end and `flip_4 = 4` becomes `flip_4 = 40`; `flo.py` (1 line) | `69dc87e` |
+| T3 | 2026-05-04 | Flo | `fix: take the NUL byte out of flip.py`: its second line becomes `flip_2 = 20`, so the file is text again | `87a9b65` |
+| R1 | 2026-06-01 | Ann | `refactor: rename bin.py to moved.py`: `git mv`, nothing else | `f3d9d5f` |
+
+All five commits are first-parent landings in the `durable@1` cohort, `[2025-10-07, 2026-07-09)`, and none is in the 90-day window, so no one has a `simplifying@1` value. What History and blame make of them (git 2.50.1, through `gitcli.Runner` with the collectors' own options and attribute source):
+
+| Row | numstat | Own patch (`-U0 -w`) | Lines blame gives the commit at HEAD |
+| --- | --- | --- | --- |
+| B1 | `bin.py` `-` `-`; `core.py` 2 | `Binary files /dev/null and b/bin.py differ`; `core.py` +2 | `moved.py` 3, through R1's rename; `core.py` 2 |
+| T1 | `flip.py` 4 | +4 | `flip.py` 2: `flip_1 = 1` and `flip_3 = 3` |
+| T2 | `flip.py` `-` `-`; `flo.py` 1 | `Binary files a/flip.py and b/flip.py differ`; `flo.py` +1 | `flip.py` 1: `flip_4 = 40`; `flo.py` 1 |
+| T3 | `flip.py` `-` `-` | `Binary files a/flip.py and b/flip.py differ` | `flip.py` 1: `flip_2 = 20` |
+| R1 | `bin.py => moved.py` `-` `-` | `similarity index 100%`, no hunks | none |
+
+So git makes a file that is text at one commit and binary at a later one observable: T1's numstat counts `flip.py`'s lines, T2's prints `-` `-` because its new side holds a NUL byte, and T3's prints `-` `-` too, because its old side does, although `flip.py` is text at HEAD. The binary changes are B1's `bin.py`, T2's and T3's `flip.py` and R1's `moved.py`. Their added lines are unknown, so under the [missing-facts rule](../../docs/metrics.md#change-facts-shared-by-durable1-and-simplifying1) each leaves Σ added, and the lines blame gives its commit in the path its file has at HEAD, followed through the renames, leave Σ surviving:
+
+| Metric | Who | Value | N | Clusters |
+| --- | --- | --- | --- | --- |
+| `durable@1` | Ann Binary | 2 / 2 | 1 | B1 2 / 2: `core.py`; `bin.py`'s 3 lines, blamed to B1 in `moved.py`, are in neither sum |
+| `durable@1` | Flo Flip | 3 / 5 | 2 | T1 2 / 4; T2 1 / 1: `flo.py`, while `flip_4 = 40` is in neither sum |
+| `ai_assisted@1` (subject `repo`) | | 0 of 5 landings tagged | 5 | `durable_other` 5 / 7 over `durable_other_n` 3 clusters, the three above; no `durable_ai`, which has no cluster |
+
+T3 is no cluster: its only change is binary, so no added line of it is in the ratio, and `flip_2 = 20` leaves Σ surviving. R1 adds nothing, so it is no cluster either. Ann and Flo have fewer than 10 clusters, so the rank table lists both below the minimum.
+
+Wrong implementations this catches:
+
+- **No rule** (`main` before #54). Ann gets 5 / 2 = 2.5, num 5 and den 2, the issue's evidence; Flo 4 / 5, with T2 at 2 / 1; and `durable_other` 9 / 7, above 1 too.
+- **The binary change's own path only, not its renames.** HEAD no longer has `bin.py`, so `moved.py`'s 3 lines stay with B1: Ann 5 / 2.
+- **Whole paths, as for a failed blame**: every commit's lines on a path that was ever binary. T1's lines on `flip.py` leave both sums, so T1 is no cluster: Flo 1 / 1, N 1.
+- **Only files that are binary at HEAD** (the alternative #54 rejected: blame skipping them). `moved.py` is binary at HEAD, but `flip.py` is text there, so T2's `flip_4 = 40` stays: Flo 4 / 5, T2 2 / 1.
+- **Whole commits**: a commit with a binary change keeps none of its blamed lines. B1 keeps 0 of `core.py`'s 2, Ann 0 / 2; T2 keeps 0, Flo 2 / 5.
 
 ## Tests that are not extra commits in this history
 
@@ -757,7 +797,7 @@ The token check runs `Discover` over every path above with git's debug log on: t
 
 - **Oracles.** Any week or still-here oracle above changes. That includes Frank's 3 versus 2, Ivy's `prod_lines_added` 0, Jules's 0-line commit, Erin's rename insertion of 1, Ada's single mailmapped week row, and both Gina and Hank at `majority_files` 1.
 - **Change oracles.** Any value in the change-oracle tables of either fixture changes. That includes Bob's move keeping 0 of 2, Ada's `durable@1` N of 2, Cara's absence from `durable@1`, `knowledge_loss@1` at 4/34, Lena eligible at exactly 10 clusters in both metrics, Omar not eligible at 9, S1 simplifying at exactly −20, S2 not simplifying at −16, Q1 untagged, M tagged through P2, and C1's 4 surviving lines credited to Pia (`surviving@1` 9), not to Copilot.
-- **Regression guards.** A landing below a backdated first-parent commit goes missing, or that commit's own change counts for a landing; a rebased landing is chosen or dated by its author time, or credited to its committer; a revert that a `--no-ff` merge landed is not linked to the merge, or the merge's commits count in `durable@1` or `simplifying@1`, or the lines the revert restored leave `surviving@1`.
+- **Regression guards.** A landing below a backdated first-parent commit goes missing, or that commit's own change counts for a landing; a rebased landing is chosen or dated by its author time, or credited to its committer; a revert that a `--no-ff` merge landed is not linked to the merge, or the merge's commits count in `durable@1` or `simplifying@1`, or the lines the revert restored leave `surviving@1`; a change git took for binary keeps, in `durable@1` or its `ai_assisted@1` cohort, any line blamed to its commit, through a rename or not, or another change loses its lines with it.
 - **Classification.** `tests/test_service.py` is classified `prod`, or `bootstrap/cache/config.php` is blamed.
 - **Discovery.** A duplicate remote is not skipped, a scrubbed URL contains userinfo, a bare repo is skipped, the SSH and HTTPS forms of one path are collapsed, or a work tree is measured at a local branch although its clone has upstream's.
 - **Isolation.** A repo whose git directory was removed makes a sibling repo disappear, or the run exits 1 when the sibling succeeded.
@@ -773,4 +813,5 @@ Work out the expected values from the history above and write them into this fil
 
 - **Done for M1 (issue #3):** `durable@1` per landing and per person, `simplifying@1`, revert detection, AI-assisted tagging, `knowledge_loss@1` and `who_knows@1`. They are in [Change oracles](#change-oracles-m1-testchangeoracles) and the [Sibling fixture](#sibling-fixture), which holds the revert and AI-assisted cases so that the main oracles don't move. The oracle audit (2026-10-14) re-derived them and added [`surviving@1` credit](#surviving1-credit-sibling) on the sibling.
 - **Done for #13:** the [regression guards](#regression-guards-testchangeoracles) that the review of #37 asked for, a backdated first-parent commit and a revert merged with `--no-ff`, on repositories of their own.
+- **Done for #54:** the [binary-file guard](#binary-files-fixturebinary), a binary `prod` file beside a text one and a file that is binary at some commits only, on a repository of its own.
 - **GitHub sync contract tests**: done for the sync (#14) in [testdata/github/README.md](../github/README.md): recorded responses for repositories, pull requests, reviews (with their inline comments counted), labels and commits, with no live calls, and the expected facts and `reviews_given@1` derived by hand. Team membership and the viewer's verified emails belong to sign-in (M3, #17).

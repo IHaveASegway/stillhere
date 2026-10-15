@@ -189,7 +189,8 @@ func (c *aiCohorts) addLanding(l *landingView) {
 }
 
 // addDurable adds one durable@1 cluster to its cohort, with durable@1's own
-// denominator: the added lines on files blame read.
+// sums: the added and the surviving lines whose survival blame can tell, so
+// a cohort ratio leaves out what durable@1 leaves out (untracedLines).
 func (c *aiCohorts) addDurable(k *cluster) {
 	if k.landing.ai {
 		c.aiSurviving += k.surviving

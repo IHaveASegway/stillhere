@@ -8,18 +8,25 @@ import (
 	"time"
 )
 
-// This file builds the two small repositories of the regression guards in
+// This file builds the small repositories of the regression guards in
 // testdata/fixture/SPEC.md: history shapes that broke the history collector
-// once (#37's review) and that the main and sibling fixtures must not hold,
-// because each would move their oracles. Each repository is its own, so a
-// guard that fails names its own cause.
+// once (#37's review) or a metric (#54), and that the main and sibling
+// fixtures must not hold, because each would move their oracles. Each
+// repository is its own, so a guard that fails names its own cause.
 
 // The base names of the directories the guards build into, so their
-// discovery keys are "local:backdated" and "local:merged-revert".
+// discovery keys are "local:backdated", "local:merged-revert" and
+// "local:binary".
 const (
 	backdatedName    = "backdated"
 	mergedRevertName = "merged-revert"
+	binaryName       = "binary"
 )
+
+// nul is the byte that makes git take a file for binary when it is in the
+// file's first 8,000 bytes: the binary guard's files hold it at the end of
+// a line.
+const nul = "\x00"
 
 // Backdated builds the backdated-commit guard of testdata/fixture/SPEC.md in
 // a new temporary directory and returns its absolute path: a work tree named
@@ -77,6 +84,37 @@ func BuildMergedRevert(ctx context.Context, dir string) error {
 	mergedRevertHistory(b)
 	if b.err != nil {
 		return fmt.Errorf("fixture: build merged-revert repository in %s: %w", dir, b.err)
+	}
+	return nil
+}
+
+// Binary builds the binary-file guard of testdata/fixture/SPEC.md in a new
+// temporary directory and returns its absolute path: a work tree named
+// "binary", on branch main, where git takes some prod files for binary at
+// some commits, so those commits' added lines are unknown while blame still
+// attributes every line: a file added with a NUL byte beside a text file and
+// renamed later, and a file that is text, then binary, then text again. It
+// stops the test with t.Fatal if the build fails.
+func Binary(t testing.TB) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), binaryName)
+	if err := BuildBinary(t.Context(), dir); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// BuildBinary builds the binary-file guard in dir, which is created when
+// missing and must otherwise be empty. Cancelling ctx kills the running git
+// process and returns its error.
+func BuildBinary(ctx context.Context, dir string) error {
+	b, err := newBuilder(ctx, dir)
+	if err != nil {
+		return fmt.Errorf("fixture: %w", err)
+	}
+	binaryHistory(b)
+	if b.err != nil {
+		return fmt.Errorf("fixture: build binary repository in %s: %w", dir, b.err)
 	}
 	return nil
 }
@@ -183,4 +221,46 @@ func mergedRevertHistory(b *builder) {
 	b.row(noon(2026, time.August, 24), nia) // N2
 	b.write("nia_w.py", numbered("nia_w", 1))
 	b.commit("feat: add nia_w.py")
+}
+
+// binaryHistory writes the Binary history table of SPEC: one row per commit,
+// in table order, each commented with its row ID. Every row is in durable@1's
+// cohort.
+//
+// A NUL byte in a file's first 8,000 bytes makes git take it for binary in a
+// diff whose old or new side holds one: numstat prints "-" "-" and the own
+// patch has no hunks, so History gives the change no lines. Blame reads no
+// such check and attributes every line. B1 is #54's case: bin.py is binary
+// from its first commit, and R1 renames it, so its lines are blamed to B1
+// in moved.py at HEAD. flip.py is text at T1, binary at T2, which changes
+// two of its lines, and text again at T3, which takes the NUL byte out: at
+// HEAD it is text, and T1, T2 and T3 each hold one of its lines or more.
+func binaryHistory(b *builder) {
+	ann := person{"Ann Binary", "ann@example.com"}
+	flo := person{"Flo Flip", "flo@example.com"}
+
+	b.initRepo()
+	b.git("config", "commit.gpgsign", "false")
+
+	b.row(noon(2026, time.February, 2), ann) // B1: a binary prod file beside a text one
+	b.write("bin.py", lines("bin_1 = 1", "bin_2 = 2"+nul, "bin_3 = 3"))
+	b.write("core.py", numbered("core", 2))
+	b.commit("feat: add bin.py and core.py")
+
+	b.row(noon(2026, time.March, 2), flo) // T1: flip.py is text
+	b.write("flip.py", numbered("flip", 4))
+	b.commit("feat: add flip.py")
+
+	b.row(noon(2026, time.April, 6), flo) // T2: flip.py turns binary
+	b.write("flip.py", lines("flip_1 = 1", "flip_2 = 2"+nul, "flip_3 = 3", "flip_4 = 40"))
+	b.write("flo.py", numbered("flo", 1))
+	b.commit("feat: change flip.py and add flo.py")
+
+	b.row(noon(2026, time.May, 4), flo) // T3: flip.py is text again
+	b.write("flip.py", lines("flip_1 = 1", "flip_2 = 20", "flip_3 = 3", "flip_4 = 40"))
+	b.commit("fix: take the NUL byte out of flip.py")
+
+	b.row(noon(2026, time.June, 1), ann) // R1: B1's binary file, renamed
+	b.git("mv", "bin.py", "moved.py")
+	b.commit("refactor: rename bin.py to moved.py")
 }
