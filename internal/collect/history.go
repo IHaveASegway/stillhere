@@ -45,7 +45,7 @@ type HistoryOptions struct {
 type HistoryFacts struct {
 	// FirstCommit is the repository's age: the author time of the earliest
 	// root commit reachable from Head (git log --max-parents=0
-	// --format=%aI <head>; a repository can have several roots). It is
+	// --format=%at <head>; a repository can have several roots). It is
 	// zero when unknown, such as in a shallow clone, whose boundary
 	// commits are not roots, and in week runs, which do not need it.
 	FirstCommit time.Time
@@ -66,7 +66,12 @@ type HistoryFacts struct {
 	// runs. A partial clone has no rows: its blobs are not local.
 	Changes []domain.FileChange
 	// Reverts links each revert landing in the window to the commit its
-	// message names (scan runs only), sorted by SHA, then Reverted.
+	// revert names (scan runs only), sorted by SHA, then Reverted. A revert
+	// landing is a landing whose map holds a commit whose message carries
+	// "This reverts commit <sha>.": the landing itself, or, for a revert
+	// merged with a merge commit, the side-branch commit the merge brought
+	// in. So SHA is always a landing, and a landing that brought in both a
+	// commit and its revert names a commit of its own map.
 	Reverts []domain.Revert
 	// Warnings holds shallow-window when a shallow clone's history ends
 	// inside what the window needs, sorted by Code, then Message.
@@ -77,13 +82,16 @@ type HistoryFacts struct {
 // streams git's output into facts (docs/spec/week-collector.md).
 //
 // Every git command names commits by SHA (repo.Head, or SHAs git printed),
-// never by branch, and pins the options whose repository config would
-// change what it prints: -M for rename detection, --root for the root
-// commit's diff, --diff-algorithm=myers, --no-textconv (no program the
+// never by branch, and pins what the repository's own config would change
+// in what it prints: -M and -l1000 for rename detection, --root for the
+// root commit's diff, --diff-algorithm=myers, --no-textconv (no program the
 // repository names runs, and lines are counted on stored content),
-// --no-color, --default-prefix and --encoding=UTF-8. Numstat is read with
-// -z, so every path, including a rename's two paths, arrives exactly as
-// stored, however odd it is.
+// --ignore-submodules=none and --submodule=short for gitlinks, --no-color,
+// --default-prefix and --encoding=UTF-8, and, as -c settings ahead of the
+// subcommand, core.bigFileThreshold, core.commentChar and
+// trailer.separators (historyConfig). Numstat is read with -z, so every
+// path, including a rename's two paths, arrives exactly as stored, however
+// odd it is.
 //
 // In HistoryWeek it runs one first-parent log. HistoryScan adds:
 //
@@ -95,7 +103,8 @@ type HistoryFacts struct {
 //   - every non-merge commit's own -U0 -w patch, from one git log
 //     --no-walk --stdin -p over the mapped commits, never --first-parent,
 //     under which git prints a merge's first-parent diff as the merger's;
-//   - the revert query, and the repository's first commit.
+//   - the revert query over the same mapped commits, so a revert that a
+//     merge brought in is found too, and the repository's first commit.
 //
 // Co-authors are canonicalised with one git check-mailmap --stdin in both
 // modes. A partial clone gets commit facts only. In a shallow clone, a
@@ -200,32 +209,55 @@ func (h *historyRun) run(ctx context.Context) error {
 	return h.canonicalise(ctx)
 }
 
-// historyLogFormat is the pretty format of the landing and brought-in logs.
-// A record starts at NUL, and its fields are separated by U+001F: SHA,
-// parents, committer time, author time, mailmapped author name and email,
-// co-author trailer values separated by U+001E, and the subject. The
-// subject comes last, so a stray U+001F inside it cannot shift the other
-// fields. %aN and %aE apply the mailmap even where a repository sets
-// log.mailmap=false; %an and %ae would not (week-collector.md).
-const historyLogFormat = "%x00%H%x1f%P%x1f%cI%x1f%aI%x1f%aN%x1f%aE%x1f" + coAuthorFormat + "%x1f%s"
+// historyConfig pins the repository settings that change the diff or the
+// trailers a log prints and that no log option overrides. A -c ahead of the
+// subcommand beats the repository's own config, and each value here is
+// git's default (each verified on 2.50.1 by setting it in the repository's
+// config). Above core.bigFileThreshold every blob is binary, with no
+// numstat counts and no patch lines. git's trailer parser skips comment
+// lines, so core.commentChar=C (or core.commentString, the same setting)
+// hides every Co-authored-by line, and without ":" in trailer.separators
+// no line is a trailer at all. Every history log that prints a diff or
+// trailers starts with these; domain.GitSubcommand skips the -c pairs.
+func historyConfig() []string {
+	return []string{
+		"-c", "core.bigFileThreshold=512m",
+		"-c", "core.commentChar=#",
+		"-c", "trailer.separators=:",
+	}
+}
 
 // historyDiffArgs pin the diff that numstat and the own patches count, so
 // that repository config cannot change it (each verified on 2.50.1):
 // rename detection is git's default, where diff.renames=false would turn a
-// rename into a full delete and add; the root commit is diffed against the
-// empty tree, which log.showRoot=false would hide; the algorithm is git's
-// default whatever diff.algorithm says; and no textconv program that the
-// repository's attributes and config name runs, which log -p otherwise
-// does.
+// rename into a full delete and add, and so is its limit of 1000 files,
+// where diff.renameLimit=1 does the same to every rename that also edits
+// the file; the root commit is diffed against the empty tree, which
+// log.showRoot=false would hide; the algorithm is git's default whatever
+// diff.algorithm says; no textconv program that the repository's
+// attributes and config name runs, which log -p otherwise does; and a
+// gitlink change is shown, as a one-line hunk, where
+// diff.ignoreSubmodules=all would hide it and diff.submodule=log or diff
+// would print a summary with no hunk to count.
 func historyDiffArgs() []string {
-	return []string{"-M", "--root", "--diff-algorithm=myers", "--no-textconv"}
+	return []string{
+		"-M", "-l1000", "--root", "--diff-algorithm=myers", "--no-textconv",
+		"--ignore-submodules=none", "--submodule=short",
+	}
 }
 
-// windowArgs limit a first-parent log to the window. git includes both
-// boundary instants, so callers also filter with Window.Contains.
+// windowArgs limit the first-parent log to the window by committer time.
+// --since-as-filter (git 2.37) filters, as --until does. Plain --since
+// stops the walk at the first commit older than the window, and under
+// --first-parent there is only one chain, so one first-parent commit with
+// a backdated committer time (rebase --committer-date-is-author-date, a
+// wrong clock) would hide every landing below it (verified on 2.50.1). The
+// price is a walk of the whole first-parent chain, which reads commit
+// headers only. git includes both boundary instants, so callers also
+// filter with Window.Contains.
 func (h *historyRun) windowArgs() []string {
 	return []string{
-		"--since=" + h.opt.Window.Since.UTC().Format(time.RFC3339),
+		"--since-as-filter=" + h.opt.Window.Since.UTC().Format(time.RFC3339),
 		"--until=" + h.opt.Window.Until.UTC().Format(time.RFC3339),
 	}
 }
@@ -238,7 +270,7 @@ func (h *historyRun) windowArgs() []string {
 // detection then reads blobs the clone does not have (verified on 2.50.1:
 // "could not fetch ... from promisor remote" under GIT_NO_LAZY_FETCH).
 func (h *historyRun) readLandings(ctx context.Context) error {
-	args := []string{"log", "--first-parent"}
+	args := append(historyConfig(), "log", "--first-parent")
 	if h.lines {
 		args = append(args, "--diff-merges=first-parent")
 	}
@@ -248,8 +280,7 @@ func (h *historyRun) readLandings(ctx context.Context) error {
 		args = append(args, "--numstat")
 		args = append(args, historyDiffArgs()...)
 	}
-	args = append(args, "--no-color", "--encoding=UTF-8", "--date=iso-strict",
-		"--pretty=format:"+historyLogFormat, h.repo.Head, "--")
+	args = append(args, "--no-color", "--encoding=UTF-8", "--pretty=format:"+historyLogFormat, h.repo.Head, "--")
 
 	err := h.git.Stream(ctx, domain.GitCmd{Dir: h.repo.Path, Args: args}, func(r io.Reader) error {
 		return historyParseLog(r, func(rec *historyRecord) error {
@@ -325,7 +356,7 @@ func (h *historyRun) readBroughtIn(ctx context.Context) error {
 	}
 	slices.Sort(want)
 
-	args := []string{"log", "--no-walk", "--stdin", "--diff-merges=off", "-z"}
+	args := append(historyConfig(), "log", "--no-walk", "--stdin", "--diff-merges=off", "-z")
 	if h.lines {
 		args = append(args, "--numstat")
 		args = append(args, historyDiffArgs()...)
@@ -359,7 +390,7 @@ func (h *historyRun) readRoots(ctx context.Context) error {
 	}
 	var roots []root
 	args := []string{"log", "--max-parents=0", "-z", "--no-color",
-		"--pretty=format:%H%x1f%aI%x1f%cI", h.repo.Head, "--"}
+		"--pretty=format:%H%x1f%at%x1f%ct", h.repo.Head, "--"}
 	err := h.git.Stream(ctx, domain.GitCmd{Dir: h.repo.Path, Args: args}, func(r io.Reader) error {
 		s := newScanner(r, scanNUL)
 		for s.Scan() {
@@ -370,12 +401,12 @@ func (h *historyRun) readRoots(ctx context.Context) error {
 			if len(f) != 3 || !historySHA(f[0]) {
 				return errors.New("malformed root commit record")
 			}
-			at, err1 := time.Parse(time.RFC3339, f[1])
-			ct, err2 := time.Parse(time.RFC3339, f[2])
-			if err := errors.Join(err1, err2); err != nil {
-				return fmt.Errorf("root commit %s: %w", f[0], err)
+			at, ok1 := historyUnix(f[1])
+			ct, ok2 := historyUnix(f[2])
+			if !ok1 || !ok2 {
+				return fmt.Errorf("root commit %s: malformed author or commit time", f[0])
 			}
-			roots = append(roots, root{sha: f[0], author: at.UTC(), cmtr: ct.UTC()})
+			roots = append(roots, root{sha: f[0], author: at, cmtr: ct})
 		}
 		return s.Err()
 	})

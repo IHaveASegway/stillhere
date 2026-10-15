@@ -25,30 +25,43 @@ const historyRevertGrep = "^This reverts commit [0-9a-f]{7,64}"
 var historyRevertLine = regexp.MustCompile(`(?m)^This reverts commit ([0-9a-f]{7,64})`)
 
 // readReverts links each revert landing in the window to the commit its
-// message names. It is a query of its own because a message body cannot
-// share a stream with numstat: body lines can look like numstat rows.
+// revert names. It searches the messages of every commit in a window
+// landing's map, the landings included, and links the landing whose map
+// holds the revert commit. It never walks --first-parent: a pull request
+// merged with a merge commit, GitHub's default, lands as a merge whose
+// message names no revert, while the revert commit sits on the side branch
+// the merge brought in. A squash, rebase or direct revert is its own
+// landing, as before.
 //
-// It reads the whole message (%B), not only the body (%b), because --grep
-// searches the subject too. A full SHA is kept as written, whether or not
-// the commit exists here. An abbreviated one is resolved to the one commit
-// it names with git cat-file --batch-check, and dropped when it names none
-// or several.
+// It is a query of its own because a message body cannot share a stream
+// with numstat: body lines can look like numstat rows. It prints no diff
+// and no trailers, so it needs none of historyConfig's settings, and -E
+// beats a repository's grep.patternType (verified on 2.50.1). It reads the
+// whole message (%B), not only the body (%b), because --grep searches the
+// subject too. A full SHA is kept as written, whether or not the commit exists
+// here. An abbreviated one is resolved to the one commit it names with git
+// cat-file --batch-check, and dropped when it names none or several.
 func (h *historyRun) readReverts(ctx context.Context) error {
-	if len(h.landings) == 0 {
+	owner := make(map[string]string) // a mapped commit → the landing whose map holds it
+	var want []string
+	for _, landing := range h.landings {
+		for _, sha := range h.maps[landing] {
+			owner[sha] = landing
+			want = append(want, sha)
+		}
+	}
+	if len(want) == 0 {
 		return nil
 	}
-	landing := make(map[string]bool, len(h.landings))
-	for _, sha := range h.landings {
-		landing[sha] = true
-	}
+	slices.Sort(want)
 
-	args := []string{"log", "--first-parent", "-E", "--grep=" + historyRevertGrep}
-	args = append(args, h.windowArgs()...)
-	args = append(args, "-z", "--no-color", "--encoding=UTF-8", "--pretty=format:%x00%H%x1f%B", h.repo.Head, "--")
+	args := []string{"log", "--no-walk", "--stdin", "-E", "--grep=" + historyRevertGrep,
+		"-z", "--no-color", "--encoding=UTF-8", "--pretty=format:%x00%H%x1f%B", "--"}
+	cmd := domain.GitCmd{Dir: h.repo.Path, Args: args, Stdin: historyStdin(want)}
 
-	type link struct{ sha, name string }
+	type link struct{ landing, name string }
 	var links []link
-	err := h.git.Stream(ctx, domain.GitCmd{Dir: h.repo.Path, Args: args}, func(r io.Reader) error {
+	err := h.git.Stream(ctx, cmd, func(r io.Reader) error {
 		s := newScanner(r, scanNUL)
 		for s.Scan() {
 			if s.Text() == "" {
@@ -58,11 +71,12 @@ func (h *historyRun) readReverts(ctx context.Context) error {
 			if !ok || !historySHA(sha) {
 				return errors.New("malformed revert record")
 			}
-			if !landing[sha] {
-				continue // at a window boundary instant that Window.Contains excludes
+			landing, ok := owner[sha]
+			if !ok {
+				return fmt.Errorf("git log --no-walk printed commit %s, which it was not given", sha)
 			}
 			for _, m := range historyRevertLine.FindAllStringSubmatch(message, -1) {
-				links = append(links, link{sha: sha, name: m[1]})
+				links = append(links, link{landing: landing, name: m[1]})
 			}
 		}
 		return s.Err()
@@ -88,7 +102,7 @@ func (h *historyRun) readReverts(ctx context.Context) error {
 				continue
 			}
 		}
-		h.reverts = append(h.reverts, domain.Revert{SHA: l.sha, Reverted: name})
+		h.reverts = append(h.reverts, domain.Revert{SHA: l.landing, Reverted: name})
 	}
 	slices.SortFunc(h.reverts, func(a, b domain.Revert) int {
 		return cmp.Or(strings.Compare(a.SHA, b.SHA), strings.Compare(a.Reverted, b.Reverted))

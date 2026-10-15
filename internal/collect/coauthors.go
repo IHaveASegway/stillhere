@@ -16,22 +16,24 @@ import (
 // (docs/spec/codebase.md#working-in-parallel). History reads the trailers
 // from its own log streams and canonicalises them with coAuthorCanonical;
 // blame calls coAuthors for the commits it attributes lines to, which can be
-// older than any history window. Both therefore give one commit the same
-// co-authors, in the same order.
+// older than any history window. coAuthors reads the same format
+// (historyLogFormat) under the same pinned config (historyConfig) with the
+// same parser (historyParseLog) as History's logs, so both give one commit
+// the same co-authors, in the same order.
 
 // coAuthorFormat is the log placeholder for a commit's Co-authored-by trailer
 // values, separated by U+001E. Git matches the key in any case, so
 // Co-Authored-By: is found too (verified on 2.50.1). unfold joins a value
-// that a trailer continued on an indented line, so no value holds a newline
-// and every field of a log record stays on one line.
+// that a trailer continued on an indented line, so no value holds a newline.
 const coAuthorFormat = "%(trailers:key=Co-authored-by,valueonly,separator=%x1e,unfold)"
 
 // coAuthors returns the Co-authored-by trailers of each of shas, keyed by
 // full SHA, in trailer order and canonicalised with git's mailmap. A commit
 // without co-authors is absent from the map. It reads every commit in one
-// batched call (git log --no-walk --stdin with
-// %(trailers:key=Co-authored-by,valueonly)), matching the trailer key in any
-// case, and canonicalises the identities with one git check-mailmap --stdin.
+// batched call (git log --no-walk --stdin with historyLogFormat, whose
+// trailer field is %(trailers:key=Co-authored-by,valueonly)), matching the
+// trailer key in any case, and canonicalises the identities with one git
+// check-mailmap --stdin.
 //
 // A trailer value that names no email in angle brackets, such as
 // "Co-authored-by: someone", is not an identity and is left out, as is a
@@ -50,31 +52,16 @@ func coAuthors(ctx context.Context, git domain.GitRunner, repo domain.Repo, shas
 	}
 
 	raw := make(map[string][]domain.Person)
-	cmd := domain.GitCmd{
-		Dir: repo.Path,
-		Args: []string{
-			"log", "--no-walk", "--stdin", "-z", "--no-color", "--encoding=UTF-8",
-			"--pretty=format:%x00%H%x1f" + coAuthorFormat, "--",
-		},
-		Stdin: historyStdin(want),
-	}
+	args := append(historyConfig(), "log", "--no-walk", "--stdin", "-z", "--no-color", "--encoding=UTF-8",
+		"--pretty=format:"+historyLogFormat, "--")
+	cmd := domain.GitCmd{Dir: repo.Path, Args: args, Stdin: historyStdin(want)}
 	err := git.Stream(ctx, cmd, func(r io.Reader) error {
-		s := newScanner(r, scanNUL)
-		for s.Scan() {
-			tok := s.Text()
-			if tok == "" {
-				continue // the NUL that starts each record, or the one between records
+		return historyParseLog(r, func(rec *historyRecord) error {
+			if rec.coAuthors != nil {
+				raw[rec.commit.SHA] = rec.coAuthors
 			}
-			sha, field, ok := strings.Cut(tok, "\x1f")
-			if !ok || !historySHA(sha) {
-				// The record is not quoted: it may hold names and emails.
-				return errors.New("malformed trailer record")
-			}
-			if people := coAuthorParse(field); people != nil {
-				raw[sha] = people
-			}
-		}
-		return s.Err()
+			return nil
+		})
 	})
 	if err != nil {
 		return nil, fmt.Errorf("collect.coAuthors: reading trailers: %w", err)

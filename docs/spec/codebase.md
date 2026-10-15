@@ -378,11 +378,11 @@ func History(ctx context.Context, git domain.GitRunner, repo domain.Repo, opt Hi
 // HistoryFacts: each slice nil when empty and sorted by the key named, which a store's round trip
 // keeps; Commit.Parents and Commit.CoAuthors keep git's order (first parent first, trailer order).
 type HistoryFacts struct {
-	FirstCommit time.Time           // git log --max-parents=0 --format=%aI <head>: the earliest root's author time; zero when unknown, and in week runs
+	FirstCommit time.Time           // git log --max-parents=0 --format=%at <head>: the earliest root's author time; zero when unknown, and in week runs
 	Commits     []domain.Commit     // by SHA: the landing commits, plus in scan runs every commit a landing brought in
 	Landings    []domain.Landing    // by SHA; Landing.Commits, the map, in scan runs only (nil in week runs)
 	Changes     []domain.FileChange // by Commit, then Path; NonBlank -1 in week runs; no rows in a partial clone or for a shallow clone's boundary commit
-	Reverts     []domain.Revert     // by SHA, then Reverted; scan runs only
+	Reverts     []domain.Revert     // by SHA, then Reverted; scan runs only; SHA is the window landing whose map holds the revert commit (itself, or a commit a merge brought in)
 	Warnings    []domain.Warning    // by Code, then Message: shallow-window
 }
 type BlameOptions struct {
