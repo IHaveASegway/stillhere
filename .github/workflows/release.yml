@@ -1,0 +1,117 @@
+# Release: pushing a v* tag publishes that commit through every channel in
+# .goreleaser.yaml (the GitHub release with archives and checksums, the
+# Homebrew cask, the images on ghcr.io). Only this workflow holds the
+# credentials that publish, and only for this job.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+# Nothing by default; the job below asks for exactly what it publishes.
+permissions: {}
+
+# One release at a time, and never cancel one halfway through publishing.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+# An explicit bash runs every step with -eo pipefail.
+defaults:
+  run:
+    shell: bash
+
+# The tool and the two images that build what this workflow publishes, pinned
+# to a version and a digest. ci.yml's snapshot job dry-runs the release with
+# the same pins, and its lint job fails if the copies differ. Dependabot reads
+# neither a go run argument nor an action's with: input, so they are updated
+# by hand, everywhere at once.
+env:
+  GORELEASER: github.com/goreleaser/goreleaser/v2@v2.18.3
+  # QEMU for the arm64 image's RUN steps. setup-qemu-action runs this image
+  # with --privileged, and its default is a moving tag.
+  BINFMT_IMAGE: docker.io/tonistiigi/binfmt:qemu-v10.2.3-68@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
+  # The BuildKit daemon that builds both images and pushes them with the
+  # ghcr.io credentials. setup-buildx-action's default is a moving tag.
+  BUILDKIT_IMAGE: docker.io/moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: write # create the GitHub release and upload its assets
+      packages: write # push the images to ghcr.io/ihaveasegway/stillhere
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # the changelog runs from the previous tag
+          persist-credentials: false
+      # Release only what was reviewed: the tagged commit must be on main.
+      - name: The tag points at a commit on main
+        run: |
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_REF_NAME is not on main; tag a commit that main contains"
+            exit 1
+          fi
+      # No caches in this job: a cache written by another workflow run must
+      # not be able to change what a release builds or runs.
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+          cache: false
+      # Fail before anything is published if the cask cannot be, because
+      # GoReleaser pushes the images and the GitHub release before the cask.
+      # A dry-run push asks GitHub for the tap's write side (git-receive-pack)
+      # and sends nothing. GitHub serves that side only to a token that may
+      # push there, so a missing tap or an expired, read-only or wrongly
+      # scoped token all fail here. semantic-release checks push access the
+      # same way. The repository API's permissions field is no substitute:
+      # GitHub does not document it as what the token may do, and a GitHub
+      # App token never reports push there. gh's credential helper gives git
+      # the token from the environment, so it never appears in argv or a
+      # file.
+      - name: The tap token can push to IHaveASegway/homebrew-tap
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          GIT_TERMINAL_PROMPT: "0"
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::error::the HOMEBREW_TAP_GITHUB_TOKEN secret is not set"
+            exit 1
+          fi
+          probe=$(mktemp -d "$RUNNER_TEMP/tap-probe.XXXXXX")
+          git -C "$probe" init -q -b preflight
+          git -C "$probe" -c user.name=preflight -c user.email=preflight@example.com \
+            commit -q --allow-empty -m preflight
+          if ! git -C "$probe" -c credential.helper= -c 'credential.helper=!gh auth git-credential' \
+            push --dry-run https://github.com/IHaveASegway/homebrew-tap.git HEAD:refs/heads/goreleaser-preflight; then
+            echo "::error::HOMEBREW_TAP_GITHUB_TOKEN cannot push to IHaveASegway/homebrew-tap: create the tap, renew the token, or give it Contents read and write there"
+            exit 1
+          fi
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          image: ${{ env.BINFMT_IMAGE }}
+          platforms: arm64
+          cache-image: false
+      # A docker-container builder: one build pushes both platforms under one
+      # index, with SBOM and provenance attestations.
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver-opts: image=${{ env.BUILDKIT_IMAGE }}
+          cache-binary: false
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: goreleaser release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          # Release the tag that started this run, whatever else points at
+          # the same commit. A release candidate promoted to final carries
+          # both tags, and without this GoReleaser would choose between them
+          # by version sort.
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
+        run: go run "$GORELEASER" release --clean

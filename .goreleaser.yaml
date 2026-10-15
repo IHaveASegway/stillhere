@@ -1,0 +1,216 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+#
+# The release of stillhere, as one declarative pipeline (ADR 0002): six
+# static binaries, their archives and checksums, a GitHub release with a
+# changelog grouped by Conventional Commits, a Homebrew cask in
+# IHaveASegway/homebrew-tap, and a multi-platform image on ghcr.io. Every
+# channel ships the same binaries.
+#
+# Written for GoReleaser v2.18.3, the version CI and the release workflow
+# run. Check it and dry-run it locally (nothing is tagged, uploaded or
+# pushed; images are loaded into the local Docker daemon, one per platform):
+#
+#   go run github.com/goreleaser/goreleaser/v2@v2.18.3 check
+#   go run github.com/goreleaser/goreleaser/v2@v2.18.3 release --snapshot --clean
+#
+# (Prefix CGO_ENABLED=0 on a Mac whose C linker cannot read the SDK.)
+# .github/workflows/release.yml runs the real release when a v* tag is pushed.
+version: 2
+
+project_name: stillhere
+
+before:
+  hooks:
+    # Fail if a module in the cache no longer matches go.sum: the release
+    # builds exactly the dependencies that were reviewed.
+    - go mod verify
+    # The bash, zsh and fish completion scripts that the archives and the
+    # cask ship, in completions/ (the cask's comment says why they are files).
+    - .github/scripts/completions.sh
+
+# A final tag sorts above its release candidates, so v0.2.0 is picked over
+# v0.2.0-rc.1 on the same commit, as the tag being released and as the
+# previous tag of the next release. git's default version sort puts the
+# candidate first.
+git:
+  prerelease_suffix: "-"
+
+builds:
+  - id: stillhere
+    main: ./cmd/stillhere
+    binary: stillhere
+    env:
+      # Static, with no C toolchain: SQLite comes from modernc.org/sqlite
+      # (ADR 0002), so the binary runs on any distribution and cross-compiles.
+      - CGO_ENABLED=0
+    goos: [darwin, linux, windows]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    # The same flags as make build. internal/cli prints them in
+    # "stillhere version"; Date is the build time, as cli.Build documents.
+    ldflags:
+      - -s -w
+      - -X main.version={{ .Version }}
+      - -X main.commit={{ .FullCommit }}
+      - -X main.date={{ .Date }}
+
+archives:
+  - id: stillhere
+    ids: [stillhere]
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    # Named by GoReleaser's default, such as stillhere_0.1.0_darwin_arm64.tar.gz.
+    files:
+      - LICENSE
+      - README.md
+      - completions/*
+
+checksum:
+  algorithm: sha256
+
+changelog:
+  use: git
+  sort: asc
+  abbrev: 7
+  filters:
+    exclude:
+      # Merge commits repeat what the commits they bring in already say.
+      - "^Merge "
+  # Each commit lands in the first group, in this order, whose pattern
+  # matches its subject (docs/spec/codebase.md#commits-and-branches).
+  groups:
+    - title: Breaking changes
+      regexp: '^[a-z]+(\([^)]*\))?!:'
+      order: 0
+    - title: Features
+      regexp: '^feat(\([^)]*\))?:'
+      order: 1
+    - title: Bug fixes
+      regexp: '^fix(\([^)]*\))?:'
+      order: 2
+    - title: Refactoring
+      regexp: '^refactor(\([^)]*\))?:'
+      order: 3
+    - title: Documentation
+      regexp: '^docs(\([^)]*\))?:'
+      order: 4
+    - title: Tests, CI and chores
+      regexp: '^(test|ci|chore|build)(\([^)]*\))?:'
+      order: 5
+    - title: Other
+      order: 6
+
+release:
+  github:
+    owner: IHaveASegway
+    name: stillhere
+  # A tag such as v0.2.0-rc.1 publishes a pre-release.
+  prerelease: auto
+  # Before building anything, stop if the token cannot reach this repository
+  # or the tag already has an immutable release.
+  preflight:
+    fail_on_error: true
+  footer: |
+    ## Install
+
+    ```sh
+    {{- if not .Prerelease }}
+    brew install --cask ihaveasegway/tap/stillhere
+    {{- end }}
+    docker pull ghcr.io/ihaveasegway/stillhere:{{ .Version }}
+    go install github.com/IHaveASegway/stillhere/cmd/stillhere@{{ .Tag }}
+    ```
+
+    stillhere needs git 2.44 or newer on PATH. Verify a download against `{{ .ProjectName }}_{{ .Version }}_checksums.txt`.
+
+# A cask, not a formula: GoReleaser deprecated brews for prebuilt binaries,
+# because a Homebrew formula is expected to build from source.
+homebrew_casks:
+  - name: stillhere
+    ids: [stillhere]
+    repository:
+      owner: IHaveASegway
+      name: homebrew-tap
+      # A token that can push to the tap only; GITHUB_TOKEN cannot write to
+      # another repository.
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    directory: Casks
+    homepage: https://github.com/IHaveASegway/stillhere
+    description: "Change analytics for git and GitHub: what landed, what lasted, who knows it"
+    # A pre-release never reaches brew users.
+    skip_upload: auto
+    # Homebrew's git meets the 2.44 floor; the git in older Xcode command
+    # line tools does not.
+    dependencies:
+      - formula: git
+    # The binaries are not signed or notarized yet. On macOS, Homebrew
+    # quarantines every cask download, and Gatekeeper kills a quarantined,
+    # unnotarized binary when it runs. Removing the quarantine attribute
+    # after install is GoReleaser's documented workaround, so that users can
+    # run stillhere. Developer ID signing and notarization replace it
+    # (ADR 0002, consequences).
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/stillhere"]
+          end
+    # Completion scripts generated at release time, which Homebrew links
+    # without running anything. The hook above cannot protect a binary that
+    # runs during install: Homebrew installs a cask's artifacts in a fixed
+    # order by type, not in the order the cask lists them, and completions
+    # generated from the executable come before the postflight hook. So
+    # generate_completions_from_executable would run the binary while it is
+    # still quarantined, and Gatekeeper would kill it on every install.
+    completions:
+      bash: completions/stillhere.bash
+      zsh: completions/_stillhere
+      fish: completions/stillhere.fish
+    caveats: |
+      stillhere runs the first git on your PATH and needs git 2.44 or newer.
+      Check with: git version
+
+dockers_v2:
+  - id: stillhere
+    ids: [stillhere]
+    dockerfile: Dockerfile
+    images:
+      - ghcr.io/ihaveasegway/stillhere
+    # 0.3.1, plus 0.3 and latest for a release that is not a pre-release.
+    # A template that renders empty adds no tag.
+    tags:
+      - "{{ .Version }}"
+      - "{{ if not .Prerelease }}{{ .Major }}.{{ .Minor }}{{ end }}"
+      - "{{ if not .Prerelease }}latest{{ end }}"
+    platforms:
+      - linux/amd64
+      - linux/arm64
+    # A released image carries an SBOM attestation, made by a generator
+    # pinned to a version and digest like the builder in release.yml. With
+    # sbom left on, GoReleaser passes a bare --attest=type=sbom, and BuildKit
+    # runs its default generator from a moving tag. A snapshot builds no SBOM,
+    # just as GoReleaser adds its own flag only when it pushes. Updated by
+    # hand: Dependabot does not read this pin.
+    sbom: false
+    flags:
+      - "{{ if not .IsSnapshot }}--attest=type=sbom,generator=docker.io/docker/buildkit-syft-scanner:1.12.0@sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9{{ end }}"
+    # OCI labels on each image.
+    labels:
+      org.opencontainers.image.title: "{{ .ProjectName }}"
+      org.opencontainers.image.description: "Change analytics for git and GitHub: what landed, what lasted, who knows it"
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.created: "{{ .Date }}"
+      org.opencontainers.image.source: https://github.com/IHaveASegway/stillhere
+      org.opencontainers.image.url: https://github.com/IHaveASegway/stillhere
+      org.opencontainers.image.licenses: Apache-2.0
+      org.opencontainers.image.base.name: "{{ .BaseImage }}"
+      org.opencontainers.image.base.digest: "{{ .BaseImageDigest }}"
+    # ghcr.io reads these from the multi-platform index (GoReleaser scopes
+    # them there) to link the package to this repository and describe it.
+    annotations:
+      org.opencontainers.image.source: https://github.com/IHaveASegway/stillhere
+      org.opencontainers.image.description: "Change analytics for git and GitHub: what landed, what lasted, who knows it"
+      org.opencontainers.image.licenses: Apache-2.0

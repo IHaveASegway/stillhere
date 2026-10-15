@@ -1,0 +1,72 @@
+name: Metric proposal
+description: A new metric, or a new version of an existing one. Every field mirrors an entry in docs/metrics.md.
+title: "metric: <name>@<version>"
+labels: [enhancement, area/core]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A metric without all of these does not ship ([docs/metrics.md](https://github.com/IHaveASegway/stillhere/blob/main/docs/metrics.md)). A change to an existing metric that can move any value is a new version, never an edit, and the old version stays computable. stillhere measures properties of changes, never a person's value: a proposal that only works as a score of people will be declined (ADR 0001).
+  - type: input
+    id: id
+    attributes:
+      label: Metric id
+      description: Name and version, such as durable@2.
+      placeholder: name@1
+    validations:
+      required: true
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: The one question it answers, in plain words.
+    validations:
+      required: true
+  - type: textarea
+    id: definition
+    attributes:
+      label: Definition and unit
+      description: Exactly what is counted, over which facts, in which window; the unit (commit, landing, change, person, area). For a new version, what changes from the previous one and which values move.
+    validations:
+      required: true
+  - type: dropdown
+    id: ranked
+    attributes:
+      label: Ranked or context
+      description: Ranked metrics need an eligibility rule and an interval; context metrics are shown, never ranked.
+      options:
+        - Context (shown, never ranked)
+        - Ranked (one metric at a time, with intervals)
+    validations:
+      required: true
+  - type: textarea
+    id: eligibility
+    attributes:
+      label: Eligibility and uncertainty
+      description: The minimum sample before a value is shown or ranked, and how its uncertainty is expressed.
+  - type: textarea
+    id: blind-spots
+    attributes:
+      label: Blind spots
+      description: What it cannot see, and who it is unfair to.
+    validations:
+      required: true
+  - type: textarea
+    id: gaming
+    attributes:
+      label: How it can be gamed
+      description: How someone could move the number without doing the work it is meant to reflect.
+    validations:
+      required: true
+  - type: textarea
+    id: oracle
+    attributes:
+      label: Fixture oracle
+      description: The history (commits, authors, dates) whose expected value you derive by hand, and the wrong implementation it would catch (testdata/fixture/SPEC.md).
+    validations:
+      required: true
+  - type: textarea
+    id: validity
+    attributes:
+      label: Validity
+      description: How we would know it measures what it claims, such as a check against hand labels.

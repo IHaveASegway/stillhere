@@ -1,0 +1,54 @@
+# Dependabot proposes updates to the pins it can read: the actions that the
+# workflows pin to full commit SHAs, the Go modules in go.mod, and the base
+# image digest in the Dockerfile. A pin that nobody updates becomes a known
+# vulnerability, so pinning and updating come together.
+#
+# It cannot read the other pins, which are updated by hand. These are the
+# tools run as "go run module@version" (GoReleaser, actionlint and
+# govulncheck in the workflows, golangci-lint in the Makefile), the binfmt
+# and BuildKit images the workflows pass to the Docker actions, and the SBOM
+# generator in .goreleaser.yaml. ci.yml's lint job fails if the copies of a
+# release pin differ. A tools module with Go's tool directive would put the
+# Go tools here, once Dependabot updates tool dependencies
+# (dependabot/dependabot-core#12050).
+#
+# A seven-day cooldown lets a release age before it is proposed: most
+# malicious releases of a hijacked package are caught and pulled within
+# days. Security updates are not delayed.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci
+      include: scope
+
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      go-modules:
+        patterns: ["*"]
+    commit-message:
+      prefix: chore
+      include: scope
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore
+      include: scope

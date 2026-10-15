@@ -5,7 +5,7 @@ Change analytics for git and GitHub (what landed, what lasted, who knows it) for
 
 > stillhere measures specific properties of code changes: how long they lasted, how much they simplified, how much review they got. It does not measure a person's value, and it must not be the basis for performance or pay decisions.
 
-**Status:** design. Nothing to install yet; milestone M0 (the walking skeleton) is next.
+**Status:** pre-release; milestone M0 is in progress. No release is tagged yet, so build from source (see [Install](#install)).
 
 - [Product brief](docs/product.md): what it is, who it is for, milestones, open decisions
 - [Metric catalog](docs/metrics.md): every metric's definition, blind spots, and how it can be gamed
@@ -14,4 +14,60 @@ Change analytics for git and GitHub (what landed, what lasted, who knows it) for
 - [Implementation contracts](docs/spec/): git commands, classification, collectors
 - [Test fixture spec](testdata/fixture/SPEC.md)
 
-License: Apache-2.0 ([ADR 0008](docs/adr/0008-apache-2-public.md)). The LICENSE file arrives with M0.
+## Install
+
+stillhere is one static binary for macOS, Linux and Windows. It runs the git on your `PATH`, which must be 2.44 or newer (`git version` tells you).
+
+No release is tagged yet. Until the first one, build from a checkout with Go 1.27:
+
+```sh
+git clone https://github.com/IHaveASegway/stillhere.git
+cd stillhere
+make build            # writes bin/stillhere
+```
+
+From the first release on:
+
+```sh
+# Homebrew, macOS or Linux. The cask installs Homebrew's git, which meets the floor.
+brew install --cask ihaveasegway/tap/stillhere
+
+# Go 1.27 or newer
+go install github.com/IHaveASegway/stillhere/cmd/stillhere@latest
+
+# Docker, linux/amd64 and linux/arm64, with git included
+docker pull ghcr.io/ihaveasegway/stillhere
+```
+
+Each [release](https://github.com/IHaveASegway/stillhere/releases) also carries archives for every platform and a checksums file to [verify them against](SECURITY.md#verifying-a-download).
+
+## Quickstart
+
+```sh
+stillhere week ~/src/acme                                  # the last 7 days, per person
+stillhere week ~/src/acme/api ~/src/acme/web --days 14     # two repositories, two weeks
+stillhere week ~/src/acme --format md > week.md            # Markdown, for a status note
+stillhere week ~/src/acme --now 2026-10-07 --format json   # same inputs, same bytes
+stillhere help week
+```
+
+`week` prints what landed on each repository's default branch: one row per person with commits, lines added, and lines added to production code, with bots in a table of their own. Each `PATH` is a repository (a work tree or a bare mirror) or a group: a directory whose immediate children are repositories. `week` reads only what is already cloned and stores nothing; fetch first for fresh numbers.
+
+Two files in the current directory change the answer when present. `.mailmap` folds one person's addresses into one identity (`--mailmap FILE` names another). `stillhere.toml` replaces the packaged policy: which paths count as production code, which authors are bots (`--policy FILE` names another).
+
+The other commands (`scan`, `explain`, `sync github`, `mcp` and the rest in `stillhere help`) arrive with milestones M1 to M4 ([product brief](docs/product.md#milestones)); until then they exit with status 2.
+
+In Docker, mount the repositories and run as the user who owns them, because git refuses to read a repository that belongs to someone else:
+
+```sh
+docker run --rm --user "$(id -u):$(id -g)" -v "$HOME/src:/work:ro" \
+  ghcr.io/ihaveasegway/stillhere week /work/acme
+```
+
+Docker Desktop on macOS presents mounted files as owned by root, so there either pass `--user 0:0` or use the Homebrew install.
+
+The commands that store facts (`scan`, from M1) keep them under `STILLHERE_HOME`, which is `/data` in the image, a directory only the image's own user may enter. When you pass `--user`, mount a directory that user owns there, such as `-v "$HOME/.stillhere:/data"`.
+
+## License
+
+[Apache-2.0](LICENSE) ([ADR 0008](docs/adr/0008-apache-2-public.md)). Contributions are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md).

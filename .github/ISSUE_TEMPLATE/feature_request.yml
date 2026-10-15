@@ -1,0 +1,36 @@
+name: Feature request
+description: A new command, flag, report or integration. For a new metric, use the metric proposal instead.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Start from the problem rather than the solution: who needs this, what they are trying to decide, and what happens today without it. Check [docs/product.md](https://github.com/IHaveASegway/stillhere/blob/main/docs/product.md) first: its non-goals and open decisions may already cover it.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: Who runs into it, when, and what it costs them today.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you propose
+      description: The command, flag or output you have in mind, with an example.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you considered
+      description: Other designs, existing tools that already do this, and why they fall short.
+  - type: checkboxes
+    id: boundaries
+    attributes:
+      label: Boundaries it touches
+      description: These need a design discussion before code (docs/architecture.md).
+      options:
+        - label: It needs the network outside "stillhere sync".
+        - label: It changes what facts.db stores, or a published format (report JSON, metric ids).
+        - label: It would show or rank individual people.
