@@ -82,4 +82,9 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          # Release the tag that started this run, whatever else points at
+          # the same commit. A release candidate promoted to final carries
+          # both tags, and without this GoReleaser would choose between them
+          # by version sort.
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
         run: go run github.com/goreleaser/goreleaser/v2@v2.18.3 release --clean

@@ -28,6 +28,13 @@ before:
     # cask ship, in completions/ (the cask's comment says why they are files).
     - .github/scripts/completions.sh
 
+# A final tag sorts above its release candidates, so v0.2.0 is picked over
+# v0.2.0-rc.1 on the same commit, as the tag being released and as the
+# previous tag of the next release. git's default version sort puts the
+# candidate first.
+git:
+  prerelease_suffix: "-"
+
 builds:
   - id: stillhere
     main: ./cmd/stillhere

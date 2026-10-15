@@ -86,6 +86,8 @@ go run github.com/goreleaser/goreleaser/v2@v2.18.3 release --snapshot --clean
 .github/scripts/smoke-release.sh
 ```
 
+A tag such as `v0.2.0-rc.1` publishes a pre-release, which gets no cask update and no `latest` image tag. To promote it, tag the same commit `v0.2.0`.
+
 ## License
 
 stillhere is licensed under [Apache-2.0](LICENSE). By contributing, you agree that your contribution is licensed under the same terms (section 5 of the license).
