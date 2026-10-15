@@ -39,7 +39,8 @@
               "nodes": [
                 {"id": "PRR_02a", "state": "CHANGES_REQUESTED", "submittedAt": "2026-09-14T11:00:00Z", "body": "Please add a test for empty input.", "author": {"__typename": "User", "login": "ada"}, "comments": {"totalCount": 1}},
                 {"id": "PRR_02b", "state": "COMMENTED", "submittedAt": "2026-09-14T13:00:00Z", "body": "Added the test.", "author": {"__typename": "User", "login": "bob"}, "comments": {"totalCount": 1}},
-                {"id": "PRR_02c", "state": "APPROVED", "submittedAt": "2026-09-15T14:00:00Z", "body": "  \n", "author": {"__typename": "User", "login": "ada"}, "comments": {"totalCount": 0}}
+                {"id": "PRR_02c", "state": "APPROVED", "submittedAt": "2026-09-15T14:00:00Z", "body": "  \n", "author": {"__typename": "User", "login": "ada"}, "comments": {"totalCount": 0}},
+                {"id": "PRR_02d", "state": "APPROVED", "submittedAt": "2026-09-15T15:00:00Z", "body": "", "author": {"__typename": "User", "login": "renovate-approver"}, "comments": {"totalCount": 0}}
               ]
             },
             "commits": {

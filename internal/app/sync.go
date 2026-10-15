@@ -31,6 +31,13 @@ type SyncRequest struct {
 // adapter sends API requests one at a time whatever this is, as GitHub asks.
 const syncJobs = 4
 
+// finishTimeout bounds the FinishRun that records a sync's outcome, which
+// runs even after a cancellation. A store that waits for another process's
+// write lock would otherwise keep a stopped sync alive for minutes (until a
+// service manager kills it); a run left running is invisible to readers and
+// deleted once its lease lapses.
+const finishTimeout = 10 * time.Second
+
 // Sync lists the organization's repositories, keeps a bare mirror of each,
 // and copies the pull requests updated since the last sync into the forge
 // replica. Archived repositories and forks are left out unless asked for,
@@ -61,8 +68,10 @@ func Sync(ctx context.Context, d Deps, r SyncRequest) error {
 	}
 	status, err := syncOrg(ctx, d, r, log)
 	// The run is finished even after a cancellation, so that it does not
-	// stay running until the next open deletes it.
-	if ferr := d.Store.FinishRun(context.WithoutCancel(ctx), runID, status); ferr != nil {
+	// stay running until its lease lapses, but within finishTimeout.
+	fctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), finishTimeout)
+	defer cancel()
+	if ferr := d.Store.FinishRun(fctx, runID, status); ferr != nil {
 		err = errors.Join(err, fmt.Errorf("sync: finishing run %d: %w", runID, ferr))
 	}
 	return err
@@ -96,13 +105,14 @@ func syncOrg(ctx context.Context, d Deps, r SyncRequest, log *slog.Logger) (doma
 	if err := d.ForgeStore.PutForgeRepos(ctx, repos); err != nil {
 		return domain.RunStatusFailed, fmt.Errorf("storing the repositories of %s: %w", r.Org, err)
 	}
+	unmirrored := reconcileMirrors(ctx, d, r, listed, log)
 
 	errs := make([]error, len(repos))
 	var g errgroup.Group
 	g.SetLimit(syncJobs)
 	for i, repo := range repos {
 		g.Go(func() error {
-			errs[i] = syncRepo(ctx, d, r, repo, log)
+			errs[i] = syncRepo(ctx, d, r, repo, unmirrored[repo.ID], log)
 			return nil // a bulkhead: one repository's failure stops no other
 		})
 	}
@@ -152,15 +162,58 @@ func selectRepos(listed []domain.ForgeRepo, r SyncRequest) ([]domain.ForgeRepo, 
 	return keep, s
 }
 
+// reconcileMirrors moves the mirrors after their repositories, by node id,
+// before any is fetched (ForgeSource.ReconcileMirrors), and logs each move.
+// It returns, by ForgeRepo.ID, why a repository must not be mirrored this
+// sync: its existing mirror is somewhere it could not be moved from, and a
+// clone at its path would be a second copy, which scan would count twice.
+// When the mirrors cannot be taken stock of at all, no repository is
+// mirrored, for the same reason; pull requests still sync.
+func reconcileMirrors(ctx context.Context, d Deps, r SyncRequest, listed []domain.ForgeRepo, log *slog.Logger) map[string]error {
+	moves, err := d.Forge.ReconcileMirrors(ctx, r.Org, listed, r.Mirrors)
+	if err != nil {
+		err = fmt.Errorf("taking stock of the mirrors: %w", err)
+		unmirrored := make(map[string]error, len(listed))
+		for _, repo := range listed {
+			unmirrored[repo.ID] = err
+		}
+		return unmirrored
+	}
+	var unmirrored map[string]error
+	for _, m := range moves {
+		attrs := []any{"reason", m.Reason, "from", m.From, "to", m.To}
+		switch {
+		case m.Err == "" && (m.Reason == domain.MirrorRenamed || m.Reason == domain.MirrorRestored):
+			log.Info("mirror moved", attrs...)
+		case m.Err == "":
+			log.Warn("mirror moved out of scan's way", attrs...)
+		default:
+			log.Warn("mirror not moved", append(attrs, "error", m.Err)...)
+			if m.Reason == domain.MirrorRenamed || m.Reason == domain.MirrorRestored {
+				if unmirrored == nil {
+					unmirrored = map[string]error{}
+				}
+				unmirrored[m.Repo] = fmt.Errorf("its mirror at %s could not move to %s: %s", m.From, m.To, m.Err)
+			}
+		}
+	}
+	return unmirrored
+}
+
 // syncRepo brings one repository's mirror and pull requests up to date. The
-// two are independent: a mirror that fails to fetch does not stop the pull
-// requests, and the other way round.
-func syncRepo(ctx context.Context, d Deps, r SyncRequest, repo domain.ForgeRepo, log *slog.Logger) error {
+// two are independent: a mirror that fails to fetch, or that unmirrored
+// says to leave alone, does not stop the pull requests, and the other way
+// round.
+func syncRepo(ctx context.Context, d Deps, r SyncRequest, repo domain.ForgeRepo, unmirrored error, log *slog.Logger) error {
 	started := time.Now()
 	var errs []error
-	path, err := d.Forge.Mirror(ctx, repo, r.Mirrors)
-	if err != nil {
+	path := ""
+	if unmirrored != nil {
+		errs = append(errs, fmt.Errorf("mirror: %w", unmirrored))
+	} else if p, err := d.Forge.Mirror(ctx, repo, r.Mirrors); err != nil {
 		errs = append(errs, fmt.Errorf("mirror: %w", err))
+	} else {
+		path = p
 	}
 	if ctx.Err() != nil {
 		return errors.Join(append(errs, ctx.Err())...)

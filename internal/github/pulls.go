@@ -263,7 +263,9 @@ func (s *Source) pass(ctx context.Context, repo domain.ForgeRepo, direction stri
 		if last {
 			return nil
 		}
-		after = conn.PageInfo.EndCursor
+		if after, err = nextCursor("PullRequests", conn.PageInfo, after); err != nil {
+			return err
+		}
 	}
 }
 
@@ -288,7 +290,9 @@ func (s *Source) pull(ctx context.Context, repo domain.ForgeRepo, n *pullJSON) (
 		p.MergeCommit = commit(n.MergeCommit)
 	}
 
-	labels := n.Labels
+	// Each nested list's first page came with the pull request, read from
+	// the start of the list (after ""); the follow-ups read on from there.
+	labels, after := n.Labels, ""
 	for {
 		for _, l := range labels.Nodes {
 			p.Labels = append(p.Labels, l.Name)
@@ -296,20 +300,24 @@ func (s *Source) pull(ctx context.Context, repo domain.ForgeRepo, n *pullJSON) (
 		if !labels.PageInfo.HasNextPage {
 			break
 		}
+		next, err := nextCursor("PullRequestLabels", labels.PageInfo, after)
+		if err != nil {
+			return p, err
+		}
 		data, err := query[labelsData](ctx, s, "PullRequestLabels", labelsQuery,
-			map[string]any{"pull": n.ID, "after": labels.PageInfo.EndCursor}, false)
+			map[string]any{"pull": n.ID, "after": next}, false)
 		if err != nil {
 			return p, err
 		}
 		if data.Node == nil || data.Node.Labels == nil {
 			return p, errNoNode("pull request", n.ID)
 		}
-		labels = *data.Node.Labels
+		labels, after = *data.Node.Labels, next
 	}
 	slices.Sort(p.Labels)
 	p.Labels = slices.Compact(p.Labels) // a set: the replica keys labels by name
 
-	reviews := n.Reviews
+	reviews, after := n.Reviews, ""
 	for {
 		for i := range reviews.Nodes {
 			if r, ok := review(&reviews.Nodes[i]); ok {
@@ -319,21 +327,25 @@ func (s *Source) pull(ctx context.Context, repo domain.ForgeRepo, n *pullJSON) (
 		if !reviews.PageInfo.HasNextPage {
 			break
 		}
+		next, err := nextCursor("PullRequestReviews", reviews.PageInfo, after)
+		if err != nil {
+			return p, err
+		}
 		data, err := query[reviewsData](ctx, s, "PullRequestReviews", reviewsQuery,
-			map[string]any{"pull": n.ID, "after": reviews.PageInfo.EndCursor}, false)
+			map[string]any{"pull": n.ID, "after": next}, false)
 		if err != nil {
 			return p, err
 		}
 		if data.Node == nil || data.Node.Reviews == nil {
 			return p, errNoNode("pull request", n.ID)
 		}
-		reviews = *data.Node.Reviews
+		reviews, after = *data.Node.Reviews, next
 	}
 	slices.SortFunc(p.Reviews, func(a, b domain.Review) int {
 		return cmp.Or(a.Submitted.Compare(b.Submitted), cmp.Compare(a.ID, b.ID))
 	})
 
-	commits := n.Commits
+	commits, after := n.Commits, ""
 	for {
 		for i := range commits.Nodes {
 			p.Commits = append(p.Commits, commit(&commits.Nodes[i].Commit))
@@ -341,15 +353,19 @@ func (s *Source) pull(ctx context.Context, repo domain.ForgeRepo, n *pullJSON) (
 		if !commits.PageInfo.HasNextPage {
 			break
 		}
+		next, err := nextCursor("PullRequestCommits", commits.PageInfo, after)
+		if err != nil {
+			return p, err
+		}
 		data, err := query[commitsData](ctx, s, "PullRequestCommits", commitsQuery,
-			map[string]any{"pull": n.ID, "after": commits.PageInfo.EndCursor}, false)
+			map[string]any{"pull": n.ID, "after": next}, false)
 		if err != nil {
 			return p, err
 		}
 		if data.Node == nil || data.Node.Commits == nil {
 			return p, errNoNode("pull request", n.ID)
 		}
-		commits = *data.Node.Commits
+		commits, after = *data.Node.Commits, next
 	}
 	return p, nil
 }

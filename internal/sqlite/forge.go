@@ -19,14 +19,17 @@ import (
 // storing one deletes the labels, reviews and commits the replica held for
 // it and inserts the new ones, in the transaction that also raises the
 // repository's watermark. A page and its watermark therefore land together
-// or not at all, which is what makes a sync resumable.
+// or not at all, which is what makes a sync resumable. A pull request is
+// replaced only by a copy updated at the same time or later, so two syncs
+// that overlap cannot undo each other: the replica keeps the newest copy
+// whichever page commits last.
 
 var _ domain.ForgeStore = (*Store)(nil)
 
 // PutForgeRepos upserts the repositories a sync is about to bring up to
 // date, by ID.
 func (s *Store) PutForgeRepos(ctx context.Context, repos []domain.ForgeRepo) error {
-	return s.forgeTx(ctx, func(tx *sql.Tx) error {
+	return s.forgeTx(ctx, "storing forge repositories", func(tx *sql.Tx) error {
 		stmt, err := tx.PrepareContext(ctx, `
 INSERT INTO forge_repos (id, key, owner, name, default_branch, archived, fork)
 VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -44,32 +47,34 @@ ON CONFLICT (id) DO UPDATE SET
 			}
 		}
 		return nil
-	}, "storing forge repositories")
+	})
 }
 
 // ForgeWatermark returns a repository's watermark, with zero times when the
 // replica has none.
 func (s *Store) ForgeWatermark(ctx context.Context, repo string) (domain.ForgeWatermark, error) {
 	wm := domain.ForgeWatermark{Repo: repo}
-	var updated, synced sql.NullInt64
-	err := s.db.QueryRowContext(ctx,
-		`SELECT updated, synced FROM forge_watermarks WHERE repo = ?`, repo).Scan(&updated, &synced)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-		return wm, nil
-	case err != nil:
-		return wm, fmt.Errorf("sqlite: reading the forge watermark of %s: %w", repo, err)
-	}
-	wm.Updated, wm.Synced = forgeTime(updated), forgeTime(synced)
-	return wm, nil
+	err := s.forgeRead(ctx, "reading the forge watermark of "+repo, func(tx *sql.Tx) error {
+		var updated, synced sql.NullString
+		err := tx.QueryRowContext(ctx,
+			`SELECT updated, synced FROM forge_watermarks WHERE repo = ?`, repo).Scan(&updated, &synced)
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		return forgeDecodeTimes([]*time.Time{&wm.Updated, &wm.Synced}, updated, synced)
+	})
+	return wm, err
 }
 
-// PutForgePage stores a page in one transaction: each pull request replaces
-// what the replica held for it, and the repository's watermark rises to
-// page.Updated. It never falls, so a page from an older pass cannot undo a
-// newer one.
+// PutForgePage stores a page in one transaction: each pull request
+// replaces what the replica held for it, unless the replica's copy was
+// updated later, and the repository's watermark rises to page.Updated. It
+// never falls, so a page from an older pass cannot undo a newer one.
 func (s *Store) PutForgePage(ctx context.Context, page *domain.ForgePage) error {
-	return s.forgeTx(ctx, func(tx *sql.Tx) error {
+	return s.forgeTx(ctx, "storing a page of forge pull requests", func(tx *sql.Tx) error {
 		w, err := newForgePullWriter(ctx, tx)
 		if err != nil {
 			return err
@@ -84,27 +89,34 @@ func (s *Store) PutForgePage(ctx context.Context, page *domain.ForgePage) error 
 				return fmt.Errorf("pull request %s: %w", p.ID, err)
 			}
 		}
+		updated, err := forgeEncodeTime(page.Updated)
+		if err != nil {
+			return err
+		}
 		_, err = tx.ExecContext(ctx, `
 INSERT INTO forge_watermarks (repo, updated, synced) VALUES (?, ?, NULL)
 ON CONFLICT (repo) DO UPDATE SET updated = CASE
     WHEN excluded.updated IS NOT NULL
          AND (forge_watermarks.updated IS NULL OR excluded.updated > forge_watermarks.updated)
     THEN excluded.updated ELSE forge_watermarks.updated END`,
-			page.Repo, forgeUnix(page.Updated))
+			page.Repo, updated)
 		return err
-	}, "storing a page of forge pull requests")
+	})
 }
 
 // MarkForgeSynced records that the sync that started at `at` brought the
 // repository's pull requests up to date.
 func (s *Store) MarkForgeSynced(ctx context.Context, repo string, at time.Time) error {
-	_, err := s.db.ExecContext(ctx, `
+	return s.forgeTx(ctx, "marking "+repo+" synced", func(tx *sql.Tx) error {
+		synced, err := forgeEncodeTime(at)
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `
 INSERT INTO forge_watermarks (repo, updated, synced) VALUES (?, NULL, ?)
-ON CONFLICT (repo) DO UPDATE SET synced = excluded.synced`, repo, forgeUnix(at))
-	if err != nil {
-		return fmt.Errorf("sqlite: marking %s synced: %w", repo, err)
-	}
-	return nil
+ON CONFLICT (repo) DO UPDATE SET synced = excluded.synced`, repo, synced)
+		return err
+	})
 }
 
 // LoadForge returns the replica's repositories and watermarks, and every
@@ -113,16 +125,82 @@ ON CONFLICT (repo) DO UPDATE SET synced = excluded.synced`, repo, forgeUnix(at))
 // repository. It reads in one transaction, so a sync writing at the same
 // time is seen whole or not at all.
 func (s *Store) LoadForge(ctx context.Context, since time.Time) (*domain.ForgeFacts, error) {
-	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	var f *domain.ForgeFacts
+	err := s.forgeRead(ctx, "loading the forge replica", func(tx *sql.Tx) error {
+		var err error
+		f, err = forgeLoad(ctx, tx, since)
+		return err
+	})
 	if err != nil {
-		return nil, fmt.Errorf("sqlite: loading the forge replica: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-	f, err := forgeLoad(ctx, tx, since)
-	if err != nil {
-		return nil, fmt.Errorf("sqlite: loading the forge replica: %w", err)
+		return nil, err
 	}
 	return f, nil
+}
+
+// PutRunWatermarks records the watermarks a running run read with
+// LoadForge, replacing any it recorded before. They are deleted with the
+// run (ON DELETE CASCADE), by retention or as a crash's leftover.
+func (s *Store) PutRunWatermarks(ctx context.Context, runID int64, watermarks []domain.ForgeWatermark) error {
+	return s.forgeTx(ctx, fmt.Sprintf("recording the forge watermarks of run %d", runID), func(tx *sql.Tx) error {
+		var status string
+		err := tx.QueryRowContext(ctx, `SELECT status FROM runs WHERE id = ?`, runID).Scan(&status)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			return fmt.Errorf("run %d: %w", runID, domain.ErrNotFound)
+		case err != nil:
+			return err
+		case status != string(domain.RunStatusRunning):
+			return fmt.Errorf("run %d is %s, not running: a finished run's facts are final", runID, status)
+		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM forge_run_watermarks WHERE run_id = ?`, runID); err != nil {
+			return err
+		}
+		stmt, err := tx.PrepareContext(ctx,
+			`INSERT INTO forge_run_watermarks (run_id, repo, updated, synced) VALUES (?, ?, ?, ?)`)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = stmt.Close() }()
+		for _, wm := range watermarks {
+			times, err := forgeEncodeTimes(wm.Updated, wm.Synced)
+			if err != nil {
+				return fmt.Errorf("watermark of %s: %w", wm.Repo, err)
+			}
+			if _, err := stmt.ExecContext(ctx, runID, wm.Repo, times[0], times[1]); err != nil {
+				return fmt.Errorf("watermark of %s: %w", wm.Repo, err)
+			}
+		}
+		return nil
+	})
+}
+
+// RunWatermarks returns the watermarks a complete or partial run recorded,
+// sorted by repository, nil when it recorded none, and domain.ErrNotFound
+// for a run that is unknown, running or failed.
+func (s *Store) RunWatermarks(ctx context.Context, runID int64) ([]domain.ForgeWatermark, error) {
+	var out []domain.ForgeWatermark
+	err := s.forgeRead(ctx, fmt.Sprintf("reading the forge watermarks of run %d", runID), func(tx *sql.Tx) error {
+		var status string
+		err := tx.QueryRowContext(ctx, `SELECT status FROM runs WHERE id = ?`, runID).Scan(&status)
+		switch {
+		case errors.Is(err, sql.ErrNoRows):
+			return fmt.Errorf("run %d: %w", runID, domain.ErrNotFound)
+		case err != nil:
+			return err
+		case status != string(domain.RunStatusComplete) && status != string(domain.RunStatusPartial):
+			return fmt.Errorf("run %d is %s: %w", runID, status, domain.ErrNotFound)
+		}
+		return forgeRows(ctx, tx, `SELECT repo, updated, synced FROM forge_run_watermarks WHERE run_id = ? ORDER BY repo`,
+			[]any{runID}, func(rows *sql.Rows) error {
+				wm, err := forgeScanWatermark(rows)
+				out = append(out, wm)
+				return err
+			})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // The SELECT lists of LoadForge. The pull requests after since are named
@@ -164,32 +242,33 @@ SELECT id, key, owner, name, default_branch, archived, fork FROM forge_repos ORD
 	}
 	if err := forgeRows(ctx, tx, `SELECT repo, updated, synced FROM forge_watermarks ORDER BY repo`,
 		nil, func(rows *sql.Rows) error {
-			wm := domain.ForgeWatermark{}
-			var updated, synced sql.NullInt64
-			if err := rows.Scan(&wm.Repo, &updated, &synced); err != nil {
-				return err
-			}
-			wm.Updated, wm.Synced = forgeTime(updated), forgeTime(synced)
+			wm, err := forgeScanWatermark(rows)
 			f.Watermarks = append(f.Watermarks, wm)
-			return nil
+			return err
 		}); err != nil {
 		return nil, err
 	}
 
-	bound := forgeUnix(since)
+	bound, err := forgeEncodeTime(since)
+	if err != nil {
+		return nil, err
+	}
 	args := []any{bound, bound}
 	index := map[string]int{} // pull request id → position in f.PullRequests
 	if err := forgeRows(ctx, tx, forgeSelectPulls, args, func(rows *sql.Rows) error {
 		var p domain.PullRequest
 		var authorBot, draft int64
-		var created, updated, closed, merged sql.NullInt64
+		var created, updated, closed, merged sql.NullString
 		if err := rows.Scan(&p.ID, &p.Repo, &p.Number, &p.Title, &p.Author.Login, &authorBot, &p.State,
 			&draft, &p.BaseBranch, &created, &updated, &closed, &merged,
 			&p.MergeCommit.SHA, &p.MergeCommit.AuthorEmail, &p.MergeCommit.AuthorLogin); err != nil {
 			return err
 		}
 		p.Author.Bot, p.Draft = authorBot != 0, draft != 0
-		p.Created, p.Updated, p.Closed, p.Merged = forgeTime(created), forgeTime(updated), forgeTime(closed), forgeTime(merged)
+		if err := forgeDecodeTimes([]*time.Time{&p.Created, &p.Updated, &p.Closed, &p.Merged},
+			created, updated, closed, merged); err != nil {
+			return fmt.Errorf("pull request %s: %w", p.ID, err)
+		}
 		index[p.ID] = len(f.PullRequests)
 		f.PullRequests = append(f.PullRequests, p)
 		return nil
@@ -221,12 +300,15 @@ SELECT id, key, owner, name, default_branch, archived, fork FROM forge_repos ORD
 		var id string
 		var r domain.Review
 		var authorBot int64
-		var submitted sql.NullInt64
+		var submitted sql.NullString
 		if err := rows.Scan(&id, &r.ID, &r.Author.Login, &authorBot, &r.State, &submitted,
 			&r.BodyLength, &r.Comments); err != nil {
 			return err
 		}
-		r.Author.Bot, r.Submitted = authorBot != 0, forgeTime(submitted)
+		r.Author.Bot = authorBot != 0
+		if err := forgeDecodeTimes([]*time.Time{&r.Submitted}, submitted); err != nil {
+			return fmt.Errorf("review %s: %w", r.ID, err)
+		}
 		p, err := pull(id)
 		if err != nil {
 			return err
@@ -254,6 +336,16 @@ SELECT id, key, owner, name, default_branch, archived, fork FROM forge_repos ORD
 	return &f, nil
 }
 
+// forgeScanWatermark scans a (repo, updated, synced) row.
+func forgeScanWatermark(rows *sql.Rows) (domain.ForgeWatermark, error) {
+	var wm domain.ForgeWatermark
+	var updated, synced sql.NullString
+	if err := rows.Scan(&wm.Repo, &updated, &synced); err != nil {
+		return wm, err
+	}
+	return wm, forgeDecodeTimes([]*time.Time{&wm.Updated, &wm.Synced}, updated, synced)
+}
+
 // forgePullWriter holds the prepared statements that replace pull requests.
 type forgePullWriter struct {
 	stmts                                    []*sql.Stmt
@@ -267,6 +359,9 @@ func newForgePullWriter(ctx context.Context, tx *sql.Tx) (*forgePullWriter, erro
 		stmt **sql.Stmt
 		sql  string
 	}{
+		// The WHERE makes the replacement monotonic: a copy older than the
+		// replica's, from a slower sync that read it first, changes nothing.
+		// The times sort as text (forgeTimeLayout).
 		{&w.upsert, `
 INSERT INTO forge_pull_requests (id, repo, number, title, author, author_bot, state, draft, base_branch,
     created, updated, closed, merged, merge_sha, merge_author_email, merge_author_login)
@@ -277,7 +372,8 @@ ON CONFLICT (id) DO UPDATE SET
     draft = excluded.draft, base_branch = excluded.base_branch, created = excluded.created,
     updated = excluded.updated, closed = excluded.closed, merged = excluded.merged,
     merge_sha = excluded.merge_sha, merge_author_email = excluded.merge_author_email,
-    merge_author_login = excluded.merge_author_login`},
+    merge_author_login = excluded.merge_author_login
+WHERE forge_pull_requests.updated IS NULL OR excluded.updated >= forge_pull_requests.updated`},
 		{&w.delLabels, `DELETE FROM forge_pull_labels WHERE pull = ?`},
 		{&w.delReviews, `DELETE FROM forge_reviews WHERE pull = ?`},
 		{&w.delCommit, `DELETE FROM forge_pull_commits WHERE pull = ?`},
@@ -305,12 +401,21 @@ func (w *forgePullWriter) close() {
 	}
 }
 
-// put replaces one pull request and everything the replica held for it.
+// put replaces one pull request and everything the replica held for it,
+// unless the replica holds a copy updated later, which it keeps whole.
 func (w *forgePullWriter) put(ctx context.Context, p *domain.PullRequest) error {
-	if _, err := w.upsert.ExecContext(ctx, p.ID, p.Repo, p.Number, p.Title, p.Author.Login, forgeFlag(p.Author.Bot),
-		p.State, forgeFlag(p.Draft), p.BaseBranch, forgeUnix(p.Created), forgeUnix(p.Updated), forgeUnix(p.Closed),
-		forgeUnix(p.Merged), p.MergeCommit.SHA, p.MergeCommit.AuthorEmail, p.MergeCommit.AuthorLogin); err != nil {
+	times, err := forgeEncodeTimes(p.Created, p.Updated, p.Closed, p.Merged)
+	if err != nil {
 		return err
+	}
+	res, err := w.upsert.ExecContext(ctx, p.ID, p.Repo, p.Number, p.Title, p.Author.Login, forgeFlag(p.Author.Bot),
+		p.State, forgeFlag(p.Draft), p.BaseBranch, times[0], times[1], times[2], times[3],
+		p.MergeCommit.SHA, p.MergeCommit.AuthorEmail, p.MergeCommit.AuthorLogin)
+	if err != nil {
+		return err
+	}
+	if n, err := res.RowsAffected(); err != nil || n == 0 {
+		return err // n == 0: the replica's copy is newer, so its children stay too
 	}
 	for _, del := range []*sql.Stmt{w.delLabels, w.delReviews, w.delCommit} {
 		if _, err := del.ExecContext(ctx, p.ID); err != nil {
@@ -323,8 +428,12 @@ func (w *forgePullWriter) put(ctx context.Context, p *domain.PullRequest) error 
 		}
 	}
 	for _, r := range p.Reviews {
+		submitted, err := forgeEncodeTime(r.Submitted)
+		if err != nil {
+			return fmt.Errorf("review %s: %w", r.ID, err)
+		}
 		if _, err := w.review.ExecContext(ctx, r.ID, p.ID, r.Author.Login, forgeFlag(r.Author.Bot), r.State,
-			forgeUnix(r.Submitted), r.BodyLength, r.Comments); err != nil {
+			submitted, r.BodyLength, r.Comments); err != nil {
 			return fmt.Errorf("review %s: %w", r.ID, err)
 		}
 	}
@@ -336,9 +445,19 @@ func (w *forgePullWriter) put(ctx context.Context, p *domain.PullRequest) error 
 	return nil
 }
 
-// forgeTx runs fn in a write transaction and commits it, or rolls it back
-// when fn fails. what names the operation in the error.
-func (s *Store) forgeTx(ctx context.Context, fn func(*sql.Tx) error, what string) error {
+// forgeTx runs fn in one write transaction and commits it, or rolls it back
+// when fn fails; what names the operation in the error. Every write to the
+// forge tables goes through it.
+//
+// Merge note for #13: #8's Store has one writer connection whose
+// transactions begin IMMEDIATE and wait, in s.write, up to lockWait for
+// another process's write lock, while its busy timeout alone gives up after
+// a second. When #8 merges, this body becomes
+//
+//	if err := s.write(ctx, fn); err != nil { return fmt.Errorf("sqlite: %s: %w", what, err) }
+//
+// so that a sync waits for a scan's commit instead of failing beside it.
+func (s *Store) forgeTx(ctx context.Context, what string, fn func(*sql.Tx) error) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("sqlite: %s: %w", what, err)
@@ -348,6 +467,25 @@ func (s *Store) forgeTx(ctx context.Context, fn func(*sql.Tx) error, what string
 		return fmt.Errorf("sqlite: %s: %w", what, err)
 	}
 	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("sqlite: %s: %w", what, err)
+	}
+	return nil
+}
+
+// forgeRead runs fn in one read-only transaction, so that every query fn
+// makes reads the same snapshot; what names the operation in the error.
+// Every read of the forge tables goes through it.
+//
+// Merge note for #13: when #8 merges, this body becomes s.read(ctx, fn),
+// on #8's query_only reader pool, so that a long LoadForge (scan, the MCP
+// server) never holds the single writer connection.
+func (s *Store) forgeRead(ctx context.Context, what string, fn func(*sql.Tx) error) error {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return fmt.Errorf("sqlite: %s: %w", what, err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := fn(tx); err != nil {
 		return fmt.Errorf("sqlite: %s: %w", what, err)
 	}
 	return nil
@@ -368,21 +506,56 @@ func forgeRows(ctx context.Context, tx *sql.Tx, q string, args []any, fn func(*s
 	return rows.Err()
 }
 
-// forgeUnix stores a time as Unix seconds, and the zero time as NULL.
-func forgeUnix(t time.Time) any {
+// forgeTimeLayout is how the forge tables store a time: migration 1's
+// encoding (#8's timeLayout), RFC 3339 in UTC with exactly nine fractional
+// digits, so that facts.db has one time encoding, a time round-trips to the
+// nanosecond, and the text sorts like the time. #13 may fold these helpers
+// into #8's encodeTime and decodeTime.
+const forgeTimeLayout = "2006-01-02T15:04:05.000000000Z"
+
+// forgeEncodeTime returns t as UTC text in forgeTimeLayout, or nil (NULL)
+// for the zero time. A year outside 0000 to 9999 would not sort, so it is an
+// error.
+func forgeEncodeTime(t time.Time) (any, error) {
 	if t.IsZero() {
-		return nil
+		return nil, nil
 	}
-	return t.Unix()
+	u := t.UTC()
+	if y := u.Year(); y < 0 || y > 9999 {
+		return nil, fmt.Errorf("time %s is outside the years 0000 to 9999 that facts.db stores", t.Format(time.RFC3339Nano))
+	}
+	return u.Format(forgeTimeLayout), nil
 }
 
-// forgeTime is the inverse of forgeUnix: NULL is the zero time, and any other
-// value is a time in UTC.
-func forgeTime(v sql.NullInt64) time.Time {
-	if !v.Valid {
-		return time.Time{}
+// forgeEncodeTimes encodes each time, stopping at the first one facts.db
+// cannot store.
+func forgeEncodeTimes(ts ...time.Time) ([]any, error) {
+	out := make([]any, len(ts))
+	for i, t := range ts {
+		v, err := forgeEncodeTime(t)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = v
 	}
-	return time.Unix(v.Int64, 0).UTC()
+	return out, nil
+}
+
+// forgeDecodeTimes is the inverse of forgeEncodeTime for each column into
+// the time dst names: NULL is the zero time, any other value a time in UTC.
+func forgeDecodeTimes(dst []*time.Time, cols ...sql.NullString) error {
+	for i, c := range cols {
+		*dst[i] = time.Time{}
+		if !c.Valid {
+			continue
+		}
+		t, err := time.Parse(forgeTimeLayout, c.String)
+		if err != nil {
+			return fmt.Errorf("stored time %q: %w", c.String, err)
+		}
+		*dst[i] = t
+	}
+	return nil
 }
 
 // forgeFlag stores a bool as the 0 or 1 a STRICT INTEGER column takes.

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
+	"github.com/IHaveASegway/stillhere/internal/identity"
 	"github.com/IHaveASegway/stillhere/internal/rank"
 )
 
@@ -41,7 +42,8 @@ func (reviewsGiven) Definition() Definition {
 			"bots (an app account, or a [bots] match) are listed and never ranked",
 		BlindSpots: "reviews of pull requests that were closed unmerged or are still open; dismissed reviews; " +
 			"conversation comments outside a review; pairing and reviews outside GitHub; " +
-			"a reviewer with no commit in the run shows as @login, apart from their email",
+			"a reviewer with no commit in the run shows as @login, apart from their email; " +
+			"pull requests of a repository the run did not scan, or scanned through a host alias",
 		Gaming: "rubber-stamp approvals, which the share of approvals with no comment shows next to the count; " +
 			"reviewing many trivial pull requests, such as dependency bumps",
 		Oracle:   "testdata/github/README.md#reviews_given1 (TestGitHubSync)",
@@ -158,8 +160,8 @@ type reviewsTally struct {
 // reviewsPull is one person's counted reviews of one pull request: the unit
 // reviews_given@1 counts and rank resamples.
 type reviewsPull struct {
-	pull  string // PullRequest.ID
-	repo  string // ForgeRepo.Key of its repository
+	pull  string   // PullRequest.ID
+	repos []string // Repo.Key of the run's repositories that are its repository: one, unless the run scanned two clones of it
 	who   domain.Subject
 	bot   bool
 	first time.Time // the person's earliest counted review of it
@@ -178,6 +180,14 @@ type reviewsView struct {
 // newReviewsView applies the definition to the forge facts. It returns nil
 // when the fact set has none.
 //
+// Only the pull requests of the run's own repositories count, in every
+// scope: the replica outlives runs and holds whatever any sync copied into
+// facts.db, such as another organization's repositories, while every
+// scope's numbers describe the repositories the run scanned. A forge
+// repository is the run's when its clone URL and the repository's origin
+// name the same host, owner and name (domain.RemoteRepo), so a user's SSH
+// clone counts like a managed mirror.
+//
 // A review counts when it was submitted in the window as an approval, a
 // change request or a comment, by an account with a login, on a pull
 // request merged before Now by someone else. "Someone else" compares
@@ -193,13 +203,23 @@ func newReviewsView(in *Input) *reviewsView {
 		rv.groupRepos[g.Name] = g.Repos
 	}
 	who := newReviewsLogins(in)
-	repoKey := make(map[string]string, len(fs.Forge.Repos))
+	scanned := map[string][]string{} // domain.RemoteRepo → Repo.Key of the run's repositories
+	for i := range fs.Repos {
+		r := &fs.Repos[i].Repo
+		if name, ok := domain.RemoteRepo(r.Remote); ok {
+			scanned[name] = append(scanned[name], r.Key)
+		}
+	}
+	repoKeys := make(map[string][]string, len(fs.Forge.Repos)) // ForgeRepo.ID → Repo.Key of the run's repositories
 	for _, r := range fs.Forge.Repos {
-		repoKey[r.ID] = r.Key
+		if name, ok := domain.RemoteRepo(r.Key); ok && len(scanned[name]) > 0 {
+			repoKeys[r.ID] = scanned[name]
+		}
 	}
 	for i := range fs.Forge.PullRequests {
 		p := &fs.Forge.PullRequests[i]
-		if p.State != domain.PullMerged || p.Merged.IsZero() || !p.Merged.Before(fs.Now) {
+		keys := repoKeys[p.Repo]
+		if len(keys) == 0 || p.State != domain.PullMerged || p.Merged.IsZero() || !p.Merged.Before(fs.Now) {
 			continue
 		}
 		author := who.subject(p.Author)
@@ -219,7 +239,7 @@ func newReviewsView(in *Input) *reviewsView {
 			}
 			c := byPerson[s]
 			if c == nil {
-				c = &reviewsPull{pull: p.ID, repo: repoKey[p.Repo], who: s, bot: who.bot(r.Author, s), first: r.Submitted}
+				c = &reviewsPull{pull: p.ID, repos: keys, who: s, bot: who.bot(r.Author, s), first: r.Submitted}
 				byPerson[s] = c
 			}
 			if r.Submitted.Before(c.first) {
@@ -245,16 +265,19 @@ func newReviewsView(in *Input) *reviewsView {
 }
 
 // inScope returns the counted reviews of pull requests in scope's
-// repositories: every one for scope all, a group's repositories by
-// Repo.Key, or one repository.
+// repositories: every one for scope all, which holds the run's repositories
+// only (newReviewsView), a group's repositories by Repo.Key, or one
+// repository.
 func (rv *reviewsView) inScope(scope domain.Scope) []reviewsPull {
 	if scope.Kind == domain.ScopeAll {
 		return rv.all
 	}
 	var out []reviewsPull
 	for _, r := range rv.all {
-		if scope.Kind == domain.ScopeRepo && r.repo == scope.Key ||
-			scope.Kind == domain.ScopeGroup && rv.inGroup(r.repo, scope.Key) {
+		if slices.ContainsFunc(r.repos, func(key string) bool {
+			return scope.Kind == domain.ScopeRepo && key == scope.Key ||
+				scope.Kind == domain.ScopeGroup && rv.inGroup(key, scope.Key)
+		}) {
 			out = append(out, r)
 		}
 	}
@@ -273,8 +296,8 @@ func (rv *reviewsView) inGroup(repoKey, group string) bool {
 // (docs/spec/git-invocation.md#identity-mailmap-and-bots). Any other login
 // is the subject "@login" (ADR 0004), and an app's "@login[bot]".
 type reviewsLogins struct {
-	email map[string]string // login → canonical email
-	in    *Input
+	email map[string]string   // login → canonical email
+	who   *identity.Directory // Input.Who, or one built from the facts and the policy as Input documents
 }
 
 func newReviewsLogins(in *Input) reviewsLogins {
@@ -307,7 +330,15 @@ func newReviewsLogins(in *Input) reviewsLogins {
 		}
 		count(p.MergeCommit)
 	}
-	links := reviewsLogins{email: map[string]string{}, in: in}
+	who := in.Who
+	if who == nil {
+		// Input.Who is optional; metrics.Compute hands every metric the
+		// Input it was given. Without a directory no [bots] fragment would
+		// match, and a User-typed bot account (renovate, a [bot] machine
+		// user) would be ranked.
+		who = identity.New(in.Facts, in.Policy)
+	}
+	links := reviewsLogins{email: map[string]string{}, who: who}
 	for login, emails := range votes {
 		best, n := "", 0
 		for email, k := range emails {
@@ -332,7 +363,7 @@ func (l reviewsLogins) subject(u domain.ForgeUser) domain.Subject {
 }
 
 // bot reports whether an account is a bot: an app account, or a subject the
-// policy's [bots] fragments match.
+// policy's [bots] fragments match, as identity decides for every metric.
 func (l reviewsLogins) bot(u domain.ForgeUser, s domain.Subject) bool {
-	return u.Bot || l.in.Who != nil && l.in.Who.Bot(s.Key)
+	return u.Bot || l.who.Bot(s.Key)
 }

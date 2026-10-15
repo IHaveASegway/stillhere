@@ -98,7 +98,9 @@ func (s *Source) Repos(ctx context.Context, owner string) ([]domain.ForgeRepo, e
 		if !conn.PageInfo.HasNextPage {
 			break
 		}
-		after = conn.PageInfo.EndCursor
+		if after, err = nextCursor("Repos", conn.PageInfo, after); err != nil {
+			return nil, err
+		}
 	}
 	slices.SortFunc(repos, func(a, b domain.ForgeRepo) int {
 		return cmp.Or(cmp.Compare(a.Key, b.Key), cmp.Compare(a.ID, b.ID))

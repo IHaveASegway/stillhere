@@ -254,29 +254,55 @@ func (*credentials) Format(f fmt.State, _ rune) { _, _ = io.WriteString(f, redac
 // LogValue logs "[redacted]".
 func (*credentials) LogValue() slog.Value { return slog.StringValue(redacted) }
 
-// observer records GitHub's clock from the Date header of every response,
-// so waits until a rate-limit reset are measured on GitHub's clock rather
-// than a laptop's, which may be minutes off.
+// observer sees every API response before go-gh does. It records GitHub's
+// clock from the Date header, so waits until a rate-limit reset are measured
+// on GitHub's clock rather than a laptop's, which may be minutes off. It
+// also keeps the rate-limit headers of the last response, because GitHub
+// reports a spent budget and some secondary limits inside a 200, whose
+// headers go-gh does not keep.
 type observer struct {
 	base http.RoundTripper
 
 	mu   sync.Mutex
-	date time.Time // the Date of the last response
-	at   time.Time // when that response arrived, for the monotonic time since
+	date time.Time   // the Date of the last response
+	at   time.Time   // when that response arrived, for the monotonic time since
+	rate http.Header // the rate-limit headers of the last response; nil after a failed round trip
 }
 
-// RoundTrip passes req to the base transport and notes the response's Date.
+// rateHeaders are the response headers a rate limit is read from.
+var rateHeaders = []string{"Retry-After", "X-Ratelimit-Remaining", "X-Ratelimit-Reset"}
+
+// RoundTrip passes req to the base transport and notes the response's Date
+// and rate-limit headers.
 func (o *observer) RoundTrip(req *http.Request) (*http.Response, error) {
 	resp, err := o.base.RoundTrip(req)
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	o.rate = nil
 	if err != nil {
 		return nil, err
 	}
 	if date, perr := http.ParseTime(resp.Header.Get("Date")); perr == nil {
-		o.mu.Lock()
 		o.date, o.at = date.UTC(), time.Now()
-		o.mu.Unlock()
+	}
+	for _, k := range rateHeaders {
+		if v := resp.Header.Get(k); v != "" {
+			if o.rate == nil {
+				o.rate = http.Header{}
+			}
+			o.rate.Set(k, v)
+		}
 	}
 	return resp, nil
+}
+
+// headers returns the rate-limit headers of the last response. API requests
+// go one at a time, behind the gate, so inside query they are the headers of
+// the response that has just failed.
+func (o *observer) headers() http.Header {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.rate
 }
 
 // now estimates GitHub's clock: the last Date plus the time since it

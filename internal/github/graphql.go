@@ -8,6 +8,7 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -188,18 +189,7 @@ func (s *Source) backoff(err error, attempt int) (wait time.Duration, reason str
 	case errors.As(err, &herr):
 		return s.httpBackoff(herr, attempt)
 	case errors.As(err, &gerr):
-		for _, e := range gerr.Errors {
-			if e.Type == "RATE_LIMITED" {
-				s.mu.Lock()
-				reset := s.budget.reset
-				s.mu.Unlock()
-				if now, ok := s.seen.now(); ok && reset.After(now) {
-					return s.untilReset(reset), "rate limit exhausted", false
-				}
-				return equalJitter(secondaryBase, secondaryCap, attempt), "rate limit exhausted", false
-			}
-		}
-		return 0, "", false
+		return s.graphQLBackoff(gerr, attempt)
 	case errors.As(err, &uerr):
 		// The connection failed or timed out before GitHub answered.
 		return equalJitter(transientBase, transientCap, attempt), "network error", true
@@ -214,13 +204,8 @@ func (s *Source) backoff(err error, attempt int) (wait time.Duration, reason str
 func (s *Source) httpBackoff(herr *api.HTTPError, attempt int) (time.Duration, string, bool) {
 	switch status := herr.StatusCode; {
 	case status == http.StatusForbidden || status == http.StatusTooManyRequests:
-		if seconds, err := strconv.Atoi(strings.TrimSpace(herr.Headers.Get("Retry-After"))); err == nil && seconds >= 0 {
-			return time.Duration(seconds)*time.Second + jitter(time.Second), "secondary rate limit (Retry-After)", false
-		}
-		if herr.Headers.Get("X-RateLimit-Remaining") == "0" {
-			if epoch, err := strconv.ParseInt(herr.Headers.Get("X-RateLimit-Reset"), 10, 64); err == nil {
-				return s.untilReset(time.Unix(epoch, 0).UTC()), "rate limit exhausted", false
-			}
+		if wait, reason, ok := s.limitWait(herr.Headers); ok {
+			return wait, reason, false
 		}
 		if status == http.StatusTooManyRequests || secondaryLimit(herr.Message) {
 			return equalJitter(secondaryBase, secondaryCap, attempt), "secondary rate limit", false
@@ -228,6 +213,52 @@ func (s *Source) httpBackoff(herr *api.HTTPError, attempt int) (time.Duration, s
 		return 0, "", false // forbidden: a scope, an SSO authorization or a permission is missing
 	case status >= 500:
 		return equalJitter(transientBase, transientCap, attempt), "HTTP " + strconv.Itoa(status), true
+	}
+	return 0, "", false
+}
+
+// graphQLBackoff classifies the errors of a response that GitHub sent with
+// status 200. GitHub reports both rate limits that way too: a spent hourly
+// budget as an error of type RATE_LIMITED with X-RateLimit-Remaining 0, and
+// a secondary limit by its message. go-gh keeps no header of a 200, so the
+// headers come from the observer. As for an HTTP error, Retry-After and
+// X-RateLimit-Reset are obeyed first; without them, a spent budget waits
+// for the reset the last success reported, and a secondary limit backs off
+// from a minute up.
+func (s *Source) graphQLBackoff(gerr *api.GraphQLError, attempt int) (time.Duration, string, bool) {
+	secondary := slices.ContainsFunc(gerr.Errors, func(e api.GraphQLErrorItem) bool { return secondaryLimit(e.Message) })
+	spent := slices.ContainsFunc(gerr.Errors, func(e api.GraphQLErrorItem) bool { return e.Type == "RATE_LIMITED" })
+	if !secondary && !spent {
+		return 0, "", false
+	}
+	if wait, reason, ok := s.limitWait(s.seen.headers()); ok {
+		return wait, reason, false
+	}
+	if !secondary {
+		s.mu.Lock()
+		reset := s.budget.reset
+		s.mu.Unlock()
+		if now, ok := s.seen.now(); ok && reset.After(now) {
+			return s.untilReset(reset), "rate limit exhausted", false
+		}
+		return equalJitter(secondaryBase, secondaryCap, attempt), "rate limit exhausted", false
+	}
+	return equalJitter(secondaryBase, secondaryCap, attempt), "secondary rate limit", false
+}
+
+// limitWait reads the wait a rate-limited response asks for from its
+// headers: Retry-After seconds, else, once X-RateLimit-Remaining is 0,
+// until X-RateLimit-Reset on GitHub's clock (docs.github.com, "Rate limits
+// and query limits for the GraphQL API"). ok is false when they ask for
+// neither.
+func (s *Source) limitWait(h http.Header) (wait time.Duration, reason string, ok bool) {
+	if seconds, err := strconv.Atoi(strings.TrimSpace(h.Get("Retry-After"))); err == nil && seconds >= 0 {
+		return time.Duration(seconds)*time.Second + jitter(time.Second), "rate limit (Retry-After)", true
+	}
+	if h.Get("X-RateLimit-Remaining") == "0" {
+		if epoch, err := strconv.ParseInt(h.Get("X-RateLimit-Reset"), 10, 64); err == nil {
+			return s.untilReset(time.Unix(epoch, 0).UTC()), "rate limit exhausted", true
+		}
 	}
 	return 0, "", false
 }
@@ -287,6 +318,18 @@ func cursor(after string) any {
 		return nil
 	}
 	return after
+}
+
+// nextCursor returns the cursor of the page after one read from the cursor
+// after ("" for the first page), for a connection whose pageInfo says it has
+// a next page. A cursor that is missing or did not move would read the same
+// page again, and so on forever, spending the budget down to the reserve
+// and then waiting out reset after reset; the pass fails instead.
+func nextCursor(op string, pi pageInfo, after string) (string, error) {
+	if pi.EndCursor == "" || pi.EndCursor == after {
+		return "", fmt.Errorf("GitHub %s: the connection says it has another page, but its cursor does not move past this one", op)
+	}
+	return pi.EndCursor, nil
 }
 
 // errNoNode is returned when GitHub answers a query about a repository or a
