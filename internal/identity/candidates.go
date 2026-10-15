@@ -233,9 +233,17 @@ func RevealsAddress(name, email string) bool {
 // different candidates never map one alias twice: git would silently keep
 // the last.
 func Candidates(fs *domain.FactSet, who *Directory) *Survey {
+	s, _, _ := candSurvey(fs, who)
+	return s
+}
+
+// candSurvey is Candidates, with the addresses it compared and the
+// hand-off chains it left out as several people's (Survey.Oversized), each
+// as its addresses in time order.
+func candSurvey(fs *domain.FactSet, who *Directory) (*Survey, []*candAddress, [][]*candAddress) {
 	s := &Survey{}
 	if fs == nil {
-		return s
+		return s, nil, nil
 	}
 	if who == nil {
 		who = New(fs, nil)
@@ -264,11 +272,17 @@ func Candidates(fs *domain.FactSet, who *Directory) *Survey {
 			singles = append(singles, a)
 		}
 	}
+	var leftOut [][]*candAddress
 	for _, chain := range candHandOffs(fs, singles) {
 		// A chain of more addresses than a candidate may hold is several
 		// people's, as a component of that size is.
 		if len(chain)+1 > candMaxShare {
 			s.Oversized++
+			members := []*candAddress{chain[0].from}
+			for _, e := range chain {
+				members = append(members, e.to)
+			}
+			leftOut = append(leftOut, members)
 			continue
 		}
 		s.Candidates = append(s.Candidates, candChainCandidate(chain, domains))
@@ -281,7 +295,7 @@ func Candidates(fs *domain.FactSet, who *Directory) *Survey {
 			cmp.Compare(a.Addresses[0].Email, b.Addresses[0].Email),
 		)
 	})
-	return s
+	return s, addrs, leftOut
 }
 
 // candAddress is one human address while the rules compare it.
@@ -300,6 +314,8 @@ type candAddress struct {
 	repos     map[string]bool // while collecting
 	counted   map[string]bool // while collecting: commit SHAs already counted, so a commit two repositories share counts once
 	names     map[string]bool // while collecting: the author names its commits carry
+	coNames   map[string]bool // while collecting: the names co-author trailers give it
+	nameKeys  []string        // every name seen with it, as author or co-author, by its words (candWords), a default one included: the names Blocks compares
 }
 
 // candCollect gathers every human address the facts show, as a commit's
@@ -349,6 +365,7 @@ func candCollect(fs *domain.FactSet, who *Directory) ([]*candAddress, int) {
 		var role bool
 		a.handle, a.account, a.login, a.domain, a.noreply, role = candLocal(a.Email)
 		a.selfNamed = candSelfNamed(a.Name, a.Email)
+		a.nameKeys = candNameKeys(a)
 		// A GitHub noreply address is one account's by construction, so
 		// names that differ on it are a person's name changing.
 		a.shared = !a.noreply && (role || !candOwnNamesAgree(a))
@@ -356,11 +373,33 @@ func candCollect(fs *domain.FactSet, who *Directory) ([]*candAddress, int) {
 			a.Repos = append(a.Repos, r)
 		}
 		slices.Sort(a.Repos)
-		a.repos, a.counted, a.names = nil, nil, nil
+		a.repos, a.counted, a.names, a.coNames = nil, nil, nil, nil
 		addrs = append(addrs, a)
 	}
 	slices.SortFunc(addrs, func(x, y *candAddress) int { return cmp.Compare(x.Email, y.Email) })
 	return addrs, len(bots)
+}
+
+// candNameKeys returns the words (candWords) of every name seen with a,
+// sorted: its display name, the author names its commits carry and the
+// names co-author trailers give it. A default name stays, since Blocks,
+// which reads them, joins whatever may be one person.
+func candNameKeys(a *candAddress) []string {
+	var out []string
+	add := func(name string) {
+		if key, _ := candWords(name); key != "" {
+			out = append(out, key)
+		}
+	}
+	add(a.Name)
+	for name := range a.names {
+		add(name)
+	}
+	for name := range a.coNames {
+		add(name)
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 // candPeople calls fn for a commit's author and each distinct co-author:
@@ -381,7 +420,8 @@ func candPeople(author domain.Person, coAuthors []domain.Person, fn func(p domai
 // the repository and, the first time the commit is seen, the count and the
 // author time. It keeps the author's name, which tells whether several
 // people commit as one address; a trailer's name is whatever the commit's
-// author typed, so it is not kept.
+// author typed, so it tells nothing of the kind and is kept apart, for
+// Blocks alone.
 func candSee(address func(email string) *candAddress, repo, sha string, at time.Time,
 	author domain.Person, coAuthors []domain.Person) {
 	candPeople(author, coAuthors, func(p domain.Person, email string, authored bool) {
@@ -390,8 +430,15 @@ func candSee(address func(email string) *candAddress, repo, sha string, at time.
 			return
 		}
 		a.repos[repo] = true
-		if authored && p.Name != "" {
+		switch {
+		case p.Name == "":
+		case authored:
 			a.names[p.Name] = true
+		default:
+			if a.coNames == nil {
+				a.coNames = map[string]bool{}
+			}
+			a.coNames[p.Name] = true
 		}
 		if a.counted[sha] {
 			return
@@ -480,19 +527,24 @@ func (d *Directory) NameKey(email string) string {
 	return key
 }
 
-// candNameKey normalises a display name for the same-name rule: its words
-// (runs of letters, marks and digits) lowercased and joined by one space,
-// so case, spacing and punctuation never tell two names apart. A default
-// name, which a machine or a tutorial wrote, has no key.
+// candNameKey normalises a display name for the same-name rule (candWords).
+// A default name, which a machine or a tutorial wrote, has no key.
 func candNameKey(name string) (string, int) {
-	words := strings.FieldsFunc(strings.ToLower(name), func(r rune) bool {
-		return !unicode.IsLetter(r) && !unicode.IsMark(r) && !unicode.IsDigit(r)
-	})
-	key := strings.Join(words, " ")
+	key, words := candWords(name)
 	if key == "" || candDefaultName(key, words) {
 		return "", 0
 	}
 	return key, len(words)
+}
+
+// candWords returns a display name's words (runs of letters, marks and
+// digits), lowercased, and those words joined by one space, so case,
+// spacing and punctuation never tell two names apart.
+func candWords(name string) (string, []string) {
+	words := strings.FieldsFunc(strings.ToLower(name), func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsMark(r) && !unicode.IsDigit(r)
+	})
+	return strings.Join(words, " "), words
 }
 
 // candDefaultName reports whether a normalised name is one that git's
@@ -527,14 +579,29 @@ func candGenericWord(w string) bool {
 	return false
 }
 
-// candLocal reads an address's local part for the local-part rule: a
-// GitHub noreply address counts as its login, and its id, when the address
-// has one, is the account; a +tag is dropped elsewhere. The handle is ""
-// for a local part the rule compares with nothing: a role or default one,
-// or one shorter than candMinLocal. role reports a role or default local
-// part on any domain but GitHub's noreply one, where it is a login.
+// candLocal reads an address's local part for the local-part rule
+// (candLocalPart). The handle is "" for a local part the rule compares with
+// nothing: a role or default one, or one shorter than candMinLocal. role
+// reports a role or default local part on any domain but GitHub's noreply
+// one, where it is a login.
 func candLocal(email string) (handle, account, login, domain string, noreply, role bool) {
-	local := email
+	var local string
+	local, account, login, domain, noreply = candLocalPart(email)
+	if !noreply {
+		role = candDefaultLocal(local)
+	}
+	if utf8.RuneCountInString(local) >= candMinLocal && !candDefaultLocal(local) {
+		handle = local
+	}
+	return handle, account, login, domain, noreply, role
+}
+
+// candLocalPart reads the local part the local-part rule compares, before
+// its vetoes: a GitHub noreply address counts as its login, and its id,
+// when the address has one, is the account; on any other domain a +tag is
+// dropped.
+func candLocalPart(email string) (local, account, login, domain string, noreply bool) {
+	local = email
 	if i := strings.LastIndexByte(email, '@'); i >= 0 {
 		local, domain = email[:i], email[i+1:]
 	}
@@ -544,16 +611,10 @@ func candLocal(email string) (handle, account, login, domain string, noreply, ro
 			account, local = id, l
 		}
 		login = local
-	} else {
-		if i := strings.IndexByte(local, '+'); i > 0 {
-			local = local[:i]
-		}
-		role = candDefaultLocal(local)
+	} else if i := strings.IndexByte(local, '+'); i > 0 {
+		local = local[:i]
 	}
-	if utf8.RuneCountInString(local) >= candMinLocal && !candDefaultLocal(local) {
-		handle = local
-	}
-	return handle, account, login, domain, noreply, role
+	return local, account, login, domain, noreply
 }
 
 // candDefaultLocal reports whether a local part belongs to a role, a

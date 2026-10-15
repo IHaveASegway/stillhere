@@ -137,7 +137,7 @@ type WhoKnowsRequest struct {
 // MeRequest asks for one person's own page.
 type MeRequest struct {
 	RunID int64  // 0: the latest complete or partial scan run
-	Email string // canonical email, lowercased; required: the command line resolves any default
+	Email string // canonical email, lowercased; required: the command line has no default (me needs --email)
 }
 
 // ValidateRequest asks how well each ranked metric separates changes a person

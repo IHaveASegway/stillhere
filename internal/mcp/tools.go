@@ -260,11 +260,6 @@ func (s *server) overview(ctx context.Context, in overviewIn) *sdk.CallToolResul
 		if err := checkCursor(cursorRun, a.Run.ID); err != nil {
 			return nil, err
 		}
-		if len(req.Rank) == 0 {
-			// The report adds the tables the scan was asked to rank; an
-			// overview holds a rank table only when the agent asks for one.
-			a.Ranks = nil
-		}
 		so := scopeOf(sc, r.scopeName(sc))
 		return func(sh *shaper) (any, error) { return sh.overviewAnswer(a, so), nil }, nil
 	})

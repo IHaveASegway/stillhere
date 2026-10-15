@@ -85,7 +85,7 @@ func (m *Model) writeMarkdown(p *printer) {
 func mdCaveats(p *printer, level string, cs []Caveat, nested bool) {
 	var shown []Caveat
 	for _, c := range cs {
-		if !nested || !standing(c) {
+		if !nested || !c.Standing() {
 			shown = append(shown, c)
 		}
 	}

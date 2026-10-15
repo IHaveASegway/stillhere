@@ -17,7 +17,7 @@ func (e *env) whoKnowsCommand() *cobra.Command {
 		Long: `who-knows lists the people who know the code under PATH, a path prefix inside
 a repository: majority owners, the top authors of surviving lines and recent
 landers. It is a routing answer, not a rank. It reads a stored run, by
-default the latest complete one.
+default the latest complete or partial scan.
 
 PATH is relative to a repository's root, such as src or src/pay.go, as the
 run stores it, and not a path on disk: an absolute path, or one relative to

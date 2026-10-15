@@ -255,6 +255,8 @@ type OverviewRequest struct {
 	// Rank names ranked metrics whose rank tables to add: those of the
 	// run's rank scopes that hold the asked scope, since ranks are kept
 	// within groups unless the scan asked for one table of everything.
+	// With none named, the answer holds no rank table, not even those of
+	// the metrics the scan was asked to rank, which a report adds.
 	Rank []domain.MetricID
 }
 
@@ -264,7 +266,11 @@ type OverviewRequest struct {
 // and its AI and bot share, each section with its own provenance and
 // caveats.
 type OverviewAnswer struct {
-	Provenance report.Provenance // the scope's: its overview's, its card's, or the whole run's
+	// Provenance is a group's overview's or a repository's card's, with the
+	// metrics of the repositories and rank tables the answer holds, or the
+	// whole run's, which names every metric of the run's report: one index
+	// page of the whole run holds the numbers of only some of them.
+	Provenance report.Provenance
 	Run        report.Run
 	Scope      domain.Scope // as asked
 	// Overviews holds a group's overview; for the whole run, every overview
@@ -285,7 +291,7 @@ func Overview(ctx context.Context, d Deps, r OverviewRequest) (*OverviewAnswer, 
 	if err != nil {
 		return nil, err
 	}
-	m, s, err := buildReport(ctx, d, ReportRequest{RunID: r.RunID, Rank: r.Rank})
+	m, s, err := buildReport(ctx, d, ReportRequest{RunID: r.RunID, Rank: r.Rank}, false)
 	if err != nil {
 		return nil, err
 	}
@@ -337,6 +343,22 @@ func Overview(ctx context.Context, d Deps, r OverviewRequest) (*OverviewAnswer, 
 			a.Ranks = append(a.Ranks, t)
 		}
 	}
+	// metrics lists every number's (docs/spec/mcp.md), as the whole run's
+	// above does by listing every metric of its report. The scope's own provenance names only its overview's or
+	// its card's, so add those of the repositories the answer holds, each
+	// with its week table (landed@1) beside its card, and the rank tables'.
+	metrics := slices.Clone(a.Provenance.Metrics)
+	for _, rp := range a.Repos {
+		metrics = append(metrics, rp.Card.Provenance.Metrics...)
+		if rp.Week != nil {
+			metrics = append(metrics, report.MetricLanded)
+		}
+	}
+	for _, t := range a.Ranks {
+		metrics = append(metrics, t.Metric)
+	}
+	slices.Sort(metrics)
+	a.Provenance.Metrics = slices.Compact(metrics)
 	return a, nil
 }
 

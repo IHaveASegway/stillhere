@@ -14,6 +14,7 @@ Identity is the weakest joint of an authorship report. One person with several a
 | --- | --- | --- | --- | --- |
 | Email aliases | `.mailmap`: each repository's own, and the organisation's file `--mailmap` names | People, in reviewed commits | git, at every analysis command | git applies them while a scan runs (`-c mailmap.file=`) |
 | Candidates | None: derived when asked from one stored run, never stored | `identity.Candidates` | `stillhere identities`, the MCP server | In memory, as a `report.Identities` |
+| Blocks | None: derived when asked from one stored run, never stored | `identity.Blocks` | the AI-share floor (`app.AIShares`) | In memory; never printed |
 | GitHub logins | GitHub | GitHub | `sync github` | The forge replica (`ForgeCommit`) |
 
 No second owner: stillhere writes no mailmap and keeps no people table ([architecture.md](../architecture.md)). The candidates read one run, so one HEAD set and one mailmap; a line added since takes effect at the next scan, which every answer says in its `mailmap-at-scan` caveat.
@@ -95,6 +96,10 @@ The suggested lines, with the evidence above each candidate's lines as `#` comme
 
 The fixtures' suggestions are their hand-written mailmaps byte for byte, commented out, and `git check-mailmap` over the printed form leaves every alias alone; with the `# ` removed from a suggested line, it maps the alias to the canonical identity ([SPEC.md](../../testdata/fixture/SPEC.md#identity-candidates-m2-26)).
 
+## Counting people for a floor
+
+The AI-share floor ([ADR 0007's amendment](../adr/0007-ai-assisted-attribution.md#amendment-the-shares-that-leave-the-machine)) counts people with `identity.Blocks`, which reads the same keys the other way. A block holds the addresses a candidate holds, those of every hand-off chain however long (one longer than a candidate may hold included), and every two that share the words of any name seen with them, as author or co-author (a default name such as John Doe included), a local part (without its `+tag`, a noreply address's login) or a GitHub account id, with none of the vetoes above, through any number of links. The rules lean to precision because a wrong merge invents a person; a floor leans to recall because a missed link lets one person's own share out, while a wrong one only lowers a count, so it never lets out a share of fewer than three people; only a missed link can ([Limits](#limits)). Record linkage draws the same line between blocking and classification (Christen, *Data Matching*, Springer 2012, ch. 4). A block merges no one on any page and is never suggested as a line.
+
 ## Limits
 
 - **No chains through existing lines.** git applies one `.mailmap` line per commit and never follows a chain (verified with `git check-mailmap` on 2.50.1). The facts are already mailmapped, so a suggested alias can be the canonical address of existing lines: appending `Name <new> <alias>` then remaps only the commits made as the alias, the older addresses stay at the alias, and the next scan suggests the same line again. The mailmap form's header and the `mailmap-at-scan` caveat tell the person to change those lines to the new canonical address too. The proper fix is for a run to record the mailmaps git applied, as it records its policy, so the suggestions can rewrite such lines and drop those already present (#53).
@@ -102,6 +107,7 @@ The fixtures' suggestions are their hand-written mailmaps byte for byte, comment
 - **A changed name.** An address whose owner changed name in a way the subset rule cannot see (Ada Lovelace, then Ada King) looks like a mailbox two people share, so it is compared with nothing: a missed merge, never a false one.
 - **GitHub only.** Only `users.noreply.github.com`, the documented form, is read as a noreply domain; an Enterprise host's form is unverified (#44).
 - **No forge links yet.** The forge replica's commit-to-login links (`ForgeCommit`) are the strongest evidence there is, GitHub's own; a rule over them needs forge facts on the read side (#13).
+- **The floor's blocks** join only addresses that have something in common: a name's words, a local part, a GitHub account, a candidate or a hand-off chain. One person's addresses with nothing in common count as several people, so a share of two people can leave as three until a `.mailmap` line merges them (ADR 0007's amendment, #86). An empty author address is a missing fact: beside other people it may be any of them and adds no one, and alone it is one person (`app.aiShareCount`), while the run takes it for a person's rather than a bot's, which it decides once per run by the name most often seen with it (#74).
 - **Hand-offs** need the earlier address quiet for 90 days, so a change of address shows up 90 days after the old address's last commit, and only between addresses no other rule links.
 
 ## Tests

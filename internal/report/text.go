@@ -125,15 +125,16 @@ func repoSummary(m *Model, esc func(string) string) string {
 	return s
 }
 
-// standing reports whether a caveat is one the top of a report already
+// Standing reports whether a caveat is one the top of a report already
 // states for every section: nested sections leave it out of text and
-// Markdown, while JSON keeps it so each section reads on its own.
-func standing(c Caveat) bool { return c.Code == codeNotFetched || c.Code == codeAILowerBound }
+// Markdown, and MCP's repository summaries out of their codes, while JSON
+// keeps it so each section reads on its own.
+func (c Caveat) Standing() bool { return c.Code == codeNotFetched || c.Code == codeAILowerBound }
 
 func textCaveats(p *printer, indent, title string, cs []Caveat, nested bool) {
 	var shown []Caveat
 	for _, c := range cs {
-		if !nested || !standing(c) {
+		if !nested || !c.Standing() {
 			shown = append(shown, c)
 		}
 	}

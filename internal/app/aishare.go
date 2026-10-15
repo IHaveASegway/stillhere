@@ -26,30 +26,36 @@ import (
 // (Hundepool et al., Statistical Disclosure Control, Wiley 2012, ch. 4;
 // tau-ARGUS's modular method for hierarchical tables; R's sdcTable). The
 // decision is made once per run, from the run's facts alone, so every
-// answer about the run reads the same one: no two calls disagree, and no
-// pair of answers about the run can be subtracted to give what one of them
-// withholds. Answers about two runs can be, since each run is decided on
-// its own: a rescan of fewer repositories at the same as-of time gives a
-// share the first run withheld exactly (a known limit, ADR 0007's
-// amendment, with what would close it).
+// answer about the run under one version of these rules reads the same
+// one: no two calls disagree, and no pair of answers about the run can be
+// subtracted to give what one of them withholds. Two decisions can be:
+// those of two runs, since each run is decided on its own (a rescan of
+// fewer repositories at the same as-of time gives a share the first run
+// withheld exactly), and those one run gets from two versions whose count
+// of people, threshold or order of suppression differ, since the decision
+// is not stored but made again by whichever binary reads the run (known
+// limits, ADR 0007's amendment, with what would close them).
 //
 // The rules, bottom-up over the tree of scopes: the whole run, its groups,
 // their repositories, and the repositories named on their own, which hang
 // from the run.
 //
 //   - Primary: a scope's share is withheld when fewer than
-//     AIShareMinPeople people landed in its window (aiSharePeople counts
-//     them, the one rule for who a share is made of, and errs low: it
-//     counts as one person the addresses the identities rules link).
+//     AIShareMinPeople people landed in its window (aiShareCount counts
+//     them over aiSharePeople's sets, the one rule for who a share is
+//     made of, and errs low: it counts as one person the addresses
+//     identity.Blocks puts in one block, and adds no one for an empty
+//     address beside others).
 //   - Secondary: the children of a scope whose shares are withheld leave a
 //     part of it that no shown share covers. When the people of that part
 //     number 1 or 2, more children are withheld, the smallest first (fewest
 //     people, then kind and key), until they number AIShareMinPeople or
 //     more; a child whose withholding would add no one is passed over. When
 //     no child can bring them there, the scope's own share is withheld.
-//     Only the run can come to that: a group whose repositories are all
-//     shown adds no one when it is withheld, and a group's children are
-//     repositories, each of which adds its own people.
+//     Only the run can come to that: a shown group whose withheld
+//     repositories credit no one (it has none, or they hold only bots'
+//     landings) adds no one when it is withheld, while withholding a
+//     shown repository brings the part to AIShareMinPeople or more.
 //
 // Why that is enough. For a shown scope S, call U(S) the repositories under
 // S that no shown scope below S covers, so that S's share less the shares
@@ -76,11 +82,18 @@ import (
 //  3. Three, not two: one of a U's people who takes their own landings away
 //     still sees two people's together, which is the reason the minimum
 //     frequency rule of disclosure control asks for three.
-//  4. People are what aiSharePeople counts. The argument reasons about sets
-//     of them only, so it holds for any rule that gives each address one
-//     person; three people counted are three humans or more wherever the
-//     identities rules link every address of each human, whether or not
-//     they also link two humans wrongly.
+//  4. People are what aiShareCount counts over aiSharePeople's sets. The
+//     argument asks two things of that count: it is never more than the
+//     humans behind a set's landings, so three counted are three humans
+//     or more, and it is 0 only for a set with no person's landing (a
+//     bot's landings credit no one), so a U that holds no one holds no
+//     person's landings. Blocks give the first wherever they
+//     join every address of each human, whether or not they also join two
+//     humans wrongly; a missed link breaks it (#86). The empty address
+//     keeps both: beside others it adds no one, and alone it is one.
+//     Counting it as no one broke the second: a repository whose only
+//     author had no email looked empty, so its share could be subtracted
+//     out of its group's.
 //
 // The whole run's share reaches an answer only in an overview of every
 // repository, which a run has when it was scanned with --scope all or has
@@ -142,38 +155,64 @@ func aiShares(s *stored) AIShares {
 // aiSharePeople returns, per repository with an AI-assisted share, the
 // people the share is made of as the threshold counts them: the humans
 // credited with a non-merge commit of a landing in its window
-// (mcpAIPeople), with the addresses the identities rules link counted as
-// one person, the one address of their candidate (identity.Candidates over
-// the whole run, at every confidence, hand-offs included).
+// (mcpAIPeople), with the addresses of one block counted as one person
+// (identity.Blocks over the whole run: what the identities rules link,
+// every hand-off chain, and every two addresses that share a name, any
+// name seen with either and a default one included, a local part or a
+// GitHub account, without the vetoes those rules apply).
 //
 // A .mailmap merges people on every page; this merges no one on any page,
 // and only makes the count err low, never high. One person who committed
 // from a work address, a laptop's made-up one and GitHub's noreply one,
-// which no .mailmap merges, is one person here, as stillhere identities
-// suggests, not three: a share of theirs alone is their own share. Two
-// people a rule links wrongly count as one, which withholds more and
-// leaks nothing. What no rule links still counts apart: addresses with
-// nothing in common, and a chain of more addresses than a candidate may
-// hold, which identities leaves out as several people's (Survey.Oversized).
+// which no .mailmap merges, is one person here whenever the three share a
+// name or a local part, even spelt as Sam Solo, S. Solo and Samuel Solo,
+// which identities, leaning to precision, leaves apart: a share of theirs
+// alone is their own share. Two people a block joins wrongly count as one,
+// which lowers a count and never raises one, so a wrong link never lets
+// out a share of fewer than three people. Only a missed link can: what no
+// key joins still counts apart, addresses with nothing in common (#86).
+// Nor does a lower count make the decision monotone: it can move secondary
+// suppression to another sibling, so a version that counts otherwise
+// decides a stored run otherwise (ADR 0007's amendment, known limits).
+//
+// The one address no block holds is the empty one: git records a commit
+// with no author email, and so do the facts. It is a missing fact, not a
+// person, so a set keeps it as "" for aiShareCount, which counts it only
+// when no one else is there: beside others it may be any of them, and
+// alone it is still someone. Counted as a person of its own, it made one
+// person who once committed without an email two (#74). That holds while
+// the run takes "" for a person's: identity decides it once per run, by
+// the name most often seen with it, and a bot's "" is in no set, its
+// landings tagged by no one (#74).
 func aiSharePeople(s *stored) map[string]map[string]bool {
-	one := map[string]string{} // an address a candidate holds → the candidate's one address
-	for _, c := range identity.Candidates(s.facts, s.who).Candidates {
-		for _, a := range c.Addresses {
-			one[a.Email] = c.Canonical
-		}
-	}
+	block := identity.Blocks(s.facts, s.who)
 	out := map[string]map[string]bool{}
 	for key, people := range mcpAIPeople(s) {
 		counted := make(map[string]bool, len(people))
 		for p := range people {
-			if c, ok := one[p]; ok {
-				p = c
+			if b, ok := block[p]; ok {
+				p = b
+			} else {
+				p = "" // no block holds it: the empty address, someone unknown
 			}
 			counted[p] = true
 		}
 		out[key] = counted
 	}
 	return out
+}
+
+// aiShareCount is the fewest people a set from aiSharePeople can be made
+// of: its blocks, where the empty address ("") may be any of the others,
+// so it adds one only to a set that holds no one else. It is 0 only for a
+// set with no person's landing, which is what a part that covers no one
+// must mean to the residual rule.
+func aiShareCount(people map[string]bool) int {
+	n := len(people)
+	if people[""] && n > 1 {
+		n--
+	}
+	return n
 }
 
 // aiShareDecide decides a run's AI-assisted shares: repos are the run's
@@ -223,12 +262,12 @@ func (n *aiShareNode) decide(reaches bool) {
 			maps.Copy(n.people, c.people)
 		}
 	}
-	if !reaches || len(n.people) < AIShareMinPeople {
+	if !reaches || aiShareCount(n.people) < AIShareMinPeople {
 		return // the primary rule; such a scope's children are all withheld too
 	}
 	u := map[string]bool{}
 	n.uncovered(u)
-	if len(u) > 0 && len(u) < AIShareMinPeople {
+	if c := aiShareCount(u); c > 0 && c < AIShareMinPeople {
 		var children []*aiShareNode
 		for _, c := range n.children {
 			if c.shown {
@@ -236,22 +275,20 @@ func (n *aiShareNode) decide(reaches bool) {
 			}
 		}
 		slices.SortFunc(children, func(a, b *aiShareNode) int {
-			return cmp.Or(cmp.Compare(len(a.people), len(b.people)), aiShareCompare(a.scope, b.scope))
+			return cmp.Or(cmp.Compare(aiShareCount(a.people), aiShareCount(b.people)), aiShareCompare(a.scope, b.scope))
 		})
 		for _, c := range children {
-			if len(u) >= AIShareMinPeople {
+			if aiShareCount(u) >= AIShareMinPeople {
 				break
 			}
-			add := map[string]bool{}
-			c.uncovered(add)
-			before := len(u)
-			maps.Copy(u, add)
-			if len(u) == before {
+			with := maps.Clone(u)
+			c.uncovered(with)
+			if aiShareCount(with) == aiShareCount(u) {
 				continue // withholding it would add no one
 			}
-			c.shown = false
+			u, c.shown = with, false
 		}
-		if len(u) < AIShareMinPeople {
+		if aiShareCount(u) < AIShareMinPeople {
 			return // no child can cover the part: the scope itself is withheld
 		}
 	}

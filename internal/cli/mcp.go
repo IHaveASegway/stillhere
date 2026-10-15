@@ -37,8 +37,10 @@ by default what the provider does not need: emails become stable ids unless
 and a person's AI-assisted share is shown only to that person, the one --me
 names (ADR 0007).
 
-To use it from Claude Code, register this binary's absolute path: Claude
-Code starts the server with its own PATH, which need not hold stillhere.
+To use it from Claude Code, register stillhere's absolute path: Claude Code
+starts the server with its own PATH, which need not hold stillhere. command -v
+stillhere must print that path; nothing printed means stillhere is not on your
+PATH, and the line below would register an empty command.
 
   claude mcp add --scope user stillhere -- "$(command -v stillhere)" mcp --me you@example.com`,
 		Args: usageArgs(cobra.NoArgs),

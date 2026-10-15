@@ -255,7 +255,7 @@ func (s *server) pinned(ctx context.Context, d app.Deps, err error) error {
 	}
 	why := err.Error()
 	if errors.Is(err, domain.ErrNotFound) {
-		why = "facts.db holds no complete or partial run with that id (retention keeps the newest 8 scans and one a month)"
+		why = "facts.db holds no complete or partial run with that id: it may have failed, or retention may have deleted it"
 	}
 	latest := ""
 	if r, lerr := d.Store.LatestRun(ctx, domain.RunKindScan); lerr == nil {

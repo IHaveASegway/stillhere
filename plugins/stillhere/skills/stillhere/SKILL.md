@@ -94,11 +94,12 @@ instead.
   and only known trailers and agent authors are recognised. A person's own share
   is shown only to that person (the user, with `person` and an empty name), and
   a repository's or group's share only when at least three people landed in it,
-  the addresses `identity_candidates` links (`stillhere identities`) counting as
-  one person: with fewer, it would be close to one person's own. A share is
-  also withheld when it would let a withheld share be worked out from the
-  shares shown beside it, such as a group's less its repositories'
-  (`ai-few-people` names the scopes withheld).
+  addresses that share a name (any name seen with them, John Doe included), a
+  local part or a GitHub account, or that a hand-off or `identity_candidates`
+  links, counting as one person: with fewer, it would be
+  close to one person's own. A share is also withheld when it would let a
+  withheld share be worked out from the shares shown beside it, such as a
+  group's less its repositories' (`ai-few-people` names the scopes withheld).
 - **Analysis did not fetch.** Each repository is as current as the clone the
   scan read; a stale clone gives stale numbers.
 - **durable@1 scores changes 90 to 365 days old only.** A younger change has no

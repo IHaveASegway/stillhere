@@ -16,8 +16,8 @@ func (e *env) explainCommand() *cobra.Command {
 		Use:   "explain METRIC --person EMAIL",
 		Short: "Trace one person's value for a metric to the changes behind it",
 		Long: `explain shows the facts behind one person's value for one metric in a stored
-run, by default the latest complete one. METRIC is an id such as durable@1, or
-a bare name such as durable for its latest version.`,
+run, by default the latest complete or partial scan. METRIC is an id such as
+durable@1, or a bare name such as durable for its latest version.`,
 		Args: usageArgs(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := domain.ParseMetricID(args[0])

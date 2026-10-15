@@ -10,7 +10,7 @@ import (
 )
 
 // A run reads each repository as it stood at --now (#70,
-// docs/spec/codebase.md#run-model): every window ends at now, so the code a
+// docs/spec/codebase.md#run-model): no window extends past now, so the code a
 // run blames, classifies and sizes must be the code of that moment too.
 // Otherwise a scan with --now before the fetched head credits lines written
 // after now to people whose landings no window holds yet, and

@@ -72,6 +72,12 @@ linters:
           deny:
             - pkg: os
               desc: "core does no I/O and starts no process: it computes over the facts it is handed (codebase.md#the-dependency-rule)"
+            - &no-filepath
+              pkg: path/filepath
+              desc: "path/filepath walks, globs and resolves the file system, and the files a run touches are collect's; a path in the facts is slash-separated, which package path handles (codebase.md#the-dependency-rule)"
+            - &no-ioutil
+              pkg: io/ioutil
+              desc: "io/ioutil reads and writes files, and the files a run touches are collect's (codebase.md#the-dependency-rule)"
             - &no-syscall
               pkg: syscall
               desc: "raw system calls, such as fork and exec, belong to the adapters (codebase.md#the-dependency-rule)"
@@ -175,7 +181,10 @@ linters:
             - *no-sqlite
         # The use cases: core and collect, and git, facts.db and GitHub only
         # through the ports in app.Deps. The files a run touches outside git
-        # (discovery's directories, blame's ignore-revs lists) are collect's.
+        # (discovery's directories, blame's ignore-revs lists) are collect's,
+        # so app imports no os, path/filepath or io/ioutil. The os entry
+        # covers os/exec, so no entry here may name it: depguard compares an
+        # import with the nearest entry that sorts before it (see the top).
         app:
           list-mode: strict
           files:
@@ -195,7 +204,10 @@ linters:
             - github.com/IHaveASegway/stillhere/internal/app
             - golang.org/x/sync
           deny:
-            - *no-exec
+            - pkg: os
+              desc: "app opens no file and starts no process: the files a run touches outside git are collect's, and git, facts.db and GitHub are reached through app.Deps (codebase.md#the-dependency-rule)"
+            - *no-filepath
+            - *no-ioutil
             - *no-syscall
             - *no-xsys
             - *no-net
@@ -355,6 +367,8 @@ linters:
           deny:
             - pkg: os
               desc: "a package codebase.md's layout does not list is guarded as core: add it there and give it a rule in .golangci.yml (codebase.md#layout)"
+            - *no-filepath
+            - *no-ioutil
             - *no-syscall
             - *no-xsys
             - *no-net

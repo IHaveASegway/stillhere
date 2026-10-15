@@ -286,8 +286,8 @@ func identSummary(id *Identities) string {
 }
 
 // identNone says what an empty answer means.
-const identNone = "no candidates: no two addresses share a display name, a local part or a GitHub account, and " +
-	"no address took over from another that stopped"
+const identNone = "no candidates: the rules link no two addresses by a shared display name, local part or " +
+	"GitHub account, or by one address taking over from another that stopped"
 
 // identTitle is "Ada Example · medium confidence · same-name,
 // same-local-part"; a hand-off names each address's person in order.

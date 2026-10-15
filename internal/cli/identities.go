@@ -20,10 +20,10 @@ func (e *env) identitiesCommand() *cobra.Command {
 		Use:   "identities",
 		Short: "Suggest .mailmap lines for addresses that may be one person",
 		Long: `identities lists the addresses of a stored run, by default the latest complete
-one, that may belong to one person, with the evidence for each: a shared
-display name, a shared local part, one GitHub account, or a hand-off (one
-address stopped as another started in the same files, which is only ever a
-guess). stillhere applies none of them: git's .mailmap is the only identity
+or partial scan, that may belong to one person, with the evidence for each: a
+shared display name, a shared local part, one GitHub account, or a hand-off
+(one address stopped as another started in the same files, which is only ever
+a guess). stillhere applies none of them: git's .mailmap is the only identity
 store, and a wrong line merges two people into one who does not exist.
 
 --format mailmap prints the suggested .mailmap lines with the evidence as

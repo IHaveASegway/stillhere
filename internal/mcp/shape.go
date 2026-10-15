@@ -450,7 +450,7 @@ func (s *shaper) summary(r report.Repo) repoSummary {
 		out.MadeOf = append(out.MadeOf, madeOf{Name: a.Name, Email: a.Email, Share: a.Share})
 	}
 	for _, cv := range c.Caveats {
-		if cv.Code != "not-fetched" && cv.Code != "ai-lower-bound" {
+		if !cv.Standing() {
 			out.Caveats = append(out.Caveats, cv.Code)
 		}
 	}

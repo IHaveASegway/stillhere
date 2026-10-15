@@ -280,13 +280,16 @@ func historyOf(fs *domain.FactSet) domain.Window {
 // Report renders a stored run as a report, with ranks for the metrics
 // named, or, when none is named, for those the scan was asked to rank.
 func Report(ctx context.Context, d Deps, r ReportRequest) (*report.Model, error) {
-	m, _, err := buildReport(ctx, d, r)
+	m, _, err := buildReport(ctx, d, r, true)
 	return m, err
 }
 
 // buildReport is Report, with the stored run its model was built from, for
-// an answer built on a report (Overview).
-func buildReport(ctx context.Context, d Deps, r ReportRequest) (*report.Model, *stored, error) {
+// an answer built on a report (Overview). scanRanks says whether a request
+// that names no rank gets the tables the scan was asked to rank, as a
+// report does; an overview holds a rank table only when it is asked for
+// one, so an overview asked for none ranks nothing.
+func buildReport(ctx context.Context, d Deps, r ReportRequest, scanRanks bool) (*report.Model, *stored, error) {
 	d, err := d.ready("app.Report", false, false, true)
 	if err != nil {
 		return nil, nil, err
@@ -302,7 +305,7 @@ func buildReport(ctx context.Context, d Deps, r ReportRequest) (*report.Model, *
 		return nil, nil, err
 	}
 	loaded := time.Since(started).Milliseconds()
-	if len(ids) == 0 {
+	if len(ids) == 0 && scanRanks {
 		// The ranks the scan was asked for. One the registry no longer has
 		// is left out rather than failing the report the user did not ask
 		// to rank.

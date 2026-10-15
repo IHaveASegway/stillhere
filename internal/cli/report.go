@@ -14,10 +14,11 @@ func (e *env) reportCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "report",
 		Short: "Print a stored run as a report",
-		Long: `report prints a run stored in facts.db, by default the latest complete one,
-with ranks for the metrics named by --rank, or, without --rank, for those the
-scan was asked to rank. Every number comes from the run's own facts and policy,
-so a report of the same run is the same report. It reads only facts.db.`,
+		Long: `report prints a run stored in facts.db, by default the latest complete or
+partial scan, with ranks for the metrics named by --rank, or, without --rank,
+for those the scan was asked to rank. Every number comes from the run's own
+facts and policy, so a report of the same run is the same report. It reads
+only facts.db.`,
 		Args: usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if err := checkRun(run); err != nil {

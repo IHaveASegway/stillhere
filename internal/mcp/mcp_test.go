@@ -172,6 +172,12 @@ func TestMCPTools(t *testing.T) {
 			!slices.Contains(pv.Metrics, "surviving@1") {
 			t.Errorf("fixture provenance %+v, want run 1, its HEAD, the digest and the metric versions", pv)
 		}
+		// metrics names every number's metric: the week table's landed@1
+		// beside the card's, and none the scan ranked, since no rank table
+		// was asked for.
+		if !slices.Contains(pv.Metrics, "landed@1") || slices.Contains(pv.Metrics, "durable@1") {
+			t.Errorf("fixture provenance metrics %v, want landed@1 and no durable@1", pv.Metrics)
+		}
 
 		// The sibling's surviving@1 credit, and the platform's durable@1
 		// table, where Lena alone is eligible at exactly 10 clusters.
@@ -895,14 +901,20 @@ func TestMCPTools(t *testing.T) {
 	// team, four people with one AI-assisted landing of 12, and solo, one
 	// person with three of 4; group solos holds three repositories of one
 	// person each; group alias holds max, one person who committed from three
-	// addresses no .mailmap merges. The local report shows every share, which
+	// addresses, under three spellings of a name, that no .mailmap merges;
+	// group defaults holds doe, one person who committed as John Doe, a
+	// default name, from three addresses with nothing else in common; group
+	// blanks holds blank, two people, one of whom also committed with an
+	// empty email; group nomail holds crew, three people, and ghost, whose
+	// one person never set an email. The local report shows every share, which
 	// is how the test knows what no answer may let the agent work out, and
 	// surviving@1's population makeup copies each share (ai_assisted_share),
 	// which explain must withhold as the decision does.
 	t.Run("AI-assisted shares that add up", func(t *testing.T) {
 		root := t.TempDir()
 		group, solos, lone := filepath.Join(root, "ai"), filepath.Join(root, "solos"), filepath.Join(root, "lone")
-		alias := filepath.Join(root, "alias")
+		alias, defaults, blanks := filepath.Join(root, "alias"), filepath.Join(root, "defaults"), filepath.Join(root, "blanks")
+		nomail := filepath.Join(root, "nomail")
 		const trailer = "\n\nCo-Authored-By: Claude <noreply@anthropic.com>"
 		commit := func(name, email string, day int, ai bool) testCommit {
 			subject := "feat: " + strings.ToLower(name) + " " + strconv.Itoa(day)
@@ -930,10 +942,34 @@ func TestMCPTools(t *testing.T) {
 		}
 		buildRepo(t, lone, []testCommit{commit("Lee Lone", "lee@lone.example", 28, true)})
 		// One person, three addresses: a work one, a laptop's made-up one and
-		// GitHub's noreply one, which identities links by their one name.
+		// GitHub's noreply one, under three spellings of their name, which
+		// identities leaves apart (the names disagree) and the floor's blocks
+		// join by the local part max (identity.Blocks).
 		buildRepo(t, filepath.Join(alias, "max"), []testCommit{
-			commit("Max Multi", "max@multi.example", 13, true), commit("Max Multi", "max@maxs-laptop.local", 14, false),
-			commit("Max Multi", "4242+max@users.noreply.github.com", 15, false),
+			commit("Max Multi", "max@multi.example", 13, true), commit("M. Multi", "max@maxs-laptop.local", 14, false),
+			commit("Maximilian Multi", "4242+max@users.noreply.github.com", 15, false),
+		})
+		// One person under a default name, which identities never compares
+		// and the floor's blocks still join.
+		buildRepo(t, filepath.Join(defaults, "doe"), []testCommit{
+			commit("John Doe", "jdoe@work.example", 16, true), commit("John Doe", "johnny@laptop.local", 17, false),
+			commit("John Doe", "jd.home@home.example", 18, false),
+		})
+		// An empty email is a missing fact: beside Sam's other address and
+		// Bob, it adds no one.
+		buildRepo(t, filepath.Join(blanks, "blank"), []testCommit{
+			commit("Sam Blank", "", 19, true), commit("Sam Blank", "sam@blank.example", 27, false),
+			commit("Bob Blank", "bob@blank.example", 29, true),
+		})
+		// An email no one set is still someone when no one else is there:
+		// ghost's share is withheld, and so is crew's, which beside the
+		// group's would give ghost's away.
+		buildRepo(t, filepath.Join(nomail, "crew"), []testCommit{
+			commit("Iris Crew", "iris@crew.example", 2, true), commit("Joel Crew", "joel@crew.example", 3, false),
+			commit("Kira Crew", "kira@crew.example", 4, false),
+		})
+		buildRepo(t, filepath.Join(nomail, "ghost"), []testCommit{
+			commit("Sam Ghost", "", 5, true), commit("Sam Ghost", "", 6, true), commit("Sam Ghost", "", 7, false),
 		})
 
 		// overview answers each scope's share as the agent sees it, keyed
@@ -1056,7 +1092,7 @@ func TestMCPTools(t *testing.T) {
 		}
 
 		db := filepath.Join(root, "group.db")
-		scan(t, db, mailmap, domain.ScopeGroup, group, solos, alias)
+		scan(t, db, mailmap, domain.ScopeGroup, group, solos, alias, defaults, blanks, nomail)
 		truth := local(t, db)
 		cs := connect(t, Config{Open: openDB(db), Version: "test"}, 0)
 
@@ -1095,13 +1131,22 @@ func TestMCPTools(t *testing.T) {
 		}
 		copied(t, cs, "solos", "group", truth["group:solos"])
 		copied(t, cs, "s1", "repo", nil)
-		// Three addresses that identities links are one person, so neither
-		// max's share nor its group's leaves: the count errs low, never high.
+		// Three addresses of one block are one person, so neither max's share
+		// nor its group's leaves: the count errs low, never high.
 		got, _ = overview(t, cs, "alias")
 		shown(t, "overview(alias)", got, truth)
 		withheld(t, cs, "max", "repo")
 		withheld(t, cs, "alias", "group")
 		copied(t, cs, "max", "repo", nil)
+		got, _ = overview(t, cs, "defaults")
+		shown(t, "overview(defaults)", got, truth)
+		withheld(t, cs, "doe", "repo")
+		got, _ = overview(t, cs, "blanks")
+		shown(t, "overview(blanks)", got, truth)
+		withheld(t, cs, "blank", "repo")
+		got, _ = overview(t, cs, "nomail")
+		shown(t, "overview(nomail)", got, truth, "group:nomail")
+		withheld(t, cs, "ghost", "repo")
 
 		// With --scope all the whole run's share is shown too, and a
 		// repository of one person named on its own hangs from the run: the

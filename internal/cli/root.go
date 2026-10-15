@@ -470,12 +470,13 @@ func (f timeFlag) Set(s string) error {
 func (f timeFlag) Type() string { return "time" }
 
 // addNowFlag defines --now; read it with nowOr. Its help says what the
-// instant decides: every window ends at it, and the commit each repository
-// is read at, the chain-order rule of collect.SnapshotAt (ADR 0012).
+// instant decides: every window is measured back from it (durable@1's
+// cohort ends 90 days before it), and the commit each repository is read
+// at, the chain-order rule of collect.SnapshotAt (ADR 0012).
 func addNowFlag(cmd *cobra.Command, t *time.Time) {
 	cmd.Flags().Var(timeFlag{t}, "now",
 		"the instant the run describes, an RFC 3339 time or a date for midnight UTC (default the wall clock, UTC): "+
-			"every window ends at it, and each repository is read at the first commit committed before it, walking "+
+			"every window is measured back from it, and each repository is read at the first commit committed before it, walking "+
 			"its default branch's first-parent chain back from the head (a head-after-now caveat when the head is "+
 			"newer; a repository with none is left out); pass it for reproducible output")
 }
@@ -494,7 +495,7 @@ func (e *env) nowOr(cmd *cobra.Command, t time.Time) time.Time {
 
 // addRunFlag defines --run; check it with checkRun.
 func addRunFlag(cmd *cobra.Command, id *int64) {
-	cmd.Flags().Int64Var(id, "run", 0, "run `ID` to read (default the latest complete run)")
+	cmd.Flags().Int64Var(id, "run", 0, "run `ID` to read (default the latest complete or partial scan)")
 }
 
 func checkRun(id int64) error {
