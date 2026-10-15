@@ -26,6 +26,9 @@ type Input struct {
 	// overview of every repository, which a run without groups gets too;
 	// "" (week) or domain.ScopeGroup keeps groups apart.
 	Scope string
+	// Forge is the GitHub data a scan run read, which every section's
+	// provenance dates; nil for week, and when the reader cannot tell.
+	Forge *ForgeRead
 }
 
 // Landed is how the landed@1 window was set: by the command line, or by the
@@ -596,6 +599,9 @@ func (b *builder) rankTable(rs RankSet) RankTable {
 	members := b.scopeMembers(rs.Scope)
 	t.Provenance = b.provenance(members, []string{rs.Metric.ID})
 	t.Caveats = b.scopeCaveats(members, rs.Scope, false)
+	if forgeMetric(rs.Metric.ID) {
+		t.Caveats = append(t.Caveats, b.forgeCaveats(members)...)
+	}
 	if len(t.Ranked)+len(t.BelowMin)+len(t.Bots) == 0 {
 		// A table asked for is printed even when empty, so that a rank
 		// never disappears without a word.
@@ -629,6 +635,7 @@ func (b *builder) provenance(repos []*domain.RepoFacts, metrics []string) Proven
 	ids := slices.Clone(metrics)
 	slices.Sort(ids)
 	p.Metrics = slices.Compact(ids)
+	p.Forge = b.forgeProvenance(repos)
 	return p
 }
 

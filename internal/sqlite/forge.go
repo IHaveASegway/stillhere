@@ -12,8 +12,9 @@ import (
 
 // This file belongs to the GitHub sync (#14). It implements
 // domain.ForgeStore on Store: the forge replica, in the tables that
-// migrations/0002_forge.sql creates (migration 1 is #8's schema). Keeping
-// them here leaves store.go to #8.
+// migrations/0002_forge.sql creates (migration 1 is #8's schema), and what
+// each run read of it, with the join migrations/0003_forge_run_join.sql
+// adds. Keeping them here leaves store.go to #8.
 //
 // The replica is upserted by node id, and a pull request is an aggregate:
 // storing one deletes the labels, reviews and commits the replica held for
@@ -138,29 +139,46 @@ func (s *Store) LoadForge(ctx context.Context, since time.Time) (*domain.ForgeFa
 }
 
 // PutRunWatermarks records the watermarks a running run read with
-// LoadForge, replacing any it recorded before. They are deleted with the
-// run (ON DELETE CASCADE), by retention or as a crash's leftover.
-func (s *Store) PutRunWatermarks(ctx context.Context, runID int64, watermarks []domain.ForgeWatermark) error {
+// LoadForge, each with its name and the run's repositories it joined,
+// replacing any it recorded before. They are deleted with the run (ON
+// DELETE CASCADE), by retention or as a crash's leftover.
+func (s *Store) PutRunWatermarks(ctx context.Context, runID int64, watermarks []domain.RunWatermark) error {
 	return s.forgeTx(ctx, fmt.Sprintf("recording the forge watermarks of run %d", runID), func(tx *sql.Tx) error {
 		if err := claimRun(ctx, tx, runID); err != nil {
 			return err
 		}
+		// The join rows go with their watermarks (ON DELETE CASCADE).
 		if _, err := tx.ExecContext(ctx, `DELETE FROM forge_run_watermarks WHERE run_id = ?`, runID); err != nil {
 			return err
 		}
-		stmt, err := tx.PrepareContext(ctx,
-			`INSERT INTO forge_run_watermarks (run_id, repo, updated, synced) VALUES (?, ?, ?, ?)`)
+		mark, err := tx.PrepareContext(ctx,
+			`INSERT INTO forge_run_watermarks (run_id, repo, name, updated, synced) VALUES (?, ?, ?, ?, ?)`)
 		if err != nil {
 			return err
 		}
-		defer func() { _ = stmt.Close() }()
+		defer func() { _ = mark.Close() }()
+		join, err := tx.PrepareContext(ctx, `INSERT INTO forge_run_repos (run_id, repo, key) VALUES (?, ?, ?)`)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = join.Close() }()
 		for _, wm := range watermarks {
+			if len(wm.Keys) == 0 {
+				// A reader takes a watermark without a join for one recorded
+				// before migration 3, whose repositories it cannot tell.
+				return fmt.Errorf("watermark of %s: it joins none of the run's repositories", wm.Repo)
+			}
 			times, err := forgeEncodeTimes(wm.Updated, wm.Synced)
 			if err != nil {
 				return fmt.Errorf("watermark of %s: %w", wm.Repo, err)
 			}
-			if _, err := stmt.ExecContext(ctx, runID, wm.Repo, times[0], times[1]); err != nil {
+			if _, err := mark.ExecContext(ctx, runID, wm.Repo, wm.Name, times[0], times[1]); err != nil {
 				return fmt.Errorf("watermark of %s: %w", wm.Repo, err)
+			}
+			for _, key := range wm.Keys {
+				if _, err := join.ExecContext(ctx, runID, wm.Repo, key); err != nil {
+					return fmt.Errorf("watermark of %s, repository %s: %w", wm.Repo, key, err)
+				}
 			}
 		}
 		return nil
@@ -168,10 +186,11 @@ func (s *Store) PutRunWatermarks(ctx context.Context, runID int64, watermarks []
 }
 
 // RunWatermarks returns the watermarks a complete or partial run recorded,
-// sorted by repository, nil when it recorded none, and domain.ErrNotFound
-// for a run that is unknown, running or failed.
-func (s *Store) RunWatermarks(ctx context.Context, runID int64) ([]domain.ForgeWatermark, error) {
-	var out []domain.ForgeWatermark
+// each with its name and its join, sorted by repository; nil when it
+// recorded none, and domain.ErrNotFound for a run that is unknown, running
+// or failed.
+func (s *Store) RunWatermarks(ctx context.Context, runID int64) ([]domain.RunWatermark, error) {
+	var out []domain.RunWatermark
 	err := s.forgeRead(ctx, fmt.Sprintf("reading the forge watermarks of run %d", runID), func(tx *sql.Tx) error {
 		var status string
 		err := tx.QueryRowContext(ctx, `SELECT status FROM runs WHERE id = ?`, runID).Scan(&status)
@@ -183,11 +202,35 @@ func (s *Store) RunWatermarks(ctx context.Context, runID int64) ([]domain.ForgeW
 		case status != string(domain.RunStatusComplete) && status != string(domain.RunStatusPartial):
 			return fmt.Errorf("run %d is %s: %w", runID, status, domain.ErrNotFound)
 		}
-		return forgeRows(ctx, tx, `SELECT repo, updated, synced FROM forge_run_watermarks WHERE run_id = ? ORDER BY repo`,
+		if err := forgeRows(ctx, tx, `
+SELECT repo, updated, synced, name FROM forge_run_watermarks WHERE run_id = ? ORDER BY repo`,
 			[]any{runID}, func(rows *sql.Rows) error {
-				wm, err := forgeScanWatermark(rows)
+				var wm domain.RunWatermark
+				var updated, synced sql.NullString
+				if err := rows.Scan(&wm.Repo, &updated, &synced, &wm.Name); err != nil {
+					return err
+				}
 				out = append(out, wm)
-				return err
+				return forgeDecodeTimes([]*time.Time{&out[len(out)-1].Updated, &out[len(out)-1].Synced}, updated, synced)
+			}); err != nil {
+			return err
+		}
+		index := make(map[string]int, len(out)) // ForgeRepo.ID → position in out
+		for i, wm := range out {
+			index[wm.Repo] = i
+		}
+		return forgeRows(ctx, tx, `SELECT repo, key FROM forge_run_repos WHERE run_id = ? ORDER BY repo, key`,
+			[]any{runID}, func(rows *sql.Rows) error {
+				var repo, key string
+				if err := rows.Scan(&repo, &key); err != nil {
+					return err
+				}
+				i, ok := index[repo]
+				if !ok {
+					return fmt.Errorf("a join row names forge repository %s, which has no watermark", repo)
+				}
+				out[i].Keys = append(out[i].Keys, key)
+				return nil
 			})
 	})
 	if err != nil {

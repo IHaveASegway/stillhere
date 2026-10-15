@@ -27,9 +27,18 @@ import (
 // run's policy and seeded from the inputs, so it is the same every time.
 // The answers are report types, which the command line renders and the MCP
 // server (#15) returns.
+//
+// GitHub data is not per run: the forge replica outlives runs, and a run
+// keeps only the watermarks it read, with the names and the join they were
+// read under (docs/spec/codebase.md#run-model). So the read side never
+// reads the replica. Its forge numbers are the values and ranks the scan
+// stored, which is why a scan ranks every ranked metric, and the
+// watermarks say when the GitHub data behind them was synced: a report of a
+// run from last month says last month's "as of" over last month's
+// repositories, whatever a sync did since.
 
 // stored is a run read back: the run, its own policy, its facts and its
-// values.
+// values, and the GitHub data it read.
 type stored struct {
 	run    domain.Run
 	policy *policy.Policy
@@ -37,6 +46,7 @@ type stored struct {
 	who    *identity.Directory
 	values []domain.MetricValue
 	ranks  []domain.RankInterval
+	forge  *report.ForgeRead // nil without the replica port: the reader cannot tell
 }
 
 // input is the metrics input over a stored run's facts.
@@ -71,7 +81,39 @@ func load(ctx context.Context, d Deps, runID int64) (*stored, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading run %d's metrics: %w", run.ID, err)
 	}
-	return &stored{run: run, policy: p, facts: fs, who: identity.New(fs, p), values: values, ranks: ranks}, nil
+	forge, err := readForge(ctx, d, run)
+	if err != nil {
+		return nil, err
+	}
+	return &stored{run: run, policy: p, facts: fs, who: identity.New(fs, p), values: values, ranks: ranks, forge: forge}, nil
+}
+
+// readForge reads back the GitHub data a stored run read: the watermarks it
+// recorded (ForgeStore.RunWatermarks), each with the name and the join it
+// was read under, so nothing a later sync changed in the replica, a rename
+// included, reaches the run's pages. It returns nil without the replica
+// port, when the reader cannot tell.
+func readForge(ctx context.Context, d Deps, run domain.Run) (*report.ForgeRead, error) {
+	if d.ForgeStore == nil {
+		return nil, nil
+	}
+	watermarks, err := d.ForgeStore.RunWatermarks(ctx, run.ID)
+	if err != nil {
+		return nil, fmt.Errorf("reading the forge watermarks of run %d: %w", run.ID, err)
+	}
+	for _, wm := range watermarks {
+		if len(wm.Keys) == 0 {
+			// Only a run stored before facts.db kept the join (schema
+			// version 3) has such a watermark. Which of its repositories it
+			// dates is unknown, and matching it against today's replica
+			// could date the wrong ones, so the reader cannot tell, as
+			// without the port.
+			d.Log.Warn("the run recorded its GitHub data without the repositories it dates, so its pages date none: scan again",
+				"run", run.ID)
+			return nil, nil
+		}
+	}
+	return forgeRead(watermarks), nil
 }
 
 // resolveRun finds the run a request names: its id, or the latest complete
@@ -170,7 +212,7 @@ func Report(ctx context.Context, d Deps, r ReportRequest) (*report.Model, error)
 		Kind: report.KindScan, Tool: d.Version, Run: &run, Facts: s.facts, Policy: s.policy, Who: s.who,
 		Values: s.values, Ranks: sets,
 		Landed:  report.Landed{Days: s.policy.Week.Days, Sort: s.policy.Week.Sort},
-		History: historyOf(s.facts), Timings: timings, Scope: s.scope(),
+		History: historyOf(s.facts), Timings: timings, Scope: s.scope(), Forge: s.forge,
 	}), nil
 }
 
@@ -232,7 +274,7 @@ func Explain(ctx context.Context, d Deps, r ExplainRequest) (*report.Explain, er
 	run := s.run
 	return report.NewExplain(&report.ExplainInput{
 		Run: &run, Facts: s.facts, Who: s.who, Metric: metricInfo(def), Subject: r.Subject,
-		Values: values, Clusters: clusters,
+		Values: values, Clusters: clusters, Forge: s.forge,
 	}), nil
 }
 
@@ -273,6 +315,7 @@ func WhoKnows(ctx context.Context, d Deps, r WhoKnowsRequest) (*report.WhoKnows,
 	run := s.run
 	return report.NewWhoKnows(&report.WhoKnowsInput{
 		Run: &run, Facts: underPrefix(s.facts, prefix, repo), Who: s.who, Path: prefix, Repo: repo, Values: values,
+		Forge: s.forge,
 	}), nil
 }
 
@@ -380,6 +423,6 @@ func Me(ctx context.Context, d Deps, r MeRequest) (*report.Me, error) {
 	}
 	run := s.run
 	return report.NewMe(&report.MeInput{
-		Run: &run, Facts: s.facts, Who: s.who, Email: email, Values: values, Ranks: sets,
+		Run: &run, Facts: s.facts, Who: s.who, Email: email, Values: values, Ranks: sets, Forge: s.forge,
 	}), nil
 }

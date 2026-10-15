@@ -23,10 +23,15 @@ func (e *env) scanCommand() *cobra.Command {
 		Short: "Record a run in facts.db: history, blame, metrics and ranks (offline)",
 		Long: `scan records a run in facts.db: what landed in the last year, whose lines
 blame still attributes at each HEAD, and every metric computed from those
-facts, with ranks for the metrics named by --rank. A repository that fails is
-recorded as failed and the run continues.
+facts. It ranks every ranked metric and stores the ranks with the run; --rank
+names the rank tables to print, and 'stillhere report --rank' prints any of
+them later. A repository that fails is recorded as failed and the run
+continues.
 
-Each PATH is a repository or a group, as for week. scan never fetches.`,
+Each PATH is a repository or a group, as for week. scan never fetches and
+never calls GitHub: the pull requests and reviews it counts are the ones
+'stillhere sync github' last copied into facts.db, and the run records when
+that was, which every report of it shows.`,
 		Args: usageArgs(cobra.MinimumNArgs(1)),
 		RunE: func(cmd *cobra.Command, paths []string) error {
 			ids, err := parseMetricIDs(ranks)

@@ -21,7 +21,6 @@ import (
 const (
 	reviewsGivenDays = 90
 	reviewsGivenMinN = 10
-	reviewsWeek      = 7 * 24 * time.Hour
 )
 
 // reviewsGiven is reviews_given@1: per person, the distinct merged pull
@@ -43,7 +42,7 @@ func (reviewsGiven) Definition() Definition {
 		BlindSpots: "reviews of pull requests that were closed unmerged or are still open; dismissed reviews; " +
 			"conversation comments outside a review; pairing and reviews outside GitHub; " +
 			"a reviewer with no commit in the run shows as @login, apart from their email; " +
-			"pull requests of a repository the run did not scan, or scanned through a host alias",
+			"pull requests of a repository the run did not scan, scanned through a host alias, or failed to collect",
 		Gaming: "rubber-stamp approvals, which the share of approvals with no comment shows next to the count; " +
 			"reviewing many trivial pull requests, such as dependency bumps",
 		Oracle:   "testdata/github/README.md#reviews_given1 (TestGitHubSync)",
@@ -51,10 +50,12 @@ func (reviewsGiven) Definition() Definition {
 	}
 }
 
-// Compute returns one value per person for scope all and for each group:
-// Value and N are the pull requests reviewed, and Detail holds the context
-// numbers shown next to them (reviews, review_comments, approvals,
-// approvals_no_comment, and no_comment_share when there are approvals).
+// Compute returns one value per person for scope all, each group and each
+// repository, as the git metrics do, so that every scope a scan ranks in
+// has the values its table lists bots from: Value and N are the pull
+// requests reviewed, and Detail holds the context numbers shown next to
+// them (reviews, review_comments, approvals, approvals_no_comment, and
+// no_comment_share when there are approvals).
 func (m reviewsGiven) Compute(in *Input) ([]domain.MetricValue, error) {
 	rv := newReviewsView(in)
 	if rv == nil {
@@ -64,6 +65,9 @@ func (m reviewsGiven) Compute(in *Input) ([]domain.MetricValue, error) {
 	scopes := []domain.Scope{{Kind: domain.ScopeAll}}
 	for _, g := range in.Facts.Groups {
 		scopes = append(scopes, domain.Scope{Kind: domain.ScopeGroup, Key: g.Name})
+	}
+	for _, key := range rv.repoKeys() {
+		scopes = append(scopes, domain.Scope{Kind: domain.ScopeRepo, Key: key})
 	}
 	var out []domain.MetricValue
 	for _, scope := range scopes {
@@ -112,17 +116,18 @@ func (m reviewsGiven) Compute(in *Input) ([]domain.MetricValue, error) {
 }
 
 // Clusters returns one cluster per person and pull request reviewed, with
-// Num 1, in the week (counted back from Now) of the person's first counted
-// review of it, for rank's week-block bootstrap. Bots get no clusters: they
-// are never ranked.
+// Num 1, in the window's week block (counted back from Now,
+// domain.Window.Week) of the person's first counted review of it, for
+// rank's week-block bootstrap. Bots get no clusters: they are never ranked.
 func (m reviewsGiven) Clusters(in *Input, scope domain.Scope) (RankInput, error) {
 	if in == nil || in.Facts == nil {
 		return RankInput{}, errors.New("reviews_given@1: no facts to rank")
 	}
+	window := reviewsGivenWindow(in.Facts.Now)
 	ri := RankInput{
 		Kind:    rank.Sum,
-		Window:  reviewsGivenWindow(in.Facts.Now),
-		Options: rank.Options{MinN: reviewsGivenMinN, Blocks: (reviewsGivenDays + 6) / 7},
+		Window:  window,
+		Options: rank.Options{MinN: reviewsGivenMinN, Blocks: window.Weeks()},
 	}
 	rv := newReviewsView(in)
 	if rv == nil {
@@ -138,7 +143,7 @@ func (m reviewsGiven) Clusters(in *Input, scope domain.Scope) (RankInput, error)
 		ri.Data[r.who] = append(ri.Data[r.who], rank.Cluster{
 			Change: r.pull,
 			Num:    1,
-			Block:  int(in.Facts.Now.Sub(r.first) / reviewsWeek),
+			Block:  window.Week(r.first),
 		})
 	}
 	for _, cs := range ri.Data {
@@ -175,6 +180,7 @@ type reviewsView struct {
 	window     domain.Window
 	all        []reviewsPull
 	groupRepos map[string][]string // group name → Repo.Key of its repositories
+	join       map[string][]string // ForgeRepo.ID → Repo.Key of the run's repositories (domain.ForgeJoin)
 }
 
 // newReviewsView applies the definition to the forge facts. It returns nil
@@ -184,9 +190,11 @@ type reviewsView struct {
 // scope: the replica outlives runs and holds whatever any sync copied into
 // facts.db, such as another organization's repositories, while every
 // scope's numbers describe the repositories the run scanned. A forge
-// repository is the run's when its clone URL and the repository's origin
-// name the same host, owner and name (domain.RemoteRepo), so a user's SSH
-// clone counts like a managed mirror.
+// repository is the run's when its clone URL and the origin of one of the
+// run's repositories that it collected name the same host, owner and name
+// (domain.ForgeJoin, which a scan records the watermarks by too), so a
+// user's SSH clone counts like a managed mirror, and a repository whose
+// collection failed adds nothing here, as it adds nothing to any number.
 //
 // A review counts when it was submitted in the window as an approval, a
 // change request or a comment, by an account with a login, on a pull
@@ -198,27 +206,18 @@ func newReviewsView(in *Input) *reviewsView {
 		return nil
 	}
 	fs := in.Facts
-	rv := &reviewsView{window: reviewsGivenWindow(fs.Now), groupRepos: map[string][]string{}}
+	rv := &reviewsView{
+		window:     reviewsGivenWindow(fs.Now),
+		groupRepos: map[string][]string{},
+		join:       domain.ForgeJoin(fs.Repos, fs.Forge.Repos),
+	}
 	for _, g := range fs.Groups {
 		rv.groupRepos[g.Name] = g.Repos
 	}
 	who := newReviewsLogins(in)
-	scanned := map[string][]string{} // domain.RemoteRepo → Repo.Key of the run's repositories
-	for i := range fs.Repos {
-		r := &fs.Repos[i].Repo
-		if name, ok := domain.RemoteRepo(r.Remote); ok {
-			scanned[name] = append(scanned[name], r.Key)
-		}
-	}
-	repoKeys := make(map[string][]string, len(fs.Forge.Repos)) // ForgeRepo.ID → Repo.Key of the run's repositories
-	for _, r := range fs.Forge.Repos {
-		if name, ok := domain.RemoteRepo(r.Key); ok && len(scanned[name]) > 0 {
-			repoKeys[r.ID] = scanned[name]
-		}
-	}
 	for i := range fs.Forge.PullRequests {
 		p := &fs.Forge.PullRequests[i]
-		keys := repoKeys[p.Repo]
+		keys := rv.join[p.Repo]
 		if len(keys) == 0 || p.State != domain.PullMerged || p.Merged.IsZero() || !p.Merged.Before(fs.Now) {
 			continue
 		}
@@ -287,6 +286,18 @@ func (rv *reviewsView) inScope(scope domain.Scope) []reviewsPull {
 // inGroup reports whether the repository with repoKey is in the group.
 func (rv *reviewsView) inGroup(repoKey, group string) bool {
 	return slices.Contains(rv.groupRepos[group], repoKey)
+}
+
+// repoKeys returns, sorted, the Repo.Key of every repository of the run
+// that a forge repository joins: the repository scopes reviews_given@1 can
+// have values in.
+func (rv *reviewsView) repoKeys() []string {
+	var out []string
+	for _, keys := range rv.join {
+		out = append(out, keys...)
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 // reviewsLogins resolves forge accounts to people. A login is a person when a

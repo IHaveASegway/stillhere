@@ -12,7 +12,9 @@ import (
 // me, validate and metrics. Each starts with its provenance and ends with
 // its caveats.
 
-// provenanceText is "run 3 · as of 2026-10-07 · policy 1a2b3c4d5e6f".
+// provenanceText is "run 3 · as of 2026-10-07 · policy 1a2b3c4d5e6f", and
+// when the answer shows a number computed from GitHub data, when that data
+// was synced: "· GitHub data as of 2026-10-06".
 func provenanceText(pv Provenance) string {
 	s := "as of " + day(pv.AsOf)
 	if pv.RunID != 0 {
@@ -20,6 +22,9 @@ func provenanceText(pv Provenance) string {
 	}
 	if pv.Policy != "" {
 		s += " · policy " + short12(pv.Policy)
+	}
+	if slices.ContainsFunc(pv.Metrics, forgeMetric) {
+		s += forgeAsOf(pv.Forge)
 	}
 	return s
 }

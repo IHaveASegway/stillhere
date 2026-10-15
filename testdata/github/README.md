@@ -118,15 +118,19 @@ One page, watermark 2026-10-08T09:00:00Z (#8).
 
 ## reviews_given@1
 
-The replica after both passes, read as of the fixture's `Now`, 2026-10-07T00:00:00Z. The window is [2026-07-09T00:00:00Z, 2026-10-07T00:00:00Z). The policy holds the packaged `[bots]` fragments (`copilot`, `gpt-engineer`, `dependabot`, `renovate`, `[bot]`), and the input has no `identity.Directory`, as `metrics.Compute` may pass it, so the metric builds one.
+The replica after both passes, stored in a facts.db as sync stores it (`sqlite.Open`, `PutForgeRepos`, `PutForgePage`) and read back as scan reads it (`LoadForge` from a year before `Now`), which returns each pull request as the last page that carried it said; read as of the fixture's `Now`, 2026-10-07T00:00:00Z. The window is [2026-07-09T00:00:00Z, 2026-10-07T00:00:00Z). The policy holds the packaged `[bots]` fragments (`copilot`, `gpt-engineer`, `dependabot`, `renovate`, `[bot]`), and the input has no `identity.Directory`, as `metrics.Compute` may pass it, so the metric builds one.
+
+**`LoadForge`'s since** is checked apart, from #10's update, 2026-10-01T11:58:00Z, which the later pass read again: it returns #5 (10-04 15:00), #8 (10-08 09:00) and #10 itself, at or after since, each with its labels, reviews and commits, and every repository and watermark, whatever since.
 
 **The run** scanned widget through a user's own SSH clone, origin `git@<git URL's host>:acme/widget.git`, in group `acme`, not through the managed mirror. The replica keys widget by its HTTPS clone URL, and the two name the same host, owner and name. The clone's history holds the squash commits f01, f02, f03, f04, f05, f07 and f09 with their mailmapped authors (f03 and f05 as `erin@example.com`); f08 landed after `Now`.
 
-**The replica also holds `other-org/secret`** (`R_secret`), which an earlier sync of another organization left there, with one pull request: #1 by `dana`, merged 09-30 12:00, approved by bob 09-30 11:00. The run did not scan that repository, so it counts in no scope, `all` included: bob's value stays 4.
+**The run also scanned `acme/sprocket`** (`R_sprocket`), in group `acme` too, through an SSH clone whose collection failed (status `error`). Its one pull request, #1 by `dana`, merged 09-29 12:00, was approved by bob 09-29 10:00. A failed repository adds nothing to any number, its GitHub ones included (`domain.ForgeJoin` joins it to no forge repository), so it counts in no scope, its group's included: bob's value stays 4.
+
+**The replica also holds `other-org/secret`** (`R_secret`), which an earlier sync of another organization left there, with one pull request: #1 by `dana`, merged 09-30 12:00, commented on by cara 09-30 10:00 and approved by bob 09-30 11:00. The run did not scan that repository, so it counts in no scope, `all` included: bob's value stays 4. cara's comment has the larger review ID (`PRR_s1b`), so the round trip checks that reviews come back by submission time, then ID.
 
 **Logins to people.** Each login takes the run's author of the commits GitHub attributes to it: ada (f01, f09) is `ada@example.com`, bob (f02) is `bob@example.com`, and erin (f03, f05) is `erin@example.com`, the mailmap reaching GitHub's `erin@old.example` through the shared SHA. cara and renovate-approver have no commit in the run, so they are `@cara` and `@renovate-approver`. A Bot reviewer is `@<login>[bot]`.
 
-**Pull requests that count**, merged before `Now`: #1, #2, #3, #4, #5 (merged 10-04, learned in the later pass), #7 and #9. Not #6 (closed unmerged), #8 (merged 10-08, after `Now`), #10 (open) or other-org's #1 (not scanned).
+**Pull requests that count**, merged before `Now`: #1, #2, #3, #4, #5 (merged 10-04, learned in the later pass), #7 and #9. Not #6 (closed unmerged), #8 (merged 10-08, after `Now`), #10 (open), sprocket's #1 (its repository failed) or other-org's #1 (not scanned).
 
 **Reviews**, per pull request, in the window, approved, changes requested or commented, by someone other than the author:
 
@@ -141,9 +145,10 @@ The replica after both passes, read as of the fixture's `Now`, 2026-10-07T00:00:
 | 9 | bob commented 09-22 (3 inline); bob approved 09-24 (no comment); cara approved 09-25 (no comment) | erin dismissed 09-23 |
 | 8 | | ada approved 10-01 and cara commented 10-07: merged after `Now` (and 10-07 is outside the window) |
 | 6 | | bob changes requested 09-01: never merged |
-| other-org #1 | | bob approved 09-30: a repository the run did not scan |
+| sprocket #1 | | bob approved 09-29: a repository whose collection failed |
+| other-org #1 | | cara commented 09-30 and bob approved 09-30: a repository the run did not scan |
 
-**Values**, the same for scope `all` and for group `acme` (which holds the clone), with N equal to the value:
+**Values**, the same for scope `all`, for group `acme` (which holds the clone, and sprocket) and for the repository scope of the clone, in which a scan ranks a repository named directly; none for sprocket's. N equals the value:
 
 | Subject | Value | reviews | review_comments | approvals | approvals_no_comment | no_comment_share |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -154,7 +159,7 @@ The replica after both passes, read as of the fixture's `Now`, 2026-10-07T00:00:
 | `bob@example.com` | 4 (#1, #4, #5, #9) | 5 | 4 | 3 | 3 | 1 |
 | `erin@example.com` | 1 (#7) | 1 | 0 | 1 | 0 | 0 |
 
-**Clusters** for scope `all`: one per person and pull request, Num 1, in week block `floor((Now − first counted review) / 7 days)`; 13 blocks, eligibility 10. The two bots have none: `@copilot-pull-request-reviewer[bot]` is an app account, and `@renovate-approver` matches the fragment `renovate`. That second exclusion is `identity.Directory.Bot`'s to decide, which is #9's: until #9 merges, the walking skeleton's stub matches nothing, and the test sets that one cluster aside with a log line.
+**Clusters** for scope `all`: one per person and pull request, Num 1, in week block `⌈(Now − first counted review) / 7 days⌉ − 1` (`domain.Window.Week`, the rule every Sum metric and `rank.Intervals` share: block 0 is `[Now − 7 days, Now)`); 13 blocks, eligibility 10. No review below is a whole number of weeks before `Now`, so `⌊(Now − t) / 7 days⌋`, which this table used before the rule had one home, gives the same blocks. The two bots have none: `@copilot-pull-request-reviewer[bot]` is an app account, and `@renovate-approver` matches the fragment `renovate`, which `identity.Directory.Bot` decides.
 
 | Subject | Pull request: first counted review → block |
 | --- | --- |

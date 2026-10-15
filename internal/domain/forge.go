@@ -3,6 +3,7 @@ package domain
 import (
 	"context"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 )
@@ -67,6 +68,46 @@ func RemoteRepo(remote string) (string, bool) {
 		return "", false
 	}
 	return strings.ToLower(host) + "/" + path, true
+}
+
+// ForgeJoin is the one join between the forge repositories of a replica and
+// the repositories a run scanned: for each ForgeRepo.ID, the Repo.Key of
+// every repository of the run whose origin names it (RemoteRepo of
+// Repo.Remote and of ForgeRepo.Key), sorted. A forge repository that no
+// repository of the run names is absent, and the result is nil when none
+// is named. reviews_given@1 counts the pull requests of the forge
+// repositories in it, and a scan records their watermarks
+// (ForgeStore.PutRunWatermarks), so the two can never disagree about which
+// GitHub data is a run's.
+//
+// A repository whose collection failed (status error) joins nothing: a
+// failed repository adds nothing to a run's numbers, its GitHub ones
+// included, as every page that lists it says.
+func ForgeJoin(repos []RepoFacts, forge []ForgeRepo) map[string][]string {
+	byName := map[string][]string{} // RemoteRepo → Repo.Key of the run's repositories
+	for i := range repos {
+		rf := &repos[i]
+		if rf.Status == RepoStatusError {
+			continue
+		}
+		if name, ok := RemoteRepo(rf.Repo.Remote); ok {
+			byName[name] = append(byName[name], rf.Repo.Key)
+		}
+	}
+	var out map[string][]string
+	for _, r := range forge {
+		name, ok := RemoteRepo(r.Key)
+		if !ok || len(byName[name]) == 0 {
+			continue
+		}
+		if out == nil {
+			out = map[string][]string{}
+		}
+		keys := slices.Clone(byName[name])
+		slices.Sort(keys)
+		out[r.ID] = slices.Compact(keys)
+	}
+	return out
 }
 
 // ForgeUser is an account as it appears on a pull request or a review.
@@ -162,7 +203,23 @@ type ForgePage struct {
 type ForgeFacts struct {
 	Repos        []ForgeRepo      // sorted by Key, then ID
 	PullRequests []PullRequest    // sorted by Repo, then Number
-	Watermarks   []ForgeWatermark // sorted by Repo: the watermarks the run read, which date every forge number
+	Watermarks   []ForgeWatermark // sorted by Repo: the replica's, of which a run keeps those of its own repositories (RunWatermark)
+}
+
+// RunWatermark is the watermark of one of a scan run's forge repositories
+// (ForgeJoin) as the run read it, with the repository's name then and the
+// run's repositories it is. A run keeps these in place of the pull requests
+// (docs/spec/codebase.md#run-model), and all of it is the run's own: a
+// later sync that renames the repository, which the replica follows by node
+// id, or moves its watermark on, changes nothing a stored run shows.
+// Matching the watermark to the run's repositories again at read time,
+// against today's names, would let every later sync rewrite a stored run's
+// pages; what a run read is immutable, like its facts (Helland,
+// "Immutability Changes Everything", CIDR 2015).
+type RunWatermark struct {
+	ForgeWatermark          // Repo is the ForgeRepo.ID; zero times when the replica held no page of it
+	Name           string   // "owner/name" as the replica listed it
+	Keys           []string // Repo.Key of the run's repositories whose origin names it (ForgeJoin), sorted; never empty
 }
 
 // MirrorMove is a mirror that ForgeSource.ReconcileMirrors moved, or found
@@ -244,13 +301,17 @@ type ForgeStore interface {
 	// replica holds no repository.
 	LoadForge(ctx context.Context, since time.Time) (*ForgeFacts, error)
 	// PutRunWatermarks records, for a run that is being written, the
-	// watermarks it read with LoadForge (ForgeFacts.Watermarks). They date
-	// its forge numbers: a stored run shows "as of" them (ADR 0004) after
-	// later syncs moved the replica on. They are deleted with the run.
-	PutRunWatermarks(ctx context.Context, runID int64, watermarks []ForgeWatermark) error
+	// watermark of each of its forge repositories as it read them with
+	// LoadForge, with the name and the run's repositories each one is
+	// (RunWatermark). They date its forge numbers: a stored run shows "as
+	// of" them (ADR 0004), over the repositories they joined then, after
+	// later syncs moved the replica on or renamed a repository. They are
+	// deleted with the run. A watermark without Keys is an error.
+	PutRunWatermarks(ctx context.Context, runID int64, watermarks []RunWatermark) error
 	// RunWatermarks returns the watermarks a complete or partial run
 	// recorded, sorted by Repo, or nil when it recorded none. Like
 	// FactStore's read side, it returns ErrNotFound for a run that is
-	// unknown, running or failed.
-	RunWatermarks(ctx context.Context, runID int64) ([]ForgeWatermark, error)
+	// unknown, running or failed. A watermark recorded before facts.db
+	// kept the join (schema version 3) has no Name and no Keys.
+	RunWatermarks(ctx context.Context, runID int64) ([]RunWatermark, error)
 }

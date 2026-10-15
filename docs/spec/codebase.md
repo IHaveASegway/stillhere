@@ -150,6 +150,10 @@ type IgnoreRevs struct {
 type FileError struct{ Path, Message string }
 
 type Window struct{ Since, Until time.Time } // [Since, Until)
+// The one definition of a Sum metric's week blocks (docs/metrics.md#ranking-rules), which simplifying@1,
+// reviews_given@1 and rank.Intervals' check all use (Information Expert: Larman, "Applying UML and Patterns", ch. 17):
+func (w Window) Weeks() int           // ⌈(Until − Since) / 7 days⌉, 0 when empty: rank.Options.Blocks over w (13 for 90 days)
+func (w Window) Week(t time.Time) int // ⌈(Until − t) / 7 days⌉ − 1, half-open: block 0 is [Until − 7 days, Until); rank.Cluster.Block
 
 // RepoFacts is everything one run learned about one repository.
 type RepoFacts struct {
@@ -330,6 +334,17 @@ type ForgeFacts struct { Repos []ForgeRepo; PullRequests []PullRequest; Watermar
 // RemoteRepo: "host/owner/name" of a remote, lowercased, with no user, port or ".git", for https://, ssh:// and
 // git@host:o/r remotes. A run's repository (Repo.Remote) is a forge repository (ForgeRepo.Key) when the two match.
 func RemoteRepo(remote string) (string, bool)
+// ForgeJoin (#13): the one join of a run's repositories to a replica's: ForgeRepo.ID → the sorted Repo.Key of every
+// repository whose origin names it (RemoteRepo), a failed one (status error) left out; nil when none. reviews_given@1
+// counts by it and scan records the watermarks by it, so the two cannot disagree about which GitHub data is a run's.
+func ForgeJoin(repos []RepoFacts, forge []ForgeRepo) map[string][]string
+// RunWatermark (#13): a run's forge repository (ForgeJoin) as the run read it, which it keeps in place of the pull
+// requests. All of it is the run's own, so a later sync that renames the repository changes nothing a stored run shows.
+type RunWatermark struct {
+	ForgeWatermark          // zero times when the replica held no page of the repository
+	Name           string   // "owner/name" as the replica listed it
+	Keys           []string // Repo.Key of the run's repositories whose origin names it (ForgeJoin), sorted; never empty
+}
 
 type MirrorMove struct { // a mirror ReconcileMirrors moved, or could not
 	Repo, From, To string // ForgeRepo.ID; absolute paths
@@ -351,12 +366,12 @@ type ForgeStore interface { // the replica in facts.db (*sqlite.Store, sqlite/fo
 	PutForgePage(ctx context.Context, page *ForgePage) error // the watermark only rises; a pull request is replaced only by a copy updated as late or later
 	MarkForgeSynced(ctx context.Context, repo string, at time.Time) error
 	LoadForge(ctx context.Context, since time.Time) (*ForgeFacts, error) // PRs updated at or after since; nil for an empty replica
-	PutRunWatermarks(ctx context.Context, runID int64, watermarks []ForgeWatermark) error // a running run: the Watermarks it read
-	RunWatermarks(ctx context.Context, runID int64) ([]ForgeWatermark, error) // sorted by Repo; ErrNotFound unless complete or partial
+	PutRunWatermarks(ctx context.Context, runID int64, watermarks []RunWatermark) error // a running run: what it read, with its join; no Keys is an error
+	RunWatermarks(ctx context.Context, runID int64) ([]RunWatermark, error) // sorted by Repo; ErrNotFound unless complete or partial; no Name or Keys before schema version 3
 }
 ```
 
-#14 owns `domain/forge.go`, `internal/github`, `sqlite/forge.go` and `sqlite/migrations/0002_forge.sql` (where `*sqlite.Store` implements `ForgeStore`), `cli/forge.go` (which builds the `ForgeSource` adapter), `cli/sync.go`, `app/sync.go` and `metrics/reviews.go`. `ForgeStore` is a port of its own rather than more `FactStore` methods: `FactStore` holds per-run snapshots, while forge facts are a replica that outlives runs ([run model](#run-model)), and a separate port leaves `FactStore` and #8's implementation untouched (Interface Segregation Principle). Mirroring is on `ForgeSource` because the credentials are the forge's: the adapter holds the token, so it runs the clone and the fetch (through `domain.GitRunner`), and the token never reaches `app`. A mirror carries its repository's node id in its own git config (`stillhere.forgeId`), because its path does not identify it: a rename or a transfer changes the path and keeps the id, and discovery keys repositories by origin URL, so a mirror left under the old name would be scanned twice. `ReconcileMirrors` is a separate, sequential call because only it sees the whole listing: it can tell a rename from a deletion, and settle two repositories that swapped names, before the parallel fetches start. Store migrations are embedded files, `internal/sqlite/migrations/NNNN_<name>.sql`, applied in order, one transaction each, and numbered by `PRAGMA user_version`: 1 (`0001_facts.sql`) is #8's schema, 2 (`0002_forge.sql`) is #14's forge tables (`forge_run_watermarks` references #8's `runs`). M4 adds narrations the same way.
+#14 owns `domain/forge.go`, `internal/github`, `sqlite/forge.go` and `sqlite/migrations/0002_forge.sql` (where `*sqlite.Store` implements `ForgeStore`), `cli/forge.go` (which builds the `ForgeSource` adapter), `cli/sync.go`, `app/sync.go` and `metrics/reviews.go`. `ForgeStore` is a port of its own rather than more `FactStore` methods: `FactStore` holds per-run snapshots, while forge facts are a replica that outlives runs ([run model](#run-model)), and a separate port leaves `FactStore` and #8's implementation untouched (Interface Segregation Principle). Mirroring is on `ForgeSource` because the credentials are the forge's: the adapter holds the token, so it runs the clone and the fetch (through `domain.GitRunner`), and the token never reaches `app`. A mirror carries its repository's node id in its own git config (`stillhere.forgeId`), because its path does not identify it: a rename or a transfer changes the path and keeps the id, and discovery keys repositories by origin URL, so a mirror left under the old name would be scanned twice. `ReconcileMirrors` is a separate, sequential call because only it sees the whole listing: it can tell a rename from a deletion, and settle two repositories that swapped names, before the parallel fetches start. Store migrations are embedded files, `internal/sqlite/migrations/NNNN_<name>.sql`, applied in order, one transaction each, and numbered by `PRAGMA user_version`: 1 (`0001_facts.sql`) is #8's schema, 2 (`0002_forge.sql`) is #14's forge tables (`forge_run_watermarks` references #8's `runs`), 3 (`0003_forge_run_join.sql`) is #13's: each run watermark's name, and the run's repositories it joined (`forge_run_repos`), so a reader never matches a stored run against today's `forge_repos`. M4 adds narrations the same way.
 
 ## Package APIs
 
@@ -525,14 +540,15 @@ type Cluster struct {
 	Change string  // landing SHA or PR id
 	Num    float64
 	Den    float64 // Ratio only
-	Block  int     // Sum only: the window's 7-day block the change landed in, counted back from w.Until (Now for every Sum
-	               // metric) and half-open like the window: block k holds [Until − 7(k+1) days, Until − 7k days), so a
-	               // landing at t is in block ⌈(Until − t) / 7 days⌉ − 1, and 0 is the last 7 days; in [0, Blocks)
+	Block  int     // Sum only: w.Week(t), the window's 7-day block the change landed in, counted back from w.Until (Now
+	               // for every Sum metric) and half-open like the window: block k holds [Until − 7(k+1) days,
+	               // Until − 7k days), so a landing at t is in block ⌈(Until − t) / 7 days⌉ − 1, and 0 is the last 7
+	               // days; in [0, Blocks)
 }
 type Options struct { // supplied by the ranked metric (metrics.RankInput)
 	Replicates int // B; 0 means 1000
 	MinN       int // eligibility: clusters per subject, from the metric's definition
-	Blocks     int // Sum only: the window's 7-day blocks, ⌈(Until − Since) / 7 days⌉, the oldest one short: 13 for 90 days
+	Blocks     int // Sum only: w.Weeks(), the window's 7-day blocks, ⌈(Until − Since) / 7 days⌉, the oldest one short: 13 for 90 days
 }
 // Intervals panics on what only a bug in the ranked metric produces, rather than publish plausible but wrong
 // intervals: a Kind other than Ratio and Sum and, for Sum, an empty window, a Blocks other than the window's, or a
@@ -561,12 +577,23 @@ type Input struct {
 	History    domain.Window
 	Timings    *Timings
 	Scope      string    // the scan's rank scope: domain.ScopeAll (or a run without groups) adds an overview of every repository
+	Forge      *ForgeRead // the GitHub data a scan run read, which app builds; nil for week, and when the reader cannot tell
+}
+// forge.go: the GitHub data a run read, which dates its forge numbers (ADR 0004). ExplainInput, WhoKnowsInput and MeInput
+// carry Forge too. Every Provenance gets Forge *ForgeProvenance (json "forge"): {AsOf, Repos} for the repositories in its
+// Heads that had GitHub data (a page or a finished sync), AsOf the oldest Synced (nil while a first sync has not
+// finished), and nil when none had any. On me and explain, a forge metric's value in a group or in all puts every
+// repository of that scope in Heads. Only a section that shows a forge metric's numbers gets a forge-not-synced caveat.
+type ForgeRead struct{ Repos []ForgeSync } // per domain.RunWatermark and joined key, sorted by Repo, Key; built alike by scan and readers
+type ForgeSync struct {                    // a watermark as the run read it
+	Repo, Key       string     // "owner/name" and the run's Repo.Key it joined, both as the run read them (RunWatermark)
+	Updated, Synced *time.Time // ForgeWatermark's, nil for its zero times
 }
 func OwnPageOnly(metric domain.MetricID) bool // a person's values only their own page shows: ai_assisted (ADR 0007); explain refuses them
 type RankSet struct { Metric MetricInfo; Scope domain.Scope; Window domain.Window; Percent bool; MinN int; Intervals []domain.RankInterval } // bots left out
 func Build(in *Input) *Model
 // The read commands' answers live here too, so the renderers and the MCP server share one shape.
-// Each has Provenance (run id, as-of, policy, HEAD SHAs, metric@version) and Caveats:
+// Each has Provenance (run id, as-of, policy, HEAD SHAs, metric@version, when the GitHub data was synced) and Caveats:
 type Explain struct { Provenance Provenance; Metric MetricInfo; Subject Subject; Values []Value; Changes []Change; Caveats []Caveat }
 type WhoKnows struct { Provenance Provenance; Path, Repo string; Repos []WhoKnowsRepo; Caveats []Caveat } // owners, top authors, recent landers, bots
 type Me struct { Provenance Provenance; Person Subject; Values []Value; Ranks []MeRank; Caveats []Caveat }
@@ -607,7 +634,9 @@ type Deps struct {
 	Git        domain.GitRunner
 	Store      domain.FactStore   // nil for week
 	Forge      domain.ForgeSource // sync only
-	ForgeStore domain.ForgeStore  // sync only: the same *sqlite.Store
+	ForgeStore domain.ForgeStore  // the same *sqlite.Store, given wherever facts.db is: sync writes the replica, scan reads it
+	                              // and records the watermarks it read, readers date a run's GitHub data; nil: no GitHub data
+	                              // read, and none reported (no forge provenance or caveat) by scan or reader alike
 	Policy     *policy.Policy     // week and scan only; read use cases rebuild the run's own
 	Log        *slog.Logger
 	Version    string
@@ -647,9 +676,12 @@ func Identities(ctx context.Context, d Deps, r IdentitiesRequest) (*report.Ident
 func Sync(ctx context.Context, d Deps, r SyncRequest) error // #14
 // Week and Scan return the model alongside domain.ErrNoFacts when no repository produced facts (a scan then
 // stores nothing). A cancellation, a *domain.UsageError from a collector, or a collector that is not built yet
-// stops the run; any other failure is the repository's, recorded on its RepoFacts. Scan writes the run after
-// computing everything: BeginRun, PutRepoFacts in key order, PutRunFacts, PutMetrics, then FinishRun with complete
-// or partial (a failed repository or PATH), or failed if a write fails. Ranks leave bots out of rank.Intervals.
+// stops the run; any other failure is the repository's, recorded on its RepoFacts. Scan reads the forge replica
+// (ForgeStore.LoadForge) after discovery and before any git process, and a read error stops it. It writes the run
+// after computing everything: BeginRun, PutRepoFacts in key order, PutRunFacts, PutRunWatermarks (when it read any),
+// PutMetrics (every value, and every ranked metric's intervals in every rank scope, whichever --rank names), then
+// FinishRun with complete or partial (a failed repository or PATH), or failed if a write fails. Ranks leave bots out
+// of rank.Intervals.
 // The MCP server's own use cases (overview, person, changes, highlights; ADR 0006) go in app/mcp.go, which #15
 // owns. They answer from #11's report model (the overviews and repo cards), so #15 builds on #11's report types.
 
@@ -688,7 +720,13 @@ Every `scan` is a **run**: a snapshot of facts at one set of HEADs, under one po
 - **Publishing** is a status flip. A run is written as `running` and becomes `complete` (or `partial` when some repo failed) only after its last row. Readers select complete and partial runs only, so nobody sees half a run: every `FactStore` read method returns `ErrNotFound` for a running or failed run. A run left `running` by a crash is deleted by the next open once its lease has lapsed. The store that began the run holds the lease: every write it makes renews it, a sync's forge writes included, and it lapses after a day without one, so an open deletes a running run only after its writer has written nothing for a day.
 - **Retention.** When a run finishes, the store keeps, among the runs of its kind, that run, the newest 8 published runs and the newest published run of each of the 12 most recent months that have one (by `Now`, as restic's `--keep-last` and `--keep-monthly` count), and deletes the others, failed runs included.
 - **The policy travels with the run.** `Run.PolicySource` holds exactly the bytes `PolicyRef.SHA256` hashes. Every reader of a stored run (`report`, `explain`, `who-knows`, `me`, `validate`, `mcp`, and a new metric version computed over old facts) rebuilds that policy with `policy.FromSource` and checks its `Ref` against `Run.Policy`. Today's `stillhere.toml`, or a newer packaged default, never changes a stored run's numbers; only `week` and `scan` load a policy file.
-- **Forge facts** (M2) are not per run. They are a replica of GitHub, upserted by node id with a watermark per repo, and each run records the watermark it read. `scan` reads the replica with `ForgeStore.LoadForge` into `FactSet.Forge` and records its `Watermarks` with `ForgeStore.PutRunWatermarks` while the run is running; `report`, `explain` and the other readers of a stored run read them back with `RunWatermarks` and show "as of" each repository's `Synced` ([ADR 0004](../adr/0004-github-behind-sync-boundary.md)). The run keeps those times, not a copy of the pull requests, so the stored metric values are the run's forge numbers, and a new metric version computed over an old run reads today's replica, which the watermarks show to be newer. Wiring both calls is #13's (#14 owns the methods). A sync is recorded as a run of kind `sync` (no policy, no facts of its own), so its status is kept like a scan's.
+- **Forge facts** (M2) are not per run. They are a replica of GitHub, upserted by node id with a watermark per repo, and each run records the watermarks it read.
+  - **Scan.** `scan` reads the replica once, with `ForgeStore.LoadForge(now − 365 days)` into `FactSet.Forge`, after discovery and before any git process starts. While the run is running, it records with `ForgeStore.PutRunWatermarks` the watermark of each of its forge repositories, those `domain.ForgeJoin` joins to one of its repositories' origins (the join `reviews_given@1` counts by), and a zero one for such a repository the replica holds no page of, each with the repository's name and the run's repositories it joined (`domain.RunWatermark`). Another organization's repositories in the replica are none of the run's, and neither is a repository whose collection failed: it adds nothing to the run's numbers, its GitHub ones included. An empty replica is normal: the run has no forge facts, and every forge-based value is absent, never zero.
+  - **A replica that cannot be read stops the scan**, before it collects anything. It is the facts.db the run would be written to, so the run could most likely not be stored either, and a run published without the GitHub data the replica holds would read as "not synced": plausible, but wrong.
+  - **Readers.** `report`, `explain`, `who-knows` and `me` (the read use cases' shared `load`) read the watermarks back with `RunWatermarks`, with the names and the join the run recorded, and show in every section's provenance when each repository's GitHub data was synced (`Synced`; [ADR 0004](../adr/0004-github-behind-sync-boundary.md)). They never read `forge_repos`, which a sync renames, so a later sync, a rename included, moves none of a stored run's "as of" times: the run's reading of the replica is its own, like its facts. A run recorded before schema version 3 kept no join; its readers report no GitHub data for it rather than guess. A section that shows a forge metric's numbers (a `reviews_given@1` rank table, `me`, `explain` of `reviews_given@1`) gets a `forge-not-synced` caveat when its collected repositories have no GitHub data, or only part; no other section does, so a git-only report says nothing about GitHub.
+  - **Ranks are stored too.** The run keeps those times, not a copy of the pull requests, so its forge numbers cannot be computed again from it. The stored metric values are the run's forge numbers, and so are its ranks: a scan ranks every ranked metric in every rank scope and stores the intervals, whichever ones `--rank` names (it picks the tables the scan's report prints). Readers use the stored ranks and never rank over the replica. Ranking over today's replica would put, in one table, ranks from one state of the replica beside values (and bot rows) from another; refusing would make a user scan again, blame and all, for a rank the scan stores in well under a second ([ADR 0010](../adr/0010-rank-intervals-bootstrap-per-kind.md#consequences): 250 ms for a ratio and 65 ms for a sum over 500 people).
+  - **Not built yet**: a metric version newer than a run, computed over its stored facts, gets no forge facts. Reading today's replica for it, dated by today's watermarks, would be the honest answer.
+  - A sync is recorded as a run of kind `sync` (no policy, no facts of its own), so its status is kept like a scan's.
 - **Metric values** are stored with the run, keyed by `metric@version`. A new metric version can be computed over an old run's facts with `LoadFacts`, which is why `LoadFacts(PutRepoFacts(x)) == x` is tested.
 
 ## Command surface
@@ -698,7 +736,7 @@ Global flags: `--db` (default `$STILLHERE_HOME/facts.db`, where `STILLHERE_HOME`
 | Command | Reads | Writes | Milestone |
 | --- | --- | --- | --- |
 | `week PATH...` `[--now] [--days N] [--week-sort lines_added\|commits] [--exclude-repo GLOB]...` | git | nothing | M0 |
-| `scan PATH...` `[--now] [--jobs N] [--ignore-revs-file F] [--rank METRIC]... [--scope group\|all] [--exclude-repo GLOB]...` | git | a run in facts.db | M1 |
+| `scan PATH...` `[--now] [--jobs N] [--ignore-revs-file F] [--rank METRIC]... [--scope group\|all] [--exclude-repo GLOB]...` | git, the forge replica in facts.db | a run in facts.db | M1 |
 | `report [--run ID] [--rank METRIC]...` | facts.db | nothing | M1 |
 | `explain METRIC --person EMAIL [--run ID]` | facts.db | nothing | M1 |
 | `who-knows PATH [--repo KEY]` | facts.db | nothing | M1 |
@@ -776,7 +814,7 @@ Tests sit at stable boundaries, so a refactor does not rewrite them (Kent Beck, 
 | `TestAUC` | `rank` | the validity check's statistic: a hand-counted example with ties, 1 and 0 for perfect separation, 0.5 when either class is empty, and the value counting every pair gives |
 | `TestRedact` | `redact` | no credential survives `URL`, `Scrub` or `Message` (userinfo, scp-like and malformed remotes, a URL given as a path and made absolute, query strings, quotes, the 180-rune cut); text that holds none is unchanged |
 | `TestRunner` | `gitcli` | per-user and system attributes change neither numstat nor `check-attr`; no askpass, signature or external diff program runs; an inherited `GIT_DIR` changes nothing; a timeout or cancellation kills git's process group and is reported as such even when the reader fails first on the truncated output; a helper that left the group cannot hold `Stream` |
-| `TestStoreRoundTrip` | `sqlite` | `LoadFacts(PutRepoFacts(x)) == x`, a zero loading as +0; `Run(id)` returns the run as begun and finished, policy source included; readers never see a running or failed run (`ErrNotFound`) |
+| `TestStoreRoundTrip` | `sqlite` | `LoadFacts(PutRepoFacts(x)) == x`, a zero loading as +0; `Run(id)` returns the run as begun and finished, policy source included; `RunWatermarks` returns the last `PutRunWatermarks` of the run, names and joins included, and a watermark that joins nothing is refused; readers never see a running or failed run (`ErrNotFound`, `RunWatermarks` included) |
 | `TestStoreLifecycle` | `sqlite` | `Open` creates a missing directory 0700 and files 0600, in WAL mode; it refuses another program's SQLite file, a file that is not SQLite and a newer facts database with a `UsageError`, without waiting for a held lock and leaving the file byte for byte; first opens racing in separate processes all succeed; a run left running is deleted once its store has written nothing for a day, and not before; retention and `LatestRun` match a model of the run-model rule across gaps, year-long pauses, ties and backfills |
-| `TestGitHubSync` | `github` | recorded responses ([testdata/github](../../testdata/github/README.md)) become the expected repositories and pull request pages, through rate limits (a 403 with Retry-After, a nearly spent budget, and a spent budget and a secondary limit that GitHub reports inside a 200), a 502 and nested follow-ups; a mirror clones and fetches from a local git server that takes only the token, follows a rename by node id, moves to `.stale` and back, and never follows a redirect to another host; the token is in no fact, mirror file, log or error; `reviews_given@1` over the pages the passes return matches its oracle (M2). The store round trip of those pages (`LoadForge` after `PutForgePage`) joins it when #8's `sqlite.Open` merges (#13) |
+| `TestGitHubSync` | `github` | recorded responses ([testdata/github](../../testdata/github/README.md)) become the expected repositories and pull request pages, through rate limits (a 403 with Retry-After, a nearly spent budget, and a spent budget and a secondary limit that GitHub reports inside a 200), a 502 and nested follow-ups; a mirror clones and fetches from a local git server that takes only the token, follows a rename by node id, moves to `.stale` and back, and never follows a redirect to another host; the token is in no fact, mirror file, log or error; the pages the passes return, stored through `sqlite.Open` and `PutForgePage`, come back from `LoadForge` as the last page that carried each pull request said, reviews in submission order, and from a `since` between the passes only the pull requests updated at or after it; `reviews_given@1` over what `LoadForge` returns matches its oracle in scope `all`, the group and the repository, another organization's repository and a failed one counting nowhere (M2) |
 | `TestMCPTools` | `mcp` | each tool through the SDK's in-memory client (M4) |

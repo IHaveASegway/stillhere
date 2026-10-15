@@ -2,6 +2,7 @@ package github_test
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -18,6 +19,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -28,10 +30,10 @@ import (
 	"github.com/IHaveASegway/stillhere/internal/fixture"
 	"github.com/IHaveASegway/stillhere/internal/gitcli"
 	"github.com/IHaveASegway/stillhere/internal/github"
-	"github.com/IHaveASegway/stillhere/internal/identity"
 	"github.com/IHaveASegway/stillhere/internal/metrics"
 	"github.com/IHaveASegway/stillhere/internal/policy"
 	"github.com/IHaveASegway/stillhere/internal/rank"
+	"github.com/IHaveASegway/stillhere/internal/sqlite"
 )
 
 // plantedToken is the token the test hands the adapter. It must reach the
@@ -284,49 +286,145 @@ func TestGitHubSync(t *testing.T) {
 	})
 }
 
-// reviewsGivenOracle checks reviews_given@1 over the replica the two passes
-// leave, as of the fixture's Now, against the values derived by hand in
-// testdata/github/README.md#reviews_given1.
+// reviewsGivenOracle stores the pages the two passes returned in a real
+// facts.db, as sync does (sqlite.Open, PutForgeRepos, PutForgePage), reads
+// the replica back as scan does (LoadForge, from a year before the
+// fixture's Now) and from a time between the passes, and checks
+// reviews_given@1 over what LoadForge returns against the values derived by
+// hand in testdata/github/README.md#reviews_given1.
 func reviewsGivenOracle(t *testing.T, repos []domain.ForgeRepo, pages []domain.ForgePage, gitURL string) {
-	replica := map[string]domain.PullRequest{}
-	for _, p := range pages {
-		for _, pr := range p.PullRequests {
-			replica[pr.ID] = pr // a later page replaces an earlier one, as the store does
-		}
-	}
-	var pulls []domain.PullRequest
-	for _, id := range []string{"PR_01", "PR_02", "PR_03", "PR_04", "PR_05", "PR_06", "PR_07", "PR_08", "PR_09", "PR_10"} {
-		pulls = append(pulls, replica[id])
-	}
+	ctx := t.Context()
 	// The replica outlives runs: an earlier sync of another organization
 	// left other-org/secret in it, with a merged pull request bob approved
 	// in the window. This run did not scan that repository, so it counts in
-	// no scope.
+	// no scope. cara's comment, submitted first, has the larger review ID,
+	// so the round trip tells submission order from ID order.
 	secret := domain.ForgeRepo{ID: "R_secret", Key: gitURL + "/other-org/secret.git", Owner: "other-org", Name: "secret", DefaultBranch: "main"}
-	repos = append(repos, secret)
-	pulls = append(pulls, domain.PullRequest{
+	secretPull := domain.PullRequest{
 		ID: "PR_s1", Repo: "R_secret", Number: 1, Title: "feat: a secret", Author: user("dana"),
 		State: domain.PullMerged, BaseBranch: "main", Created: ts("2026-09-28T09:00:00Z"),
 		Updated: ts("2026-09-30T12:00:00Z"), Closed: ts("2026-09-30T12:00:00Z"), Merged: ts("2026-09-30T12:00:00Z"),
 		MergeCommit: commit("5e00000000000000000000000000000000000001", "dana@example.com", "dana"),
-		Reviews:     []domain.Review{review("PRR_s1a", user("bob"), domain.ReviewApproved, "2026-09-30T11:00:00Z", 0, 0)},
-		Commits:     []domain.ForgeCommit{commit("5e00000000000000000000000000000000000002", "dana@example.com", "dana")},
+		Reviews: []domain.Review{
+			review("PRR_s1b", user("cara"), domain.ReviewCommented, "2026-09-30T10:00:00Z", 12, 0),
+			review("PRR_s1a", user("bob"), domain.ReviewApproved, "2026-09-30T11:00:00Z", 0, 0),
+		},
+		Commits: []domain.ForgeCommit{commit("5e00000000000000000000000000000000000002", "dana@example.com", "dana")},
+	}
+	// The run also scanned acme/sprocket, whose collection failed: a failed
+	// repository adds nothing to any number, so its pull request, which bob
+	// approved in the window, counts in no scope either, its group's
+	// included.
+	sprocket := domain.ForgeRepo{ID: "R_sprocket", Key: gitURL + "/acme/sprocket.git", Owner: "acme", Name: "sprocket", DefaultBranch: "main"}
+	sprocketPull := domain.PullRequest{
+		ID: "PR_p1", Repo: "R_sprocket", Number: 1, Title: "fix: a sprocket", Author: user("dana"),
+		State: domain.PullMerged, BaseBranch: "main", Created: ts("2026-09-28T09:00:00Z"),
+		Updated: ts("2026-09-29T12:00:00Z"), Closed: ts("2026-09-29T12:00:00Z"), Merged: ts("2026-09-29T12:00:00Z"),
+		MergeCommit: commit("6e00000000000000000000000000000000000001", "dana@example.com", "dana"),
+		Reviews:     []domain.Review{review("PRR_p1a", user("bob"), domain.ReviewApproved, "2026-09-29T10:00:00Z", 0, 0)},
+		Commits:     []domain.ForgeCommit{commit("6e00000000000000000000000000000000000002", "dana@example.com", "dana")},
+	}
+	pages = append(pages,
+		domain.ForgePage{Repo: "R_secret", PullRequests: []domain.PullRequest{secretPull}, Updated: secretPull.Updated},
+		domain.ForgePage{Repo: "R_sprocket", PullRequests: []domain.PullRequest{sprocketPull}, Updated: sprocketPull.Updated})
+	repos = append(slices.Clone(repos), secret, sprocket)
+
+	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "facts.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := store.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := store.PutForgeRepos(ctx, repos); err != nil {
+		t.Fatal(err)
+	}
+	for i := range pages {
+		if err := store.PutForgePage(ctx, &pages[i]); err != nil {
+			t.Fatalf("PutForgePage, page %d: %v", i+1, err)
+		}
+	}
+	replica, err := store.LoadForge(ctx, fixture.Now.AddDate(0, 0, -365))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The round trip: LoadForge returns each pull request as the last page
+	// that carried it said, every label, review and commit included, with
+	// each repository's watermark at its last page's.
+	latest := map[string]domain.PullRequest{}
+	marks := map[string]time.Time{}
+	for _, p := range pages {
+		for _, pr := range p.PullRequests {
+			latest[pr.ID] = pr
+		}
+		marks[p.Repo] = p.Updated
+	}
+	var wantPulls []domain.PullRequest
+	for _, pr := range latest {
+		wantPulls = append(wantPulls, pr)
+	}
+	slices.SortFunc(wantPulls, func(a, b domain.PullRequest) int {
+		return cmp.Or(cmp.Compare(a.Repo, b.Repo), cmp.Compare(a.Number, b.Number))
+	})
+	wantRepos := slices.Clone(repos)
+	slices.SortFunc(wantRepos, func(a, b domain.ForgeRepo) int { return cmp.Or(cmp.Compare(a.Key, b.Key), cmp.Compare(a.ID, b.ID)) })
+	wantMarks := []domain.ForgeWatermark{
+		{Repo: "R_secret", Updated: marks["R_secret"]},
+		{Repo: "R_sprocket", Updated: marks["R_sprocket"]},
+		{Repo: "R_widget", Updated: marks["R_widget"]},
+	}
+	equal(t, "LoadForge after PutForgePage", replica, &domain.ForgeFacts{
+		Repos:        wantRepos,
+		PullRequests: wantPulls,
+		Watermarks:   wantMarks,
+	})
+	// LoadForge's since, which a scan sets to a year before Now: from #10's
+	// update, which the later pass read again, it returns the pull requests
+	// updated at or after it, #10 itself included, each with its children,
+	// and every repository and watermark.
+	since := ts("2026-10-01T11:58:00Z")
+	var wantRecent []domain.PullRequest
+	var recentIDs []string
+	for _, pr := range wantPulls {
+		if !pr.Updated.Before(since) {
+			wantRecent = append(wantRecent, pr)
+			recentIDs = append(recentIDs, pr.ID)
+		}
+	}
+	equal(t, "the pull requests updated at or after #10's update", recentIDs, []string{"PR_05", "PR_08", "PR_10"})
+	recent, err := store.LoadForge(ctx, since)
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "LoadForge from #10's update", recent, &domain.ForgeFacts{
+		Repos:        wantRepos,
+		PullRequests: wantRecent,
+		Watermarks:   wantMarks,
 	})
 	// The run scanned widget through a user's own SSH clone, not the managed
 	// mirror: the replica keys widget by its HTTPS clone URL, and the two
-	// join by host, owner and name.
+	// join by host, owner and name. sprocket's collection failed.
 	u, err := url.Parse(gitURL)
 	if err != nil {
 		t.Fatal(err)
 	}
 	clone := "git@" + u.Hostname() + ":acme/widget.git"
+	sprocketClone := "git@" + u.Hostname() + ":acme/sprocket.git"
 	person := func(name, email string) domain.Person { return domain.Person{Name: name, Email: email} }
 	landed := func(sha string, who domain.Person) domain.Commit { return domain.Commit{SHA: sha, Author: who} }
 	ada, bob, erin := person("Ada Example", "ada@example.com"), person("Bob", "bob@example.com"), person("Erin", "erin@example.com")
 	facts := &domain.FactSet{
 		Now:    fixture.Now,
-		Groups: []domain.Group{{Name: "acme", Path: "/src/acme", Repos: []string{clone}}},
+		Groups: []domain.Group{{Name: "acme", Path: "/src/acme", Repos: []string{sprocketClone, clone}}},
 		Repos: []domain.RepoFacts{{
+			Repo: domain.Repo{Key: sprocketClone, Name: "sprocket", Group: "acme", Path: "/src/acme/sprocket",
+				Remote: sprocketClone, Branch: "main"},
+			Status: domain.RepoStatusError,
+			Error:  "history: collect.History: sprocket: reading landings: git log: exit 128",
+		}, {
 			Repo:   domain.Repo{Key: clone, Name: "widget", Group: "acme", Path: "/src/acme/widget", Remote: clone, Branch: "main"},
 			Status: domain.RepoStatusOK,
 			// The landings the scan saw (mailmapped by git), as of Now: the
@@ -343,7 +441,7 @@ func reviewsGivenOracle(t *testing.T, repos []domain.ForgeRepo, pages []domain.F
 				landed("f090000000000000000000000000000000000000", ada),
 			},
 		}},
-		Forge: &domain.ForgeFacts{Repos: repos, PullRequests: pulls},
+		Forge: replica,
 	}
 	var m metrics.Metric
 	for _, x := range metrics.All() {
@@ -380,8 +478,11 @@ func reviewsGivenOracle(t *testing.T, repos []domain.ForgeRepo, pages []domain.F
 		{"bob@example.com", 4, 5, 4, 3, 3, 1},
 		{"erin@example.com", 1, 1, 0, 1, 0, 0},
 	}
+	// The same values in every scope that holds widget: all, its group, and
+	// its own repository scope, in which a scan ranks a repository named
+	// directly; none in sprocket's.
 	var want []domain.MetricValue
-	for _, scope := range []domain.Scope{{Kind: domain.ScopeAll}, {Kind: domain.ScopeGroup, Key: "acme"}} {
+	for _, scope := range []domain.Scope{{Kind: domain.ScopeAll}, {Kind: domain.ScopeGroup, Key: "acme"}, {Kind: domain.ScopeRepo, Key: clone}} {
 		for _, r := range rows {
 			detail := map[string]float64{
 				"reviews":              float64(r.reviews),
@@ -414,14 +515,10 @@ func reviewsGivenOracle(t *testing.T, repos []domain.ForgeRepo, pages []domain.F
 	}
 	subject := func(key string) domain.Subject { return domain.Subject{Kind: domain.SubjectPerson, Key: key} }
 	// @renovate-approver is a User account that the [bots] fragment
-	// "renovate" makes a bot, which identity.Directory.Bot decides. That is
-	// #9's; until #9 merges (#13), the walking skeleton's stub calls nobody
-	// a bot, so this branch cannot see the exclusion, and sets the cluster
-	// aside. Once Bot works, the oracle below holds as written.
-	if !identity.New(facts, bots).Bot("@renovate-approver") {
-		t.Log("identity.Directory.Bot is the walking skeleton's stub: @renovate-approver's exclusion from ranking is asserted once #9 merges")
-		delete(ri.Data, subject("@renovate-approver"))
-	}
+	// "renovate" makes a bot (identity.Directory.Bot), so it has values and
+	// no cluster. Each block is the week, counted back from Now, of the
+	// person's first counted review (domain.Window.Week): no review is at a
+	// week's boundary, where ⌊(Now − t) / 7 days⌋ would give one block more.
 	cluster := func(pr string, block int) rank.Cluster { return rank.Cluster{Change: pr, Num: 1, Block: block} }
 	equal(t, "reviews_given@1 clusters", ri, metrics.RankInput{
 		Kind:    rank.Sum,

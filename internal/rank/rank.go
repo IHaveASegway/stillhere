@@ -52,11 +52,12 @@ type Cluster struct {
 	Den    float64 // Ratio only
 
 	// Block is Sum only: the window's 7-day block the change landed in,
-	// counted back from the window's end, which is Now for every Sum metric.
-	// Block k holds the landings in [Until − 7(k+1) days, Until − 7k days),
-	// half-open like the window, so a landing at time t is in block
-	// ⌈(Until − t) / 7 days⌉ − 1, and 0 is the last 7 days. It must be in
-	// [0, Options.Blocks).
+	// counted back from the window's end, which is Now for every Sum metric:
+	// w.Week(t) for a change at time t (domain.Window.Week, the one
+	// definition of the rule). Block k holds the landings in
+	// [Until − 7(k+1) days, Until − 7k days), half-open like the window, so a
+	// landing at time t is in block ⌈(Until − t) / 7 days⌉ − 1, and 0 is the
+	// last 7 days. It must be in [0, Options.Blocks).
 	Block int
 }
 
@@ -68,8 +69,8 @@ type Options struct {
 
 	// Blocks is Sum only: the number of 7-day blocks the window holds,
 	// ⌈(Until − Since) / 7 days⌉, the oldest one short when the window is
-	// not a whole number of weeks: 13 for 90 days. Intervals checks it
-	// against the window.
+	// not a whole number of weeks: 13 for 90 days. It is w.Weeks()
+	// (domain.Window.Weeks), and Intervals checks it against the window.
 	Blocks int
 }
 
@@ -77,10 +78,6 @@ const (
 	// defaultReplicates is B when Options.Replicates is 0
 	// (docs/metrics.md#ranking-rules).
 	defaultReplicates = 1000
-
-	// week is the length of a Sum metric's blocks
-	// (docs/metrics.md#ranking-rules).
-	week = 7 * 24 * time.Hour
 
 	// The interval is the central 95% of the replicates. Its ends are given
 	// in thousandths, so the order statistics are computed in integers.
@@ -255,23 +252,22 @@ func blockReplicates(seed uint64, blocks int, clusters [][]Cluster, b int) [][]f
 // checkOptions returns the number of 7-day blocks a Sum replicate draws over
 // w, and 0 for Ratio, which has no blocks. It panics on what only a bug in
 // the ranked metric can cause: an unknown kind or, for Sum, an empty window
-// or an opt.Blocks that is not the window's count, such as a count of the
-// weeks in which something landed (fail fast: Shore, "Fail Fast", IEEE
-// Software, 2004).
+// or an opt.Blocks that is not the window's count (domain.Window.Weeks),
+// such as a count of the weeks in which something landed (fail fast: Shore,
+// "Fail Fast", IEEE Software, 2004).
 func checkOptions(kind Kind, w domain.Window, opt Options) int {
 	switch kind {
 	case Ratio:
 		return 0
 	case Sum:
-		d := w.Until.Sub(w.Since)
-		if d <= 0 {
+		blocks := w.Weeks()
+		if blocks == 0 {
 			panic(fmt.Sprintf("rank: a Sum metric's window [%s, %s) is empty",
 				w.Since.Format(time.RFC3339), w.Until.Format(time.RFC3339)))
 		}
-		blocks := int((d + week - 1) / week)
 		if opt.Blocks != blocks {
 			panic(fmt.Sprintf("rank: a Sum metric's %g-day window holds %d week blocks, but Options.Blocks is %d",
-				d.Hours()/24, blocks, opt.Blocks))
+				w.Until.Sub(w.Since).Hours()/24, blocks, opt.Blocks))
 		}
 		return blocks
 	default:

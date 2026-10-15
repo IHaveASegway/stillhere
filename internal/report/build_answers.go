@@ -23,6 +23,7 @@ type ExplainInput struct {
 	// Clusters holds, by Repo.Key, the subject's clusters in that
 	// repository's scope: the changes a ranked metric counted for them.
 	Clusters map[string][]rank.Cluster
+	Forge    *ForgeRead // the GitHub data the run read; nil when the reader cannot tell
 }
 
 // NewExplain builds the explain answer: the subject's values and, for a
@@ -38,6 +39,7 @@ func NewExplain(in *ExplainInput) *Explain {
 		if v.Scope.Kind == domain.ScopeRepo {
 			involved[v.Scope.Key] = true
 		}
+		forgeScope(in.Facts, involved, v.Metric.String(), v.Scope)
 	}
 	for i := range in.Facts.Repos {
 		rf := &in.Facts.Repos[i]
@@ -64,8 +66,17 @@ func NewExplain(in *ExplainInput) *Explain {
 	}
 	sortChanges(e.Changes)
 	repos := reposWith(in.Facts, involved)
-	e.Provenance = answerProvenance(in.Run, in.Facts, repos, []string{in.Metric.ID})
+	e.Provenance = datedProvenance(in.Run, in.Facts, in.Forge, repos, []string{in.Metric.ID})
 	e.Caveats = answerCaveats(repos)
+	if forgeMetric(in.Metric.ID) {
+		// The pull requests behind the values are in the replica, which a run
+		// does not copy: the stored values stand, unexplained by change.
+		b := answerBuilder(in.Run, in.Facts, in.Forge)
+		e.Caveats = append(e.Caveats, b.forgeCaveats(reposWith(in.Facts, nil))...)
+		if len(in.Values) > 0 {
+			e.Caveats = append(e.Caveats, forgeNotKept(in.Metric.ID))
+		}
+	}
 	if in.Subject.Kind == domain.SubjectPerson {
 		if c, ok := sameName(in.Facts, in.Who, in.Subject.Key); ok {
 			e.Caveats = append(e.Caveats, c)
@@ -101,6 +112,7 @@ type WhoKnowsInput struct {
 	// about the path itself and one per person (MetricWhoKnows in
 	// values.go).
 	Values []domain.MetricValue
+	Forge  *ForgeRead // the GitHub data the run read; nil when the reader cannot tell
 }
 
 // NewWhoKnows builds the who-knows answer: per repository, the majority
@@ -180,7 +192,7 @@ func NewWhoKnows(in *WhoKnowsInput) *WhoKnows {
 		}
 	}
 	slices.SortFunc(w.Repos, func(a, b WhoKnowsRepo) int { return cmp.Or(cmp.Compare(a.Repo, b.Repo), cmp.Compare(a.Key, b.Key)) })
-	w.Provenance = answerProvenance(in.Run, in.Facts, asked, []string{MetricWhoKnows})
+	w.Provenance = datedProvenance(in.Run, in.Facts, in.Forge, asked, []string{MetricWhoKnows})
 	w.Caveats = answerCaveats(asked)
 	if c, ok := whoKnowsMissing(in.Path, asked, ix); ok {
 		w.Caveats = append(w.Caveats, c)
@@ -233,6 +245,7 @@ type MeInput struct {
 	Email  string               // canonical
 	Values []domain.MetricValue // the person's values
 	Ranks  []RankSet            // whole rank tables: the person's place is found in each
+	Forge  *ForgeRead           // the GitHub data the run read; nil when the reader cannot tell
 }
 
 // NewMe builds a person's own page: their values and their place in every
@@ -249,6 +262,7 @@ func NewMe(in *MeInput) *Me {
 		if v.Scope.Kind == domain.ScopeRepo {
 			involved[v.Scope.Key] = true
 		}
+		forgeScope(in.Facts, involved, v.Metric.String(), v.Scope)
 	}
 	for _, rs := range in.Ranks {
 		of := 0
@@ -265,6 +279,7 @@ func NewMe(in *MeInput) *Me {
 			continue
 		}
 		metrics[rs.Metric.ID] = true
+		forgeScope(in.Facts, involved, rs.Metric.ID, rs.Scope)
 		m.Ranks = append(m.Ranks, MeRank{
 			Metric: rs.Metric.ID, Scope: scopeOf(rs.Scope), Window: intervalOf(rs.Window),
 			Percent: rs.Percent, MinN: rs.MinN, Eligible: mine.Eligible,
@@ -280,8 +295,10 @@ func NewMe(in *MeInput) *Me {
 		ids = append(ids, id)
 	}
 	repos := reposWith(in.Facts, involved)
-	m.Provenance = answerProvenance(in.Run, in.Facts, repos, ids)
+	m.Provenance = datedProvenance(in.Run, in.Facts, in.Forge, repos, ids)
 	m.Caveats = answerCaveats(repos)
+	// A person's review numbers can come from any repository of the run.
+	m.Caveats = append(m.Caveats, answerBuilder(in.Run, in.Facts, in.Forge).forgeCaveats(reposWith(in.Facts, nil))...)
 	if c, ok := sameName(in.Facts, in.Who, in.Email); ok {
 		m.Caveats = append(m.Caveats, c)
 	}
@@ -289,7 +306,8 @@ func NewMe(in *MeInput) *Me {
 }
 
 // AnswerProvenance says where an answer that covers repos and reads metrics
-// comes from. run may be nil.
+// comes from. run may be nil. It does not date GitHub data (Forge is nil):
+// the answers that show GitHub numbers build their provenance themselves.
 func AnswerProvenance(run *domain.Run, fs *domain.FactSet, metrics []string) Provenance {
 	var repos []*domain.RepoFacts
 	for i := range fs.Repos {
@@ -298,13 +316,27 @@ func AnswerProvenance(run *domain.Run, fs *domain.FactSet, metrics []string) Pro
 	return answerProvenance(run, fs, repos, metrics)
 }
 
+// answerProvenance is the provenance of an answer that shows no number
+// computed from GitHub data, so its Forge is nil.
 func answerProvenance(run *domain.Run, fs *domain.FactSet, repos []*domain.RepoFacts, metrics []string) Provenance {
-	b := &builder{in: &Input{Run: run, Facts: fs}}
+	return datedProvenance(run, fs, nil, repos, metrics)
+}
+
+// datedProvenance is the provenance of an answer that may show GitHub
+// numbers, which forge, the GitHub data the run read, dates over repos.
+func datedProvenance(run *domain.Run, fs *domain.FactSet, forge *ForgeRead, repos []*domain.RepoFacts, metrics []string) Provenance {
+	b := answerBuilder(run, fs, forge)
 	sorted := slices.Clone(repos)
 	slices.SortFunc(sorted, func(x, y *domain.RepoFacts) int {
 		return cmp.Or(cmp.Compare(x.Repo.Name, y.Repo.Name), cmp.Compare(x.Repo.Key, y.Repo.Key))
 	})
 	return b.provenance(sorted, metrics)
+}
+
+// answerBuilder is the part of a report builder an answer's provenance and
+// caveats read.
+func answerBuilder(run *domain.Run, fs *domain.FactSet, forge *ForgeRead) *builder {
+	return &builder{in: &Input{Run: run, Facts: fs, Forge: forge}}
 }
 
 // AnswerCaveats says what could make an answer drawn from every repository
@@ -324,6 +356,35 @@ func answerCaveats(repos []*domain.RepoFacts) []Caveat {
 		all = append(all, repoCaveats(rf)...)
 	}
 	return append(out, summarize(all)...)
+}
+
+// forgeScope adds to involved the repositories behind a number of metric in
+// scope when the metric reads GitHub data: its value in a group, or in
+// every repository, counts the reviews in each repository of the scope, a
+// review missing from any of them included, so the answer must list and
+// date all of them (forgeProvenance), not only those the person has code
+// in. A git metric's number is left to its repository-scope values, which
+// name the repositories the person's changes are in.
+func forgeScope(fs *domain.FactSet, involved map[string]bool, metric string, scope domain.Scope) {
+	if !forgeMetric(metric) {
+		return
+	}
+	switch scope.Kind {
+	case domain.ScopeRepo:
+		involved[scope.Key] = true
+	case domain.ScopeGroup:
+		for _, g := range fs.Groups {
+			if g.Name == scope.Key {
+				for _, key := range g.Repos {
+					involved[key] = true
+				}
+			}
+		}
+	case domain.ScopeAll:
+		for i := range fs.Repos {
+			involved[fs.Repos[i].Repo.Key] = true
+		}
+	}
 }
 
 // reposWith returns the run's repositories whose keys are in keys, or every
