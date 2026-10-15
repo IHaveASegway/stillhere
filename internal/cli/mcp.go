@@ -9,6 +9,7 @@ import (
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
 	"github.com/IHaveASegway/stillhere/internal/mcp"
+	"github.com/IHaveASegway/stillhere/internal/redact"
 	"github.com/IHaveASegway/stillhere/internal/sqlite"
 )
 
@@ -81,7 +82,9 @@ To use it from Claude Code:
 				}
 				cfg.Git = git
 			}
-			e.log.Info("serving MCP on stdio", "db", path, "run", run, "allow_source", allowSource,
+			// --db is typed by the user and may be anything, a URL with a
+			// token included (#71).
+			e.log.Info("serving MCP on stdio", "db", redact.Scrub(path), "run", run, "allow_source", allowSource,
 				"allow_emails", allowEmails, "me", email != "")
 			return mcp.Serve(cmd.Context(), cfg, os.Stdin, e.stdout)
 		},

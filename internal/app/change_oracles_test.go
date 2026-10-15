@@ -3,6 +3,7 @@ package app_test
 import (
 	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/IHaveASegway/stillhere/internal/app"
@@ -151,6 +152,26 @@ func mainChangeOracles(t *testing.T) {
 				top: []knows{{"cara@example.com", 2}}, landers: []string{"cara@example.com"}},
 		} {
 			checkWhoKnows(t, "SPEC who_knows@1 (main fixture)", s, r.Key, c)
+		}
+	})
+
+	t.Run("who-knows of a path no repository has", func(t *testing.T) {
+		// A filesystem path, such as the fixture's path from its group, names
+		// nothing in a repository: the answer is missing, with a no-values
+		// caveat that says which form of path who-knows takes, never
+		// "nobody" (#71). notes.csv is a path the run knows, which no one
+		// holds lines of or landed lately: that one is a real "nobody".
+		for _, c := range []struct {
+			path    string
+			missing bool
+		}{{"fixture/service.py", true}, {"notes.csv", false}} {
+			w := s.whoKnows(t, c.path)
+			missing := slices.ContainsFunc(w.Caveats, func(cv report.Caveat) bool {
+				return cv.Code == "no-values" && strings.Contains(cv.Message, "relative to a repository's root")
+			})
+			if len(w.Repos) != 0 || missing != c.missing {
+				t.Errorf("who-knows %s: %d repositories, caveats %+v; want none, and the no-path caveat %v", c.path, len(w.Repos), w.Caveats, c.missing)
+			}
 		}
 	})
 

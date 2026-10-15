@@ -153,12 +153,35 @@ func TestDiscover(t *testing.T) {
 		discoverCheck(t, got, &Discovery{
 			Repos: []domain.Repo{
 				{Key: "local:one", Name: "one", Group: "src", Path: filepath.Join(fx.SrcA, "one"), Branch: "main", Head: main},
+				{Key: "local:three", Name: "three", Group: "src-2", Path: filepath.Join(fx.SrcC, "three"), Branch: "main", Head: main},
 				{Key: "local:two", Name: "two", Group: "src-3", Path: filepath.Join(fx.SrcB, "two"), Branch: "main", Head: main},
 			},
 			Groups: []domain.Group{
 				{Name: "src", Path: fx.SrcA, Repos: []string{"local:one"}},
-				{Name: "src-2", Path: fx.SrcC}, // its own basename, which b/src cannot take
+				{Name: "src-2", Path: fx.SrcC, Repos: []string{"local:three"}}, // its own basename, which b/src cannot take
 				{Name: "src-3", Path: fx.SrcB, Repos: []string{"local:two"}},
+			},
+		})
+	})
+
+	t.Run("a directory with no repository among its immediate children fails, and says what to pass", func(t *testing.T) {
+		t.Parallel()
+		// git names the top of a work tree as it resolves it, symbolic
+		// links and all (the temporary directory is one on macOS).
+		top, err := filepath.EvalSymlinks(fx.Outer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		stale := filepath.Join(fx.Mirrors, ".stale")
+		got := discoverRun(t, git, fx.Inside, fx.Mirrors, stale)
+		discoverCheck(t, got, &Discovery{
+			// No group: a directory of nothing would read as a group that
+			// was read and found empty, and it takes no name.
+			Failed: []domain.FileError{
+				{Path: fx.Mirrors, Message: "no repository among its immediate children, and groups are one level deep: " +
+					"pass a subdirectory that holds repositories, such as acme or oss"},
+				{Path: stale, Message: "no repository among its immediate children, so neither a repository nor a group"},
+				{Path: fx.Inside, Message: "inside repository " + top + ": pass " + top},
 			},
 		})
 	})
@@ -282,7 +305,7 @@ func TestDiscover(t *testing.T) {
 		}
 		got, err := Discover(t.Context(), logged, []string{
 			fx.WidgetA, fx.WidgetB, fx.WidgetLink, fx.Other, fx.Mirror, fx.SCP, fx.HTTPS, fx.UnparsedA, fx.UnparsedB, fx.Reset,
-			fx.Bare, fx.Group, fx.Outer, fx.Project, fx.SrcA, fx.SrcB, fx.SrcC, fx.Lab,
+			fx.Bare, fx.Group, fx.Outer, fx.Project, fx.SrcA, fx.SrcB, fx.SrcC, fx.Lab, fx.Inside, fx.Mirrors,
 			fx.Tracking, fx.NoOriginHead, fx.OriginMaster, fx.DanglingHead, fx.MainFirst, fx.MasterOnly, fx.Current, fx.Detached,
 			fx.Empty, fx.Broken, fx.Stray, fx.StrayBare, fx.StrayTree, fx.Headless, fx.Unfinished, fx.File, fx.Missing,
 		})

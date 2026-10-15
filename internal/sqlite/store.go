@@ -90,16 +90,20 @@ type Store struct {
 
 var _ domain.FactStore = (*Store)(nil)
 
-// Open opens the facts database at path. It creates a missing directory
-// with mode 0700 and a missing file with mode 0600 (the -wal and -shm files
-// SQLite adds inherit the file's mode), and leaves the mode of an existing
-// directory or file alone. It then migrates the schema to this binary's
-// version and deletes runs a crash left running (see abandonedAfter).
+// Open opens the facts database at path for a command that writes it: scan
+// and sync. It creates a missing directory with mode 0700 and a missing
+// file with mode 0600 (the -wal and -shm files SQLite adds inherit the
+// file's mode), and leaves the mode of an existing directory or file alone.
+// It then migrates the schema to this binary's version and deletes runs a
+// crash left running (see abandonedAfter).
 //
 // A database written by a newer stillhere, and a file that is not a facts
 // database (another program's SQLite database, or not SQLite at all), is a
 // *domain.UsageError. Open refuses such a file before it writes anything to
-// it, and without waiting for another process's lock.
+// it, and without waiting for another process's lock. So is a directory or a
+// file this process cannot write, with a message that names it: a writer
+// would otherwise find out at its first write, which a scan makes only after
+// collecting every repository (#71).
 func Open(ctx context.Context, path string) (*Store, error) {
 	if path == "" {
 		return nil, &domain.UsageError{Msg: "no facts database path"}
@@ -109,18 +113,76 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		return nil, fmt.Errorf("sqlite.Open %s: %w", path, err)
 	}
 	if err := createFile(abs); err != nil {
+		var usage *domain.UsageError
+		if errors.As(err, &usage) {
+			return nil, err // it names the path, and says what to do
+		}
 		return nil, fmt.Errorf("sqlite.Open %s: %w", abs, err)
 	}
 	s := &Store{path: abs}
-	if err := s.open(ctx); err != nil {
+	if err := s.open(ctx, true); err != nil {
 		return nil, errors.Join(fmt.Errorf("sqlite.Open %s: %w", abs, err), s.Close())
 	}
 	return s, nil
 }
 
-func (s *Store) open(ctx context.Context) error {
+// OpenExisting opens the facts database at path for a command that reads
+// it: report, explain, who-knows, me, identities and validate. Unlike Open
+// it creates nothing, neither a directory nor a file, and leaves runs a
+// crash left running to the next writer: a mistyped --db or STILLHERE_HOME
+// is a *domain.UsageError that names the path and says what to run, where
+// Open would make an empty database there and send the user to scan again
+// (#71). It refuses what Open refuses. A file whose schema is older than
+// this binary's is migrated, the one write a reader makes, so a database
+// that an older stillhere wrote stays readable; a reader that must never
+// write, the MCP server, uses OpenReadOnly.
+//
+// The file must exist when SQLite opens it, which SQLite checks itself
+// (mode=rw): a separate check first would race the open, and a database
+// deleted between the two would come back empty.
+func OpenExisting(ctx context.Context, path string) (*Store, error) {
+	if path == "" {
+		return nil, &domain.UsageError{Msg: "no facts database path"}
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite.OpenExisting %s: %w", path, err)
+	}
+	if fi, err := os.Stat(abs); err == nil && !fi.IsDir() && !fi.Mode().IsRegular() {
+		// A FIFO or a device: reading one could block for good. Whether the
+		// file exists at all is SQLite's to say, below.
+		return nil, &domain.UsageError{Msg: abs + ": not a regular file, so not a facts database"}
+	}
+	s := &Store{path: abs}
+	err = s.open(ctx, false)
+	if err == nil {
+		return s, nil
+	}
+	err = errors.Join(err, s.Close())
+	if resultCode(err) == sqlite3.SQLITE_CANTOPEN {
+		// SQLite says only that it could not open the file; say why, when
+		// it is the user's to fix.
+		switch fi, serr := os.Stat(abs); {
+		case errors.Is(serr, fs.ErrNotExist):
+			return nil, &domain.UsageError{Msg: fmt.Sprintf(
+				"%s: no facts database here: run 'stillhere scan PATH...' first, or pass the --db that scan wrote", abs)}
+		case serr == nil && fi.IsDir():
+			return nil, &domain.UsageError{Msg: abs + ": a directory, not a facts database file"}
+		}
+	}
+	return nil, fmt.Errorf("sqlite.OpenExisting %s: %w", abs, err)
+}
+
+// open connects both pools and migrates the file. writer says whether the
+// Store is Open's, which may create the file and does the housekeeping, or
+// OpenExisting's, whose connections never create it.
+func (s *Store) open(ctx context.Context, writer bool) error {
+	mode := "rw" // SQLite opens an existing file, or fails: never creates one
+	if writer {
+		mode = "" // createFile made it; SQLite's default may create it again if it is deleted meanwhile
+	}
 	var err error
-	if s.writer, err = sql.Open("sqlite", dsn(s.path, false)); err != nil {
+	if s.writer, err = sql.Open("sqlite", dsn(s.path, false, mode)); err != nil {
 		return err
 	}
 	// One connection: writes queue in database/sql instead of spinning on
@@ -131,10 +193,12 @@ func (s *Store) open(ctx context.Context) error {
 	if err := migrate(ctx, s.writer); err != nil {
 		return err
 	}
-	if err := s.deleteAbandonedRuns(ctx, time.Now()); err != nil {
-		return err
+	if writer {
+		if err := s.deleteAbandonedRuns(ctx, time.Now()); err != nil {
+			return err
+		}
 	}
-	if s.ro, err = sql.Open("sqlite", dsn(s.path, true)); err != nil {
+	if s.ro, err = sql.Open("sqlite", dsn(s.path, true, mode)); err != nil {
 		return err
 	}
 	s.ro.SetMaxOpenConns(readConns)
@@ -143,29 +207,63 @@ func (s *Store) open(ctx context.Context) error {
 }
 
 // createFile creates the database's directory (0700) and the empty
-// database file (0600) when they are missing. SQLite would create the file
-// itself, but with mode 0644: it forces that default on every file it
-// creates, whatever the umask, and gives the -wal and -shm files the mode of
-// the database file. Creating the file first is what keeps all three 0600.
+// database file (0600) when they are missing, and checks that this process
+// can write both. SQLite would create the file itself, but with mode 0644:
+// it forces that default on every file it creates, whatever the umask, and
+// gives the -wal and -shm files the mode of the database file. Creating the
+// file first is what keeps all three 0600.
+//
+// Writing is tried, not inferred from mode bits, which miss read-only file
+// systems, access lists and the superuser: the file is opened for writing,
+// and when it already existed a file is created and removed in its
+// directory, where SQLite keeps the -wal and -shm files. A failure is a
+// *domain.UsageError that names the path, before any work that would need
+// the write.
 func createFile(path string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return err
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return unwritable("create", dir, err)
 	}
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
 	if err == nil {
 		return f.Close()
 	}
 	if !errors.Is(err, fs.ErrExist) {
-		return err
+		return unwritable("write", dir, err)
 	}
 	fi, err := os.Stat(path)
 	switch {
 	case err != nil:
 		return err
 	case fi.IsDir():
-		return &domain.UsageError{Msg: "a directory, not a facts database file"}
+		return &domain.UsageError{Msg: path + ": a directory, not a facts database file"}
+	case !fi.Mode().IsRegular():
+		return &domain.UsageError{Msg: path + ": not a regular file, so not a facts database"}
 	}
-	return nil
+	if f, err = os.OpenFile(path, os.O_RDWR, 0); err != nil {
+		return unwritable("write", path, err)
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	probe, err := os.CreateTemp(dir, ".stillhere-write-check-*")
+	if err != nil {
+		return unwritable("write", dir, err)
+	}
+	return errors.Join(probe.Close(), os.Remove(probe.Name()))
+}
+
+// unwritable is the refusal of a facts database, or its directory, that
+// this process cannot create or write (verb).
+func unwritable(verb, path string, err error) error {
+	why := err.Error()
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) {
+		why = pathErr.Err.Error() // the path is in the message already
+	}
+	return &domain.UsageError{Msg: fmt.Sprintf(
+		"cannot %s %s (%s): scan and sync write the facts database there; make it writable, or pass --db or set STILLHERE_HOME to a place that is",
+		verb, path, why)}
 }
 
 // dsn returns the modernc.org/sqlite data source name for path: a file:
@@ -176,13 +274,14 @@ func createFile(path string) error {
 // for a misspelt column name. The writer also syncs at NORMAL (safe in WAL
 // mode; a power cut can lose the last commits of a file that is rebuilt
 // from git anyway) and begins every transaction IMMEDIATE. Readers are
-// query_only.
+// query_only. mode, when set, is SQLite's own: "rw" opens an existing file
+// and never creates one, "ro" opens it read-only (OpenReadOnly).
 //
 // WAL mode is not set here: the driver would set it as it connects, before
 // Open has looked at the file, converting a file that Open then refuses,
 // and SQLite would answer a conflicting switch with SQLITE_BUSY at once.
 // migrate turns it on instead (walMode).
-func dsn(path string, readOnly bool) string {
+func dsn(path string, readOnly bool, mode string) string {
 	q := url.Values{}
 	q.Set("_busy_timeout", strconv.FormatInt(busyTimeout.Milliseconds(), 10))
 	q.Set("_foreign_keys", "1")
@@ -192,6 +291,9 @@ func dsn(path string, readOnly bool) string {
 	} else {
 		q.Set("_synchronous", "NORMAL")
 		q.Set("_txlock", "immediate")
+	}
+	if mode != "" {
+		q.Set("mode", mode)
 	}
 	p := filepath.ToSlash(path)
 	if !strings.HasPrefix(p, "/") {
@@ -368,6 +470,34 @@ func busy(err error) bool { return resultCode(err) == sqlite3.SQLITE_BUSY }
 // notADatabase reports whether err is SQLITE_NOTADB: the file is not a
 // SQLite database.
 func notADatabase(err error) bool { return resultCode(err) == sqlite3.SQLITE_NOTADB }
+
+// Advice says what a SQLite failure that the user can act on means, and
+// what to do, in one sentence that names no path, since the caller names
+// the database: a full disk, a failing disk, a damaged file, a file or a
+// directory that cannot be written or opened, or another process that held
+// the database for longer than a command waits. It is "" for any other
+// error, a SQLite one included, whose text the caller shows as it is. The
+// command line prints it in place of the chain of operations that led
+// there ("storing the run: sqlite.BeginRun: attempt to write a readonly
+// database (8)"), which goes to its debug log.
+func Advice(err error) string {
+	switch resultCode(err) {
+	case sqlite3.SQLITE_FULL:
+		return "the disk it is on is full: free some space, then run the command again"
+	case sqlite3.SQLITE_IOERR:
+		return "the disk failed to read or write it: check the disk, then run the command again"
+	case sqlite3.SQLITE_CORRUPT:
+		return "the file is damaged: move it away and scan again, since facts.db is rebuilt from git " +
+			"(and its GitHub data by 'stillhere sync github')"
+	case sqlite3.SQLITE_READONLY, sqlite3.SQLITE_PERM:
+		return "it cannot be written: make it and its directory writable, or pass --db or set STILLHERE_HOME to a place that is"
+	case sqlite3.SQLITE_CANTOPEN:
+		return "SQLite cannot open it: check that it and its directory exist and can be read and written"
+	case sqlite3.SQLITE_BUSY, sqlite3.SQLITE_LOCKED:
+		return "another process held it for longer than stillhere waits: let that scan or sync finish, then run the command again"
+	}
+	return ""
+}
 
 // resultCode returns the primary result code of an error from SQLite, the
 // extended code's low byte, or SQLITE_OK for nil and any other error.

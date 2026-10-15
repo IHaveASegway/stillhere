@@ -76,8 +76,9 @@ func Execute(ctx context.Context, args []string, stdout, stderr io.Writer, build
 	if cmd == nil {
 		cmd = root
 	}
-	_, _ = fmt.Fprintln(stderr, errorLine(cmd, err))
-	if ctx.Err() != nil {
+	interrupted := ctx.Err() != nil
+	_, _ = fmt.Fprintln(stderr, errorLine(cmd, e.userMessage(err, interrupted)))
+	if interrupted {
 		// Interrupted: whatever failed, it failed because the run was
 		// stopped, which a shell loop must be able to tell apart from "no
 		// repository produced facts" (exit 1).
@@ -106,6 +107,11 @@ type env struct {
 	format      string
 
 	log *slog.Logger // stderr, at --log-level; built by setup
+
+	// database is the facts database the command opened, absolute, or ""
+	// before it opens one: what the error line names when the database
+	// holds no such run, or SQLite fails (userMessage).
+	database string
 }
 
 func (e *env) rootCommand() *cobra.Command {
@@ -124,7 +130,11 @@ person's value, and it must not be the basis for performance or pay decisions.`,
 		Args:              cobra.ArbitraryArgs,
 		RunE:              subcommandRequired,
 		PersistentPreRunE: func(*cobra.Command, []string) error { return e.setup() },
+		// --version (and -v), often the first command typed after an
+		// install, prints the first line of 'stillhere version' (#71).
+		Version: versionLine(e.build),
 	}
+	root.SetVersionTemplate("{{.Version}}\n")
 	root.SetFlagErrorFunc(flagError)
 	root.SetHelpCommand(helpCommand())
 
@@ -132,7 +142,7 @@ person's value, and it must not be the basis for performance or pay decisions.`,
 	f.StringVar(&e.dbPath, "db", "",
 		"facts database `FILE` (default $STILLHERE_HOME/facts.db; STILLHERE_HOME defaults to ~/.stillhere)")
 	f.StringVar(&e.policyPath, "policy", "",
-		"policy `FILE` for week and scan (default ./stillhere.toml when present, else the packaged policy); a stored run keeps its own")
+		"policy `FILE` for week, scan and policy (default ./stillhere.toml when present, else the packaged policy); a stored run keeps its own")
 	f.StringVar(&e.mailmapPath, "mailmap", "",
 		"organisation mailmap `FILE` passed to git (default ./.mailmap when present)")
 	f.StringVar(&e.logLevel, "log-level", "info", "stderr log level: debug, info, warn or error")
@@ -150,6 +160,7 @@ person's value, and it must not be the basis for performance or pay decisions.`,
 		e.validateCommand(),
 		e.syncCommand(),
 		e.mcpCommand(),
+		e.policyCommand(),
 		e.versionCommand(),
 	)
 	return root
@@ -169,7 +180,7 @@ func (e *env) setup() error {
 	}
 	e.log = slog.New(slog.NewTextHandler(e.stderr, &slog.HandlerOptions{
 		Level:       level,
-		ReplaceAttr: withoutTime,
+		ReplaceAttr: logAttr,
 	}))
 	return nil
 }
@@ -180,15 +191,20 @@ func (e *env) setup() error {
 // today's. store opens facts.db, which holds the forge replica too, so it
 // hands the one store over as both ports: sync writes the replica, scan
 // reads it, and the read commands date a run's GitHub numbers with it.
+// write says the command writes facts.db (scan, sync): it is created when
+// missing, and refused when it or its directory cannot be written, before
+// any git work (sqlite.Open). A command that only reads it never creates it
+// or its directory (sqlite.OpenExisting), so a mistyped --db is a usage
+// error that names the path rather than a new, empty database (#71).
 // forge, for sync only, builds the GitHub adapter, and needs store.
-type need struct{ git, policy, store, forge bool }
+type need struct{ git, policy, store, write, forge bool }
 
 // with builds the dependencies a command needs, runs fn with them, and
 // releases them, joining a failure to close the store to fn's error.
 func (e *env) with(ctx context.Context, n need, fn func(app.Deps) error) (err error) {
 	d := app.Deps{Log: e.log, Version: e.build.Version}
 	if !n.policy && e.policyPath != "" {
-		e.log.Warn("--policy is ignored: only week and scan read a policy file, and a stored run carries its own")
+		e.log.Warn("--policy is ignored: only week, scan and policy read a policy file, and a stored run carries its own")
 	}
 	if n.git {
 		git, err := e.gitRunner(ctx)
@@ -209,7 +225,14 @@ func (e *env) with(ctx context.Context, n need, fn func(app.Deps) error) (err er
 		if err != nil {
 			return err
 		}
-		store, err := sqlite.Open(ctx, path)
+		if e.database, err = filepath.Abs(path); err != nil {
+			return usagef("--db %s: %v", path, err)
+		}
+		open := sqlite.OpenExisting
+		if n.write {
+			open = sqlite.Open
+		}
+		store, err := open(ctx, path)
 		if err != nil {
 			return err
 		}
@@ -230,16 +253,25 @@ func (e *env) with(ctx context.Context, n need, fn func(app.Deps) error) (err er
 	return fn(d)
 }
 
+// defaultMailmapFile is read from the directory the command started in when
+// --mailmap is not given.
+const defaultMailmapFile = ".mailmap"
+
 // gitRunner builds the git adapter with the organisation mailmap: --mailmap,
 // else ./.mailmap when it exists in the directory the command started in
 // (docs/spec/git-invocation.md#identity-mailmap-and-bots).
 func (e *env) gitRunner(ctx context.Context) (*gitcli.Runner, error) {
 	flag, mailmap := "--mailmap", e.mailmapPath
 	if mailmap == "" {
-		flag, mailmap = "./.mailmap", ".mailmap"
-		if _, err := os.Lstat(mailmap); errors.Is(err, fs.ErrNotExist) {
+		flag, mailmap = "./"+defaultMailmapFile, defaultMailmapFile
+		there, err := implicitFile(flag, mailmap, "--mailmap")
+		if err != nil {
+			return nil, err
+		}
+		if !there {
 			return gitcli.New(ctx, gitcli.Config{Logger: e.log})
 		}
+		e.log.Info("using the mailmap in the working directory (--mailmap names another)", "file", flag)
 	}
 	// git reads the file in every repository and silently ignores one it
 	// cannot open, so check it here, once.
@@ -249,28 +281,103 @@ func (e *env) gitRunner(ctx context.Context) (*gitcli.Runner, error) {
 	return gitcli.New(ctx, gitcli.Config{MailmapFile: mailmap, Logger: e.log})
 }
 
+// maxPolicyBytes caps the policy file a command reads. The packaged policy
+// written out in full ('stillhere policy') is about 23 KB, and a file
+// without end, such as a link to /dev/zero, must not take the memory
+// (#71).
+const maxPolicyBytes = 1 << 20
+
 // loadPolicy reads exactly one policy: --policy, else ./stillhere.toml when
 // present, else the packaged default. A file replaces the packaged policy as
 // a whole (docs/spec/classification.md#deny-list).
 func (e *env) loadPolicy() (*policy.Policy, error) {
-	name := e.policyPath
-	if name == "" {
-		name = defaultPolicyFile
-	}
-	data, err := os.ReadFile(name)
-	switch {
-	case err == nil:
-		// Parse's errors already name the file.
-		return policy.Parse(name, data)
-	case e.policyPath == "" && errors.Is(err, fs.ErrNotExist):
-		p, err := policy.Default()
+	return e.readPolicy(false)
+}
+
+// readPolicy is loadPolicy for week and scan, and for the policy command
+// when printing is set. Then an empty ./stillhere.toml counts as absent: it
+// is the file that 'stillhere policy > stillhere.toml' asks for, which the
+// shell creates, empty, before stillhere starts, and no policy is empty.
+// week and scan refuse it, since a policy file that says nothing is a
+// mistake the user should see.
+func (e *env) readPolicy(printing bool) (*policy.Policy, error) {
+	if e.policyPath != "" {
+		data, err := readPolicyFile("--policy", e.policyPath)
 		if err != nil {
-			return nil, fmt.Errorf("packaged policy: %w", err)
+			return nil, err
 		}
-		return p, nil
-	default:
-		return nil, usagef("cannot read the policy file: %v", err)
+		// Parse's errors already name the file.
+		return policy.Parse(e.policyPath, data)
 	}
+	shown := "./" + defaultPolicyFile
+	there, err := implicitFile(shown, defaultPolicyFile, "--policy")
+	if err != nil {
+		return nil, err
+	}
+	if there {
+		data, err := readPolicyFile(shown, defaultPolicyFile)
+		switch {
+		case err != nil:
+			return nil, err
+		case len(data) > 0:
+			e.log.Info("using the policy in the working directory (--policy names another)", "file", shown)
+			return policy.Parse(defaultPolicyFile, data)
+		case !printing:
+			return nil, usagef("%s is empty: write a policy into it ('stillhere policy > %s' starts one), or remove it",
+				shown, defaultPolicyFile)
+		}
+		e.log.Info("the policy in the working directory is empty, as a redirection to it leaves it before stillhere starts: "+
+			"printing the packaged policy", "file", shown)
+	}
+	p, err := policy.Default()
+	if err != nil {
+		return nil, fmt.Errorf("packaged policy: %w", err)
+	}
+	return p, nil
+}
+
+// readPolicyFile reads a policy file that flag, or the working directory,
+// named: through readable, so that a FIFO or a device is refused rather
+// than opened, and only up to maxPolicyBytes.
+func readPolicyFile(flag, path string) ([]byte, error) {
+	if err := readable(flag, path); err != nil {
+		return nil, err
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, usagef("%s: %v", flag, err)
+	}
+	defer func() { _ = f.Close() }()
+	data, err := io.ReadAll(io.LimitReader(f, maxPolicyBytes+1))
+	if err != nil {
+		return nil, usagef("%s: %v", flag, err)
+	}
+	if len(data) > maxPolicyBytes {
+		return nil, usagef("%s %s: larger than %d bytes, far more than any policy holds", flag, path, maxPolicyBytes)
+	}
+	return data, nil
+}
+
+// implicitFile reports whether name, a file a command reads from the
+// working directory when no flag names one (./stillhere.toml, ./.mailmap),
+// is there. The working directory is often a clone's root, so the file may
+// be the clone's rather than the user's, and a clone can commit a symbolic
+// link: one to /dev/zero would be read without end, and one to a FIFO
+// would hang the command (#71). So a link there is refused, and the flag
+// that would take it said; a file a flag names may be a link, since the
+// user chose it.
+func implicitFile(shown, name, flag string) (bool, error) {
+	fi, err := os.Lstat(name)
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return false, nil
+	case err != nil:
+		return false, usagef("%s: %v", shown, err)
+	case fi.Mode()&fs.ModeSymlink != 0:
+		return false, usagef("%s is a symbolic link, which stillhere does not follow in the working directory, where a clone "+
+			"can put one: pass the file with %s to use it", shown, flag)
+	}
+	return true, nil
 }
 
 // databasePath resolves --db, else $STILLHERE_HOME/facts.db.
@@ -468,11 +575,36 @@ func parseLevel(s string) (slog.Level, error) {
 	return 0, usagef("invalid --log-level %q: want debug, info, warn or error", s)
 }
 
-// withoutTime drops the timestamp from log lines: stderr is read live, and
-// output without it is reproducible.
-func withoutTime(groups []string, a slog.Attr) slog.Attr {
+// logAttr is the log handler's ReplaceAttr. It drops the timestamp, since
+// stderr is read live and output without it is reproducible, and scrubs
+// every other value of credentials (redact.Scrub). A log line can carry a
+// path or a URL the user typed (--db, --mirrors, a PATH, a mirror under
+// them), and a token in one must not reach stderr (#71). The call
+// sites scrub what they know to be such a value; this is the one place
+// every line passes, so a line that forgets cannot leak (defence in depth:
+// a single egress filter, as a log pipeline's redaction stage is).
+// redact.Scrub changes nothing but a credential, so a clean line is printed
+// byte for byte.
+func logAttr(groups []string, a slog.Attr) slog.Attr {
 	if len(groups) == 0 && a.Key == slog.TimeKey {
 		return slog.Attr{}
+	}
+	switch v := a.Value; v.Kind() {
+	case slog.KindString:
+		a.Value = slog.StringValue(redact.Scrub(v.String()))
+	case slog.KindAny:
+		switch x := v.Any().(type) {
+		case error:
+			a.Value = slog.StringValue(redact.Scrub(x.Error()))
+		case []string:
+			scrubbed := make([]string, len(x))
+			for i, s := range x {
+				scrubbed[i] = redact.Scrub(s)
+			}
+			a.Value = slog.AnyValue(scrubbed)
+		case fmt.Stringer:
+			a.Value = slog.StringValue(redact.Scrub(x.String()))
+		}
 	}
 	return a
 }
@@ -541,13 +673,63 @@ func subcommandRequired(cmd *cobra.Command, args []string) error {
 	return usagef("%s (see '%s --help')", msg, cmd.CommandPath())
 }
 
+// userMessage returns what the error line says about err: its whole chain, as
+// the operations that failed wrapped it, except for three kinds of failure
+// whose chain is internal detail, which goes to the debug log instead
+// (#71), as kubectl maps an API error to its standard message:
+//
+//   - a command a signal stopped: "interrupted", whatever failed on the way;
+//   - a facts database that holds no such run or person (domain.ErrNotFound):
+//     the database's path, then the use case's own sentence, which says what
+//     to do, without the store operations below it;
+//   - a SQLite failure the user can act on, such as a full disk or a
+//     damaged file: the database's path, then sqlite.Advice.
+//
+// The exit code is chosen apart from the words (exitCode).
+func (e *env) userMessage(err error, interrupted bool) string {
+	short := ""
+	switch {
+	case interrupted:
+		short = "interrupted"
+	case e.database == "":
+	case errors.Is(err, domain.ErrNotFound):
+		short = e.database + ": " + outermost(err)
+	default:
+		if advice := sqlite.Advice(err); advice != "" {
+			short = e.database + ": " + advice
+		}
+	}
+	if short == "" {
+		return err.Error()
+	}
+	e.log.Debug("the error in full", "error", err)
+	return short
+}
+
+// outermost returns err's own words without those of the error it wraps:
+// the context the outermost layer added, which a use case writes for the
+// user, as Rust's anyhow prints an error's outermost context and leaves
+// the chain to its alternate form. An error that wraps nothing, or not at
+// the end of its message, is returned whole.
+func outermost(err error) string {
+	msg := err.Error()
+	inner := errors.Unwrap(err)
+	if inner == nil {
+		return msg
+	}
+	if head, ok := strings.CutSuffix(msg, ": "+inner.Error()); ok && head != "" {
+		return head
+	}
+	return msg
+}
+
 // errorLine is the one line printed for a failed command. Each line of the
 // message, such as each error errors.Join collected, becomes one clause,
 // and the clauses are joined with "; ". An error can quote an argument, and
 // an argument can be a URL with a token in it, so every clause is scrubbed.
-func errorLine(cmd *cobra.Command, err error) string {
+func errorLine(cmd *cobra.Command, msg string) string {
 	var clauses []string
-	for _, line := range strings.Split(err.Error(), "\n") {
+	for _, line := range strings.Split(msg, "\n") {
 		if line = terminalSafe(redact.Scrub(line)); line != "" {
 			clauses = append(clauses, line)
 		}

@@ -5,8 +5,12 @@
 # else this file. A policy file replaces this one as a whole. Every table and
 # every key below is required in it too, and nothing is filled in from here,
 # so the policy hash a run records describes the whole policy. To start a
-# file of your own, copy this one and replace [paths] package_file with
-# deny = [...], copying the patterns you want from generated_paths.txt:
+# file of your own, run
+#
+#   stillhere policy > stillhere.toml
+#
+# which prints the policy a scan would use, this one unless a policy file is
+# there, with [paths] deny written out in full from generated_paths.txt:
 # package_file names a file inside stillhere, which only this policy may use.
 
 # The policy schema version this file is written for.
@@ -121,7 +125,9 @@ pattern = '(^|/)(seeders|factories|seeds|fixtures)(/|$)'
 when = ["prod", "sql"]
 
 [paths]
-# The deny list is the embedded generated_paths.txt, translated to RE2 from
-# GitHub Linguist (MIT). Only this packaged policy may name a package file; a
-# policy file sets deny = [...] instead, and the policy hash covers it.
+# The deny list: RE2 patterns over the repo-relative path, translated from
+# GitHub Linguist (MIT) in generated_paths.txt. Only the packaged policy may
+# name that file (package_file); a policy file lists its patterns in
+# deny = [...], which 'stillhere policy' writes out in full, so the policy
+# hash covers every one of them.
 package_file = "generated_paths.txt"

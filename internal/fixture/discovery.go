@@ -49,8 +49,12 @@ type DiscoveryRepos struct {
 	Project string // project/.git holds "gitdir: ./.bare", which names the bare clone project/.bare (HEAD trunk; origin https://github.com/example/project.git); its worktree project/main sits beside it
 	SrcA    string // group a/src holding work tree one (no origin)
 	SrcB    string // group b/src holding work tree two (no origin): a second group named src
-	SrcC    string // group c/src-2, empty: a suffix must not take its name
+	SrcC    string // group c/src-2 holding work tree three (no origin): a suffix must not take its name
 	Lab     string // group lab, whose only member is Empty
+
+	// Directories with no repository among their immediate children (rule 3).
+	Inside  string // outer/docs/api, an empty directory inside the work tree Outer, as "stillhere week ." is run in one
+	Mirrors string // mirrors, laid out as sync github writes them: acme/widget.git, oss/tool.git and zeta/lib.git (bare, no origin) one level down, and an empty .stale
 
 	// Default branch.
 	Tracking     string // origin/HEAD is origin/trunk; local main exists; local trunk has one commit origin/trunk lacks
@@ -115,6 +119,8 @@ func BuildDiscovery(ctx context.Context, dir string) (*DiscoveryRepos, error) {
 		SrcB:         in("b", "src"),
 		SrcC:         in("c", "src-2"),
 		Lab:          in("lab"),
+		Inside:       in("outer", "docs", "api"),
+		Mirrors:      in("mirrors"),
 		Tracking:     in("tracking"),
 		NoOriginHead: in("no-origin-head"),
 		OriginMaster: in("origin-master"),
@@ -179,7 +185,14 @@ func BuildDiscovery(ctx context.Context, dir string) (*DiscoveryRepos, error) {
 	b.git("-C", r.Project, "worktree", "add", "--quiet", filepath.Join(r.Project, "main"), "main")
 	b.discoveryClone(up, filepath.Join(r.SrcA, "one"), "")
 	b.discoveryClone(up, filepath.Join(r.SrcB, "two"), "")
-	b.discoveryMkdir(r.SrcC)
+	b.discoveryClone(up, filepath.Join(r.SrcC, "three"), "")
+
+	// No repository among their immediate children.
+	b.discoveryMkdir(r.Inside)
+	for _, m := range []string{"acme/widget.git", "oss/tool.git", "zeta/lib.git"} {
+		b.discoveryClone(up, filepath.Join(r.Mirrors, filepath.FromSlash(m)), "", "--bare")
+	}
+	b.discoveryMkdir(filepath.Join(r.Mirrors, ".stale"))
 
 	// Default branch. Each repository leaves the rule it tests as the first
 	// that applies, and makes every later rule give a different answer.

@@ -80,12 +80,14 @@ stillhere creates no second owner of any fact. Identity in particular stays with
 
 | Side | Command | Network | Writes |
 |---|---|---|---|
-| Write | `sync github` | GitHub API, git fetch | mirrors, forge facts |
-| Write | `scan` (later `backfill ownership`) | None | a run: history, authorship facts, metric values |
+| Write | `sync github` | GitHub API, git fetch | mirrors, forge facts; an unwritable facts.db is refused before any network call |
+| Write | `scan` (later `backfill ownership`) | None | a run: history, authorship facts, metric values; an unwritable facts.db is refused before any git work |
 | Analysis | `week` | None | Nothing: it prints what landed |
-| Read | `report`, `me`, `explain`, `who-knows`, `validate`, `metrics` | None | Nothing |
+| Analysis | `policy` | None | Nothing: it prints the policy `week` and `scan` would use, as a complete file to edit |
+| Read | `report`, `me`, `explain`, `who-knows`, `identities`, `validate` | None | Nothing, except migrating a facts.db an older stillhere wrote; they never create one, so a mistyped `--db` is a usage error that names the path |
+| Read | `metrics` | None | Nothing |
 | Read | `serve` | GitHub at sign-in | Sessions, audit log |
-| Read | `mcp` | None (stdio) | Nothing |
+| Read | `mcp` | None (stdio) | Nothing: it opens facts.db read-only |
 | Read | `narrate` | Anthropic API | narrations |
 
 ## Ports and adapters

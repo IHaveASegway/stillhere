@@ -8,6 +8,7 @@ import (
 	"slices"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
+	"github.com/IHaveASegway/stillhere/internal/redact"
 )
 
 // reposQuery lists the repositories an organization or a user owns, a
@@ -54,14 +55,22 @@ type repoJSON struct {
 // "." and "..", is refused rather than joined into a path.
 var safeName = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
-func validName(s string) bool { return safeName.MatchString(s) && s != "." && s != ".." }
+// ValidName reports whether s can be a GitHub owner (an organization or a
+// user login) or repository name, as the adapter takes them: ASCII letters,
+// digits, ".", "_" and "-", and neither "." nor "..". It is the one rule:
+// Repos, Mirror and ReconcileMirrors apply it, and the command line checks
+// --org with it before a sync begins its run, so a URL pasted as an
+// organization, token and all, is refused before anything records it.
+func ValidName(s string) bool { return safeName.MatchString(s) && s != "." && s != ".." }
 
 // Repos lists the repositories owner owns, sorted by Key. Archived
 // repositories and forks are listed with their flags; the use case decides
 // which to sync. A login GitHub does not know is a *domain.UsageError.
 func (s *Source) Repos(ctx context.Context, owner string) ([]domain.ForgeRepo, error) {
-	if !validName(owner) {
-		return nil, &domain.UsageError{Msg: fmt.Sprintf("invalid GitHub organization %q", owner)}
+	if !ValidName(owner) {
+		// The message may be printed or logged: a URL pasted as an
+		// organization is quoted without its credentials.
+		return nil, &domain.UsageError{Msg: fmt.Sprintf("invalid GitHub organization %q", redact.Scrub(owner))}
 	}
 	var repos []domain.ForgeRepo
 	after := ""
@@ -77,7 +86,7 @@ func (s *Source) Repos(ctx context.Context, owner string) ([]domain.ForgeRepo, e
 		}
 		conn := data.Owner.Repositories
 		for _, n := range conn.Nodes {
-			if !validName(n.Owner.Login) || !validName(n.Name) {
+			if !ValidName(n.Owner.Login) || !ValidName(n.Name) {
 				s.log.Warn("GitHub listed a repository whose name cannot be a directory; skipped",
 					"owner", n.Owner.Login, "name", n.Name)
 				continue

@@ -160,12 +160,14 @@ func readForgeMarks(ctx context.Context, d Deps, run domain.Run) (*report.ForgeR
 }
 
 // resolveRun finds the run a request names: its id, or the latest complete
-// or partial scan for 0.
+// or partial scan for 0. Its not-found errors say what to do in their own
+// words, which the command line prints alone, after the database's path
+// (the chain of store operations below them goes to its debug log).
 func resolveRun(ctx context.Context, s domain.FactStore, id int64) (domain.Run, error) {
 	if id == 0 {
 		run, err := s.LatestRun(ctx, domain.RunKindScan)
 		if errors.Is(err, domain.ErrNotFound) {
-			return run, fmt.Errorf("no complete scan in facts.db yet: run 'stillhere scan PATH...' first: %w", err)
+			return run, fmt.Errorf("no complete scan in this facts database yet: run 'stillhere scan PATH...' first: %w", err)
 		}
 		if err != nil {
 			return run, fmt.Errorf("finding the latest scan: %w", err)
@@ -174,7 +176,8 @@ func resolveRun(ctx context.Context, s domain.FactStore, id int64) (domain.Run, 
 	}
 	run, err := s.Run(ctx, id)
 	if errors.Is(err, domain.ErrNotFound) {
-		return run, fmt.Errorf("run %d: no complete or partial run has that id: %w", id, err)
+		return run, fmt.Errorf("run %d: no complete or partial run has that id (retention keeps the newest 8 scans "+
+			"and one a month); leave the run out to read the latest scan: %w", id, err)
 	}
 	if err != nil {
 		return run, fmt.Errorf("reading run %d: %w", id, err)
@@ -370,10 +373,55 @@ func WhoKnows(ctx context.Context, d Deps, r WhoKnowsRequest) (*report.WhoKnows,
 		forge = nil
 	}
 	run := s.run
-	return report.NewWhoKnows(&report.WhoKnowsInput{
-		Run: &run, Facts: underPrefix(s.facts, prefix, repo), Who: s.who, Path: prefix, Repo: repo, Values: values,
+	under := underPrefix(s.facts, prefix, repo)
+	w := report.NewWhoKnows(&report.WhoKnowsInput{
+		Run: &run, Facts: under, Who: s.who, Path: prefix, Repo: repo, Values: values,
 		Forge: forge,
-	}), nil
+	})
+	if c, ok := whoKnowsNoPath(under, prefix, run.ID); ok {
+		w.Caveats = append(w.Caveats, c)
+	}
+	return w, nil
+}
+
+// caveatNoValues is report's code for a section whose emptiness is not a
+// real zero or a real "nobody" (docs/spec/report-json.md#caveats): the
+// renderers then say "no answer" rather than "nobody".
+const caveatNoValues = "no-values"
+
+// whoKnowsNoPath is the caveat of a who-knows answer whose path no
+// repository asked about has: not a path classified at its HEAD or touched
+// by its history, and no line blamed under it. The answer is then empty
+// because the path names nothing in the run, usually because it was given
+// as a filesystem path (absolute, relative to the working directory, or to
+// a group) where who-knows takes one relative to a repository's root, and
+// "nobody" would read as code no one knows (#71). It keeps exit 0: the
+// question had an answer, and this is it. under is the run's facts cut to
+// the repositories asked about and the prefix (underPrefix); a run none of
+// whose repositories asked about produced facts says so with its failed
+// caveats instead.
+func whoKnowsNoPath(under *domain.FactSet, prefix string, runID int64) (report.Caveat, bool) {
+	collected := false
+	for _, rf := range under.Repos {
+		if rf.Status != domain.RepoStatusOK {
+			continue
+		}
+		collected = true
+		if len(rf.Paths) > 0 || len(rf.Owners) > 0 || len(rf.Changes) > 0 {
+			return report.Caveat{}, false
+		}
+	}
+	if !collected {
+		return report.Caveat{}, false
+	}
+	path := redact.Scrub(prefix)
+	lead := fmt.Sprintf("No repository of run %d has a path under %q", runID, path)
+	if len(under.Repos) == 1 {
+		lead = fmt.Sprintf("Repository %s of run %d has no path under %q", under.Repos[0].Repo.Name, runID, path)
+	}
+	return report.Caveat{Code: caveatNoValues, Message: lead + ", so this answer is missing, not a real \"nobody\": " +
+		"who-knows takes a path relative to a repository's root, such as src or src/pay.go, and an absolute " +
+		"path, or one relative to the working directory or to a group, names nothing."}, true
 }
 
 func hasRepo(fs *domain.FactSet, key string) bool {
