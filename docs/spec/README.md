@@ -17,4 +17,5 @@ Behaviour marked "verified" was checked on Git 2.50.1 (Apple Git-155) on 2026-10
 | [cache.md](cache.md) | Blob-level blame reuse and its invalidation | Deferred, open decision #3 |
 | [hotspots-code-maat.md](hotspots-code-maat.md) | Hotspot facts: code-maat jar design vs in-process Go | M5, open decision #1 |
 | [report-json.md](report-json.md) | Draft JSON shape, warning and error semantics, rollups, timings, exit codes | M0 (draft), superseded in M1 |
+| [mcp.md](mcp.md) | The MCP server's tools: arguments, answers, names, privacy, paging and the token budget | M4 |
 | [../../testdata/fixture/SPEC.md](../../testdata/fixture/SPEC.md) | The fixture repository and every oracle number | M0 onward |

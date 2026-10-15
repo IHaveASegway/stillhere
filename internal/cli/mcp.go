@@ -1,28 +1,95 @@
 package cli
 
 import (
-	"fmt"
+	"context"
+	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
+	"github.com/IHaveASegway/stillhere/internal/mcp"
+	"github.com/IHaveASegway/stillhere/internal/sqlite"
 )
 
 func (e *env) mcpCommand() *cobra.Command {
-	var allowSource, allowEmails bool
+	var (
+		run         int64
+		allowSource bool
+		allowEmails bool
+		me          string
+	)
 	cmd := &cobra.Command{
 		Use:   "mcp",
 		Short: "Serve facts.db to an AI agent over MCP (stdio)",
 		Long: `mcp runs a local Model Context Protocol server on stdin and stdout that
-answers an agent's questions from facts.db. It only reads. Diffs are exposed
-only with --allow-source, and emails only with --allow-emails, because every
-answer goes on to the agent's model provider.`,
+answers an agent's questions about a platform (a group of repositories) or one
+repository from facts.db: overview, person, who_knows, changes, explain,
+highlights, identity_candidates, metrics and diff. It reads the latest complete
+or partial scan at each call, or the run --run names, and opens facts.db so
+that it cannot write to it. Only protocol messages go to stdout; the log goes
+to stderr.
+
+Every answer goes on to the agent's model provider, so the server withholds
+by default what the provider does not need: emails become stable ids unless
+--allow-emails, commit subjects and diffs stay local unless --allow-source,
+and a person's AI-assisted share is shown only to that person, the one --me
+names (ADR 0007).
+
+To use it from Claude Code:
+
+  claude mcp add --scope user stillhere -- stillhere mcp --me you@example.com`,
 		Args: usageArgs(cobra.NoArgs),
-		RunE: func(*cobra.Command, []string) error {
-			return fmt.Errorf("mcp command: %w (#15)", domain.ErrNotImplemented)
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			if err := checkRun(run); err != nil {
+				return err
+			}
+			if e.policyPath != "" {
+				e.log.Warn("--policy is ignored: mcp reads stored runs, and a stored run carries its own policy")
+			}
+			email := canonicalEmail(me)
+			if me != "" && !strings.Contains(email, "@") {
+				return usagef("invalid --me %q: want your canonical email, as the reports key you (after .mailmap)", me)
+			}
+			path, err := e.databasePath()
+			if err != nil {
+				return err
+			}
+			cfg := mcp.Config{
+				// Opened on the first call that needs it, and read-only:
+				// the server never creates, migrates or cleans up facts.db.
+				Open: func(ctx context.Context) (domain.FactStore, error) {
+					st, err := sqlite.OpenReadOnly(ctx, path)
+					if err != nil {
+						return nil, err
+					}
+					return st, nil
+				},
+				RunID:       run,
+				AllowSource: allowSource,
+				AllowEmails: allowEmails,
+				Me:          email,
+				Version:     e.build.Version,
+				Log:         e.log,
+			}
+			if allowSource {
+				// Only the diff tool runs git, and only with the analysis
+				// profile: nothing is fetched or written.
+				git, err := e.gitRunner(cmd.Context())
+				if err != nil {
+					return err
+				}
+				cfg.Git = git
+			}
+			e.log.Info("serving MCP on stdio", "db", path, "run", run, "allow_source", allowSource,
+				"allow_emails", allowEmails, "me", email != "")
+			return mcp.Serve(cmd.Context(), cfg, os.Stdin, e.stdout)
 		},
 	}
-	cmd.Flags().BoolVar(&allowSource, "allow-source", false, "let the agent read diffs and source")
-	cmd.Flags().BoolVar(&allowEmails, "allow-emails", false, "include people's emails in answers (default: display names only)")
+	f := cmd.Flags()
+	f.Int64Var(&run, "run", 0, "serve run `ID` only (default the latest complete or partial scan, read at each call)")
+	f.BoolVar(&allowSource, "allow-source", false, "let the agent read commit subjects and diffs (source leaves the machine)")
+	f.BoolVar(&allowEmails, "allow-emails", false, "include people's emails in answers (default: stable ids in their place)")
+	f.StringVar(&me, "me", "", "your canonical `EMAIL`: your own answers include your own AI-assisted share")
 	return cmd
 }

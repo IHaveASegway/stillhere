@@ -51,7 +51,7 @@ Every module is code someone must keep current, so each one says why it beat the
 | `modernc.org/sqlite` | `sqlite` | SQLite without cgo, so the binary stays static and cross-compiles ([architecture.md](../architecture.md)). | `github.com/mattn/go-sqlite3`, which needs cgo |
 | `golang.org/x/sync` | `collect`, `app` | `errgroup` with `SetLimit` bounds the number of git processes, and `semaphore` holds the blame slots every repo shares (`collect.BlameSlots`) ([Concurrency](#concurrency)). | a hand-written semaphore |
 | `github.com/cli/go-gh/v2` (M2, #14; v2.16.2) | `github` | gh's own auth and API client, so a user's `gh auth login` works unchanged: the token comes from `GH_TOKEN`, `GITHUB_TOKEN` or gh's stored token, as gh finds it. `sync github` reaches github.com only; an Enterprise host needs a `--host` flag and per-host mirrors (#44), which `github.Config.Host` already supports. It adds 13 modules to `go.mod`. `pkg/auth` alone would add 4; the other 9 (shurcooL-graphql, httpretty, termenv and three of its own, go-timezone-local, `x/term`, `x/text`) come with `pkg/api`, mostly for `GH_DEBUG` logging and terminal handling that stillhere turns off. Revisit if that count matters more than gh's token lookup: replacing `pkg/api` with `net/http` touches `internal/github` only. | `github.com/google/go-github` with our own token handling |
-| `github.com/modelcontextprotocol/go-sdk` (M4, #15) | `mcp` | The official MCP SDK ([ADR 0006](../adr/0006-ai-mcp-and-narrated-highlights.md)). | `github.com/mark3labs/mcp-go` |
+| `github.com/modelcontextprotocol/go-sdk` (M4, #15; v1.8.0) | `mcp` | The official MCP SDK ([ADR 0006](../adr/0006-ai-mcp-and-narrated-highlights.md)), published by the specification's own organisation, so it follows the specification's revisions first (v1.7 and later speak 2026-07-28 down to 2024-11-05); its in-memory transport is what `TestMCPTools` drives the real server through. It adds 7 modules to `go.mod`: itself, and 6 that the packages stillhere links need (`google/jsonschema-go` for tool schemas, `segmentio/encoding` and `segmentio/asm` for its JSON, `yosida95/uritemplate`, and `x/oauth2` and `x/time` for its HTTP transports' auth and rate limits). It adds 2.1 MB, 15%, to the stripped binary (13.8 to 15.9 MB on darwin/arm64, 2026-10-14), most of it in those HTTP transports, which stdio does not use; the `mcp` package of the SDK holds them all. Revisit if the size matters more than following the specification: a stdio-only server is a small JSON-RPC loop. | `github.com/mark3labs/mcp-go`: older and widely used, not the specification's own |
 
 ## Domain types (`internal/domain`)
 
@@ -641,6 +641,10 @@ func Open(ctx context.Context, path string) (*Store, error) // creates a missing
 // write goes through Store.write and every read through Store.read (store.go), forge.go's included: write waits for
 // another process's lock and renews the leases of the store's runs; a statement on the writer connection itself fails
 // with SQLITE_BUSY after a second.
+// readonly.go (#15): the MCP server's store. Both pools connect with SQLite's mode=ro, so every write fails inside
+// SQLite (SQLITE_READONLY); nothing is created, migrated or cleaned up. A missing file, a directory, another program's
+// file, and a facts database older or newer than this binary are each a *domain.UsageError saying what to run.
+func OpenReadOnly(ctx context.Context, path string) (*Store, error)
 
 // github (#14): domain.ForgeSource over GitHub's GraphQL API and git over HTTPS
 type Config struct {
@@ -715,6 +719,47 @@ func Sync(ctx context.Context, d Deps, r SyncRequest) error // #14
 // The MCP server's own use cases (overview, person, changes, highlights; ADR 0006) go in app/mcp.go, which #15
 // owns. They answer from #11's report model (the overviews and repo cards), so #15 builds on #11's report types.
 
+// app/mcp.go (#15): the MCP server's own read use cases (ADR 0006), answered from #11's report model and the ranked
+// metrics' clusters, as explain reads them; their answers' JSON shape is docs/spec/mcp.md. Unexported names carry mcp….
+type NamesRequest struct { RunID int64 }
+type Names struct { Run domain.Run; Groups []NamedGroup; Repos []NamedRepo; People []NamedPerson; AIPeople int } // what names resolve against
+type NamedGroup struct { Name string; Repos []string; AIPeople int }
+type NamedRepo struct { Key, Name, Group, Path string; AIPeople int }
+// AIPeople: the humans behind a scope's AI-assisted share, credited with a non-merge commit of a landing in its
+// ai_assisted@1 value's window (0 without one): the MCP server sends the share only when they are three or more.
+type NamedPerson struct { Key, Name string; Bot bool; Repos []string; Lines int } // Key: canonical email, or "@login"
+type OverviewRequest struct { RunID int64; Scope domain.Scope; Rank []domain.MetricID } // zero Scope: the whole run
+type OverviewAnswer struct { Provenance report.Provenance; Run report.Run; Scope domain.Scope; Overviews []report.Overview;
+	Repos []report.Repo; Ranks []report.RankTable; Warnings []report.Warning; Caveats []report.Caveat }
+type PersonRequest struct { RunID int64; Email string }
+type ChangesRequest struct { RunID int64; Scope domain.Scope; Since time.Time; Person, Me string; Titles bool }
+type HighlightsRequest struct { RunID int64; Scope domain.Scope; Since time.Time; Titles bool }
+type DiffRequest struct { RunID int64; Repo, Change, Path string; MaxBytes int } // Change: a landing SHA or 7+ hex digits
+// ChangesAnswer, HighlightsAnswer and DiffAnswer, and their Change, ChangePerson, Contribution, TopTier,
+// HighlightChange and DiffFile, carry their JSON names: what no report shows, in the shape docs/spec/mcp.md gives.
+// TopTier: Of eligible people, PeopleTotal whose 95% rank interval reaches first place, People them by name unless
+// they are more than a third of Of (no one stands out: a no-standout caveat).
+func RunNames(ctx context.Context, d Deps, r NamesRequest) (*Names, error)
+func Overview(ctx context.Context, d Deps, r OverviewRequest) (*OverviewAnswer, error) // report.Build's sections for one scope
+func Person(ctx context.Context, d Deps, r PersonRequest) (*report.Me, error) // Me without the AI-assisted share (ADR 0007)
+func Changes(ctx context.Context, d Deps, r ChangesRequest) (*ChangesAnswer, error) // landings with durable@1 and simplifying@1 clusters
+func Highlights(ctx context.Context, d Deps, r HighlightsRequest) (*HighlightsAnswer, error) // top tiers, lasted, removed
+func Diff(ctx context.Context, d Deps, r DiffRequest) (*DiffAnswer, error) // git diff-tree on the analysis profile; needs Deps.Git
+
+// mcp (#15): the MCP server, an inbound adapter over app; docs/spec/mcp.md is its tool contract
+type Config struct {
+	Open        func(ctx context.Context) (domain.FactStore, error) // sqlite.OpenReadOnly; called on the first call that reads, again after a failure
+	Git         domain.GitRunner // diff only; nil unless AllowSource
+	RunID       int64            // 0: the latest complete or partial scan at each call
+	AllowSource bool             // commit subjects and diffs reach the agent
+	AllowEmails bool             // emails reach the agent; else each is the id "p-" + 10 hex digits of its SHA-256
+	Me          string           // the user's canonical email: only their own answers show their AI-assisted share
+	Version     string
+	Log         *slog.Logger     // stderr
+}
+func Serve(ctx context.Context, cfg Config, in io.ReadCloser, out io.Writer) error // stdio until in closes or ctx ends; only protocol on out;
+                                                                                   // a line on in that is no JSON-RPC message gets JSON-RPC's error and is skipped
+
 // cli
 type Build struct{ Version, Commit, Date string } // from -ldflags -X main.version, main.commit, main.date
 func Execute(ctx context.Context, args []string, stdout, stderr io.Writer, build Build) int // the exit code
@@ -780,7 +825,7 @@ Global flags: `--db` (default `$STILLHERE_HOME/facts.db`, where `STILLHERE_HOME`
 | `identities [--run ID] [--format mailmap\|text\|md\|json]` | facts.db | nothing | M2 (#26) |
 | `validate --labels FILE [--run ID]` | facts.db, a labels CSV | nothing | M2 |
 | `sync github --org ORG [--mirrors DIR]` | GitHub | mirrors, forge facts | M2 |
-| `mcp [--allow-source] [--allow-emails]` | facts.db | nothing | M4 |
+| `mcp [--run ID] [--me EMAIL] [--allow-source] [--allow-emails]` | facts.db, read-only; git for `diff` with `--allow-source` | nothing | M4 |
 | `version` | | | M0 |
 
 Exit codes are in [report-json.md](report-json.md#exit-codes): 0 when any repo produced facts, 1 when none did, 2 for a usage error, death by the signal (128 + n) when interrupted.
@@ -824,7 +869,7 @@ Exit codes are in [report-json.md](report-json.md#exit-codes): 0 when any repo p
 Issues are built in parallel branches, so a shared package or file needs a rule that keeps two branches from colliding, or from compiling apart and failing only at merge.
 
 - **`collect` is shared by #4, #5, #6 and #7.** Each collector's unexported identifiers carry its prefix (`discover…`, `classify…`, `history…`, `blame…`). The readers every collector needs are in `scan.go` (`newScanner`, which allows long lines, `scanNUL` for `-z` output, and `nonBlank`, the one non-blank predicate that the history and blame collectors both count with), and the test helper in `collect_test.go` (`newRunner`, a real `gitcli.Runner`). The co-author reader `coAuthors` is in `coauthors.go`: #6 implements it, and #7 calls it for the commits blame attributes lines to, which can be older than any history window. The package has at most one `TestMain`, and it goes in `collect_test.go`.
-- **Files that belong to one issue.** #14: `domain/forge.go`, `internal/github`, `sqlite/forge.go`, `sqlite/migrations/0002_forge.sql`, `cli/forge.go`, `cli/sync.go`, `app/sync.go`, `metrics/reviews.go` (registered with one line in `metrics.All`). #15: `app/mcp.go`, `cli/mcp.go`, `internal/mcp`. #26: `identity/candidates.go`, `app/identities.go`, `report/identities.go`, `cli/identities.go`. #5: everything in `policy` but `types.go`, which is this file's contract. Where such a file shares a package with another issue's, its unexported identifiers carry a prefix, as in `collect`: `forge…` in `sqlite`, `reviews…` in `metrics`.
+- **Files that belong to one issue.** #14: `domain/forge.go`, `internal/github`, `sqlite/forge.go`, `sqlite/migrations/0002_forge.sql`, `cli/forge.go`, `cli/sync.go`, `app/sync.go`, `metrics/reviews.go` (registered with one line in `metrics.All`). #15: `app/mcp.go`, `cli/mcp.go`, `internal/mcp`, `sqlite/readonly.go`, `docs/spec/mcp.md`, `plugins/stillhere`. #26: `identity/candidates.go`, `app/identities.go`, `report/identities.go`, `cli/identities.go`. #5: everything in `policy` but `types.go`, which is this file's contract. Where such a file shares a package with another issue's, its unexported identifiers carry a prefix, as in `collect`: `forge…` in `sqlite`, `reviews…` in `metrics`, `mcp…` in `app` and `readOnly…` in `sqlite`.
 - **A stub another branch calls.** The MCP server's `identity_candidates()` (#15) calls `app.Identities`, which returns `domain.ErrNotImplemented` until #26 lands; both are built in parallel against its signature here, and `report.Identities` is a `Document` from the start, so the server serves whatever #26 puts in it. `TestMCPTools` skips that one tool's subtest (`t.Skip("#26")`) while the stub stands, and the integrator removes the skip when both merge (Consumer-Driven Contracts: Ian Robinson, "Consumer-Driven Contracts: A Service Evolution Pattern", 2006).
 - **Shared documents.** Each issue edits only the sections its scope names: in [metrics.md](../metrics.md), the entries of the metrics it builds or derives oracles for; in this file, the signatures it changes; in [report-json.md](report-json.md), the shape (#11). Where two branches still touch the same lines, #13 resolves them when it merges, as it does `go.mod` and `go.sum`.
 
