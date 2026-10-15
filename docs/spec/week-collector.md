@@ -1,13 +1,13 @@
 # Week collector
 
-Status: carried over from the 2026-10-07 plan, updated 2026-10-14 (trailers, subjects, reverts, landing map; then by #6: `-z` numstat, own patches, pinned diff options, clone health; then by #6's review: `--since-as-filter`, NUL-separated text fields, Unix times, reverts over the landing map, six more pinned settings; then by #13: attributes read at the scanned commit, the `-c` settings moved into the runner's prefix, one non-blank predicate) · becomes tests in M0 (M1 for reverts and the landing map)
+Status: carried over from the 2026-10-07 plan, updated 2026-10-14 (trailers, subjects, reverts, landing map; then by #6: `-z` numstat, own patches, pinned diff options, clone health; then by #6's review: `--since-as-filter`, NUL-separated text fields, Unix times, reverts over the landing map, six more pinned settings; then by #13: no `.gitattributes` read by any log, the `-c` settings moved into the runner's prefix, one non-blank predicate) · becomes tests in M0 (M1 for reverts and the landing map)
 
 This collector answers one question: what landed on the default branch in the window? It produces one row per landing commit, credited to that commit's author.
 
 ## The log
 
 ```
-git <common> --attr-source=<sha>^{tree} \
+git <common> --attr-source=<empty tree> \
   log --first-parent --diff-merges=first-parent \
   --since-as-filter=<window start> --until=<window end> \
   -z --numstat -M -l1000 --root --diff-algorithm=myers --no-textconv \
@@ -17,7 +17,7 @@ git <common> --attr-source=<sha>^{tree} \
   <sha> --
 ```
 
-`<common>` is the analysis prefix in [git-invocation.md](git-invocation.md#analysis-commands-offline), which pins `core.bigFileThreshold`, `core.commentChar` and `trailer.separators` for every command. Partial clones run the same command without `--numstat`, its diff options and `--diff-merges=first-parent` ([shallow and partial clones](#shallow-and-partial-clones)); with no diff to print, git reads no attribute from the source. `-z`, the pinned options and settings, `--since-as-filter` and the field layout were added by #6, the attribute source by #13; [Parsing](#parsing), [Repository config](#repository-config) and [Attributes](#attributes-at-the-scanned-commit) say why.
+`<common>` is the analysis prefix in [git-invocation.md](git-invocation.md#analysis-commands-offline), which pins `core.bigFileThreshold`, `diff.default.binary`, `core.commentChar`, `trailer.separators` and `core.ignoreCase` for every command. Partial clones run the same command without `--numstat`, its diff options and `--diff-merges=first-parent` ([shallow and partial clones](#shallow-and-partial-clones)). `-z`, the pinned options and settings, `--since-as-filter` and the field layout were added by #6, the attribute source by #13; [Parsing](#parsing), [Repository config](#repository-config) and [Attributes](#attributes-none-from-any-tree) say why.
 
 | Trap | Rule and reason |
 | --- | --- |
@@ -140,7 +140,7 @@ It then follows first parents from the newest landing down to the oldest; that c
 `FileChange.AddedNonBlank` and `RemovedNonBlank` feed `durable@1` and `simplifying@1` ([../metrics.md](../metrics.md#change-facts-shared-by-durable1-and-simplifying1)). They come from each commit's own patch, for every non-merge commit in a window landing's map, the landings included:
 
 ```
-git <common> --attr-source=<sha>^{tree} \
+git <common> --attr-source=<empty tree> \
   log --no-walk --stdin --diff-merges=off -p -U0 -w \
   -M -l1000 --root --diff-algorithm=myers --no-textconv \
   --ignore-submodules=none --submodule=short \
@@ -157,13 +157,15 @@ Numstat rows of the commits a merge brought in, which the first-parent log never
 
 ## Repository config
 
-Repository-local config is read on every command; only command-line options and `-c` settings beat it. These pin what a repository could otherwise change. Each was checked on 2.50.1 by setting the config and comparing the output with and without the option: in the repository's own config, except `diff.algorithm`, set with `git -c`. The three `-c` settings are in the runner's common prefix, so every command gets them (changed by #13: they were per call, before the subcommand of the landing, brought-in, own-patch and co-author logs), because no `log` option overrides them; each value is git's default. The options stay where each log is built: an option also beats the more specific config a `-c` cannot reach, and [git-invocation.md](git-invocation.md#repository-settings-that-change-facts) records, setting by setting, what each one changed and why it is pinned where it is.
+Repository-local config is read on every command; only command-line options and `-c` settings beat it. These pin what a repository could otherwise change. Each was checked on 2.50.1 by setting the config and comparing the output with and without the option: in the repository's own config, except `diff.algorithm`, set with `git -c`. The `-c` settings are in the runner's common prefix, so every command gets them (changed by #13: the first three were per call, before the subcommand of the landing, brought-in, own-patch and co-author logs), because no `log` option overrides them; each value is git's default. The options stay where each log is built: an option also beats the more specific config a `-c` cannot reach, and [git-invocation.md](git-invocation.md#repository-settings-that-change-facts) records, setting by setting, what each one changed and why it is pinned where it is.
 
 | Option | Setting it overrides | Effect without it |
 | --- | --- | --- |
 | `-c core.bigFileThreshold=512m` (prefix) | `core.bigFileThreshold` | every blob above it is binary: under `10`, every row became binary with 0 lines, and a typechange row got more non-blank lines from the patch than numstat counted |
 | `-c core.commentChar=#` (prefix) | `core.commentChar`, and `core.commentString`, the same setting | git's trailer parser skips comment lines, so `C` hides every `Co-authored-by:` line, and with it AI-assisted tags and Copilot credit |
 | `-c trailer.separators=:` (prefix) | `trailer.separators` | without `:` no line is a trailer: `#` hides every co-author |
+| `-c diff.default.binary=auto` (prefix) | `diff.default.binary`, the driver of every file that no `diff` attribute names | `true` makes every such file binary: numstat `-` `-` and no hunks, so it adds no lines while blame still counts them |
+| `-c core.ignoreCase=false` (prefix) | `core.ignorecase=true`, which git on macOS and Windows writes into every repository it creates or clones | attribute patterns match in any case: `*.PY -diff` in `info/attributes` made every `.py` file binary |
 | `--submodule=short` | `diff.submodule` | `log` or `diff` prints a gitlink change as a summary line with no hunk, so the patch counts 0 lines where numstat counts 1 and 1 |
 | `--ignore-submodules=none` | `diff.ignoreSubmodules`, and `submodule.<name>.ignore` in the config or in the checked-out `.gitmodules` | `all` hides every gitlink change from numstat and from the patch; `-c diff.ignoreSubmodules=none` does not override the per-submodule setting, which the option does (verified) |
 | `-M` | `diff.renames=false` | a rename becomes a full delete plus add |
@@ -179,17 +181,23 @@ Repository-local config is read on every command; only command-line options and 
 
 **Not pinned: trailer aliases.** A `trailer.<alias>.key` in the repository's config renames trailer keys before `%(trailers)` filters them, matching a key by prefix: `trailer.co-authored-by.key=Signed-off-by` hides every co-author, and `trailer.cab.key=Co-authored-by` makes co-authors of `cab:` lines and of `Co:` lines too (verified). A `-c` cannot remove an alias whose name it does not know, and pinning `trailer.co-authored-by.key=Co-authored-by` would add one: on its own it turned a `Co:` line into a co-author (verified). Like a textconv driver, an alias is a deliberate setting in a repository the user already trusts, so it is named here rather than papered over. `trailer.<alias>.cmd` and `.command` do not run during `log` (verified).
 
-## Attributes at the scanned commit
+## Attributes: none from any tree
 
-Every `log` that can print a diff (the landing, brought-in and own-patch logs) starts with `--attr-source=<sha>^{tree}`, so it reads `.gitattributes` from the scanned commit's tree, as classification does with `check-attr --source` ([classification.md](classification.md#gitattributes)). Added by #13. The `diff` attribute decides whether a file is binary, and without a source git reads attributes from wherever it finds them: a work tree reads its checked-out files, uncommitted edits included; a bare clone reads HEAD's tree on git 2.43.0 to 2.45.2, CI's 2.45.0 among them, and none from 2.45.3 and 2.46.0 on; and a repository's `attr.tree` names any tree. Verified on 2.50.1 with a work tree and a bare clone of one repository holding a committed `blob.dat -diff` and, in the work tree only, an uncommitted `code.py -diff`:
+Every `log` that can print a diff (the landing, brought-in and own-patch logs) starts with `--attr-source=<empty tree>`, the empty tree of the repository's object format, so it reads no `.gitattributes` file (added by #13). In these logs attributes decide one thing, through the `diff` attribute: whether git counts a file's lines at all. Without a source git reads attributes from wherever it finds them. A work tree reads its checked-out files, uncommitted edits included; a bare clone reads HEAD's tree on git 2.43.0 to 2.45.2, CI's 2.45.0 among them, and none from 2.45.3 and 2.46.0 on; and a repository's `attr.tree` names any tree, in a bare clone too. Verified on 2.50.1 with a work tree and a bare clone of one repository holding a committed `blob.dat -diff` and, in the work tree only, an uncommitted `code.py -diff`:
 
-| | work tree | bare clone | both, with the source |
+| | work tree | bare clone | both, with the empty tree |
 | --- | --- | --- | --- |
-| `blob.dat` (committed `-diff`) | binary: `-` `-` | text: `1` `0` | binary |
+| `blob.dat` (committed `-diff`) | binary: `-` `-` | text: `1` `0` | text |
 | `code.py` (uncommitted `-diff`) | binary | text | text |
 | `other.py` (`-diff` in `$GIT_DIR/info/attributes` of both) | binary | binary | binary |
 
-So History, in week and scan runs alike, gave the work tree and the bare clone different `FileChange` rows for one commit, and gives them the same rows with the source; blame's case is in [blame-collector.md](blame-collector.md#tree-and-command). `$GIT_DIR/info/attributes` still applies: it belongs to the repository, not to a checkout. Head's own `-diff` is honoured, so a file the scanned commit marks binary adds no lines, wherever it is checked out. git reads the source only when a command first asks for an attribute, so a partial clone's landing log, which prints no diff, reads nothing from it. The revert, root and co-author logs print no diff and take no source. The source is the tree, not the commit, because git looks each `.gitattributes` up in it anew, and from a commit it first reads the commit; the cost is in [git-invocation.md](git-invocation.md#repository-settings-that-change-facts).
+So History, in week and scan runs alike, gave the work tree and the bare clone different `FileChange` rows for one commit, and gives them the same rows with the source; blame's case is in [blame-collector.md](blame-collector.md#tree-and-command).
+
+**Why no attributes, rather than the scanned commit's.** Reading the scanned commit's `.gitattributes`, as classification does with `check-attr --source`, makes the result independent of the checkout too. #13 first did that, and History and blame then disagreed about the same lines. Blame attributes every line of a file, whatever its `diff` attribute says, so a committed `-diff` would leave lines out of a commit's added lines that blame then counts as surviving. With a committed `api.py -diff` and Ann's one commit adding 20 lines to `api.py` and 2 to `core.py`, `durable@1` gave her 22 surviving lines over 2 added, a durability of 11; the empty tree, like a bare clone on a recent git, gives 22 over 22 (verified). Read from the scanned commit, the patterns also depend on the machine: under `core.ignorecase=true`, which git on macOS writes, a committed `*.PY -diff` marked every `.py` file binary. Which files count is classification's decision, and classification does not read the `diff` attribute either: it reads `linguist-generated` and `linguist-vendored` at the scanned commit, and its header sniff reads every file as text (`git grep -a`, [classification.md](classification.md#header-sniff)). A team that wants its `-diff` files left out marks them `linguist-generated`, or adds a deny pattern; honouring `-diff` itself would be a policy decision, which would need an ADR and would have to apply to blame's lines as well.
+
+**What still makes a file binary.** Two things: git's content check, which takes a file with a NUL byte in its first 8,000 bytes for binary, and `$GIT_DIR/info/attributes`, which belongs to the repository rather than to a checkout and is the same in a work tree and a bare clone. The runner's prefix makes the patterns there match case-sensitively, and pins `core.bigFileThreshold` and `diff.default.binary`, which would otherwise make files binary too. History gives a binary file no lines: numstat prints `-` `-`, and the own patch has no hunks. Blame still attributes each of its lines, so `durable@1` counts them in Σ surviving and not in Σ added: a `prod` file with a NUL byte gave Ann 5 surviving lines over 2 added (verified; this predates #13). Leaving such lines out of both sums, as `durable@1` already does for a file whose blame failed ([metrics.md](../metrics.md#change-facts-shared-by-durable1-and-simplifying1)), is the metric's fix, left for its own issue.
+
+The revert, root and co-author logs print no diff and take no source. The cost of the source is in [git-invocation.md](git-invocation.md#repository-settings-that-change-facts): almost nothing, where the scanned commit's tree cost about 40% more on the history logs.
 
 ## Shallow and partial clones
 

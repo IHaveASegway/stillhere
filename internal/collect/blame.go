@@ -233,7 +233,7 @@ func (b *blamer) all(ctx context.Context, paths []string, slots *BlameSlots, pro
 
 // file blames one path at Head:
 //
-//	git --attr-source=<head>^{tree} blame -w -M --no-textconv
+//	git --attr-source=<empty tree> blame -w -M --no-textconv
 //	    --indent-heuristic --encoding=UTF-8 --line-porcelain
 //	    --no-ignore-revs-file [--ignore-revs-file <list>] <head> -- <path>
 //
@@ -242,12 +242,14 @@ func (b *blamer) all(ctx context.Context, paths []string, slots *BlameSlots, pro
 // the repository's checkout or config would change
 // (docs/spec/blame-collector.md, each verified on git 2.50.1):
 //
-//   - --attr-source reads .gitattributes at Head (attrSource), as History and
-//     classification do. Blame reads the diff attribute when it follows a
-//     rename, and a file marked binary is compared byte for byte, so a
-//     rename that also turned CRLF into LF was followed in a bare clone
-//     but not in a work tree whose uncommitted .gitattributes said
-//     "*.py -diff", which gave every line to the renamer.
+//   - --attr-source reads no .gitattributes file (attrSource), as History's
+//     logs do. Blame reads the diff attribute when it follows a rename,
+//     and a file marked binary is compared byte for byte, so a rename that
+//     also turned CRLF into LF was followed in a bare clone but not in a
+//     work tree whose uncommitted .gitattributes said "*.py -diff", nor,
+//     when blame read Head's attributes, in a clone with
+//     core.ignorecase=true whose committed "*.PY -diff" then matched the
+//     file. Each time the renamer got every line.
 //   - --no-textconv counts the stored bytes, as History does. By default
 //     blame runs a textconv program that a diff=<driver> attribute and the
 //     repository's diff.<driver>.textconv name, and counts its output: one

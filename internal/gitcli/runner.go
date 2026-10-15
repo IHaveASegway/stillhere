@@ -5,14 +5,14 @@
 // lives in one place (docs/spec/git-invocation.md): the common prefix that
 // disables hooks, fsmonitor, external diff, signature verification and the
 // per-user attributes file, and pins the repository settings no subcommand
-// option can (the big-file threshold, how trailers are parsed, and, on
-// macOS, how path arguments are read); an
-// environment stripped of inherited GIT_* and askpass variables and of
-// system and global config and attributes; a profile that keeps analysis
-// offline and prompt-free; a timeout that kills git and everything it
-// started; and errors whose stderr has been scrubbed of credentials. Call
-// sites still spell out their git arguments, options included, so the exact
-// command stays visible where it is used.
+// option can (which files git takes for binary, how trailers are parsed,
+// how attribute patterns match case, and, on macOS, how path arguments are
+// read); an environment stripped of inherited GIT_* and askpass variables
+// and of system and global config and attributes; a profile that keeps
+// analysis offline and prompt-free; a timeout that kills git and everything
+// it started; and errors whose stderr has been scrubbed of credentials.
+// Call sites still spell out their git arguments, options included, so the
+// exact command stays visible where it is used.
 package gitcli
 
 import (
@@ -144,7 +144,8 @@ type invocation struct {
 //	git -C <dir> --no-optional-locks -c core.hooksPath=/dev/null
 //	    -c core.fsmonitor= -c core.attributesFile=/dev/null -c diff.external=
 //	    -c log.showSignature=false -c core.bigFileThreshold=512m
-//	    -c core.commentChar=# -c trailer.separators=:
+//	    -c diff.default.binary=auto -c core.commentChar=#
+//	    -c trailer.separators=: -c core.ignoreCase=false
 //	    -c core.precomposeUnicode=false [-c mailmap.file=<org-mailmap>] <args>
 //
 // Command-line -c beats repo-local config. core.attributesFile=/dev/null
@@ -155,19 +156,24 @@ type invocation struct {
 // closed instead of running a program the repository names.
 // log.showSignature=false keeps log and show from running gpg.program.
 //
-// The next four are git's defaults, pinned here because no subcommand
+// The next six are git's defaults, pinned here because no subcommand
 // option overrides them and a repository's own value changes facts (each
-// verified on git 2.50.1 with the value in the repository's config): above
+// verified on git 2.50.1 with the value in the repository's config). Above
 // core.bigFileThreshold every blob is binary, so numstat counts no lines and
-// a patch has no hunks; git's trailer parser skips comment lines, so
-// core.commentChar=C (or core.commentString, the same setting) hides every
-// Co-authored-by line; without ":" in trailer.separators no line is a
-// trailer; and core.precomposeUnicode=true, which git on macOS writes into
-// every repository it creates or clones, rewrites a decomposed path argument
-// in composed form, so blame found no such path for a file whose name the
-// tree stores decomposed, which git on Linux blames. Every command gets them
-// (the history and co-author logs, blame, and any command added later),
-// and none changes the output of a command that does not read it.
+// a patch has no hunks; diff.default.binary=true does the same to every
+// file no diff attribute names, while blame still counts every line of it.
+// git's trailer parser skips comment lines, so core.commentChar=C (or
+// core.commentString, the same setting) hides every Co-authored-by line,
+// and without ":" in trailer.separators no line is a trailer.
+// core.ignoreCase=true, which git on macOS and Windows writes into every
+// repository it creates or clones, matches attribute patterns in any case:
+// "*.PY linguist-generated" marked a.py, which a Linux clone, like GitHub,
+// does not. core.precomposeUnicode=true, which git on macOS writes too,
+// rewrites a decomposed path argument in composed form, so blame found no
+// such path for a file whose name the tree stores decomposed, which git on
+// Linux blames. Every command gets them (classification, the history and
+// co-author logs, blame, and any command added later), and none changes
+// the output of a command that does not read it.
 // Settings that a subcommand option pins, such as rename detection
 // or submodule diffs, are pinned by that option where the command is built,
 // because an option also beats the more specific config a -c cannot reach
@@ -197,8 +203,10 @@ func (r *Runner) invocation(cmd domain.GitCmd) (invocation, error) {
 		"-c", "diff.external=",
 		"-c", "log.showSignature=false",
 		"-c", "core.bigFileThreshold=512m",
+		"-c", "diff.default.binary=auto",
 		"-c", "core.commentChar=#",
 		"-c", "trailer.separators=:",
+		"-c", "core.ignoreCase=false",
 		"-c", "core.precomposeUnicode=false",
 	}
 	if r.mailmap != "" {

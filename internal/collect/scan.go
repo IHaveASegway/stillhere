@@ -8,11 +8,10 @@ import (
 
 // This file holds what every collector (#4, #5, #6, #7) needs to read git's
 // output and count its lines, so the four do not each write their own, and
-// the option with which the history and blame collectors read attributes
-// at the scanned commit. A collector's other unexported identifiers carry
-// its prefix (discover, classify, history, blame), so the four can be
-// written in parallel without colliding
-// (docs/spec/codebase.md#working-in-parallel).
+// the attribute source the history and blame collectors share. A
+// collector's other unexported identifiers carry its prefix (discover,
+// classify, history, blame), so the four can be written in parallel
+// without colliding (docs/spec/codebase.md#working-in-parallel).
 
 // maxToken bounds one line, or one NUL-terminated token, of git output.
 // Generated files have megabyte lines (docs/spec/codebase.md#concurrency);
@@ -42,32 +41,52 @@ func nonBlank(line []byte) bool {
 	return len(bytes.TrimSpace(line)) > 0
 }
 
-// attrSource is the global option, ahead of the subcommand, with which a
-// history log or a blame reads .gitattributes from head's tree: the
-// scanned commit's attributes, which classification reads too (check-attr
-// --source). Without it git reads them from wherever it finds them. A work
-// tree reads its checked-out files, uncommitted edits included; a bare
+// The empty tree of each object format. git holds it as an object of every
+// repository, whether or not the repository stores it (verified on git
+// 2.50.1 in SHA-1 and SHA-256 repositories that do not).
+const (
+	emptyTreeSHA1   = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
+	emptyTreeSHA256 = "6ef19b41225c5369f1c104d45d8d85efa9b057b53b14b4b9b939dd74decc5321"
+)
+
+// attrSource is the global option, ahead of the subcommand, with which every
+// history log that can print a diff, and blame, read no .gitattributes file:
+// the attribute source is the empty tree of head's object format (a 64-hex
+// head is SHA-256). In these commands attributes decide one thing, through
+// the diff attribute: whether git counts a file's lines at all. Blame
+// attributes every line of a file whatever that attribute says, so a log
+// that honoured a committed -diff would leave out of the added lines what
+// blame counts as surviving: durable@1 gave Ann 22 surviving lines over 2
+// added, where a clone that reads no attributes gives 22 over 22
+// (verified). Which files count is classification's decision: it reads
+// linguist-generated and linguist-vendored at head (check-attr --source),
+// and its header sniff reads no attribute either (git grep -a).
+//
+// Without a source, git reads attributes from wherever it finds them. A
+// work tree reads its checked-out files, uncommitted edits included; a bare
 // clone reads HEAD's tree on git 2.43.0 to 2.45.2, CI's floor among them,
 // and none from 2.45.3 and 2.46.0 on; and a repository's attr.tree config
-// can name any tree. The diff
-// attribute decides whether a file is binary, so a file marked -diff gave
-// numstat "-\t-" in a work tree and "1\t0" in a bare clone of the same
-// commit, an uncommitted "-diff" line changed the work tree's count, and
-// blame stopped following a rename there (verified on git 2.50.1).
-// $GIT_DIR/info/attributes, which belongs to the repository rather than to
-// a checkout, still applies. git reads the source only when a command first
-// asks for an attribute, so a log that prints no diff, as in a partial
-// clone, reads nothing from it.
+// names any tree, in a bare clone too. So a file marked -diff gave numstat
+// "-\t-" in a work tree and "1\t0" in a bare clone of the same commit, and
+// blame stopped following a rename that also turned CRLF into LF (verified
+// on git 2.50.1). What still applies is $GIT_DIR/info/attributes, which
+// belongs to the repository rather than to a checkout and which no option
+// turns off, its patterns matched case-sensitively on every machine
+// because the runner pins core.ignoreCase=false; and git's own content
+// check, which takes a file with a NUL byte in its first 8,000 bytes for
+// binary.
 //
-// The source is head's tree, not head: git looks each .gitattributes up in
-// the source anew, and from a commit it first reads the commit. Over a year
-// of Homebrew's brew (2,459 landings, 3,696 non-merge commits; git 2.50.1,
-// best of three), the landing log took 1.49 s with no source, 2.28 s with
-// head and 2.01 s with head^{tree}, and the own-patch log 1.83 s, 2.79 s
-// and 2.48 s (docs/spec/git-invocation.md). --attr-source arrived in git
-// 2.41, below the 2.45 floor, and domain.GitSubcommand skips it.
+// It costs almost nothing. Over a year of Homebrew's brew (2,459 landings,
+// 3,696 non-merge commits; a bare clone, git 2.50.1, best of three), the
+// landing log took 1.34 s with no source, 1.39 s with the empty tree and
+// 1.87 s with head's tree, and the own-patch log 1.56 s, 1.62 s and 2.25 s
+// (docs/spec/git-invocation.md). --attr-source arrived in git 2.41, below
+// the 2.45 floor, and domain.GitSubcommand skips it.
 func attrSource(head string) string {
-	return "--attr-source=" + head + "^{tree}"
+	if len(head) == 64 {
+		return "--attr-source=" + emptyTreeSHA256
+	}
+	return "--attr-source=" + emptyTreeSHA1
 }
 
 // scanNUL is a bufio.SplitFunc for NUL-separated output: check-attr -z,

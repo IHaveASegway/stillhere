@@ -88,13 +88,14 @@ type HistoryFacts struct {
 // (no program the repository names runs, and lines are counted on stored
 // content), --ignore-submodules=none and --submodule=short for gitlinks,
 // --no-color, --default-prefix and --encoding=UTF-8. Every log that can
-// print a diff reads .gitattributes at Head (attrSource, scan.go), as
-// classification does, so whether a file is binary does not depend on what
-// is checked out. The runner's common prefix pins what no option can:
-// core.bigFileThreshold, core.commentChar and trailer.separators
-// (docs/spec/git-invocation.md). Numstat is read with -z, so every path,
-// including a rename's two paths, arrives exactly as stored, however odd it
-// is.
+// print a diff reads no .gitattributes file (attrSource, scan.go), so
+// whether git counts a file's lines depends neither on what is checked out
+// nor on a -diff that blame, which counts every line, would not honour.
+// The runner's common prefix pins what no option can: core.bigFileThreshold,
+// diff.default.binary, core.commentChar, trailer.separators and
+// core.ignoreCase (docs/spec/git-invocation.md). Numstat is read with -z,
+// so every path, including a rename's two paths, arrives exactly as
+// stored, however odd it is.
 //
 // In HistoryWeek it runs one first-parent log. HistoryScan adds:
 //

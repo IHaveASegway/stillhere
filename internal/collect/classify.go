@@ -254,17 +254,18 @@ type classifyAttr struct{ generated, vendored string }
 // classifyAttributes reads the linguist attributes of paths at Head, in one
 // batched call:
 //
-//	git -c core.ignoreCase=false check-attr -z --source=<head> --stdin linguist-generated linguist-vendored
+//	git check-attr -z --source=<head> --stdin linguist-generated linguist-vendored
 //
 // Stdin is the paths, NUL-terminated; the output is "path NUL attribute NUL
 // info NUL" for each path and attribute, in input order. --source reads
 // .gitattributes at Head, so a bare mirror answers (without it every
 // attribute reads unspecified there), and a work tree answers for the
-// scanned commit rather than whatever is checked out. core.ignoreCase=false
-// makes a pattern match the same way on every machine: a clone on macOS or
-// Windows sets core.ignorecase=true, which lets "*.PY linguist-generated"
-// mark a.py (verified on git 2.50.1), while a Linux clone, like GitHub,
-// matches case-sensitively. The result is in the order of paths.
+// scanned commit rather than whatever is checked out. A pattern matches
+// the same way on every machine because the runner's prefix pins
+// core.ignoreCase=false: a clone on macOS or Windows sets
+// core.ignorecase=true, which lets "*.PY linguist-generated" mark a.py
+// (verified on git 2.50.1), while a Linux clone, like GitHub, matches
+// case-sensitively. The result is in the order of paths.
 //
 // An empty value, as in "a.py linguist-generated=", is passed on as set.
 // check-attr prints it as an empty info (verified on git 2.50.1), while
@@ -282,9 +283,8 @@ func classifyAttributes(ctx context.Context, git domain.GitRunner, repo domain.R
 	}
 	out := make([]classifyAttr, len(paths))
 	cmd := domain.GitCmd{
-		Dir: repo.Path,
-		Args: []string{"-c", "core.ignoreCase=false", "check-attr", "-z", "--source=" + repo.Head, "--stdin",
-			classifyAttrGenerated, classifyAttrVendored},
+		Dir:   repo.Path,
+		Args:  []string{"check-attr", "-z", "--source=" + repo.Head, "--stdin", classifyAttrGenerated, classifyAttrVendored},
 		Stdin: bytes.NewReader(stdin.Bytes()),
 	}
 	answers := 0 // two per path: linguist-generated, then linguist-vendored
