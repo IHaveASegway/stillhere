@@ -284,7 +284,7 @@ type FactStore interface {
 	FinishRun(ctx context.Context, runID int64, status RunStatus) error
 	// The read side sees complete and partial runs only: an unknown, running or failed run is ErrNotFound.
 	Run(ctx context.Context, id int64) (Run, error)           // status, tool version, times, options, policy source
-	LatestRun(ctx context.Context, kind RunKind) (Run, error) // the newest one
+	LatestRun(ctx context.Context, kind RunKind) (Run, error) // the newest one: the last begun, whatever its Now
 	LoadFacts(ctx context.Context, runID int64) (*FactSet, error)
 	LoadMetrics(ctx context.Context, runID int64) ([]MetricValue, []RankInterval, error)
 	Close() error
@@ -298,7 +298,7 @@ type ForgeSource interface{}   // the forge's API: GitHub, later GitLab (ADR 000
 type ForgeStore interface{}    // the forge replica in facts.db, upserted by node id with a watermark per repo
 ```
 
-The forge ports exist now, empty, so the sync can be built without editing another issue's files: #14 owns `domain/forge.go`, `sqlite/forge.go` (where `*sqlite.Store` implements `ForgeStore`), `cli/forge.go` (which builds the `ForgeSource` adapter) and `app/sync.go`. `ForgeStore` is a port of its own rather than more `FactStore` methods: `FactStore` holds per-run snapshots, while forge facts are a replica that outlives runs ([run model](#run-model)), and a separate port leaves `FactStore` and #8's implementation untouched (Interface Segregation Principle). Store migrations are numbered by `PRAGMA user_version`: 1 is #8's schema, 2 is #14's forge tables. M4 adds narrations the same way.
+The forge ports exist now, empty, so the sync can be built without editing another issue's files: #14 owns `domain/forge.go`, `sqlite/forge.go` (where `*sqlite.Store` implements `ForgeStore`), `cli/forge.go` (which builds the `ForgeSource` adapter) and `app/sync.go`. `ForgeStore` is a port of its own rather than more `FactStore` methods: `FactStore` holds per-run snapshots, while forge facts are a replica that outlives runs ([run model](#run-model)), and a separate port leaves `FactStore` and #8's implementation untouched (Interface Segregation Principle). Store migrations are embedded files, `internal/sqlite/migrations/NNNN_<name>.sql`, applied in order, one transaction each, and numbered by `PRAGMA user_version`: 1 (`0001_facts.sql`) is #8's schema, 2 is #14's forge tables. M4 adds narrations the same way.
 
 ## Package APIs
 
@@ -481,8 +481,11 @@ type Validation struct { RunID int64; Labels int; Metrics []MetricAUC }
 type MetricAUC struct { Metric domain.MetricID; AUC float64; N int }
 
 // sqlite
-func Open(ctx context.Context, path string) (*Store, error) // dir 0700, file 0600, migrated; deletes runs left running
-// *Store implements domain.FactStore (store.go, #8) and domain.ForgeStore (forge.go, #14)
+func Open(ctx context.Context, path string) (*Store, error) // creates a missing dir 0700 and file 0600; migrated, then WAL (a newer facts database, or a file that is not one, SQLite or not, is a *domain.UsageError, refused unchanged and without waiting for a lock); deletes runs left running
+// *Store implements domain.FactStore (store.go, #8) and domain.ForgeStore (forge.go, #14). Inside the package every
+// write goes through Store.write and every read through Store.read (store.go), forge.go's included: write waits for
+// another process's lock and renews the leases of the store's runs; a statement on the writer connection itself fails
+// with SQLITE_BUSY after a second.
 
 // app
 type Deps struct {
@@ -559,7 +562,8 @@ func BuildCloneHealth(ctx context.Context, dir, promisor string) (*CloneHealthRe
 Every `scan` is a **run**: a snapshot of facts at one set of HEADs, under one policy and one mailmap, with the metric values computed from them.
 
 - **Git-derived facts are stored per run**, not once per commit. The mailmap and the policy can change between runs, and every number in a run must come from one HEAD set, one policy and one mailmap. The cost is repeated rows across runs, bounded by retention. The store is disposable, so this is a two-way door.
-- **Publishing** is a status flip. A run is written as `running` and becomes `complete` (or `partial` when some repo failed) only after its last row. Readers select complete and partial runs only, so nobody sees half a run: every `FactStore` read method returns `ErrNotFound` for a running or failed run. A run left `running` by a crash is deleted on the next open.
+- **Publishing** is a status flip. A run is written as `running` and becomes `complete` (or `partial` when some repo failed) only after its last row. Readers select complete and partial runs only, so nobody sees half a run: every `FactStore` read method returns `ErrNotFound` for a running or failed run. A run left `running` by a crash is deleted by the next open once its lease has lapsed. The store that began the run holds the lease: every write it makes renews it, a sync's forge writes included, and it lapses after a day without one, so an open deletes a running run only after its writer has written nothing for a day.
+- **Retention.** When a run finishes, the store keeps, among the runs of its kind, that run, the newest 8 published runs and the newest published run of each of the 12 most recent months that have one (by `Now`, as restic's `--keep-last` and `--keep-monthly` count), and deletes the others, failed runs included.
 - **The policy travels with the run.** `Run.PolicySource` holds exactly the bytes `PolicyRef.SHA256` hashes. Every reader of a stored run (`report`, `explain`, `who-knows`, `me`, `validate`, `mcp`, and a new metric version computed over old facts) rebuilds that policy with `policy.FromSource` and checks its `Ref` against `Run.Policy`. Today's `stillhere.toml`, or a newer packaged default, never changes a stored run's numbers; only `week` and `scan` load a policy file.
 - **Forge facts** (M2) are not per run. They are a replica of GitHub, upserted by node id with a watermark per repo, and each run records the watermark it read.
 - **Metric values** are stored with the run, keyed by `metric@version`. A new metric version can be computed over an old run's facts with `LoadFacts`, which is why `LoadFacts(PutRepoFacts(x)) == x` is tested.
@@ -646,6 +650,7 @@ Tests sit at stable boundaries, so a refactor does not rewrite them (Kent Beck, 
 | `TestRankIntervals` | `rank` | reproducible intervals; ineligible subjects unranked |
 | `TestRedact` | `redact` | no credential survives `URL`, `Scrub` or `Message` (userinfo, scp-like and malformed remotes, query strings, quotes, the 180-rune cut); text that holds none is unchanged |
 | `TestRunner` | `gitcli` | per-user and system attributes change neither numstat nor `check-attr`; no askpass, signature or external diff program runs; an inherited `GIT_DIR` changes nothing; a timeout or cancellation kills git's process group and is reported as such even when the reader fails first on the truncated output; a helper that left the group cannot hold `Stream` |
-| `TestStoreRoundTrip` | `sqlite` | `LoadFacts(PutRepoFacts(x)) == x`; `Run(id)` returns the run as begun and finished, policy source included; readers never see a running or failed run (`ErrNotFound`) |
+| `TestStoreRoundTrip` | `sqlite` | `LoadFacts(PutRepoFacts(x)) == x`, a zero loading as +0; `Run(id)` returns the run as begun and finished, policy source included; readers never see a running or failed run (`ErrNotFound`) |
+| `TestStoreLifecycle` | `sqlite` | `Open` creates a missing directory 0700 and files 0600, in WAL mode; it refuses another program's SQLite file, a file that is not SQLite and a newer facts database with a `UsageError`, without waiting for a held lock and leaving the file byte for byte; first opens racing in separate processes all succeed; a run left running is deleted once its store has written nothing for a day, and not before; retention and `LatestRun` match a model of the run-model rule across gaps, year-long pauses, ties and backfills |
 | `TestGitHubSync` | `github` | recorded responses become the expected facts; the token is never stored (M2) |
 | `TestMCPTools` | `mcp` | each tool through the SDK's in-memory client (M4) |
