@@ -669,6 +669,11 @@ func Build(dir string) error                                    // BuildContext 
 func BuildContext(ctx context.Context, dir string) error        // the main fixture in dir, which must be empty or absent
 func BuildSibling(dir string) error                             // BuildSiblingContext with context.Background
 func BuildSiblingContext(ctx context.Context, dir string) error // the sibling in dir, which must be empty or absent
+// guards.go (#13): the regression guards' repositories, scanned without a mailmap
+func Backdated(t testing.TB) string                             // builds <t.TempDir()>/backdated: a first-parent commit older than the scan window, above landings in it
+func BuildBackdated(ctx context.Context, dir string) error      // the backdated guard in dir, which must be empty or absent
+func MergedRevert(t testing.TB) string                          // builds <t.TempDir()>/merged-revert: reverts on side branches that --no-ff merges land
+func BuildMergedRevert(ctx context.Context, dir string) error   // the merged-revert guard in dir, which must be empty or absent
 // discovery.go (#4): the discovery and clone-health repositories, as structs of absolute paths
 const DiscoveryToken = "TOKENVALUE"                             // planted in remote URLs; TestDiscover asserts no output holds it
 const DiscoveryWidgetRemote = "https://user:" + DiscoveryToken + "@github.com/example/widget.git"
