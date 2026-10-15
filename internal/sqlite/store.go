@@ -1,6 +1,8 @@
-// Package sqlite is the outbound adapter that implements domain.FactStore on
-// SQLite through modernc.org/sqlite, a pure-Go translation of SQLite, so the
-// binary needs no cgo and stays static (ADR 0002, ADR 0003).
+// Package sqlite is the outbound adapter that implements domain.FactStore,
+// and domain.ForgeStore (the GitHub replica, forge.go, and what each run
+// read of it, forgesnapshot.go), on SQLite through modernc.org/sqlite, a
+// pure-Go translation of SQLite, so the binary needs no cgo and stays
+// static (ADR 0002, ADR 0003, ADR 0011).
 //
 // facts.db is a derived, disposable replica: git, GitHub and .mailmap stay
 // the sources of truth. Every scan is a run, written as running and
@@ -8,14 +10,14 @@
 // (docs/spec/codebase.md#run-model).
 //
 // The schema is a set of embedded migrations (migrations/NNNN_name.sql) that
-// Open applies in order, tracked by PRAGMA user_version. It mirrors the
-// domain types table by table, so a run's facts load back exactly as they
-// were put. A Store holds two connection pools over one WAL-mode file: a
-// single writer connection whose transactions begin IMMEDIATE, so writers
-// queue for the lock instead of failing halfway, and query_only readers,
-// each transaction of which reads one consistent snapshot while a run is
-// being written. That split is the store's half of CQRS: the read side
-// cannot write.
+// Open and OpenExisting apply in order, tracked by PRAGMA user_version. It
+// mirrors the domain types table by table, so a run's facts load back
+// exactly as they were put. A Store holds two connection pools over one
+// WAL-mode file: a single writer connection whose transactions begin
+// IMMEDIATE, so writers queue for the lock instead of failing halfway, and
+// query_only readers, each transaction of which reads one consistent
+// snapshot while a run is being written. That split is the store's half of
+// CQRS: the read side cannot write.
 package sqlite
 
 import (

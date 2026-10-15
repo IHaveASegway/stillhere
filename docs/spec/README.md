@@ -16,7 +16,7 @@ Behaviour marked "verified" was checked on Git 2.50.1 (Apple Git-155) on 2026-10
 | [blame-collector.md](blame-collector.md) | What is still here: tree listing, blame flags, porcelain parsing, per-repo ignore-revs, persisted per-commit rows, majority owner, concentration walk | M1 |
 | [cache.md](cache.md) | Blob-level blame reuse and its invalidation | Deferred, open decision #3 |
 | [hotspots-code-maat.md](hotspots-code-maat.md) | Hotspot facts: code-maat jar design vs in-process Go | M5, open decision #1 |
-| [report-json.md](report-json.md) | Draft JSON shape, warning and error semantics, rollups, timings, exit codes | M0 (draft), superseded in M1 |
+| [report-json.md](report-json.md) | The `stillhere.report/v1` JSON shape as built (#11) and the read commands' answers, where emails go, warning and caveat codes, timings, exit codes | M0 (week), M1 (v1) |
 | [identities.md](identities.md) | Identity candidates: which addresses may be one person, the rules and how each can be wrong, the `.mailmap` suggestions, privacy | M2 |
 | [mcp.md](mcp.md) | The MCP server's tools: arguments, answers, names, privacy, paging and the token budget | M4 |
 | [../../testdata/fixture/SPEC.md](../../testdata/fixture/SPEC.md) | The fixture repository and every oracle number | M0 onward |

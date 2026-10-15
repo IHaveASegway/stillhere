@@ -124,8 +124,8 @@ All tools are read-only, idempotent and closed-world (`readOnlyHint`, `idempoten
 
 ## Not yet
 
-- Pull requests next to landings in `changes`, once scans read forge facts (#13's forge scan): a landing's pull request number and reviews.
-- Paging of `identity_candidates` once #26 defines its list.
+- Pull requests next to landings in `changes`: a landing's pull request number and reviews. A run keeps the pull requests it read ([ADR 0011](../adr/0011-a-run-keeps-the-github-facts-it-read.md)), and `who_knows` reads them for its recent reviewers, but `changes` does not join them to its landings yet.
+- Paging of `identity_candidates`, which answers with every candidate of its scope (#26's list).
 - A Claude Code plugin manifest (`.claude-plugin/plugin.json`, `.mcp.json` with `userConfig` for `--me`) around the skill's directory, which already has the plugin layout.
-- The same rule for AI-assisted shares in the local report's cards and overviews: an open decision for the owner (ADR 0007's amendment).
+- The same rule for AI-assisted shares in the local report's cards and overviews: an open decision for the owner (ADR 0007's amendment; [product.md's open decision 7](../product.md#open-decisions)).
 - The known limits ADR 0007's amendment records: each run is decided on its own, so shares of two runs can be subtracted, exactly for two scans of different repositories at one as-of time (a group's share less one of its repositories' scanned alone), which one session reads through `run-changed`, and in part for consecutive runs, whose windows overlap; addresses that no identities rule links count as different people; `explain`'s cohort comparisons of a shown share (`durable_ai_n`, `durable_other_n`, `reverted_ai`, `reverted_other`) count a narrower population than the share, which can be one or two people.

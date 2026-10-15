@@ -30,9 +30,10 @@ import (
 // both fixtures, scanned as one group with their mailmaps in one file: two
 // fresh scans, each into its own facts.db, render byte-identical JSON once
 // timings are removed, and byte-identical text and Markdown; report on the
-// stored run reproduces its scan; and a token planted in a URL given as a
-// PATH, in its userinfo, query or fragment, reaches no byte of facts.db, no
-// rendering and no log line.
+// stored run reproduces its scan; a person's own page prints a share of
+// den 1 as a percent, as explain does (#66); and a token planted in a URL
+// given as a PATH, in its userinfo, query or fragment, reaches no byte of
+// facts.db, no rendering and no log line.
 //
 // The scans read GitHub data too (docs/spec/codebase.md#run-model): the
 // fixture's origin names a forge repository in the replica, beside another
@@ -77,6 +78,14 @@ func TestDeterminism(t *testing.T) {
 	sameBytes(t, "report's JSON without timings and the scan's", rep.json, a.json)
 	sameBytes(t, "report's text and the scan's", rep.text, a.text)
 	sameBytes(t, "report's Markdown and the scan's", rep.markdown, a.markdown)
+
+	// A person's own page prints a share by its metric's one declaration,
+	// as explain does, whatever its den (#66): Gina's own AI-assisted share
+	// is 0 of 1, which me printed as a bare 0.
+	gina := render(t, first.me(t, "gina@example.com"))
+	if !bytes.Contains(gina.text, []byte("0.0% (0 of 1)")) || !bytes.Contains(gina.markdown, []byte("0.0% (0 of 1)")) {
+		t.Errorf("Gina's own page does not print her AI-assisted share of 0 of 1 as 0.0%% (0 of 1):\n%s", gina.text)
+	}
 
 	// A later sync follows a rename on GitHub by node id and moves the
 	// watermark on. The stored run keeps what it read, so its report does

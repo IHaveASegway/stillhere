@@ -225,7 +225,8 @@ func levenshtein(a, b string) int {
 // them, which an agent may know them by, unless one gives an address away
 // (app.NamedPerson.ShownLogins), and what they hold. Names come from the
 // repositories, so each is quoted: in the server's own sentence,
-// repository text stays data (docs/spec/mcp.md#errors).
+// repository text stays data (docs/spec/mcp.md#every-answer, "Repository
+// text is untrusted").
 func (r *resolver) listPeople(people []app.NamedPerson) string {
 	var parts []string
 	for i, p := range people {

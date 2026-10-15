@@ -131,7 +131,7 @@ Each milestone ships and gets used before the next starts. Numbers come before U
 
 ## Open decisions
 
-Recommendations that were not approved stay open. The baseline is what happens if nobody decides.
+Recommendations that were not approved stay open. The baseline is what happens if nobody decides. Decisions already written up as ADRs await the owner too, with status Proposed in the [ADR index](adr/README.md): today 0009, 0010, 0011 and 0012, and 0007's amendment on the AI-assisted shares the MCP server sends.
 
 | # | Decision | Baseline (2026-10-07 plan) | Recommendation | Decide by | Evidence that settles it |
 |---|---|---|---|---|---|
@@ -141,6 +141,7 @@ Recommendations that were not approved stay open. The baseline is what happens i
 | 4 | Server refresh | Unspecified | The server only reads; a refresh builds a new run that readers see only once complete; refresh is scheduled inside the same container | Before M3 | Whether refresh should run in-process, as a separate job, or on demand from the UI |
 | 5 | Minimum sample and cohort window | None | At least 10 landings; durability cohort is changes 90–365 days old | M2, on real data | Interval widths on a real org |
 | 6 | Moved lines in "substantive" counts | Rename detection only | `durable@2` using blame at the landing commit | After M1 data | How often moved code inflates added lines |
+| 7 | AI-assisted shares in the local report | As built (the plan had no rule): the report's overviews and cards show every share, a repository's, a group's and the whole run's, however few people landed in it; the 3-person floor and the secondary rule apply only to what the MCP server sends ([ADR 0007's amendment](adr/0007-ai-assisted-attribution.md#amendment-the-shares-that-leave-the-machine)) | Keep the terminal as it is; apply the MCP server's one decision per run (`app.AIShares`) to every page the web server serves | Before M3 | Whether a report's readers can already read the clones it is built from: a terminal user can (every trailer is in `git log`), a lead on the web server may not, and a pasted report travels without them |
 
 ## Non-goals (v1)
 

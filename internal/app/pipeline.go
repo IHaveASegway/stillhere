@@ -23,9 +23,9 @@ import (
 // This file is what week and scan share: discovery, --exclude-repo, and the
 // collection of each repository's facts. Every repository is a bulkhead
 // (Michael Nygard, Release It!, "Bulkheads"): its failure is recorded on its
-// own RepoFacts and the run goes on. Three things stop a run instead: a
-// cancellation, which the user asked for; a usage error, which is the
-// user's to fix; and a collector that is not built yet (see runStopped).
+// own RepoFacts and the run goes on. Two things stop a run instead: a
+// cancellation, which the user asked for, and a usage error, such as an
+// unreadable --ignore-revs-file, which is the user's to fix (runStopped).
 
 // The warning codes this package records.
 const (

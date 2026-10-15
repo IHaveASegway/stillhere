@@ -55,7 +55,7 @@ The rule is not a guideline: `make lint` enforces it with depguard ([.golangci.y
 
 - **Tests sit at stable boundaries** and run real git; no test mocks git, and porcelain output is never recorded and replayed. The tests that exist, and what each asserts, are listed in [codebase.md](docs/spec/codebase.md#tests). Add a test outside that list only with a reason in the pull request; check other behaviour by running the real thing.
 - **The fixture oracles are the contract.** [testdata/fixture/SPEC.md](testdata/fixture/SPEC.md) describes the fixture repositories commit by commit, with every expected value derived by hand. `internal/fixture` builds those repositories with the real git binary. An implementation never produces its own oracle: derive a new value by hand and write it into SPEC.md first, then write the code that has to match it.
-- **Determinism is tested.** Pass `--now`, sort before output, and keep empty slices and maps `nil` inside the core ([codebase.md](docs/spec/codebase.md#determinism)); two runs on the same inputs must give byte-identical JSON.
+- **Determinism is tested.** Pass `--now`, sort before output, and keep empty slices and maps `nil` inside the core ([codebase.md](docs/spec/codebase.md#determinism)); two runs on the same inputs must give byte-identical JSON without `timings`, the one wall-clock section.
 
 ## Adding or changing a metric
 

@@ -29,10 +29,13 @@ func provenanceText(pv Provenance) string {
 	return s
 }
 
-// valueText prints a value: a ratio as "86.7% (26 of 30)", anything else as
-// its number.
+// valueText prints a value: a share as "86.7% (26 of 30)", and "100.0% (1
+// of 1)" too, anything else as its number. ratio is the value's metric's
+// one declaration (MetricInfo.Ratio, from metrics.Definition.Ratio), which
+// explain and me read alike: a den of 1 is a count's as much as a share's,
+// so the value cannot tell (#66).
 func valueText(v Value, ratio bool) string {
-	if ratio || (v.Den != 1 && v.Den != 0) {
+	if ratio {
 		return percent(v.Value) + " (" + number(v.Num) + " of " + number(v.Den) + ")"
 	}
 	return number(v.Value)
@@ -342,6 +345,18 @@ const meIntro = "every value and rank interval this run holds about you, includi
 // page shows.
 const ownPageLabel = "shown only on your own page (ADR 0007)"
 
+// ratio reports whether the page's metric id is a share, as its definition
+// on the page declares (Me.Metrics): a metric the page has no definition of,
+// such as a version this binary does not register, prints its number.
+func (m *Me) ratio(id string) bool {
+	for _, mi := range m.Metrics {
+		if mi.ID == id {
+			return mi.Ratio
+		}
+	}
+	return false
+}
+
 // metricHeading is a metric's heading on the me page, labelled when only
 // that page shows it.
 func metricHeading(id string, esc func(string) string) string {
@@ -362,7 +377,7 @@ func (m *Me) writeText(p *printer) {
 		p.blank()
 		p.line(metricHeading(group[0].Metric, clean))
 		for _, v := range group {
-			line := scopeText(v.Scope, clean, m.Provenance) + " · " + windowText(v.Window) + ": " + valueText(v, false)
+			line := scopeText(v.Scope, clean, m.Provenance) + " · " + windowText(v.Window) + ": " + valueText(v, m.ratio(v.Metric))
 			if v.N > 0 {
 				line += ", n " + grouped(v.N)
 			}
@@ -402,7 +417,7 @@ func (m *Me) writeMarkdown(p *printer) {
 		cols := []column{{head: "Scope"}, {head: "Window"}, {head: "Value", right: true}, {head: "n", right: true}, {head: "Detail"}}
 		var rows [][]string
 		for _, v := range group {
-			rows = append(rows, []string{scopeText(v.Scope, mdText, m.Provenance), windowText(v.Window), valueText(v, false), grouped(v.N), detailText(v.Detail, mdID)})
+			rows = append(rows, []string{scopeText(v.Scope, mdText, m.Provenance), windowText(v.Window), valueText(v, m.ratio(v.Metric)), grouped(v.N), detailText(v.Detail, mdID)})
 		}
 		p.mdTable(cols, rows)
 	}

@@ -153,8 +153,11 @@ type projected interface {
 }
 
 // All returns every registered metric version in a stable order: the order
-// of the catalog in docs/metrics.md. It is the registry, a single list: a
-// new metric or version registers with one line here.
+// of the catalog in docs/metrics.md, which the metrics command and the MCP
+// server's metrics() list it in. It is the registry, a single list: a new
+// metric or version registers with one line here, at its place in the
+// catalog. Nothing computed depends on the order: Compute sorts its values,
+// and the bootstrap seeds come from a metric's id, scope and window.
 func All() []Metric {
 	return []Metric{
 		landedV1{},
@@ -165,8 +168,8 @@ func All() []Metric {
 		whoKnowsV1{},
 		durableV1{},
 		simplifyingV1{},
-		aiAssistedV1{},
 		reviewsGiven{},
+		aiAssistedV1{},
 	}
 }
 

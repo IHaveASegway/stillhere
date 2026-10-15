@@ -128,9 +128,10 @@ func Scan(ctx context.Context, d Deps, r ScanRequest) (*report.Model, error) {
 	timings.MetricsMS = time.Since(start).Milliseconds()
 	start = time.Now()
 	// Every ranked metric is ranked in every scope and stored with the run,
-	// whichever ones --rank names, so a reader uses the stored ranks and
-	// never bootstraps again: one rule for every metric, which leaves no
-	// metric to forget (docs/spec/codebase.md#run-model). --rank picks the
+	// whichever ones --rank names, so a reader uses the stored ranks: one
+	// rule for every metric, which leaves no metric to forget. A reader
+	// bootstraps only a table the run did not store, such as a newer metric
+	// version's (rankAll; docs/spec/codebase.md#run-model). --rank picks the
 	// tables this report prints.
 	all, intervals, err := rankAll(in, allRanked(), rankScopes(scope, fs), nil, nil)
 	if err != nil {

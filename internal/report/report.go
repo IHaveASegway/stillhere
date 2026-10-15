@@ -49,7 +49,7 @@ const (
 const ConcentrationLabel = "not a truck factor"
 
 // Document is what the renderers print: a report Model, or the answer of a
-// read command (Explain, WhoKnows, Me, Validation, Catalog).
+// read command (Explain, WhoKnows, Me, Validation, Catalog, Identities).
 type Document interface {
 	writeText(p *printer)
 	writeMarkdown(p *printer)

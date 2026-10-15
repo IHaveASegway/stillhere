@@ -24,7 +24,7 @@ type Value struct {
 
 // Subject is what a value is about.
 type Subject struct {
-	Kind         string `json:"kind"`          // person, area, repo or change
+	Kind         string `json:"kind"`          // person, area, repo, group or change (domain.Subject*)
 	Key          string `json:"key"`           // a person's canonical email, or "@login" for an unlinked GitHub account; JSON only
 	Name         string `json:"name"`          // a person's display name, "@login", or "" when there is none a page may show (personName); "" for other kinds
 	NameWithheld bool   `json:"name_withheld"` // a person's name is "" because it gives an address away
@@ -126,7 +126,11 @@ type Me struct {
 	Person     Subject    `json:"person"`
 	Values     []Value    `json:"values"` // sorted by metric, scope and window
 	Ranks      []MeRank   `json:"ranks"`  // sorted by metric and scope
-	Caveats    []Caveat   `json:"caveats"`
+	// Metrics are the definitions of the metrics the page shows, in
+	// registry order, as explain carries its one (#66): a value is printed
+	// as a share exactly when its metric's Ratio says so, whatever its den.
+	Metrics []MetricInfo `json:"metrics"`
+	Caveats []Caveat     `json:"caveats"`
 }
 
 // MeRank is one person's place in one rank table.

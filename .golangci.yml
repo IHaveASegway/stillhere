@@ -173,8 +173,9 @@ linters:
             - *no-github
             - *no-mcp
             - *no-sqlite
-        # The use cases: core and collect, and the outside world only through
-        # the ports in app.Deps.
+        # The use cases: core and collect, and git, facts.db and GitHub only
+        # through the ports in app.Deps. The files a run touches outside git
+        # (discovery's directories, blame's ignore-revs lists) are collect's.
         app:
           list-mode: strict
           files:

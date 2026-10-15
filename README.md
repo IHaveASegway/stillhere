@@ -111,7 +111,7 @@ Everything after `--` is the server's own command line; add `--db FILE` there fo
 | `--allow-source` | Commit subjects stay local and `diff` refuses. With it, `diff` runs git, offline, on the clones the scan read. |
 | `--run ID` | Each call reads the latest complete or partial scan, so a new scan shows up mid-session. |
 
-Whatever the flags, a repository's or group's AI-assisted share is sent only when at least three people landed in it: with fewer, it would be close to one person's own share.
+Whatever the flags, a repository's or group's AI-assisted share is sent only when at least three people landed in it, counting as one person the addresses `stillhere identities` links: with fewer, it would be close to one person's own share. A share is also withheld when it would let a withheld share be worked out from the shares sent beside it, such as a group's less its repositories'.
 
 The skill in [plugins/stillhere/skills/stillhere](plugins/stillhere/skills/stillhere/SKILL.md) teaches your agent which tool answers which question, how to read rank intervals, and the stated limits. It is at that path in a checkout and in every release archive, and the Homebrew cask keeps it in the cask's own directory, `$(brew --caskroom)/stillhere/<version>/plugins/stillhere/skills/stillhere`. Copy that directory to `~/.claude/skills/stillhere` to use it in every project, or load the plugin it belongs to for one session: `claude --plugin-dir plugins/stillhere`, run in a checkout or an unpacked archive.
 

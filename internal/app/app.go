@@ -1,8 +1,10 @@
 // Package app holds stillhere's use cases: week, scan, report, explain,
-// who-knows, me, validate, metrics and sync, and the MCP server's from M4.
-// Each one orchestrates the core and the collectors and reaches the outside
-// world only through the ports it is handed in Deps, so it never imports an
-// adapter, os/exec, database/sql or cobra, and never opens a file
+// who-knows, me, validate, metrics, identities and sync, and the MCP
+// server's from M4. Each one orchestrates the core and the collectors, and
+// reaches git, facts.db and GitHub only through the ports it is handed in
+// Deps, so it never imports an adapter, os/exec, database/sql or cobra, and
+// never opens a file itself: the files a run touches outside git are
+// collect's, the directories discovery reads and blame's ignore-revs lists
 // (docs/spec/codebase.md#the-dependency-rule).
 //
 // Requests arrive already parsed and validated by an inbound adapter (the
@@ -41,9 +43,11 @@ type Deps struct {
 	Store domain.FactStore   // nil for week
 	Forge domain.ForgeSource // sync only: the forge's API
 	// ForgeStore is the forge replica in facts.db, the same store as Store:
-	// sync writes it; scan reads it (LoadForge) and records the watermarks
-	// it read (PutRunWatermarks); the read use cases read those back
-	// (RunWatermarks) to say when a run's GitHub data was synced. With nil,
+	// sync writes it; scan reads it (LoadForge) and records what it read,
+	// the watermarks (PutRunWatermarks) and the repositories and pull
+	// requests (PutRunForge); the read use cases read those back
+	// (RunWatermarks, RunForge) to say when a run's GitHub data was synced
+	// and to compute over the run's own GitHub data (ADR 0011). With nil,
 	// a scan reads no GitHub data, and neither a scan nor a reader says
 	// anything about it, provenance or caveat: they cannot speak for a
 	// replica they were not given, and so a stored run renders as its scan

@@ -78,6 +78,17 @@ func aiLowerBound() Caveat {
 	return Caveat{Code: codeAILowerBound, Message: "AI-assisted shares are a lower bound: editor completions leave no trace in git."}
 }
 
+// NoValuesCaveat is the no-values caveat (docs/spec/report-json.md#caveats)
+// of a section or an answer whose emptiness is not a real zero or a real
+// "nobody", with message saying why it is empty: an empty who-knows answer
+// that carries it prints "no answer", never "nobody" (noAnswer). The code
+// is report's, so a use case that finds such an emptiness itself, as
+// app.WhoKnows does for a path the run does not have, makes its caveat
+// here rather than repeat the code.
+func NoValuesCaveat(message string) Caveat {
+	return Caveat{Code: codeNoValues, Message: message}
+}
+
 // repoCaveats says what could make one repository's numbers wrong.
 func repoCaveats(rf *domain.RepoFacts) []Caveat {
 	name := rf.Repo.Name

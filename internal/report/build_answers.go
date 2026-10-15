@@ -294,8 +294,9 @@ type MeInput struct {
 	Ranks  []RankSet            // whole rank tables: the person's place is found in each
 	Forge  *ForgeRead           // the GitHub data the run read; nil when the reader cannot tell
 	// Metrics are the registry's definitions, at least of the page's
-	// metrics: the ranked ones among them carry their validity notes to
-	// the page (ValidityCaveats).
+	// metrics. The page keeps those of its own (Me.Metrics), whose Ratio
+	// says which values print as a share (#66), and the ranked ones among
+	// them carry their validity notes to it (ValidityCaveats).
 	Metrics  []MetricInfo
 	Commands Commands // how the page names the commands it sends the reader to; nil: the command line's
 }
@@ -356,7 +357,10 @@ func NewMe(in *MeInput) *Me {
 	if c, ok := sameName(in.Facts, in.Who, in.Email, in.Commands); ok {
 		m.Caveats = append(m.Caveats, c)
 	}
-	// Each caveat goes where the number it qualifies is (#48): a person's
+	// The page carries the definitions of the metrics it shows, as explain
+	// carries its one, so the renderers print a value as a share by its
+	// metric's one declaration (MetricInfo.Ratio), never by its den (#66).
+	// And each caveat goes where the number it qualifies is (#48): a person's
 	// page shows their ranked values and ranks, so it says how far each
 	// ranked metric is validated, as its rank table does, and their own
 	// AI-assisted share, on their own page, is a lower bound (#69).
@@ -366,6 +370,7 @@ func NewMe(in *MeInput) *Me {
 			shown = append(shown, mi)
 		}
 	}
+	m.Metrics = shown
 	m.Caveats = append(m.Caveats, ValidityCaveats(shown...)...)
 	if metrics[MetricAIAssisted] {
 		m.Caveats = append(m.Caveats, aiLowerBound())
