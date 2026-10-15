@@ -329,12 +329,12 @@ type Policy struct {
 	                // deny list is in the TOML; the prefix makes the split unambiguous, so no edit moves bytes across it
 	                // and keeps the hash
 	Headline Headline // [headline] Metric string
-	Week     Week     // [week] Days int; Sort string
+	Week     Week     // [week] Days int, 1 to 36500 (--days should hold to the same bound); Sort string
 	Blame    Blame    // [blame] MaxBytes int64
 	Bots     Bots     // [bots] Fragments []string, lowercased
 	AI       AI       // [ai] Version int; CoauthorEmails, AgentAuthors []string. Matches co-author emails and agent
 	                  // authors only: a rule on another trailer (Made-with:) needs a collector field and a new ai_assisted version
-	Roles    Roles    // [roles] Extensions, Names map[string]domain.Role; Path []PathRule
+	Roles    Roles    // [roles] Extensions (one dot each: classify reads the last dot suffix), Names map[string]domain.Role; Path []PathRule
 	Paths    Paths    // [paths] Deny []*regexp.Regexp, matched with Denies; Source "package:generated_paths.txt" or "policy"
 }
 type PathRule struct {
@@ -614,7 +614,7 @@ Tests sit at stable boundaries, so a refactor does not rewrite them (Kent Beck, 
 
 | Test | Package | Asserts |
 | --- | --- | --- |
-| `TestWeekOracle` | `app` | the week table in the fixture spec |
+| `TestWeekOracle` | `app` | the week table in the fixture spec, and the `--days 1` window against `[week] days = 7`: `window.days` 1, `days_from` `cli`, `since` `2026-10-06T00:00:00Z` |
 | `TestStillHereOracle` | `app` | the still-here table and the concentration walk |
 | `TestChangeOracles` | `app` | `durable@1`, `simplifying@1`, reverts and AI-assisted tags on both fixtures; `knowledge_loss@1` and `who_knows@1` on the main fixture |
 | `TestDeterminism` | `app` | two scans of the fixture give byte-identical JSON without `timings` |
@@ -623,8 +623,8 @@ Tests sit at stable boundaries, so a refactor does not rewrite them (Kent Beck, 
 | `TestAttributes` | `collect` | `check-attr --source` on a work tree and a bare clone: the scanned commit's attributes, not the checked-out ones, matched case-sensitively under `core.ignorecase=true`; an attribute that settles a generated header; a deleted path classified by Head's attributes |
 | `TestNumstatRename` | `collect` | the rename path forms |
 | `TestBlamePorcelain` | `collect` | `--line-porcelain` and `--porcelain` parse to the same counts |
-| `TestClassify` | `classify` | roles, role precedence, `too_big`, segment matching, the deny list's minimum contents, Linguist's attribute values |
-| `TestPolicy` | `policy` | a missing table or key exits 2; `[week] days` is the file's and in its hash (the `--days` override itself is `TestWeekOracle`'s); the hash covers the deny list; `FromSource(p.Source)` has `p.Ref()`; every deny line compiles and the file names RE2, Linguist (MIT) and the upstream commit; the deny prefilter never changes an answer |
+| `TestClassify` | `classify` | roles, role precedence, test directories for code and configuration only, `too_big`, segment matching, the deny list's minimum contents and what it leaves out, Linguist's attribute values |
+| `TestPolicy` | `policy` | a missing table or key exits 2; `[week] days` is the file's, in its hash, and 1 to 36500 (the `--days` override itself is `TestWeekOracle`'s); an extension holds one dot; the hash covers the deny list, and the packaged files hold no CR; `FromSource(p.Source)` has `p.Ref()`; every deny line compiles and the file names RE2, Linguist (MIT) and the upstream commit; the deny prefilter never changes an answer |
 | `TestRankIntervals` | `rank` | reproducible intervals; ineligible subjects unranked |
 | `TestRedact` | `redact` | no credential survives `URL`, `Scrub` or `Message` (userinfo, scp-like and malformed remotes, query strings, quotes, the 180-rune cut); text that holds none is unchanged |
 | `TestRunner` | `gitcli` | per-user and system attributes change neither numstat nor `check-attr`; no askpass, signature or external diff program runs; an inherited `GIT_DIR` changes nothing; a timeout or cancellation kills git's process group and is reported as such even when the reader fails first on the truncated output; a helper that left the group cannot hold `Stream` |

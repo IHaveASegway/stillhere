@@ -16,6 +16,10 @@ import (
 // schemaVersion is the only policy schema version this stillhere reads.
 const schemaVersion = 1
 
+// maxWeekDays bounds [week] days: a century, far beyond any history,
+// and small enough that no day arithmetic on the window can overflow.
+const maxWeekDays = 36500
+
 // The values the schema allows for [headline] metric and [week] sort.
 const (
 	headlineProdNonblank = "prod_nonblank_lines"
@@ -195,8 +199,8 @@ func build(name string, tomlText, denyText []byte, from origin) (*Policy, []stri
 	if f.Headline.Metric != headlineProdNonblank {
 		c.problemf("[headline] metric %q: the only headline is %q", f.Headline.Metric, headlineProdNonblank)
 	}
-	if f.Week.Days < 1 {
-		c.problemf("[week] days = %d: want 1 or more", f.Week.Days)
+	if f.Week.Days < 1 || f.Week.Days > maxWeekDays {
+		c.problemf("[week] days = %d: want 1 to %d", f.Week.Days, maxWeekDays)
 	}
 	if f.Week.Sort != sortLinesAdded && f.Week.Sort != sortCommits {
 		c.problemf("[week] sort %q: want %q or %q", f.Week.Sort, sortLinesAdded, sortCommits)
@@ -313,6 +317,10 @@ func (c *checker) roles(f rolesFile) Roles {
 			return "", "want a dot and at least one character, such as \".go\""
 		case strings.ContainsAny(ext, "/\x00") || strings.ContainsFunc(ext, unicode.IsSpace):
 			return "", "an extension holds no slash or space"
+		case strings.Count(ext, ".") > 1:
+			// classify reads only the name's last dot suffix, so the entry
+			// would never match.
+			return "", "an extension is the name's last dot suffix, with one dot, such as \".gz\"; a [[roles.path]] pattern matches a longer suffix"
 		}
 		return strings.ToLower(ext), ""
 	})

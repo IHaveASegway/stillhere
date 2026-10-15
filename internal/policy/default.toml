@@ -18,7 +18,7 @@ version = 1
 metric = "prod_nonblank_lines"
 
 [week]
-days = 7             # the window, in days back from --now; --days overrides it
+days = 7             # the window, in days back from --now (1 to 36500); --days overrides it
 sort = "lines_added" # or "commits"; --week-sort overrides it
 
 [blame]
@@ -60,7 +60,8 @@ agent_authors = ["copilot"]
 # counts toward the still-here headline. A path rule overrides the role the
 # file's name or extension gives.
 [roles.extensions]
-# The file name's last dot suffix, ignoring case.
+# The file name's last dot suffix, ignoring case, so an extension holds one
+# dot: ".gz", never ".tar.gz", which a [[roles.path]] pattern can match.
 prod = [
   ".php", ".go", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs", ".py", ".rb",
   ".java", ".kt", ".swift", ".m", ".mm", ".c", ".h", ".cc", ".cpp", ".hpp",
@@ -84,6 +85,10 @@ iac = ["Dockerfile", "Makefile", "Containerfile"]
 [[roles.path]]
 role = "test"
 pattern = '(^|/)(tests|test|__tests__|spec|testing)(/|$)'
+# Code and configuration only: data under a test directory (tests/data.csv,
+# golden files, Jest snapshots) has no role, and documentation stays doc, so
+# docs/spec/, a specification, is no test suite.
+when = ["prod", "sql", "markup", "iac"]
 
 [[roles.path]]
 role = "test"

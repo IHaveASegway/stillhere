@@ -1,0 +1,6 @@
+# The packaged policy's bytes are what its hash covers (Policy.Source), and
+# go:embed embeds them as checked out. A Windows clone converts LF to CRLF
+# under core.autocrlf=true, Git for Windows' default, which would give the
+# same commit a second packaged policy hash. eol=lf keeps them LF.
+default.toml        eol=lf
+generated_paths.txt eol=lf

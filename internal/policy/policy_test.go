@@ -180,7 +180,7 @@ func TestPolicy(t *testing.T) {
 			`bots=["[bot]" "copilot" "dependabot" "renovate" "github-actions" "gpt-engineer"]`,
 			`ai=1 ["noreply@anthropic.com" "aider@aider.chat"] ["copilot"]`,
 			`names=map[Containerfile:iac Dockerfile:iac Makefile:iac]`,
-			"rule test (^|/)(tests|test|__tests__|spec|testing)(/|$) []\n",
+			"rule test (^|/)(tests|test|__tests__|spec|testing)(/|$) [prod sql markup iac]\n",
 			"rule migration (^|/)migrations(/|$) [prod]\n",
 			"rule seed (^|/)(seeders|factories|seeds|fixtures)(/|$) [prod sql]\n",
 			"paths=package:generated_paths.txt\n",
@@ -195,6 +195,12 @@ func TestPolicy(t *testing.T) {
 		// The hash covers the TOML bytes, a length prefix and the deny list.
 		if want := source(defaultTOML, denyFile); string(p.Source) != string(want) {
 			t.Errorf("Source is not the length-prefixed default.toml and generated_paths.txt")
+		}
+		// Those bytes are the checkout's: a CRLF checkout (core.autocrlf on
+		// Windows) would build a second packaged hash from the same commit,
+		// which the package's .gitattributes (eol=lf) prevents.
+		if strings.Contains(defaultTOML+denyFile, "\r") {
+			t.Errorf("default.toml or generated_paths.txt holds a CR: check internal/policy/.gitattributes")
 		}
 		if p.SHA256 != sha(p.Source) || p.Ref() != (domain.PolicyRef{Version: 1, SHA256: sha(p.Source)}) {
 			t.Errorf("SHA256 = %s, Ref = %+v; want the SHA-256 of Source, %s", p.SHA256, p.Ref(), sha(p.Source))
@@ -244,9 +250,10 @@ func TestPolicy(t *testing.T) {
 			t.Fatalf("Default: %v", err)
 		}
 		for _, path := range []string{
-			"node_modules/x/index.js", "vendor/lib.py", "dist/app.js", "build/out.js", "coverage/lcov.info",
+			"node_modules/x/index.js", "vendor/lib.py", "dist/app.js", "coverage/lcov.info",
 			".next/cache.js", "out/main.js", "third_party/zlib/zlib.h", "pkg/__pycache__/m.py", ".venv/lib/x.py",
-			"venv/lib/x.py", "storage/framework/x.php", "bootstrap/cache/config.php", "go.sum", "web/app.min.js",
+			"venv/lib/x.py", "storage/framework/views/0a1b.php", "apps/web/storage/logs/laravel.log",
+			"bootstrap/cache/config.php", "go.sum", "web/app.min.js",
 			"api/user.pb.go", "api/user_pb2.py", "internal/mocks/store.go", "gen/api.go", "GPBMetadata/User.php",
 			"package-lock.json", "yarn.lock", "Cargo.lock", "composer.lock", "Gemfile.lock", "poetry.lock",
 		} {
@@ -254,7 +261,14 @@ func TestPolicy(t *testing.T) {
 				t.Errorf("the packaged deny list does not deny %s", path)
 			}
 		}
-		for _, path := range []string{"api/user.proto", "service.py", "internal/cache/lru.go", "internal/env/env.go", "builder/x.go", "vendored.go"} {
+		// Left out on purpose: directories that usually hold a team's own
+		// code (Linguist's cache/ and env/; build/ and storage/ beyond
+		// Laravel's), and names that only contain a denied segment.
+		for _, path := range []string{
+			"api/user.proto", "service.py", "internal/cache/lru.go", "internal/env/env.go",
+			"internal/storage/postgres.go", "storage/filesystem/dotgit/dotgit.go", "src/go/build/build.go",
+			"build/ci/release.sh", "builder/x.go", "vendored.go",
+		} {
 			if p.Paths.Denies(path) {
 				t.Errorf("the packaged deny list denies %s", path)
 			}
@@ -346,6 +360,8 @@ func TestPolicy(t *testing.T) {
 			{"version = 1\n[headline]", "version = 2\n[headline]", "version = 2"},
 			{"metric = \"prod_nonblank_lines\"", "metric = \"geared_fp\"", "[headline] metric"},
 			{"days = 7", "days = 0", "[week] days = 0"},
+			// A day count that window arithmetic would overflow.
+			{"days = 7", "days = 9223372036854775807", "[week] days = 9223372036854775807: want 1 to 36500"},
 			{"days = 7", "days = \"7\"", "week.days"},
 			{"sort = \"lines_added\"", "sort = \"lines\"", "[week] sort"},
 			{"max_bytes = 400000", "max_bytes = 0", "[blame] max_bytes"},
@@ -354,6 +370,8 @@ func TestPolicy(t *testing.T) {
 			{"\"NoReply@Anthropic.com\"", "\"noreply\"", `"noreply" is not an email address`},
 			{"doc = [\".md\"]", "doc = [\".md\", \".py\"]", "listed for both"},
 			{"doc = [\".md\"]", "doc = [\"md\"]", "want a dot"},
+			// classify reads only the last dot suffix, so this would never match.
+			{"doc = [\".md\"]", "doc = [\".md\", \".tar.gz\"]", "last dot suffix"},
 			{"iac = [\"Dockerfile\"]", "iac = [\"build/Dockerfile\"]", "without a slash"},
 		} {
 			text := strings.Replace(full, c.old, c.new, 1)

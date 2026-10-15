@@ -1,6 +1,6 @@
 # Classification
 
-Status: carried over from the 2026-10-07 plan, updated 2026-10-14 (RE2 patterns, `check-attr --source`; then, with #5's code, Linguist's attribute values, the curated deny list, the exact header sniff, `Test.php`) · the week predicate becomes tests in M0, blame roles in M1
+Status: carried over from the 2026-10-07 plan, updated 2026-10-14 (RE2 patterns, `check-attr --source`; then, with #5's code, Linguist's attribute values, the curated deny list, the exact header sniff, `Test.php`; then, from #5's review, `storage` narrowed to Laravel's and `build` left out, test directories for code only) · the week predicate becomes tests in M0, blame roles in M1
 
 There is one ordered classifier. The week collector and the blame collector both call it; there is no second, looser filter.
 
@@ -28,10 +28,13 @@ Exactly one policy file governs a run: `--policy FILE`, else `./stillhere.toml`,
   - the `generated.rb` rules that read only the path, with Ruby's delimiters removed and `/i` written `(?i)`; `go_vendor?` uses lookaround and is rewritten without it, as an equivalent DNS-label pattern;
   - none of the `generated.rb` rules that read file content, which the [header sniff](#header-sniff) covers in part;
   - two `vendor.yml` rules left out on purpose, commented in place with the reason. `(^|/)cache/` and `(^|/)env/` match directories that usually hold a team's own code, such as a Go `internal/cache` package. Linguist only drops such files from a language bar; stillhere would silently drop their authors' lines from every ownership and durability number. Laravel's generated `bootstrap/cache` and virtual environments (`venv`, `.venv`) are denied by the minimum contents below. A repository that keeps third-party code there marks it with `linguist-vendored`.
+- **Two segments of stillhere's own are left out for the same reason**, as the file's last section records; Linguist has neither. Across the 175,079 files with a role in 1,120 Go modules (a module cache, 2026-10-14), the files under either segment were the modules' own packages, scripts and test data, never vendored code or build output:
+  - `(^|/)build(/|$)`: 221 files, such as Go's `go/build` package and Thrift's `build/docker` scripts. Build output is in every common `.gitignore` template, and a repository that commits it marks it `linguist-generated`.
+  - `(^|/)storage(/|$)`: 1,083 files, such as go-git's `storage/` and Kubernetes' `storage/v1` API types. The rule was for Laravel, so the list denies Laravel's `storage/framework` (compiled Blade views, caches, sessions) and `storage/logs` instead.
 - **User file.** `[paths] deny = [...]` is the whole list. Setting `package_file`, setting both keys, or setting neither exits 2, because a user file's hash would not cover a packaged text file. A user who wants the packaged patterns copies them into `deny`.
 - **Minimum packaged contents:**
-  - single segments, each written as `(^|/)<segment>(/|$)`: `node_modules`, `vendor`, `dist`, `build`, `coverage`, `\.next`, `out`, `third_party`, `__pycache__`, `\.venv`, `venv`, `storage`;
-  - `(^|/)bootstrap/cache(/|$)`;
+  - single segments, each written as `(^|/)<segment>(/|$)`: `node_modules`, `vendor`, `dist`, `coverage`, `\.next`, `out`, `third_party`, `__pycache__`, `\.venv`, `venv`;
+  - Laravel's generated directories, as consecutive segments: `(^|/)bootstrap/cache(/|$)` and `(^|/)storage/(framework|logs)(/|$)`;
   - lock and sum files, including `go.sum`;
   - minified assets (`\.min\.js$`);
   - generated suffixes (`\.pb\.go$`, `_pb2\.py$`);
@@ -89,11 +92,11 @@ The default role map. The still-here headline counts `prod` only.
 | markup | `.css .scss .sass .less .html .htm .storyboard .xib` |
 | iac | `.yml .yaml .tf .hcl .toml .xml .json`, plus `Dockerfile`, `Makefile`, `Containerfile`, `*.sh` |
 | doc | `.md .rst .adoc` |
-| test | segments `tests`, `test`, `__tests__`, `spec`, `testing`; names ending `_test.go`, `.test.ts`, `.test.tsx`, `.spec.ts`, `.spec.tsx`, `.test.js`, `.spec.js`, `Test.php`, `Tests.swift` (case-sensitive: PHPUnit's `UserTest.php` and XCTest's `AppTests.swift`; a lowercase `test.php` would also take `latest.php`) |
+| test | segments `tests`, `test`, `__tests__`, `spec`, `testing`, when the extension or name role would have been `prod`, `sql`, `markup` or `iac`; names ending `_test.go`, `.test.ts`, `.test.tsx`, `.spec.ts`, `.spec.tsx`, `.test.js`, `.spec.js`, `Test.php`, `Tests.swift` (case-sensitive: PHPUnit's `UserTest.php` and XCTest's `AppTests.swift`; a lowercase `test.php` would also take `latest.php`) |
 | migration | segment `migrations`, when the extension role would have been `prod` |
 | seed | segments `seeders`, `factories`, `seeds`, `fixtures`, when the extension role would have been `prod` or `sql` |
 
-Path roles override extension roles. The 2026-10-07 plan left the precedence among path roles implicit (for example `tests/fixtures/x.py`). The precedence is test, then migration, then seed, pinned by `TestClassify`. Path rules are tried in that order, and the first rule whose pattern matches **and** whose condition admits the extension or name role wins: `db/migrations/seeds/x.sql` (extension role `sql`) is `seed`, because the migration rule admits only `prod`. An exact name wins over the extension, and the extension is the file name's last dot suffix, lowercased. A rule without a condition admits any path, so a file under `tests/` is `test` whatever its extension. (Under the packaged deny list `tests/fixtures/` is denied anyway, by Linguist's test-fixture rule, so the precedence matters for what `classify.Role` reports.)
+Path roles override extension roles. The 2026-10-07 plan left the precedence among path roles implicit (for example `tests/fixtures/x.py`). The precedence is test, then migration, then seed, pinned by `TestClassify`. Path rules are tried in that order, and the first rule whose pattern matches **and** whose condition admits the extension or name role wins: `db/migrations/seeds/x.sql` (extension role `sql`) is `seed`, because the migration rule admits only `prod`. An exact name wins over the extension, and the extension is the file name's last dot suffix, lowercased, so a policy may list only extensions with one dot (`.gz`, never `.tar.gz`, which a path rule can match). A rule without a condition admits any path. The test-segment rule has one: a file under a test directory is `test` when it is code or configuration, while data there gets no role (`tests/data.csv`, golden files, Jest's `__snapshots__/*.snap`, which Jest writes itself) and documentation stays `doc` (`tests/README.md`, and `docs/spec/`, a specification rather than an RSpec suite). Without it, every such file would count toward week `lines_added` as test code, and the header sniff would never read it. (Under the packaged deny list `tests/fixtures/` is denied anyway, by Linguist's test-fixture rule, so the precedence matters for what `classify.Role` reports.)
 
 ## Open decision #2: weights and gearing
 

@@ -49,7 +49,18 @@ func TestClassify(t *testing.T) {
 			{"spec/models/user_spec.rb", domain.RoleTest},
 			{"testsuite/runner.py", domain.RoleProd}, // not a test segment
 			{"contest/entry.py", domain.RoleProd},
-			{"tests", domain.RoleTest}, // the segment may be the whole path, such as a test script
+
+			// The packaged test-segment rule admits code and configuration
+			// only: data, golden files and snapshots get no role, and
+			// documentation stays doc, so docs/spec/ is no RSpec suite.
+			{"test/e2e/values.yaml", domain.RoleTest},
+			{"spec/fixtures.sql", domain.RoleTest},
+			{"tests/data.csv", ""},
+			{"tests/golden/report.txt", ""},
+			{"src/__tests__/__snapshots__/button.test.js.snap", ""},
+			{"tests/README.md", domain.RoleDoc},
+			{"docs/spec/codebase.md", domain.RoleDoc},
+			{"tests", ""}, // a name with no role is not admitted, even where the segment is the whole path
 
 			// Test names.
 			{"internal/rank/rank_test.go", domain.RoleTest},
@@ -114,6 +125,10 @@ func TestClassify(t *testing.T) {
 			// packaged list: those directories usually hold first-party code.
 			{"a cache package", at("internal/cache/lru.go", 10), domain.RoleProd, ""},
 			{"an env package", at("internal/env/env.go", 10), domain.RoleProd, ""},
+			// So are build/ and storage/, beyond Laravel's storage/framework.
+			{"a build package", at("src/go/build/build.go", 10), domain.RoleProd, ""},
+			{"a storage package", at("internal/storage/postgres.go", 10), domain.RoleProd, ""},
+			{"Laravel's compiled views", at("storage/framework/views/0a1b.php", 10), "", domain.SkipDeniedPath},
 
 			// too_big: strictly above [blame] max_bytes, and only with a
 			// known size.
@@ -214,6 +229,7 @@ deny = ['(^|/)bootstrap/cache(/|$)']
 		}{
 			{"test/x.py", domain.RoleTest, ""},
 			{"a/test/x.py", domain.RoleTest, ""},
+			{"test", domain.RoleTest, ""}, // the segment may be the whole path; this rule has no when
 			{"tests/x.py", domain.RoleProd, ""},
 			{"latest/x.py", domain.RoleProd, ""},
 			{"bootstrap/cache/config.py", "", domain.SkipDeniedPath},

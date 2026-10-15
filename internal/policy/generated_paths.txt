@@ -598,7 +598,6 @@ Pipfile\.lock
 (^|/)node_modules(/|$)
 (^|/)vendor(/|$)
 (^|/)dist(/|$)
-(^|/)build(/|$)
 (^|/)coverage(/|$)
 (^|/)\.next(/|$)
 (^|/)out(/|$)
@@ -606,11 +605,13 @@ Pipfile\.lock
 (^|/)__pycache__(/|$)
 (^|/)\.venv(/|$)
 (^|/)venv(/|$)
-(^|/)storage(/|$)
 
 # Two consecutive segments, in one pattern: comparing one path component
-# with "bootstrap/cache" never matches bootstrap/cache/config.php.
+# with "bootstrap/cache" never matches bootstrap/cache/config.php. These are
+# Laravel's generated directories: bootstrap/cache, and in storage/ the
+# compiled Blade views, caches, sessions and logs.
 (^|/)bootstrap/cache(/|$)
+(^|/)storage/(framework|logs)(/|$)
 
 # Lock and sum files that Linguist leaves to its language data
 (^|/)go\.sum$
@@ -663,3 +664,17 @@ _pb\.(js|ts|rb)$
 # (^|/)env/    "django". An env/ package or env/ configuration is
 #              first-party code. Virtual environments are denied as venv
 #              and .venv in section 3.
+#
+# Two segments of stillhere's own are left out of section 3 for the same
+# reason; Linguist has neither. In a census of the 175,079 files with a
+# role in 1,120 Go modules (a module cache, 2026-10-14), the files under
+# either segment were the modules' own packages, scripts and test data,
+# never vendored code or build output:
+#
+# (^|/)build(/|$)    221 files, such as Go's go/build package and Thrift's
+#                    build/docker scripts. Build output is in every common
+#                    .gitignore template; a repository that commits it can
+#                    mark it linguist-generated.
+# (^|/)storage(/|$)  1,083 files, such as go-git's storage/ and Kubernetes'
+#                    storage/v1 API types. The rule was for Laravel, whose
+#                    storage/framework and storage/logs section 3 denies.
