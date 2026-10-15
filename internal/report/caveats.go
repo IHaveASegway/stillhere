@@ -32,6 +32,10 @@ const (
 	codeNoValues      = "no-values"
 	codeAILowerBound  = "ai-lower-bound"
 	codeValidity      = "validity"
+	// codeHeadAfterNow (#70) is a repository's warning, whose message names
+	// the commit the run read and the landings after --now, so it is that
+	// repository's caveat as it stands; summaries words it for several.
+	codeHeadAfterNow = "head-after-now"
 )
 
 // largeRepoLines is the size, in surviving prod lines, from which a
@@ -57,6 +61,8 @@ var summaries = map[string]string{
 	codeNumstat:       "Some numstat rows could not be read and count 0 lines.",
 	codeNoIgnoreRevs:  "Large repositories without a .git-blame-ignore-revs: a formatting commit would take the credit for every line it touched.",
 	codeDuplicate:     "Clones of the same remote as these repositories were skipped as duplicates: each repository is counted once (see their warnings).",
+	codeHeadAfterNow: "These repositories are read as they stood at --now: their branches have landings at or after it, " +
+		"which no number here counts (see their warnings for the commit read and how many).",
 }
 
 func notFetched() Caveat {

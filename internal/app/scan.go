@@ -87,7 +87,7 @@ func Scan(ctx context.Context, d Deps, r ScanRequest) (*report.Model, error) {
 
 	start := time.Now()
 	results, err := collectAll(ctx, pl.jobs, jobs, collector(d, collectOptions{
-		mode: collect.HistoryScan, window: window, ignoreRevsFile: r.IgnoreRevsFile,
+		mode: collect.HistoryScan, window: window, now: r.Now, ignoreRevsFile: r.IgnoreRevsFile,
 		// One slot per running git blame, shared by every repository.
 		slots: collect.NewBlameSlots(jobs),
 	}))

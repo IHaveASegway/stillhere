@@ -43,7 +43,7 @@ func Week(ctx context.Context, d Deps, r WeekRequest) (*report.Model, error) {
 	timings.DiscoverMS = time.Since(started).Milliseconds()
 
 	start := time.Now()
-	results, err := collectAll(ctx, pl.jobs, defaultJobs(), collector(d, collectOptions{mode: collect.HistoryWeek, window: window}))
+	results, err := collectAll(ctx, pl.jobs, defaultJobs(), collector(d, collectOptions{mode: collect.HistoryWeek, window: window, now: r.Now}))
 	if err != nil {
 		return nil, err
 	}

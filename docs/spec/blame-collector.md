@@ -1,8 +1,10 @@
 # Blame collector
 
-Status: carried over from the 2026-10-07 plan, updated 2026-10-14 (per-repo ignore-revs, per-commit rows, goroutine pool; then, with #7, the ignore-revs lookup, the list resolved to commits, its warnings, per-commit author keys and shared blame slots; then by #13: no `.gitattributes` file read, `--no-textconv`, `--indent-heuristic`, `--encoding=UTF-8`; then 2026-10-15, by #54's review: the porcelain `filename`, kept per row as the path in the commit) · becomes tests in M1
+Status: carried over from the 2026-10-07 plan, updated 2026-10-14 (per-repo ignore-revs, per-commit rows, goroutine pool; then, with #7, the ignore-revs lookup, the list resolved to commits, its warnings, per-commit author keys and shared blame slots; then by #13: no `.gitattributes` file read, `--no-textconv`, `--indent-heuristic`, `--encoding=UTF-8`; then 2026-10-15, by #54's review: the porcelain `filename`, kept per row as the path in the commit; then by #70: blame reads the commit as of `--now`, and `durable@1` classifies a row by its path in the commit) · becomes tests in M1
 
 This collector answers one question: whose non-blank lines does `git blame` still attribute on the default branch?
+
+`<sha>` below is the commit the run reads, the repository as it stood at `--now` (#70): the newest first-parent commit of the default branch whose committer time is before `--now`, which is the branch's head unless the head holds landings at or after `--now` ([run model](codebase.md#run-model)). Every activity window ends at `--now`, so blaming a newer head would credit lines written after `--now` to people whose landings no window holds yet. The repository's ignore-revs file is read at that commit too.
 
 ## Tree and command
 

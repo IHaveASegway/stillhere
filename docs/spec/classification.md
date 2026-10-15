@@ -4,6 +4,8 @@ Status: carried over from the 2026-10-07 plan, updated 2026-10-14 (RE2 patterns,
 
 There is one ordered classifier. The week collector and the blame collector both call it; there is no second, looser filter.
 
+The scanned SHA is the commit the run reads: the repository as it stood at `--now`, the newest first-parent commit of the default branch committed before then ([run model](codebase.md#run-model)). Paths, sizes, attributes and headers are those of that commit, not of a newer head the clone has fetched.
+
 ## Order
 
 1. **Denied path**, decided by the [deny list](#deny-list) and then [.gitattributes](#gitattributes): adds 0 to `lines_added`, is not blamed, and counts toward `skipped.denied_path`.

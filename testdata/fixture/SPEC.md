@@ -336,6 +336,38 @@ Wrong implementations this catches:
 
 There are none. No commit has a `Co-authored-by` trailer, so no landing is AI-assisted: the share is 0 of 16 landings. GitHub Copilot's 2026-10-06 commit names no human co-author, so it is a bot commit, not an AI-assisted one, and it stays in the bot table. The revert query returns nothing.
 
+### A run reads each repository as it stood at `--now` (main fixture)
+
+A run reads each repository at the newest first-parent commit of its default branch whose committer time is before `--now`, strictly, as every window is half-open ([run model](../../docs/spec/codebase.md#run-model), #70): blame, classification and sizes read that commit, and the run's provenance heads record it. Every window ends at `--now`, so the code the run reads must be the code of that moment too.
+
+Scanned with `--now 2026-03-15T00:00:00Z`, the mailmap and both change metrics ranked, the main fixture's first-parent chain from HEAD (`4631a8b`) holds rows 16 down to 8, all on 2026-10-06, above row 7, `3cc4421`, committed 2026-03-01T12:00:00Z: the newest commit before then, which the run reads. Its windows:
+
+| Window at `--now 2026-03-15` | Interval | Main fixture landings in it |
+| --- | --- | --- |
+| The 365 days a scan collects | `[2025-03-15, 2026-03-15)` | rows 1 to 7 |
+| `knowledge_loss@1` activity | `[2025-09-16, 2026-03-15)` | rows 1 to 7 |
+| `durable@1` cohort | `[2025-03-15, 2025-12-15)` | none, so no one has a value |
+
+At `3cc4421`, the `prod` files that hold lines are `service.py` (beta, alpha and gamma: 6 non-blank lines, Ada's through `-M` and the mailmap, as in [Measured blame](#measured-blame) without delta), `old_name.py` (Ada's 3, not yet renamed), `split.py` (Gina 2, Hank 2) and `main_only.py` (Bob 5). Cara's `side.py` is still on `feature`, and nothing of 2026-10-06 exists yet. No bot holds a line.
+
+| Who | `surviving@1` (repository) | `landings_365d` |
+| --- | --- | --- |
+| Ada Example | 9 (`service.py` 6, `old_name.py` 3) | 3 (rows 1, 2 and 4) |
+| Bob Builder | 5 (`main_only.py`) | 2 (rows 3 and 7) |
+| Gina Split | 2 | 1 |
+| Hank Split | 2 | 1 |
+
+`knowledge_loss@1` is **0 / 18**, with `people` 4 and `people_inactive` 0: each of the four landed in the activity window. The repository's head is `3cc4421`, and it carries one `head-after-now` warning, also a caveat wherever its numbers are: `main` at commit `3cc4421757f1`, committed 2026-03-01T12:00:00Z, with 9 landings (rows 8 to 16) at or after `--now`, which no number counts.
+
+The check is metamorphic, so it covers every number the report prints, not only those above: the same repository with `main` reset to `3cc4421`, scanned again with the same `--now`, gives the same report, byte for byte in JSON, text and Markdown, apart from the `head-after-now` warning and caveats, which only the first scan has. The two scans read the same commit at the same path, so even their provenance agrees.
+
+A branch with no commit before `--now`: the same repository at `--now 2025-12-01T00:00:00Z`, before its root commit (2026-01-01), yields no facts. The scan stores no run and ends with `domain.ErrNoFacts` (exit 1), and its report holds one run-level `no-commit-before-now` warning: `main` has no commit before `--now`, only 16 landings at or after it.
+
+Wrong implementations this catches:
+
+- **Reading the fetched head** (`main` before #70). Blame at `4631a8b` puts the lines of 2026-10-06 beside activity counted before 2026-03-15: `knowledge_loss@1` 13 / 34, `people` 8, `people_inactive` 4 (Cara 9, Frank 2, Dana 1 and Erin 1, whose landings no window holds yet), Cara with 9 surviving lines and `landings_365d` 0, a provenance head of `4631a8b` and no caveat. At `--now 2025-12-01` it stores a run of 34 / 34, everyone inactive, and exits 0.
+- **Reading the commit but not recording it.** The provenance head stays `4631a8b` and the card says nothing, so a reader cannot tell which code the numbers describe.
+
 ## Sibling fixture
 
 `fixture.Sibling(t)` builds a second repository, named `sibling`, for the change cases that the main History must not hold. Those are AI-assisted trailers, reverts, a reformat listed in `.git-blame-ignore-revs`, a whitespace-only change, simplifying deletions, and enough landings to rank someone. A separate repository keeps the main oracles from moving.
@@ -942,7 +974,7 @@ The token check runs `Discover` over every path above with git's debug log on: t
 ## What fails CI
 
 - **Oracles.** Any week or still-here oracle above changes. That includes Frank's 3 versus 2, Ivy's `prod_lines_added` 0, Jules's 0-line commit, Erin's rename insertion of 1, Ada's single mailmapped week row, and both Gina and Hank at `majority_files` 1.
-- **Change oracles.** Any value in the change-oracle tables of either fixture changes. That includes Bob's move keeping 0 of 2, Ada's `durable@1` N of 2, Cara's absence from `durable@1`, `knowledge_loss@1` at 4/34, Lena eligible at exactly 10 clusters in both metrics, Omar not eligible at 9, S1 simplifying at exactly −20, S2 not simplifying at −16, Q1 untagged, M tagged through P2, and C1's 4 surviving lines credited to Pia (`surviving@1` 9), not to Copilot.
+- **Change oracles.** Any value in the change-oracle tables of either fixture changes. That includes Bob's move keeping 0 of 2, Ada's `durable@1` N of 2, Cara's absence from `durable@1`, `knowledge_loss@1` at 4/34, Lena eligible at exactly 10 clusters in both metrics, Omar not eligible at 9, S1 simplifying at exactly −20, S2 not simplifying at −16, Q1 untagged, M tagged through P2, and C1's 4 surviving lines credited to Pia (`surviving@1` 9), not to Copilot; and the main fixture at `--now 2026-03-15`, which must read `3cc4421`, say so, and render as the same repository cut back to it does.
 - **Regression guards.** A landing below a backdated first-parent commit goes missing, or that commit's own change counts for a landing; a rebased landing is chosen or dated by its author time, or credited to its committer; a revert that a `--no-ff` merge landed is not linked to the merge, or the merge's commits count in `durable@1` or `simplifying@1`, or the lines the revert restored leave `surviving@1`; a change git took for binary keeps, in `durable@1` or its `ai_assisted@1` cohort, any line blamed to its commit, through a rename History saw or not and whatever the role of its path, or another change loses its lines with it, a later text change to the same file included; a text line counts in one of `durable@1`'s sums and not the other because its path changed role on the way to HEAD.
 - **Classification.** `tests/test_service.py` is classified `prod`, or `bootstrap/cache/config.php` is blamed.
 - **Discovery.** A duplicate remote is not skipped, a scrubbed URL contains userinfo, a bare repo is skipped, the SSH and HTTPS forms of one path are collapsed, or a work tree is measured at a local branch although its clone has upstream's.
