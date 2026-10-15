@@ -10,6 +10,7 @@ import (
 
 	"github.com/IHaveASegway/stillhere/internal/app"
 	"github.com/IHaveASegway/stillhere/internal/domain"
+	"github.com/IHaveASegway/stillhere/internal/identity"
 	"github.com/IHaveASegway/stillhere/internal/redact"
 	"github.com/IHaveASegway/stillhere/internal/report"
 )
@@ -46,12 +47,25 @@ type resolver struct {
 func norm(s string) string { return strings.Join(strings.Fields(strings.ToLower(s)), " ") }
 
 // id is how an answer names a person when two share a name: the email with
-// --allow-emails, else its pseudonym; a login stays a login.
+// --allow-emails, else its pseudonym; a login (identity.LoginKey) stays a
+// login, and an address with an empty local part ("@example.com") is an
+// address like any other.
 func (r *resolver) id(p app.NamedPerson) string {
-	if r.emails || strings.HasPrefix(p.Key, "@") {
+	if r.emails || identity.LoginKey(p.Key) {
 		return p.Key
 	}
 	return pseudonym(p.Key)
+}
+
+// named is how the server's own sentences, and the fields that say whom an
+// answer is about, name a person: by display name as the reports print it,
+// or by id (r.id) when the reports show none, because git recorded none or
+// because it gives an address away (report.SubjectOf).
+func (r *resolver) named(p app.NamedPerson) string {
+	if p.Name != "" {
+		return p.Name
+	}
+	return r.id(p)
 }
 
 // person resolves a person: a display name as the reports print it
@@ -71,7 +85,7 @@ func (r *resolver) person(query string) (app.NamedPerson, *report.Caveat, error)
 	switch {
 	case isPseudonym(lower):
 		for _, p := range r.names.People {
-			if !strings.HasPrefix(p.Key, "@") && pseudonym(p.Key) == lower {
+			if !identity.LoginKey(p.Key) && pseudonym(p.Key) == lower {
 				return p, nil, nil
 			}
 		}
