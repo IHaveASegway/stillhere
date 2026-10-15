@@ -12,9 +12,12 @@ import (
 	"github.com/IHaveASegway/stillhere/internal/rank"
 )
 
-// This file is reviews_given@1 (docs/metrics.md#reviews_given1-m2). It
-// belongs to the GitHub sync (#14), which brings the forge facts it reads;
-// the rest of the package is #9's.
+// This file is reviews_given@1 (docs/metrics.md#reviews_given1-m2), which
+// the GitHub sync (#14) brought, and the reading of reviews that
+// knowledge_loss@1 and who_knows@1 share with it (#38): which reviews count,
+// and the pull requests a repository's landings landed. Who a login is
+// comes from identity.Directory.Reviewer, so the three metrics agree on it.
+// The rest of the package is #9's.
 
 // The window and eligibility of reviews_given@1: part of its versioned
 // definition.
@@ -37,6 +40,7 @@ func (reviewsGiven) Definition() Definition {
 		Question: "Who carries the review load?",
 		Unit:     "merged pull requests reviewed, per person",
 		Ranked:   true,
+		Forge:    true,
 		Eligibility: "at least 10 reviewed pull requests in the window; " +
 			"bots (an app account, or a [bots] match) are listed and never ranked",
 		BlindSpots: "reviews of pull requests that were closed unmerged or are still open; dismissed reviews; " +
@@ -196,11 +200,8 @@ type reviewsView struct {
 // user's SSH clone counts like a managed mirror, and a repository whose
 // collection failed adds nothing here, as it adds nothing to any number.
 //
-// A review counts when it was submitted in the window as an approval, a
-// change request or a comment, by an account with a login, on a pull
-// request merged before Now by someone else. "Someone else" compares
-// people, not only logins, so a second account of the author does not
-// count either.
+// A review counts when reviewsByOthers counts it, on a pull request merged
+// before Now.
 func newReviewsView(in *Input) *reviewsView {
 	if in == nil || in.Facts == nil || in.Facts.Forge == nil {
 		return nil
@@ -214,31 +215,18 @@ func newReviewsView(in *Input) *reviewsView {
 	for _, g := range fs.Groups {
 		rv.groupRepos[g.Name] = g.Repos
 	}
-	who := newReviewsLogins(in)
+	who := in.who()
 	for i := range fs.Forge.PullRequests {
 		p := &fs.Forge.PullRequests[i]
 		keys := rv.join[p.Repo]
 		if len(keys) == 0 || p.State != domain.PullMerged || p.Merged.IsZero() || !p.Merged.Before(fs.Now) {
 			continue
 		}
-		author := who.subject(p.Author)
 		byPerson := map[domain.Subject]*reviewsPull{}
-		for _, r := range p.Reviews {
-			switch r.State {
-			case domain.ReviewApproved, domain.ReviewChangesRequested, domain.ReviewCommented:
-			default:
-				continue
-			}
-			if r.Author.Login == "" || r.Author.Login == p.Author.Login || !rv.window.Contains(r.Submitted) {
-				continue
-			}
-			s := who.subject(r.Author)
-			if p.Author.Login != "" && s == author {
-				continue
-			}
+		reviewsByOthers(p, rv.window, who, func(r *domain.Review, s domain.Subject) {
 			c := byPerson[s]
 			if c == nil {
-				c = &reviewsPull{pull: p.ID, repos: keys, who: s, bot: who.bot(r.Author, s), first: r.Submitted}
+				c = &reviewsPull{pull: p.ID, repos: keys, who: s, bot: who.Bot(s.Key), first: r.Submitted}
 				byPerson[s] = c
 			}
 			if r.Submitted.Before(c.first) {
@@ -252,7 +240,7 @@ func newReviewsView(in *Input) *reviewsView {
 					c.approvalsNoComment++
 				}
 			}
-		}
+		})
 		for _, c := range byPerson {
 			rv.all = append(rv.all, *c)
 		}
@@ -300,81 +288,180 @@ func (rv *reviewsView) repoKeys() []string {
 	return slices.Compact(out)
 }
 
-// reviewsLogins resolves forge accounts to people. A login is a person when a
-// commit the forge attributes to it is in the run: the person is the run's
-// own mailmapped author of that SHA, the most such commits winning, then
-// the smallest email. That way git's mailmap stays the only identity store
-// (docs/spec/git-invocation.md#identity-mailmap-and-bots). Any other login
-// is the subject "@login" (ADR 0004), and an app's "@login[bot]".
-type reviewsLogins struct {
-	email map[string]string   // login → canonical email
-	who   *identity.Directory // Input.Who, or one built from the facts and the policy as Input documents
+// who returns the directory the metrics resolve people with: Input.Who, or
+// one built from the facts and the policy as Input documents. Without it no
+// [bots] fragment would match, and a User-typed bot account (renovate, a
+// [bot] machine user) would be ranked; nor would any login be linked.
+func (in *Input) who() *identity.Directory {
+	if in.Who != nil {
+		return in.Who
+	}
+	return identity.New(in.Facts, in.Policy)
 }
 
-func newReviewsLogins(in *Input) reviewsLogins {
-	author := map[string]string{} // SHA → canonical author email in the run
-	for _, r := range in.Facts.Repos {
-		for _, c := range r.Commits {
-			if c.Author.Email != "" {
-				author[c.SHA] = c.Author.Email
+// reviewsSubmitted reports whether a review is submitted work: an approval,
+// a change request or a comment. A dismissed review is not, nor a state
+// the forge adds later.
+func reviewsSubmitted(r *domain.Review) bool {
+	switch r.State {
+	case domain.ReviewApproved, domain.ReviewChangesRequested, domain.ReviewCommented:
+		return true
+	}
+	return false
+}
+
+// reviewsByOthers calls fn with every review of p that reviews_given@1 and
+// who_knows@1 count, in the pull request's order, and the subject who
+// submitted it: submitted work (reviewsSubmitted) in w, by an account with
+// a login, who is someone other than the pull request's author. "Someone
+// other" compares people, not only logins (identity.Directory.Reviewer), so
+// a second account of the author does not count either.
+func reviewsByOthers(p *domain.PullRequest, w domain.Window, who *identity.Directory, fn func(*domain.Review, domain.Subject)) {
+	author := who.Reviewer(p.Author)
+	for i := range p.Reviews {
+		r := &p.Reviews[i]
+		if !reviewsSubmitted(r) || r.Author.Login == "" || r.Author.Login == p.Author.Login || !w.Contains(r.Submitted) {
+			continue
+		}
+		s := who.Reviewer(r.Author)
+		if p.Author.Login != "" && s == author {
+			continue
+		}
+		fn(r, s)
+	}
+}
+
+// reviewsJoin is domain.ForgeJoin over the view's repositories: for each
+// forge repository, the Repo.Key of the view's repositories it is. A
+// repository the view left out, such as one a who-knows query did not ask
+// about, joins nothing. It is nil without GitHub data.
+func (v *view) reviewsJoin() map[string][]string {
+	if v.facts == nil || v.facts.Forge == nil {
+		return nil
+	}
+	in := make(map[string]bool, len(v.repos))
+	for _, r := range v.repos {
+		in[r.key] = true
+	}
+	var out map[string][]string
+	for id, keys := range domain.ForgeJoin(v.facts.Repos, v.facts.Forge.Repos) {
+		keys = slices.DeleteFunc(slices.Clone(keys), func(k string) bool { return !in[k] })
+		if len(keys) == 0 {
+			continue
+		}
+		if out == nil {
+			out = map[string][]string{}
+		}
+		out[id] = keys
+	}
+	return out
+}
+
+// reviewsActive returns the people, by canonical email, who submitted a
+// review (reviewsSubmitted) in w on any pull request of the view's forge
+// repositories, whatever its state, their own pull requests included:
+// knowledge_loss@1's review activity. A reviewer the run cannot link to an
+// email ("@login") holds no line, so it is left out, and so is an app
+// account. It is nil without GitHub data.
+func (v *view) reviewsActive(w domain.Window) map[string]bool {
+	join := v.reviewsJoin()
+	if len(join) == 0 {
+		return nil
+	}
+	var out map[string]bool
+	for i := range v.facts.Forge.PullRequests {
+		p := &v.facts.Forge.PullRequests[i]
+		if len(join[p.Repo]) == 0 {
+			continue
+		}
+		for j := range p.Reviews {
+			r := &p.Reviews[j]
+			if !reviewsSubmitted(r) || r.Author.Login == "" || !w.Contains(r.Submitted) {
+				continue
+			}
+			if s := v.who.Reviewer(r.Author); !strings.HasPrefix(s.Key, "@") {
+				if out == nil {
+					out = map[string]bool{}
+				}
+				out[s.Key] = true
 			}
 		}
 	}
-	type vote struct{ login, sha string }
-	seen := map[vote]bool{}
-	votes := map[string]map[string]int{} // login → email → distinct commits
-	count := func(c domain.ForgeCommit) {
-		email, ok := author[c.SHA]
-		if c.AuthorLogin == "" || !ok || seen[vote{c.AuthorLogin, c.SHA}] {
-			return
-		}
-		seen[vote{c.AuthorLogin, c.SHA}] = true
-		if votes[c.AuthorLogin] == nil {
-			votes[c.AuthorLogin] = map[string]int{}
-		}
-		votes[c.AuthorLogin][email]++
+	return out
+}
+
+// reviewsLanded is one merged pull request of a repository, with the
+// landings that put it on the default branch.
+type reviewsLanded struct {
+	pull     *domain.PullRequest
+	landings []*landingView
+}
+
+// reviewsLandings returns the merged pull requests of the view's repository
+// r that landed in its history, each with its landings, and whether the run
+// has GitHub data for r at all: a forge repository that joins it, whose
+// replica held a page or a finished sync when the run read it. Without
+// that, who_knows@1's reviewers are unknown, not none.
+//
+// A pull request lands as its merge commit (PullRequest.MergeCommit), which
+// GitHub reports for each merge method as the commit the base branch was
+// updated to: a merge commit, whose landing's map holds the pull request's
+// commits; a squash commit, the one landing; and for a rebase merge, the
+// last of the commits it put on the branch one by one. Those carry new
+// SHAs, which the pull request's commit list does not hold, and they share
+// the merge's committer time, so the first-parent landings before the
+// merge commit's that share its committer time, and are not merges, which
+// a rebase never puts on the branch, are the pull request's too, up to its
+// commit count. A squash of several commits stops at its own landing, whose
+// first parent another change committed earlier. A pull request merged
+// into another branch has no landing of its own.
+func (v *view) reviewsLandings(r *repoView) ([]reviewsLanded, bool) {
+	join := v.reviewsJoin()
+	if len(join) == 0 {
+		return nil, false
 	}
-	for i := range in.Facts.Forge.PullRequests {
-		p := &in.Facts.Forge.PullRequests[i]
-		for _, c := range p.Commits {
-			count(c)
+	known := false
+	for _, wm := range v.facts.Forge.Watermarks {
+		if slices.Contains(join[wm.Repo], r.key) && (!wm.Updated.IsZero() || !wm.Synced.IsZero()) {
+			known = true
 		}
-		count(p.MergeCommit)
 	}
-	who := in.Who
-	if who == nil {
-		// Input.Who is optional; metrics.Compute hands every metric the
-		// Input it was given. Without a directory no [bots] fragment would
-		// match, and a User-typed bot account (renovate, a [bot] machine
-		// user) would be ranked.
-		who = identity.New(in.Facts, in.Policy)
+	if !known {
+		return nil, false
 	}
-	links := reviewsLogins{email: map[string]string{}, who: who}
-	for login, emails := range votes {
-		best, n := "", 0
-		for email, k := range emails {
-			if k > n || k == n && email < best {
-				best, n = email, k
+	bySHA := make(map[string]*landingView, len(r.landings))
+	for _, l := range r.landings {
+		bySHA[l.sha] = l
+	}
+	firstParent := map[string]string{} // landing commit → its first parent, a landing too when the history reaches it
+	for i := range v.facts.Repos {
+		if rf := &v.facts.Repos[i]; rf.Repo.Key == r.key {
+			for j := range rf.Commits {
+				if c := &rf.Commits[j]; bySHA[c.SHA] != nil && len(c.Parents) > 0 {
+					firstParent[c.SHA] = c.Parents[0]
+				}
 			}
 		}
-		links.email[login] = best
 	}
-	return links
-}
-
-// subject is the person behind an account.
-func (l reviewsLogins) subject(u domain.ForgeUser) domain.Subject {
-	switch {
-	case u.Bot:
-		return domain.Subject{Kind: domain.SubjectPerson, Key: "@" + strings.TrimSuffix(u.Login, "[bot]") + "[bot]"}
-	case l.email[u.Login] != "":
-		return domain.Subject{Kind: domain.SubjectPerson, Key: l.email[u.Login]}
+	var out []reviewsLanded
+	for i := range v.facts.Forge.PullRequests {
+		p := &v.facts.Forge.PullRequests[i]
+		l := bySHA[p.MergeCommit.SHA]
+		if p.State != domain.PullMerged || l == nil || !slices.Contains(join[p.Repo], r.key) {
+			continue
+		}
+		pl := reviewsLanded{pull: p, landings: []*landingView{l}}
+		if l.commit != nil && !l.commit.merge {
+			for sha := l.sha; len(pl.landings) < len(p.Commits); {
+				prev := bySHA[firstParent[sha]]
+				if prev == nil || prev.commit == nil || prev.commit.merge || !prev.time.Equal(l.time) {
+					break
+				}
+				pl.landings = append(pl.landings, prev)
+				sha = prev.sha
+			}
+		}
+		out = append(out, pl)
 	}
-	return domain.Subject{Kind: domain.SubjectPerson, Key: "@" + u.Login}
-}
-
-// bot reports whether an account is a bot: an app account, or a subject the
-// policy's [bots] fragments match, as identity decides for every metric.
-func (l reviewsLogins) bot(u domain.ForgeUser, s domain.Subject) bool {
-	return u.Bot || l.who.Bot(s.Key)
+	return out, true
 }

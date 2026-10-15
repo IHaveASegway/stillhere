@@ -29,14 +29,22 @@ func (whoKnowsV1) Definition() Definition {
 			"lines, with Detail prod_files and files_with_majority; and one value per person listed, whose Value is their prod " +
 			"lines under the path, with Detail majority_files (files under the path they hold at least half of), recent_landings " +
 			"(landings in [now - 90d, now) in which a non-merge commit credited to them changed non-blank lines on a path with a " +
-			"role under the path, ignore-revs commits excluded) and top_author (1 to 5, by prod lines then email, when they are " +
-			"one of the top five). A person is listed when any of the three applies. Bots are ranked among bots, apart.",
+			"role under the path, ignore-revs commits excluded), top_author (1 to 5, by prod lines then email, when they are " +
+			"one of the top five) and, when the run has GitHub data for the repository, recent_reviews (merged pull requests " +
+			"authored by someone else whose landings changed the path as recent_landings counts a change, on which they " +
+			"submitted a review, approved, changes requested or commented, in [now - 90d, now)). A person is listed when any " +
+			"of the four applies; a reviewer the run cannot link to an email is listed as @login. Bots are ranked among bots, " +
+			"apart.",
 		Ranked:      false,
+		Forge:       true,
 		Eligibility: "Not ranked: it routes questions to people.",
-		BlindSpots: "Reviews (M2) are not counted yet. Moves across files credit the mover. Someone who knows the code but has " +
-			"neither written its surviving lines nor landed a change under it recently does not appear.",
+		BlindSpots: "Moves across files credit the mover. Someone who knows the code but has neither written its surviving lines, " +
+			"nor landed or reviewed a change under it recently, does not appear. Reviews count only in repositories whose " +
+			"GitHub data the run read, on pull requests that landed on the default branch: one merged into another branch, " +
+			"which reached it inside another landing, does not count. A rebase merge whose commits GitHub committed in " +
+			"different seconds counts its last commit only.",
 		Gaming:   "Not a target: appearing in it earns nothing but questions.",
-		Oracle:   "testdata/fixture/SPEC.md#who_knows1-main-fixture",
+		Oracle:   "testdata/fixture/SPEC.md#who_knows1-main-fixture and #reviews-in-knowledge_loss1-and-who_knows1-main-fixture",
 		Validity: "Context. Mockus and Herbsleb, \"Expertise Browser\" (ICSE 2002), routed questions by the same experience atoms (changes). " + survivingValidity,
 	}
 }
@@ -115,9 +123,9 @@ func whoKnows(v *view, r *repoView, prefix string, w domain.Window) []domain.Met
 		return prefix == "" || p == prefix || strings.HasPrefix(p, prefix+"/")
 	}
 	type person struct {
-		email                     string
-		lines, majority, landings int
-		top                       int
+		email                              string
+		lines, majority, landings, reviews int
+		top                                int
 	}
 	people := make(map[string]*person)
 	files, withMajority, lines := 0, 0, 0
@@ -153,6 +161,25 @@ func whoKnows(v *view, r *repoView, prefix string, w domain.Window) []domain.Met
 			lookup(people, email).landings++
 		}
 	}
+	// Recent reviewers: who reviewed, in w, a merged pull request whose
+	// landings changed a path under the query, as a lander's change counts.
+	// The review's time is what makes it recent, so a pull request that
+	// landed earlier counts for a review in w.
+	pulls, reviewed := v.reviewsLandings(r)
+	for _, pl := range pulls {
+		if !slices.ContainsFunc(pl.landings, func(l *landingView) bool { return l.changedUnder(r, under) }) {
+			continue
+		}
+		var reviewers []string
+		reviewsByOthers(pl.pull, w, v.who, func(_ *domain.Review, s domain.Subject) {
+			if !slices.Contains(reviewers, s.Key) {
+				reviewers = append(reviewers, s.Key)
+			}
+		})
+		for _, key := range reviewers {
+			lookup(people, key).reviews++
+		}
+	}
 	if files == 0 && len(people) == 0 {
 		return nil
 	}
@@ -184,7 +211,7 @@ func whoKnows(v *view, r *repoView, prefix string, w domain.Window) []domain.Met
 		"files_with_majority": float64(withMajority),
 	})}
 	for email, p := range people {
-		if p.majority == 0 && p.landings == 0 && p.top == 0 {
+		if p.majority == 0 && p.landings == 0 && p.top == 0 && p.reviews == 0 {
 			continue
 		}
 		detail := map[string]float64{
@@ -194,9 +221,24 @@ func whoKnows(v *view, r *repoView, prefix string, w domain.Window) []domain.Met
 		if p.top > 0 {
 			detail["top_author"] = float64(p.top)
 		}
+		if reviewed {
+			// Without GitHub data for the repository its reviews are
+			// unknown, so the key is absent, never 0.
+			detail["recent_reviews"] = float64(p.reviews)
+		}
 		out = append(out, count(whoKnowsID, scope, personSubject(email), w, p.lines, 0, detail))
 	}
 	return out
+}
+
+// changedUnder reports whether the landing changed a path under the query
+// as recent landers count a change: a commit of its map, neither a merge
+// nor listed in the ignore-revs file, whose own patch changed one
+// (commitView.changedUnder).
+func (l *landingView) changedUnder(r *repoView, under func(string) bool) bool {
+	return slices.ContainsFunc(l.commits, func(c *commitView) bool {
+		return !c.merge && !c.ignored && c.changedUnder(r, under)
+	})
 }
 
 // pathSubject names what a who_knows@1 query asked about: the repository

@@ -36,6 +36,7 @@ type MetricInfo struct {
 	Question    string `json:"question"`
 	Unit        string `json:"unit"`
 	Ranked      bool   `json:"ranked"`
+	Forge       bool   `json:"forge"` // reads the GitHub data a run read (metrics.Definition.Forge): dated by its sync
 	Eligibility string `json:"eligibility"`
 	BlindSpots  string `json:"blind_spots"`
 	Gaming      string `json:"gaming"`
@@ -94,16 +95,23 @@ type WhoKnowsRepo struct {
 	MajorityOwners    []Knower `json:"majority_owners"`     // hold at least half the lines of a file under the path
 	TopAuthors        []Knower `json:"top_authors"`         // up to five, by prod lines under the path, then email
 	RecentLanders     []Knower `json:"recent_landers"`      // credited with a change under the path in the last 90 days
-	Bots              []Knower `json:"bots"`                // listed apart, never mixed into the lists above
+	// RecentReviewers reviewed, in the last 90 days, a merged pull request
+	// that changed the path, by the GitHub data the run read: [] also when
+	// the run has none for the repository, which provenance.forge then does
+	// not list.
+	RecentReviewers []Knower `json:"recent_reviewers"`
+	Bots            []Knower `json:"bots"` // listed apart, never mixed into the lists above
 }
 
-// Knower is one person's knowledge of a path.
+// Knower is one person's knowledge of a path. Email is a reviewer's
+// "@login" when the run cannot link the login to an email.
 type Knower struct {
 	Email          string `json:"email"`
 	Name           string `json:"name"`
 	Lines          int    `json:"lines"`           // surviving prod non-blank lines under the path
 	MajorityFiles  int    `json:"majority_files"`  // files under the path where the person is a majority owner
 	RecentLandings int    `json:"recent_landings"` // landings in the last 90 days that changed the path
+	RecentReviews  int    `json:"recent_reviews"`  // pull requests that changed the path, reviewed in the last 90 days
 }
 
 // Me is one person's own page: every value and rank interval the run holds

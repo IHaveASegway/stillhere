@@ -275,6 +275,7 @@ func (b *builder) card(rf *domain.RepoFacts, still *StillHere) RepoCard {
 	// it carries the standing caveats too; the text and Markdown renderers
 	// print those once, at the top of the report.
 	c.Caveats = append([]Caveat{notFetched()}, stripRepos(repoCaveats(rf))...)
+	c.Caveats = append(c.Caveats, b.forgeSectionCaveats([]*domain.RepoFacts{rf}, used)...)
 	if c.AIAssisted != nil {
 		c.Caveats = append(c.Caveats, aiLowerBound())
 	}
@@ -332,7 +333,7 @@ func (b *builder) overview(scope domain.Scope, members []*domain.RepoFacts) Over
 	o.Totals.Bots = len(bots)
 	b.use(used...)
 	o.Provenance = b.provenance(members, used)
-	o.Caveats = b.scopeCaveats(members, scope, o.AIAssisted != nil)
+	o.Caveats = append(b.scopeCaveats(members, scope, o.AIAssisted != nil), b.forgeSectionCaveats(members, used)...)
 	return o
 }
 
@@ -599,8 +600,8 @@ func (b *builder) rankTable(rs RankSet) RankTable {
 	members := b.scopeMembers(rs.Scope)
 	t.Provenance = b.provenance(members, []string{rs.Metric.ID})
 	t.Caveats = b.scopeCaveats(members, rs.Scope, false)
-	if forgeMetric(rs.Metric.ID) {
-		t.Caveats = append(t.Caveats, b.forgeCaveats(members)...)
+	if b.in.Forge.reads(rs.Metric.ID) {
+		t.Caveats = append(t.Caveats, b.forgeCaveats(members, rs.Metric.ID, true)...)
 	}
 	if len(t.Ranked)+len(t.BelowMin)+len(t.Bots) == 0 {
 		// A table asked for is printed even when empty, so that a rank
@@ -635,8 +636,22 @@ func (b *builder) provenance(repos []*domain.RepoFacts, metrics []string) Proven
 	ids := slices.Clone(metrics)
 	slices.Sort(ids)
 	p.Metrics = slices.Compact(ids)
-	p.Forge = b.forgeProvenance(repos)
+	p.Forge = b.forgeProvenance(repos, p.Metrics)
 	return p
+}
+
+// forgeSectionCaveats says where the GitHub data behind the numbers of a
+// section that shows several metrics, a card or an overview, is missing:
+// for each metric among used that reads it (knowledge_loss@1), over the
+// section's repositories, members.
+func (b *builder) forgeSectionCaveats(members []*domain.RepoFacts, used []string) []Caveat {
+	var out []Caveat
+	for _, id := range slices.Compact(slices.Sorted(slices.Values(used))) {
+		if b.in.Forge.reads(id) {
+			out = append(out, b.forgeCaveats(members, id, false)...)
+		}
+	}
+	return out
 }
 
 // filesBlamed counts the paths blame read without an error: every path at

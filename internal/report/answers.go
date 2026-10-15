@@ -23,7 +23,7 @@ func provenanceText(pv Provenance) string {
 	if pv.Policy != "" {
 		s += " · policy " + short12(pv.Policy)
 	}
-	if slices.ContainsFunc(pv.Metrics, forgeMetric) {
+	if forgeDated(pv) {
 		s += forgeAsOf(pv.Forge)
 	}
 	return s
@@ -220,6 +220,29 @@ func lineCount(k Knower) string  { return grouped(k.Lines) }
 func landingCount(k Knower) string {
 	return "(" + plural(k.RecentLandings, "landing", "landings") + ")"
 }
+func reviewCount(k Knower) string {
+	return "(" + plural(k.RecentReviews, "pull request", "pull requests") + ")"
+}
+
+// reviewsShown reports whether a who-knows answer lists recent reviewers
+// for the repository: it has some, or the run read GitHub data for it
+// (the answer's provenance.forge lists it), so "none" is a real none. A
+// repository without GitHub data lists no reviewers line at all, so a
+// git-only answer says nothing about GitHub.
+func (w *WhoKnows) reviewsShown(r WhoKnowsRepo) bool {
+	return len(r.RecentReviewers) > 0 ||
+		w.Provenance.Forge != nil && slices.ContainsFunc(w.Provenance.Forge.Repos, func(s ForgeSync) bool { return s.Key == r.Key })
+}
+
+// whoKnowsIntro says what the answer lists, reviewers included where it
+// shows them.
+func (w *WhoKnows) whoKnowsIntro() string {
+	lists := "majority owners, the top authors of surviving prod lines, and recent landers (90 days)"
+	if slices.ContainsFunc(w.Repos, w.reviewsShown) {
+		lists = "majority owners, the top authors of surviving prod lines, and recent landers and reviewers (90 days)"
+	}
+	return "a routing answer, not a rank: " + lists
+}
 
 // noAnswer reports whether an answer's caveats say a metric it reads gave
 // no values although the run has their facts: the answer is then missing,
@@ -234,8 +257,7 @@ func (w *WhoKnows) writeText(p *printer) {
 		path = "the whole repository"
 	}
 	p.wrapped("", "  ", "who knows "+clean(path)+" · "+provenanceText(w.Provenance))
-	p.wrapped("  ", "  ", "a routing answer, not a rank: majority owners, the top authors of surviving prod lines, "+
-		"and recent landers (90 days)")
+	p.wrapped("  ", "  ", w.whoKnowsIntro())
 	switch {
 	case len(w.Repos) == 0 && noAnswer(w.Caveats):
 		p.blank()
@@ -250,6 +272,9 @@ func (w *WhoKnows) writeText(p *printer) {
 		p.wrapped("  majority owners  ", "                   ", knowers(r.MajorityOwners, clean, ownerCount))
 		p.wrapped("  top authors      ", "                   ", knowers(r.TopAuthors, clean, lineCount))
 		p.wrapped("  recent landers   ", "                   ", knowers(r.RecentLanders, clean, landingCount))
+		if w.reviewsShown(r) {
+			p.wrapped("  recent reviewers ", "                   ", knowers(r.RecentReviewers, clean, reviewCount))
+		}
 		if len(r.Bots) > 0 {
 			p.wrapped("  bots             ", "                   ", knowers(r.Bots, clean, lineCount))
 		}
@@ -265,7 +290,8 @@ func (w *WhoKnows) writeMarkdown(p *printer) {
 	p.line("# Who knows " + path)
 	p.blank()
 	p.line("- " + provenanceText(w.Provenance))
-	p.line("- A routing answer, not a rank: majority owners, the top authors of surviving prod lines, and recent landers (90 days).")
+	intro := w.whoKnowsIntro()
+	p.line("- " + strings.ToUpper(intro[:1]) + intro[1:] + ".")
 	switch {
 	case len(w.Repos) == 0 && noAnswer(w.Caveats):
 		p.blank()
@@ -282,6 +308,9 @@ func (w *WhoKnows) writeMarkdown(p *printer) {
 		p.line("- Majority owners: " + knowers(r.MajorityOwners, mdText, ownerCount))
 		p.line("- Top authors: " + knowers(r.TopAuthors, mdText, lineCount))
 		p.line("- Recent landers: " + knowers(r.RecentLanders, mdText, landingCount))
+		if w.reviewsShown(r) {
+			p.line("- Recent reviewers: " + knowers(r.RecentReviewers, mdText, reviewCount))
+		}
 		if len(r.Bots) > 0 {
 			p.line("- Bots: " + knowers(r.Bots, mdText, lineCount))
 		}

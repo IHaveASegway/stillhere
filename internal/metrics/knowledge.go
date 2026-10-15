@@ -5,9 +5,9 @@ import (
 )
 
 // knowledgeLossV1 is knowledge_loss@1: the share of an area's surviving prod
-// lines held by people who have had no landing anywhere in the scanned
-// organization for 180 days. Knowledge is held by people, so lines credited
-// to bots are in neither part of the share.
+// lines held by people who have had neither a landing nor a submitted review
+// anywhere in the scanned organization for 180 days. Knowledge is held by
+// people, so lines credited to bots are in neither part of the share.
 type knowledgeLossV1 struct{}
 
 var knowledgeLossID = domain.MetricID{Name: "knowledge_loss", Version: 1}
@@ -19,15 +19,20 @@ func (knowledgeLossV1) Definition() Definition {
 		Question: "How much of the code is held by people who have gone quiet?",
 		Unit: "Num / Den per repository (subject repo), per top-level directory (subject area, \"<repo key>:<dir>/\") and per " +
 			"group (subject group): Den is the surviving prod lines credited to people (bots excluded), Num the part credited to " +
-			"people with no landing in [now - 180d, now) in any scanned repository. A person has had a landing when a commit " +
+			"people with no activity in [now - 180d, now) in any scanned repository. A person has had activity when a commit " +
 			"credited to them, merge commits included, is in a landing in the window, so a side-branch author is active when " +
-			"the branch lands. Detail: people (humans holding lines), people_inactive.",
+			"the branch lands, or when they submitted a review (approved, changes requested or commented) in the window on any " +
+			"pull request of the scanned repositories, open, closed or merged, in the GitHub data the run read. Detail: people " +
+			"(humans holding lines), people_inactive.",
 		Ranked:      false,
+		Forge:       true,
 		Eligibility: "Not ranked: it describes code, not people.",
 		BlindSpots: "People who moved to repositories outside the scan look gone. Mailmap gaps split one person in two and can make " +
-			"either half look gone. Reviews are not activity until the GitHub sync (M2). Blame's blind spots apply.",
-		Gaming:   "Not a target for people; a quiet expert who lands one trivial change resets their clock.",
-		Oracle:   "testdata/fixture/SPEC.md#knowledge_loss1-main-fixture",
+			"either half look gone. Reviews count only on the pull requests of repositories whose GitHub data the run read, and " +
+			"only for a reviewer the run links to an email (a login whose commits are in the run): a reviewer shown as @login " +
+			"holds no line. Blame's blind spots apply.",
+		Gaming:   "Not a target for people; a quiet expert who lands one trivial change, or submits one review, resets their clock.",
+		Oracle:   "testdata/fixture/SPEC.md#knowledge_loss1-main-fixture and #reviews-in-knowledge_loss1-and-who_knows1-main-fixture",
 		Validity: knowledgeLossValidity,
 	}
 }
@@ -44,6 +49,12 @@ func (m knowledgeLossV1) Compute(in *Input) ([]domain.MetricValue, error) { retu
 func (knowledgeLossV1) compute(v *view) ([]domain.MetricValue, error) {
 	w := v.window(activityDays, 0)
 	active := v.active(w)
+	// A review is activity as a landing is (docs/metrics.md#knowledge_loss1-per-area):
+	// someone who reviewed has not gone quiet. Only a reviewer linked to an
+	// email can hold lines, so only they change a value.
+	for email := range v.reviewsActive(w) {
+		active[email] = true
+	}
 	var out []domain.MetricValue
 	add := func(s domain.Scope, sub domain.Subject, files []*fileView) {
 		if val, ok := knowledgeLoss(v, active, s, sub, w, files); ok {

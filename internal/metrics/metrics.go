@@ -29,9 +29,15 @@ import (
 // Definition is a metric's published contract: the catalog entry of
 // docs/metrics.md, in code.
 type Definition struct {
-	ID                                                domain.MetricID
-	Question, Unit                                    string
-	Ranked                                            bool
+	ID             domain.MetricID
+	Question, Unit string
+	Ranked         bool
+	// Forge is true for a metric that reads the GitHub data a run read
+	// (FactSet.Forge): its numbers are as current as that data's sync, and
+	// a report dates them by it and says where it is missing. It is the one
+	// declaration of which metrics read GitHub data, so a new metric that
+	// reads reviews is dated and caveated with no second list to forget.
+	Forge                                             bool
 	Eligibility, BlindSpots, Gaming, Oracle, Validity string
 }
 
@@ -44,8 +50,11 @@ type Definition struct {
 type Input struct {
 	Facts  *domain.FactSet
 	Policy *policy.Policy
-	Who    *identity.Directory // nil: built from Facts and Policy
-	Days   int                 // landed@1 window, at least 1; 0: the policy's [week] days
+	// Who is nil, and then built from Facts and Policy, or a directory
+	// identity.New built over the same facts, FactSet.Forge included: the
+	// GitHub data is what links a login to a person (Reviewer).
+	Who  *identity.Directory
+	Days int // landed@1 window, at least 1; 0: the policy's [week] days
 }
 
 // weekDays returns landed@1's window in days: Days, else the policy's
