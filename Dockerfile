@@ -16,6 +16,11 @@
 #
 #   docker run --rm --user "$(id -u):$(id -g)" -v "$PWD:/work:ro" \
 #     ghcr.io/ihaveasegway/stillhere week /work
+#
+# week stores nothing. A command that stores facts (scan, from M1) writes to
+# /data, which only the image's own user may enter: run as another user, it
+# needs a directory that user owns mounted there, such as
+# -v "$HOME/.stillhere:/data".
 
 # Alpine because its git tracks upstream (2.54 in 3.24) and the image stays
 # small. Pinned by digest so a rebuild cannot silently change the base;
@@ -32,14 +37,17 @@ SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 # breaks the build at the next security fix. The build asserts the floor
 # instead, and fails rather than ship a git stillhere refuses to run. The
 # user has a fixed numeric UID, so a runtime that must prove it runs as
-# non-root (Kubernetes runAsNonRoot) can check it.
+# non-root (Kubernetes runAsNonRoot) can check it. /data, STILLHERE_HOME,
+# holds facts.db and the mirrors, so it is 0700 like every directory that
+# holds them (docs/spec/codebase.md#security); a named volume mounted there
+# starts with the same owner and mode.
 # hadolint ignore=DL3018
 RUN apk add --no-cache git tini \
  && git version | awk '{ split($3, v, "."); ok = v[1] > 2 || (v[1] == 2 && v[2] >= 44); seen = $3 } END { if (!ok) { print "git " seen " is older than the 2.44 floor"; exit 1 } }' \
  && addgroup -S -g 10001 stillhere \
  && adduser -S -D -u 10001 -G stillhere -h /home/stillhere stillhere \
- && mkdir -p /data /work \
- && chown stillhere:stillhere /data /work
+ && install -d -m 0700 -o 10001 -g 10001 /data \
+ && install -d -m 0755 -o 10001 -g 10001 /work
 
 ARG TARGETPLATFORM
 COPY ${TARGETPLATFORM}/stillhere /usr/local/bin/stillhere

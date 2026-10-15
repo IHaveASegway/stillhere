@@ -66,6 +66,8 @@ docker run --rm --user "$(id -u):$(id -g)" -v "$HOME/src:/work:ro" \
 
 Docker Desktop on macOS presents mounted files as owned by root, so there either pass `--user 0:0` or use the Homebrew install.
 
+The commands that store facts (`scan`, from M1) keep them under `STILLHERE_HOME`, which is `/data` in the image, a directory only the image's own user may enter. When you pass `--user`, mount a directory that user owns there, such as `-v "$HOME/.stillhere:/data"`.
+
 ## License
 
 [Apache-2.0](LICENSE) ([ADR 0008](docs/adr/0008-apache-2-public.md)). Contributions are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md).
