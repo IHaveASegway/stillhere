@@ -214,7 +214,7 @@ type RankInterval struct {
 	Subject        Subject
 	Window         Window
 	Estimate       float64
-	Lo, Hi         float64 // 95% interval of the value
+	Lo, Hi         float64 // 95% interval of the value; 0 when not eligible
 	RankLo, RankHi int     // 95% interval of the rank; 0 when not eligible
 	N              int
 	Eligible       bool
@@ -457,16 +457,21 @@ type Cluster struct {
 	Change string  // landing SHA or PR id
 	Num    float64
 	Den    float64 // Ratio only
-	Block  int     // Sum only: the week (counted back from Now) the change landed in
+	Block  int     // Sum only: the window's 7-day block the change landed in, counted back from w.Until (Now for every Sum
+	               // metric) and half-open like the window: block k holds [Until − 7(k+1) days, Until − 7k days), so a
+	               // landing at t is in block ⌈(Until − t) / 7 days⌉ − 1, and 0 is the last 7 days; in [0, Blocks)
 }
 type Options struct { // supplied by the ranked metric (metrics.RankInput)
 	Replicates int // B; 0 means 1000
 	MinN       int // eligibility: clusters per subject, from the metric's definition
-	Blocks     int // Sum only: week blocks in the window
+	Blocks     int // Sum only: the window's 7-day blocks, ⌈(Until − Since) / 7 days⌉, the oldest one short: 13 for 90 days
 }
+// Intervals panics on what only a bug in the ranked metric produces, rather than publish plausible but wrong
+// intervals: a Kind other than Ratio and Sum and, for Sum, an empty window, a Blocks other than the window's, or a
+// Block outside [0, Blocks) in any subject's clusters, eligible or not. The options are checked even when data is empty.
 func Intervals(id domain.MetricID, scope domain.Scope, w domain.Window, kind Kind, data map[domain.Subject][]Cluster, opt Options) []domain.RankInterval
 func Seed(id domain.MetricID, scope domain.Scope, w domain.Window) uint64
-func AUC(pos, neg []float64) float64
+func AUC(pos, neg []float64) float64 // Mann-Whitney, a tie counting 1/2; 0.5 when pos or neg is empty: no pairs, not chance
 
 // report
 type Model struct{ /* stillhere.report/v1; see spec/report-json.md */ }
@@ -647,7 +652,8 @@ Tests sit at stable boundaries, so a refactor does not rewrite them (Kent Beck, 
 | `TestBlamePorcelain` | `collect` | `--line-porcelain` and `--porcelain` parse to the same counts |
 | `TestClassify` | `classify` | roles, role precedence, test directories for code and configuration only, `too_big`, segment matching, the deny list's minimum contents and what it leaves out, Linguist's attribute values, no role for a link or a submodule |
 | `TestPolicy` | `policy` | a missing table or key exits 2; `[week] days` is the file's, in its hash, and 1 to 36500 (the `--days` override itself is `TestWeekOracle`'s); an extension holds one dot; the hash covers the deny list, and the packaged files hold no CR; `FromSource(p.Source)` has `p.Ref()`; every deny line compiles and the file names RE2, Linguist (MIT) and the upstream commit; the deny prefilter never changes an answer |
-| `TestRankIntervals` | `rank` | reproducible intervals; ineligible subjects unranked |
+| `TestRankIntervals` | `rank` | reproducible intervals; ineligible subjects unranked; a sum's week blocks checked against its window |
+| `TestAUC` | `rank` | the validity check's statistic: a hand-counted example with ties, 1 and 0 for perfect separation, 0.5 when either class is empty, and the value counting every pair gives |
 | `TestRedact` | `redact` | no credential survives `URL`, `Scrub` or `Message` (userinfo, scp-like and malformed remotes, query strings, quotes, the 180-rune cut); text that holds none is unchanged |
 | `TestRunner` | `gitcli` | per-user and system attributes change neither numstat nor `check-attr`; no askpass, signature or external diff program runs; an inherited `GIT_DIR` changes nothing; a timeout or cancellation kills git's process group and is reported as such even when the reader fails first on the truncated output; a helper that left the group cannot hold `Stream` |
 | `TestStoreRoundTrip` | `sqlite` | `LoadFacts(PutRepoFacts(x)) == x`, a zero loading as +0; `Run(id)` returns the run as begun and finished, policy source included; readers never see a running or failed run (`ErrNotFound`) |

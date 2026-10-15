@@ -15,7 +15,7 @@ Rules also apply when people are ranked. The EU AI Act (Annex III 4(b)) treats *
 ## Decision
 
 - Rank **one metric at a time**: `durable`, `simplifying`, `reviews_given` (M2), `load_bearing` (M5). No composite score.
-- Every rank shows a **95% interval** from a cluster bootstrap over the person's landings, seeded so it is reproducible. People below the minimum sample (10 landings, or 10 reviewed pull requests) are listed and not ranked.
+- Every rank shows a **95% interval** from a bootstrap, seeded so it is reproducible: over the person's landings for a ratio metric, and over the window's weeks for a sum (amended 2026-10-14; the method is [ADR 0010](0010-rank-intervals-bootstrap-per-kind.md)). People below the minimum sample (10 landings, or 10 reviewed pull requests) are listed and not ranked.
 - Activity (`landed`) and `surviving` lines are context, never ranked.
 - **Visibility**: members of a named GitHub team (leads) see ranks. Every person can see their own page with exactly the facts their lead sees. Org members see change highlights and code-area views.
 - Bots are never ranked. AI-assisted work is credited to the human and tagged ([ADR 0007](0007-ai-assisted-attribution.md)).
