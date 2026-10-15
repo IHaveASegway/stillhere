@@ -553,12 +553,45 @@ Two clones whose `origin` is `https://user:TOKENVALUE@github.com/example/widget.
 - A work-tree clone and a bare mirror with the same HTTPS remote are duplicates.
 - `git@github.com:o/r.git` and `https://github.com/o/r.git` stay two separate repos.
 
+`fixture.Discovery` builds the layout. Every repo is a clone of one upstream whose `main` has two commits and whose `trunk` is one commit ahead of `main`; a clone's `origin` is the URL named below, or absent. Each row is one `Discover` call, and the expected result follows from the layout and [discovery.md](../../docs/spec/discovery.md), not from the code:
+
+| Paths named | Repos (key) | Groups | Warnings and failures | Wrong implementation it catches |
+| --- | --- | --- | --- | --- |
+| `widget-b`, `other`, `widget-a` | `https://github.com/example/other.git`; `https://github.com/example/widget.git` at `widget-a` | | `duplicate-repo`: `skipped <widget-b>; same remote as <widget-a> (https://github.com/example/widget.git)` | the duplicate kept, the token or userinfo in the key, the winner taken from argument order |
+| `widget-a`, `mirror.git` (bare, `origin` without userinfo) | `https://github.com/example/widget.git` at `mirror.git` | | `duplicate-repo` skipping `widget-a` | a mirror and a clone of one remote counted twice |
+| `scp`, `https` | `git@github.com:o/r.git`; `https://github.com/o/r.git` | | | the scp and HTTPS forms collapsed |
+| `unparsed-a`, `unparsed-b` (`https:/user:TOKENVALUE@…`, `https//user:TOKENVALUE@…`) | `local:unparsed-a`, `local:unparsed-b`, remote `<unparsed-remote>` | | | `<unparsed-remote>` used as a key |
+| `reset` (`remote.origin.url` is the widget URL with `TOKENVALUE`, then an empty value, then `https://github.com/example/reset.git`), `widget-a` | `https://github.com/example/reset.git`; `https://github.com/example/widget.git` | | none | the first URL kept although the empty value cleared it, which also makes `reset` a duplicate of `widget-a` |
+| `bare.git` (`HEAD` → `trunk`, no `origin`), `team` | `…/api.git` (`main`); `…/web.git` (bare, `HEAD` → `trunk`); `local:bare`; `local:linked` (a worktree: `.git` is a file) | `team` holds the three members; `api-link`, a link to `api`, is `api` again; `notes/`, which holds a clone, `README.md` and `lost+found`, which nobody may read, are not members | none | a bare repo skipped or read as a group; a worktree missed; a walk deeper than one level; a link to a member counted as a second clone; an unreadable child reported as a failure |
+| `outer` | `https://github.com/example/outer.git` only | | | the nested clone `outer/inner` added |
+| `project` (`.git` holds `gitdir: ./.bare`; `.bare` is a bare clone with `HEAD` → `trunk`; worktree `project/main` beside it) | `https://github.com/example/project.git`: bare, named `project`, at `project`, branch `trunk` | | none | the layout read as "no work tree here" and failed, or as a group of `.bare` and `main`; the worktree added |
+| `b/src`, `c/src-2` (empty), `a/src` | `local:one` in `src`; `local:two` in `src-3` | `src` (`a/src`), `src-2` (`c/src-2`), `src-3` (`b/src`) | | a suffix that collides with another group's own name |
+| `team/api`, `widget-a` twice (once with a trailing `/`), `widget-link` (a link to `widget-a`), `team`, `lab`, `lab/empty` (no commits) | `api`, `web.git` and `linked` in `team`; `widget-a` once | `team`; `lab`, with no repo | no warning; one failure, `lab/empty` | one directory reached twice warned about, inspected twice (so `empty` fails twice), or dropped from its group |
+| `file.txt`, `missing`, `lab/empty` (no commits), `broken` (`.git` file to a missing dir), `outer/stray` (empty `.git` dir), `bare.git/stray.git` (bad `HEAD`), `bare.git/stray-tree` (empty `.git` dir), `headless` (a bare clone without `HEAD`), `unfinished.git` (empty), `widget-a` | `widget-a` only | none | nine failures, one per path | a failure that stops the run; a broken repo, or a bare one git rejects, read as a group; git's answer for an enclosing repo taken as the path's own |
+
+The default branch, from one call over the nine work trees (the bare rows come from the `bare.git`, `team` call above). A clone with upstream's remote-tracking refs is measured at them; only the rows with no `origin` fall back to a local branch or `HEAD` ([ADR 0009](../../docs/adr/0009-default-branch-as-upstream-last-fetched.md)):
+
+| Repo | Refs | Branch | Head | Wrong implementation it catches |
+| --- | --- | --- | --- | --- |
+| `widget-a` | `origin/HEAD` → `origin/main` | `main` | `main` | |
+| `tracking` | `origin/HEAD` → `origin/trunk`; local `main`; local `trunk` one commit ahead of `origin/trunk` | `trunk` | `trunk` | `main` preferred to `origin/HEAD`; the local commit, which never landed, measured |
+| `no-origin-head` | no `origin/HEAD`; `origin/main` fetched to `trunk`; local `main` at `main`, behind it | `main` | `trunk` | the local branch measured because `origin/HEAD` is missing |
+| `origin-master` | no `origin/HEAD`; `origin/master` at `trunk` and no `origin/main`; local `main` at `main` | `master` | `trunk` | a local `main` preferred to upstream's `master` |
+| `dangling-head` | `origin/HEAD` → `origin/master`, which does not exist; `origin/main`; local `master` at `main` | (failure) | (failure) | a dangling `origin/HEAD` skipped, so that `origin/main` or a local `master` upstream deleted is measured; the failure reads `origin/HEAD points at origin/master, which does not exist: …` |
+| `main-first` | no `origin`; `main`, `master` (at `trunk`), `feature` checked out | `main` | `main` | `master` or `HEAD` preferred to `main` |
+| `master-only` | no `origin`; `master` (at `main`), `feature` (at `trunk`) checked out | `master` | `main` | `HEAD` preferred to `master` |
+| `current` | no `origin`; only `dev` (at `trunk`) | `dev` | `trunk` | no fallback to `HEAD` |
+| `detached` | no `origin`; no branch; `HEAD` detached at `trunk` | `HEAD` | `trunk` | a detached `HEAD` treated as an error |
+| `bare.git`, `team/web.git` | bare; `main` and `trunk`; `HEAD` → `trunk` | `trunk` | `trunk` | the work-tree rules applied to a bare repo |
+
+The token check runs `Discover` over every path above with git's debug log on: the configs of `widget-a`, `unparsed-a` and `reset` hold `TOKENVALUE`, and the result (as JSON and as Go values) and the log do not. The clone-health bullets above run on `fixture.CloneHealth`: a complete clone, a `--depth 1` clone, a `--filter=blob:none` clone whose `origin` is the fake promisor, and complete clones marked partial by `extensions.partialClone`, by a promisor remote other than `origin`, and not partial by `remote.origin.promisor=false`.
+
 ## What fails CI
 
 - **Oracles.** Any week or still-here oracle above changes. That includes Frank's 3 versus 2, Ivy's `prod_lines_added` 0, Jules's 0-line commit, Erin's rename insertion of 1, Ada's single mailmapped week row, and both Gina and Hank at `majority_files` 1.
 - **Change oracles.** Any value in the change-oracle tables of either fixture changes. That includes Bob's move keeping 0 of 2, Ada's `durable@1` N of 2, Cara's absence from `durable@1`, `knowledge_loss@1` at 4/34, Lena eligible at exactly 10 clusters in both metrics, Omar not eligible at 9, S1 simplifying at exactly −20, S2 not simplifying at −16, Q1 untagged, and M tagged through P2.
 - **Classification.** `tests/test_service.py` is classified `prod`, or `bootstrap/cache/config.php` is blamed.
-- **Discovery.** A duplicate remote is not skipped, a scrubbed URL contains userinfo, a bare repo is skipped, or the SSH and HTTPS forms of one path are collapsed.
+- **Discovery.** A duplicate remote is not skipped, a scrubbed URL contains userinfo, a bare repo is skipped, the SSH and HTTPS forms of one path are collapsed, or a work tree is measured at a local branch although its clone has upstream's.
 - **Isolation.** A repo whose git directory was removed makes a sibling repo disappear, or the run exits 1 when the sibling succeeded.
 - **Policy.** The policy hash is missing from the output, a user policy missing `[bots]` exits 0, or `--days 1` leaves `window.days` at 7.
 - **Draft JSON.** The output omits `errors.blame` or `group_rollups` (until M1 supersedes the format).
