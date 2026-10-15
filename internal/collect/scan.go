@@ -33,8 +33,11 @@ func newScanner(r io.Reader, split bufio.SplitFunc) *bufio.Scanner {
 // count: whether it holds a rune outside Unicode's White_Space property
 // (unicode.IsSpace), so that something is left after bytes.TrimSpace
 // (docs/metrics.md#noise-applied-before-every-metric). durable@1 divides
-// the lines blame keeps by the lines a commit's own patch added, so the
-// blame and history collectors must count with this one predicate.
+// the lines blame keeps by the lines a commit's own patch added, so both
+// collectors count with this one function: historyParsePatch for the
+// patch's added and removed lines, blameParse for the surviving ones. Both
+// hand it the line's bytes after git's one-byte marker (the patch's "+" or
+// "-", the porcelain's tab).
 func nonBlank(line []byte) bool {
 	return len(bytes.TrimSpace(line)) > 0
 }

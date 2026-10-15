@@ -20,11 +20,13 @@ import (
 // counts in its "@@ -a,b +c,d @@" header, never by their look: with -U0 a
 // hunk is exactly b removed and d added lines, so an added line whose text
 // is "++ b/x" (printed "+++ b/x") or a line that begins with NUL can never
-// be mistaken for a header or for the next commit. Outside hunks, a line
-// that starts with NUL starts the next commit, "diff --git" starts a file,
-// and the "---" and "+++" lines name its paths. The "diff --git" line
-// itself is never parsed for paths: "diff --git a/a b/b => c" has no
-// unambiguous split.
+// be mistaken for a header or for the next commit. A hunk's lines are
+// counted with nonBlank (scan.go), the predicate blame counts surviving
+// lines with, so durable@1 divides like by like. Outside hunks, a line that
+// starts with NUL starts the next commit, "diff --git" starts a file, and
+// the "---" and "+++" lines name its paths. The "diff --git" line itself is
+// never parsed for paths: "diff --git a/a b/b => c" has no unambiguous
+// split.
 
 // readPatches runs the own-patch query over every non-merge commit the
 // window's landings brought in, the landings included, and adds each
@@ -115,26 +117,32 @@ func historyParsePatch(r io.Reader, fn func(commit, path string, added, removed 
 	}
 
 	for s.Scan() {
-		line := s.Text()
 		if oldLeft > 0 || newLeft > 0 {
+			// A hunk line, read as bytes: hunks are most of a patch, and
+			// counting them needs no string.
+			line := s.Bytes()
+			mark := byte(0) // an empty line has none
+			if len(line) > 0 {
+				mark = line[0]
+			}
 			switch {
-			case strings.HasPrefix(line, "+") && newLeft > 0:
+			case mark == '+' && newLeft > 0:
 				newLeft--
-				if historyNonBlank(line[1:]) {
+				if nonBlank(line[1:]) {
 					added++
 				}
-			case strings.HasPrefix(line, "-") && oldLeft > 0:
+			case mark == '-' && oldLeft > 0:
 				oldLeft--
-				if historyNonBlank(line[1:]) {
+				if nonBlank(line[1:]) {
 					removed++
 				}
-			case (strings.HasPrefix(line, " ") || line == "") && oldLeft > 0 && newLeft > 0:
+			case (mark == ' ' || len(line) == 0) && oldLeft > 0 && newLeft > 0:
 				// A context line, which -U0 prints only when
 				// diff.interHunkContext joins two hunks; an empty one
 				// under diff.suppressBlankEmpty.
 				oldLeft--
 				newLeft--
-			case strings.HasPrefix(line, `\`):
+			case mark == '\\':
 				// "\ No newline at end of file" after a removed line.
 			default:
 				return fmt.Errorf("commit %s: a hunk does not match its header", commit)
@@ -142,6 +150,7 @@ func historyParsePatch(r io.Reader, fn func(commit, path string, added, removed 
 			continue
 		}
 
+		line := s.Text()
 		switch {
 		case strings.HasPrefix(line, "\x00"):
 			if err := flush(); err != nil {
@@ -301,12 +310,4 @@ func historyRangeCount(r string) (int, bool) {
 		return 1, true
 	}
 	return historyCount(count)
-}
-
-// historyNonBlank reports whether a line of content counts as a line:
-// whether anything is left once whitespace is trimmed (docs/metrics.md:
-// strip() != ""). The blame collector must use the same predicate, so
-// added and surviving lines agree.
-func historyNonBlank(content string) bool {
-	return strings.TrimSpace(content) != ""
 }
