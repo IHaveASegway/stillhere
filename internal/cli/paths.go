@@ -45,7 +45,7 @@ report's "skipped paths" counts.`,
 			})
 		},
 	}
-	cmd.Flags().StringVar(&repo, "repo", "", "repository `KEY` to list (default every repository in the run)")
+	cmd.Flags().StringVar(&repo, "repo", "", "repository to list: its `NAME` as a card heads it, GROUP/NAME, OWNER/NAME, its remote URL or its key (default every repository in the run)")
 	cmd.Flags().StringVar(&role, "role", "", "list only the paths with this `ROLE`, one of "+domain.RoleList())
 	cmd.Flags().BoolVar(&skipped, "skipped", false, "list only the paths the classifier skipped: denied, too big, generated header, unclassified")
 	addRunFlag(cmd, &run)

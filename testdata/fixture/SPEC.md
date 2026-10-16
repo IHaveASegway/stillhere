@@ -358,7 +358,7 @@ Paths that hold no one's knowledge say why (#71, PF-8), and, the run's policy be
 | --- | --- | --- |
 | `fixture/service.py` | missing, a `no-values` caveat: the run knows each path relative to its repository's root | a filesystem path, which names nothing in the repository |
 | `notes.csv` | empty, a `no-values` caveat: `"notes.csv" is in 1 repository, but no path there has a role (1 path unclassified)` | `notes.csv` has no role, and `who_knows@1` counts only paths with one |
-| `vendor/new.py` | empty, a `no-values` caveat: `(1 path denied)`, and that a denied path counts only once nothing denies it, a pattern of the run's deny list matching it, which removing it or `-linguist-vendored -linguist-generated` in `.gitattributes` undoes (wave 10) | a role does nothing for a denied path: a deny wins over every role |
+| `vendor/new.py` | empty, a `no-values` caveat: `(1 path denied)`, and that a denied path counts only once nothing denies it, the run's deny list's pattern `(^|/)vendors?/` (`generated_paths.txt` line 160, named by `classify.Explain`) matching it, which removing it or `-linguist-vendored -linguist-generated` in `.gitattributes` undoes (wave 10) | a role does nothing for a denied path: a deny wins over every role |
 | `gen_out.py` | empty, a `no-values` caveat: `(1 path generated)`, and that `linguist-generated=false` in `.gitattributes` counts it (wave 10) | the header sniff skipped it |
 | `app.py` | a real "nobody" | renamed to `service.py` on 2026-01-05: a path the history knows, with role `prod`, no surviving line and no landing in 90 days |
 

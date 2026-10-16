@@ -248,8 +248,13 @@ func mainChangeOracles(t *testing.T) {
 			checkWhoKnows(t, "SPEC who_knows@1 (main fixture)", s, r.Key, c)
 		}
 		w := s.whoKnows(t, "tests")
-		if !slices.ContainsFunc(w.Caveats, func(c report.Caveat) bool { return c.Code == "other-roles" }) {
-			t.Errorf("SPEC who_knows@1 (main fixture), tests: caveats %+v, want other-roles: the answer counts test lines", w.Caveats)
+		// It names the list that says which rule gave the files their role
+		// (wave 10: classify.Explain through 'stillhere paths').
+		if !slices.ContainsFunc(w.Caveats, func(c report.Caveat) bool {
+			return c.Code == "other-roles" && strings.HasSuffix(c.Message, "'stillhere paths PATH' lists each file with the rule that gave it its role.")
+		}) {
+			t.Errorf("SPEC who_knows@1 (main fixture), tests: caveats %+v, want other-roles: the answer counts test lines, "+
+				"and 'stillhere paths PATH' says which rule gave them their role", w.Caveats)
 		}
 		// A path with prod lines says which other roles' lines it leaves out
 		// (wave 10's review: docs/ of werkzeug answered for docs/conf.py
@@ -292,19 +297,23 @@ func mainChangeOracles(t *testing.T) {
 		// Each reason the policy left a path out says what would count it
 		// (wave 10): a role does nothing for a denied path, since a deny
 		// wins over every role, and the attributes turned off un-deny one a
-		// pattern matches too; and the run's packaged policy is in no file
-		// until it is written out.
+		// pattern matches too; the deny pattern is named where the run's
+		// policy holds it, by classify.Explain, the rule 'stillhere paths'
+		// prints; and the run's packaged policy is in no file until it is
+		// written out.
 		noRole := func(path, why, fix string) string {
 			return fmt.Sprintf("%q is in 1 repository, but no path there has a role (1 path %s), and who_knows@1 counts only "+
 				"paths with one: this answer is empty because the policy leaves the path out, not because nobody knows it. "+
-				"'stillhere policy' prints the roles and the deny list; the run used the packaged policy, so write it out to "+
-				"change it, 'stillhere policy > stillhere.toml'; at the next scan, %s.", path, why, fix)
+				"'stillhere policy' prints the roles and the deny list, and 'stillhere paths PATH' each path with "+
+				"the rule that decided it; the run used the packaged policy, so write it out to change it, "+
+				"'stillhere policy > stillhere.toml'; at the next scan, %s.", path, why, fix)
 		}
 		for _, c := range []struct{ path, caveat string }{
 			{"fixture/service.py", noPath},
 			{"notes.csv", noRole("notes.csv", "unclassified", "an unclassified path counts once stillhere.toml gives it a role")},
 			{"vendor/new.py", noRole("vendor/new.py", "denied", "a denied path counts only once nothing denies it, since a deny "+
-				"wins over every role: a pattern of the run's deny list matches it, so remove that pattern from stillhere.toml's "+
+				"wins over every role: the run's deny list's pattern (^|/)vendors?/ (generated_paths.txt line 160) matches it, "+
+				"so remove that pattern from stillhere.toml's "+
 				"[paths] deny, or set -linguist-vendored -linguist-generated for it in .gitattributes, which un-denies a path "+
 				"whatever the deny list says")},
 			{"gen_out.py", noRole("gen_out.py", "generated", "a path whose first lines say it is generated counts once "+
@@ -385,6 +394,12 @@ func mainChangeOracles(t *testing.T) {
 			if row.Skip == "" {
 				t.Errorf("paths --skipped lists %s, which has the role %s", row.Path, row.Role)
 			}
+		}
+		// --repo takes the repository as a card heads it, as who-knows'
+		// does (one rule, app.MatchRepos, since wave 10's integration).
+		named, err := app.Paths(t.Context(), s.read, app.PathsRequest{RunID: s.run, Repo: r.Name, Skipped: true})
+		if err != nil || len(named.Repos) != 1 || named.Repos[0].Key != r.Key {
+			t.Errorf("paths --repo %s: %+v, %v; want the repository %s", r.Name, named, err, r.Key)
 		}
 		under, err := app.Paths(t.Context(), s.read, app.PathsRequest{RunID: s.run, Prefixes: []string{"./tests/"}, Role: "test"})
 		if err != nil || len(under.Repos) != 1 || len(under.Repos[0].Paths) == 0 {

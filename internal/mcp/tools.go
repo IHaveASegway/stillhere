@@ -35,7 +35,7 @@ const (
 	propLimit = `"limit": {"type": "integer", "minimum": 1, "maximum": 100,
 		"description": "Items per page. An answer that would be too large is cut to a smaller page, and page.next_cursor gives the rest."}`
 	propCursor = `"cursor": {"type": "string", "description": "page.next_cursor of the previous answer, as it is, for the next page."}`
-	propScope  = `"scope": {"type": "string", "description": "A group of repositories (a platform) by name, a repository by name or key, group:NAME, repo:NAME or GROUP/NAME; empty for the whole run."}`
+	propScope  = `"scope": {"type": "string", "description": "A group of repositories (a platform) by name, a repository by name, key, OWNER/NAME or remote URL, group:NAME, repo:NAME or GROUP/NAME; empty for the whole run."}`
 )
 
 // schema assembles an object schema from properties. No property is
@@ -809,6 +809,11 @@ func (toolCommands) Explain(metric string, kinds []string) string {
 func (toolCommands) WhoKnows() string { return "who_knows(path, repo)" }
 
 func (toolCommands) PersonKeys() string { return "every answer gives each person an id (p-…)" }
+
+// Paths is "": no tool lists a run's paths with their rules (the command
+// line's paths does, mcp.md), and no hint names a command an agent may not
+// be able to run.
+func (toolCommands) Paths() string { return "" }
 
 func (toolCommands) OwnPage() string {
 	return `person(name: "") for the user the server runs for (--me)`

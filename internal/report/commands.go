@@ -43,6 +43,10 @@ type Commands interface {
 	// PersonKeys names where the reader finds the id or the email that
 	// names a person, for one whose display name every page withholds.
 	PersonKeys() string
+	// Paths names where the paths under a path are listed, each with the
+	// rule that decided its role or why it has none (wave 10,
+	// classify.Explain), or "" when the reader has no such list.
+	Paths() string
 }
 
 // CLI is the command line's Commands: every answer's, unless its reader
@@ -94,6 +98,9 @@ func (CLI) OwnPage() string { return "'stillhere me --email EMAIL'" }
 // PersonKeys is the report in JSON, whose person rows carry each email,
 // which no text or Markdown page prints.
 func (CLI) PersonKeys() string { return "'stillhere report --format json' lists each person's email" }
+
+// Paths is the paths command.
+func (CLI) Paths() string { return "'stillhere paths PATH'" }
 
 // CommandsOr returns c, or the command line's when c is nil: what an
 // answer's hints name when the inbound adapter said nothing.

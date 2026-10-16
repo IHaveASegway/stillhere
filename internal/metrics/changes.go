@@ -47,7 +47,10 @@ func panel(s rank.Separation) *Reference {
 }
 
 // The panel's numbers per metric: AUC, interval and n, change size alone
-// over the same changes, and the paired interval of the difference.
+// over the same changes, and the paired interval of the difference. The
+// panel's runs used packaged policy revision 2 (39f300454d59); under
+// revision 3 every verdict holds (docs/validation.md#reference-results
+// gives both), and a new panel run replaces these with its own.
 var (
 	durablePanel = rank.Separation{AUC: 0.4215277777777778, Lo: 0.29618055555555556, Hi: 0.5451388888888888, N: 76,
 		Size: 0.8159722222222222, DiffLo: -0.5541666666666667, DiffHi: -0.22534722222222225}

@@ -818,7 +818,7 @@ func WhoKnows(ctx context.Context, d Deps, r WhoKnowsRequest) (*report.WhoKnows,
 	})
 	if c, ok := whoKnowsNoPath(s.facts, prefix, repo, run.ID); ok {
 		w.Caveats = append(w.Caveats, c)
-	} else if c, ok := whoKnowsNoRole(s.facts, s.policy, prefix, repo, len(w.Repos)); ok {
+	} else if c, ok := whoKnowsNoRole(s.facts, s.policy, prefix, repo, len(w.Repos), d.Commands); ok {
 		w.Caveats = append(w.Caveats, c)
 	}
 	return w, nil
@@ -832,30 +832,32 @@ func WhoKnows(ctx context.Context, d Deps, r WhoKnowsRequest) (*report.WhoKnows,
 // answer is empty because the policy leaves the path out, not because
 // nobody knows it; "nobody" would say the second. It counts the
 // repositories and the reasons the classifier gave, as the run stored
-// them (domain.PathClass.Skip), and says for each reason what would make
-// the path count, since each takes a different change: a role for an
-// unclassified path; for a denied one, a role does nothing (a deny wins
-// over every role, spec/classification.md), so either the deny pattern of
-// the run's policy that matches it (policy.Paths.Denies) is to be removed,
-// or both linguist attributes are to be turned off for it in
-// .gitattributes, which un-denies a path whatever pattern matches it, and
-// is the one change when no pattern matches, since an attribute denied it;
-// for a generated header, linguist-generated turned off; for one too big, a
-// larger [blame] max_bytes, but only where the path's name would give it a
-// role (classify.Role): a .png too big has none either way, so a larger
-// limit alone changes nothing (wave 10's review). The run's policy says
-// where those changes go: under the packaged one, which no file holds, the
-// advice starts with 'stillhere policy > stillhere.toml'. The pattern
-// itself is not named: the run stores which skip a path got, not which
-// rule gave it (the classify lane's rule source, 'stillhere paths', says).
-func whoKnowsNoRole(fs *domain.FactSet, p *policy.Policy, prefix, repo string, listed int) (report.Caveat, bool) {
+// them (domain.PathClass.Skip), and names the rules that decided them,
+// as classify.Explain finds each from the run's own policy (the one
+// source 'stillhere paths' prints too), since each takes a different
+// change: a role for a path no rule gives one (none for a symbolic link
+// or a submodule, which no rule can give one); for a denied path, a role
+// does nothing (a deny wins over every role, spec/classification.md), so
+// either the deny pattern that matches it is to be removed, which the
+// caveat names with its place in the policy, or both linguist attributes
+// are to be turned off for it in .gitattributes, which un-denies a path
+// whatever pattern matches it, and is the one change when no pattern
+// matches, since an attribute denied it; for a generated header,
+// linguist-generated turned off; for one too big, the bound that skipped
+// it raised: [blame] max_bytes, but only where the path's name would give
+// it a role (classify.Role): a .png too big has none either way (wave 10's
+// review); or the max_bytes of the role rule that bounds it (policy
+// revision 3's test data). The run's policy says where those changes go:
+// under the packaged one, which no file holds, the advice starts with
+// 'stillhere policy > stillhere.toml'.
+func whoKnowsNoRole(fs *domain.FactSet, p *policy.Policy, prefix, repo string, listed int, c report.Commands) (report.Caveat, bool) {
 	if prefix == "" || listed > 0 {
 		return report.Caveat{}, false
 	}
 	holding := 0
 	reasons := map[domain.Skip]int{}
-	byPattern, byAttribute := 0, 0 // denied paths, by the run's deny list and by a linguist attribute
-	bigNamed := 0                  // paths too big that a role would count, which a larger [blame] max_bytes counts
+	rules := map[domain.Skip]*ruleCounts{}
+	bigNamed := 0 // paths too big for [blame] max_bytes that a role would count, which a larger bound counts
 	for i := range fs.Repos {
 		rf := &fs.Repos[i]
 		if rf.Status != domain.RepoStatusOK || (repo != "" && rf.Repo.Key != repo) {
@@ -871,12 +873,16 @@ func whoKnowsNoRole(fs *domain.FactSet, p *policy.Policy, prefix, repo string, l
 			}
 			found = true
 			reasons[pc.Skip]++
-			switch {
-			case pc.Skip == domain.SkipDeniedPath && p != nil && p.Paths.Denies(pc.Path):
-				byPattern++
-			case pc.Skip == domain.SkipDeniedPath:
-				byAttribute++
-			case pc.Skip == domain.SkipTooBig && p != nil && classify.Role(p, pc.Path) != "":
+			rule := classify.Rule{Kind: classify.RuleUnknown}
+			if p != nil {
+				rule = classify.Explain(p, pc)
+			}
+			if rules[pc.Skip] == nil {
+				rules[pc.Skip] = &ruleCounts{}
+			}
+			rules[pc.Skip].add(rule)
+			if pc.Skip == domain.SkipTooBig && strings.HasPrefix(rule.Where, "[blame]") &&
+				classify.Role(p, pc.Path) != "" {
 				bigNamed++
 			}
 		}
@@ -897,7 +903,16 @@ func whoKnowsNoRole(fs *domain.FactSet, p *policy.Policy, prefix, repo string, l
 	}
 	if n := reasons[domain.SkipUnclassified]; n > 0 {
 		why = append(why, count(n, "unclassified"))
-		fix = append(fix, "an unclassified path counts once stillhere.toml gives it a role")
+		none, notFile := rules[domain.SkipUnclassified].of(classify.RuleNone), rules[domain.SkipUnclassified].of(classify.RuleNotFile)
+		switch {
+		case notFile.n == 0:
+			fix = append(fix, "an unclassified path counts once stillhere.toml gives it a role")
+		case none.n == 0:
+			fix = append(fix, "an unclassified path here is a symbolic link or a submodule, which no rule gives a role")
+		default:
+			fix = append(fix, fmt.Sprintf("an unclassified path counts once stillhere.toml gives it a role, but for %s, "+
+				"which no rule gives one", count(notFile.n, "that are symbolic links or submodules")))
+		}
 	}
 	// Both attributes off un-deny a path whatever pattern matches it
 	// (classification.md, .gitattributes): one off while the other is on
@@ -906,19 +921,20 @@ func whoKnowsNoRole(fs *domain.FactSet, p *policy.Policy, prefix, repo string, l
 		"the deny list says"
 	if n := reasons[domain.SkipDeniedPath]; n > 0 {
 		why = append(why, count(n, "denied"))
+		denied := rules[domain.SkipDeniedPath]
+		patterns, byAttribute := denied.of(classify.RuleDeny), denied.of(classify.RuleAttribute).n
+		const lead = "a denied path counts only once nothing denies it, since a deny wins over every role: "
 		switch {
-		case byPattern > 0 && byAttribute > 0:
-			fix = append(fix, "a denied path counts only once nothing denies it, since a deny wins over every role: "+
-				"a pattern of the run's deny list denies some, so remove it from stillhere.toml's [paths] deny, and a "+
-				"linguist-vendored or linguist-generated attribute the others; or set "+undeny)
-		case byPattern > 0:
-			fix = append(fix, "a denied path counts only once nothing denies it, since a deny wins over every role: "+
-				"a pattern of the run's deny list matches it, so remove that pattern from stillhere.toml's [paths] deny, "+
-				"or set "+undeny)
+		case patterns.n > 0 && byAttribute > 0:
+			fix = append(fix, lead+patterns.named("the run's deny list")+", so remove "+patterns.them("that pattern", "those patterns")+
+				" from stillhere.toml's [paths] deny, and a linguist-vendored or linguist-generated attribute denies "+
+				count(byAttribute, "more")+"; or set "+undeny)
+		case patterns.n > 0:
+			fix = append(fix, lead+patterns.named("the run's deny list")+", so remove "+patterns.them("that pattern", "those patterns")+
+				" from stillhere.toml's [paths] deny, or set "+undeny)
 		default:
-			fix = append(fix, "a denied path counts only once nothing denies it, since a deny wins over every role: "+
-				"no pattern of the run's deny list matches it, so a linguist-vendored or linguist-generated attribute "+
-				"in .gitattributes does; set "+undeny)
+			fix = append(fix, lead+"no pattern of the run's deny list matches it, so a linguist-vendored or "+
+				"linguist-generated attribute in .gitattributes does; set "+undeny)
 		}
 	}
 	if n := reasons[domain.SkipGeneratedHeader]; n > 0 {
@@ -928,15 +944,23 @@ func whoKnowsNoRole(fs *domain.FactSet, p *policy.Policy, prefix, repo string, l
 	}
 	if n := reasons[domain.SkipTooBig]; n > 0 {
 		why = append(why, count(n, "too big"))
-		switch bigNamed {
-		case n:
+		big := rules[domain.SkipTooBig]
+		bounded := big.where("[[roles.path]]")
+		blame := n - bounded.n
+		switch {
+		case blame == 0:
+		case bigNamed == blame:
 			fix = append(fix, "a path too big to blame counts once stillhere.toml's [blame] max_bytes is larger than it")
-		case 0:
+		case bigNamed == 0:
 			fix = append(fix, "a path too big to blame would have no role either, its name matching no role rule, so it "+
 				"counts only once stillhere.toml gives it a role and its [blame] max_bytes is larger than it")
 		default:
 			fix = append(fix, "a path too big to blame counts once stillhere.toml's [blame] max_bytes is larger than it, "+
 				"and one whose name matches no role rule only once it gives that one a role too")
+		}
+		if bounded.n > 0 {
+			fix = append(fix, "a path larger than its role rule allows counts once "+bounded.named("the run's policy")+
+				" holds no max_bytes, or a larger one, in stillhere.toml")
 		}
 	}
 	where := "1 repository"
@@ -944,16 +968,128 @@ func whoKnowsNoRole(fs *domain.FactSet, p *policy.Policy, prefix, repo string, l
 		where = fmt.Sprintf("%d repositories", holding)
 	}
 	policyFile := "'stillhere policy' prints the roles and the deny list"
+	if list := report.CommandsOr(c).Paths(); list != "" {
+		policyFile += ", and " + list + " each path with the rule that decided it"
+	}
 	if p != nil && p.Packaged() {
 		// No file holds the packaged policy, so there is nothing to edit
 		// until one is written out (wave 10's review).
-		policyFile = "'stillhere policy' prints the roles and the deny list; the run used the packaged policy, so write " +
-			"it out to change it, 'stillhere policy > stillhere.toml'"
+		policyFile += "; the run used the packaged policy, so write it out to change it, 'stillhere policy > stillhere.toml'"
 	}
 	return report.NoValuesCaveat(fmt.Sprintf("%q is in %s, but no path there has a role (%s), and %s counts only "+
 		"paths with one: this answer is empty because the policy leaves the path out, not because nobody knows it. "+
 		"%s; at the next scan, %s.",
 		prefix, where, strings.Join(why, ", "), report.MetricWhoKnows, policyFile, strings.Join(fix, "; "))), true
+}
+
+// whoKnowsRuleNames is how many distinct rules a whoKnowsNoRole caveat
+// names for one reason before it counts the rest.
+const whoKnowsRuleNames = 3
+
+// ruleCounts counts the paths each rule (classify.Explain) decided, in the
+// order the paths first name them.
+type ruleCounts struct {
+	rules []classify.Rule
+	paths []int
+}
+
+func (rc *ruleCounts) add(r classify.Rule) {
+	for i, have := range rc.rules {
+		if have.Kind == r.Kind && have.Text == r.Text && have.Where == r.Where {
+			rc.paths[i]++
+			return
+		}
+	}
+	rc.rules, rc.paths = append(rc.rules, r), append(rc.paths, 1)
+}
+
+// of is the rules of one kind, with the paths they decided; where those
+// whose place in the policy starts with prefix.
+func (rc *ruleCounts) of(kind classify.RuleKind) ruleSet {
+	return rc.keep(func(r classify.Rule) bool { return r.Kind == kind })
+}
+
+func (rc *ruleCounts) where(prefix string) ruleSet {
+	return rc.keep(func(r classify.Rule) bool { return strings.HasPrefix(r.Where, prefix) })
+}
+
+func (rc *ruleCounts) keep(ok func(classify.Rule) bool) ruleSet {
+	var s ruleSet
+	if rc == nil {
+		return s
+	}
+	for i, r := range rc.rules {
+		if ok(r) {
+			s.rules, s.paths, s.n = append(s.rules, r), append(s.paths, rc.paths[i]), s.n+rc.paths[i]
+		}
+	}
+	return s
+}
+
+// ruleSet is some of a ruleCounts' rules and n, the paths they decided.
+type ruleSet struct {
+	rules []classify.Rule
+	paths []int
+	n     int
+}
+
+// named names the rules, at most whoKnowsRuleNames, each with where the
+// policy holds it and, among several, the paths it decided: "the run's
+// deny list's pattern (^|/)vendor/ (generated_paths.txt line 12) matches
+// it", "... patterns A (where, 3 paths) and B (where, 1 path) match them".
+func (s ruleSet) named(owner string) string {
+	shown := s.rules[:min(len(s.rules), whoKnowsRuleNames)]
+	var parts []string
+	for i, r := range shown {
+		part := r.Text
+		if r.Where != "" {
+			part += " (" + r.Where
+			if len(s.rules) > 1 {
+				part += ", " + nounCount(s.paths[i], "path", "paths")
+			}
+			part += ")"
+		}
+		parts = append(parts, part)
+	}
+	if more := len(s.rules) - len(shown); more > 0 {
+		parts = append(parts, nounCount(more, "more rule", "more rules"))
+	}
+	if len(s.rules) == 1 {
+		verb := "matches it"
+		if s.n > 1 {
+			verb = "matches them"
+		}
+		return fmt.Sprintf("%s's %s %s %s", owner, kindNoun(s.rules[0], false), parts[0], verb)
+	}
+	return fmt.Sprintf("%s's %s %s match them", owner, kindNoun(s.rules[0], true), listAnd(parts))
+}
+
+// them is one of two names for the rules, as their number asks.
+func (s ruleSet) them(one, many string) string {
+	if len(s.rules) == 1 {
+		return one
+	}
+	return many
+}
+
+// kindNoun is what a rule of r's kind is called in a sentence.
+func kindNoun(r classify.Rule, many bool) string {
+	noun := "rule"
+	if r.Kind == classify.RuleDeny {
+		noun = "pattern"
+	}
+	if many {
+		return noun + "s"
+	}
+	return noun
+}
+
+// listAnd joins parts as a sentence lists them: "a", "a and b", "a, b and c".
+func listAnd(parts []string) string {
+	if len(parts) < 2 {
+		return strings.Join(parts, "")
+	}
+	return strings.Join(parts[:len(parts)-1], ", ") + " and " + parts[len(parts)-1]
 }
 
 // whoKnowsNoPathNames is how many repositories that hold the path a

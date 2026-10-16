@@ -411,7 +411,7 @@ func NewWhoKnows(in *WhoKnowsInput) *WhoKnows {
 	if c, ok := whoKnowsMissing(in.Path, asked, ix); ok {
 		w.Caveats = append(w.Caveats, c)
 	}
-	if c, ok := whoKnowsOtherRoles(in.Path, w.Repos); ok {
+	if c, ok := whoKnowsOtherRoles(in.Path, w.Repos, in.Commands); ok {
 		w.Caveats = append(w.Caveats, c)
 	}
 	if c, ok := whoKnowsUncounted(in.Path, w.Repos); ok {
@@ -488,8 +488,11 @@ func NewWhoKnows(in *WhoKnowsInput) *WhoKnows {
 // knowledge loss and concentration, which count prod lines only, have no
 // value for it. A page that listed them as the path's owners without
 // saying so would read as product knowledge (round 2: tests/ and docs/
-// answered "nobody", although blame held thousands of lines there).
-func whoKnowsOtherRoles(prefix string, repos []WhoKnowsRepo) (Caveat, bool) {
+// answered "nobody", although blame held thousands of lines there). Where
+// the reader has it (Commands.Paths), it names the list of the path's files
+// with the rule that gave each its role, such as policy revision 3's
+// examples/ as doc and benches/ as test (wave 10).
+func whoKnowsOtherRoles(prefix string, repos []WhoKnowsRepo, cmds Commands) (Caveat, bool) {
 	var names, roles []string
 	for _, r := range repos {
 		if len(r.Roles) > 0 && !slices.Equal(r.Roles, []string{string(domain.RoleProd)}) {
@@ -505,11 +508,15 @@ func whoKnowsOtherRoles(prefix string, repos []WhoKnowsRepo) (Caveat, bool) {
 	if prefix == "" {
 		where = "the repository holds no surviving prod line"
 	}
+	rules := ""
+	if list := CommandsOr(cmds).Paths(); list != "" {
+		rules = " " + list + " lists each file with the rule that gave it its role."
+	}
 	return Caveat{
 		Code: codeOtherRoles,
 		Message: fmt.Sprintf("%s, so %s counts its %s lines instead: the people listed hold %s files, not product code, "+
-			"and knowledge loss and concentration, which count prod lines only, have no value for it.",
-			identSentence(where), MetricWhoKnows, joinNames(roles), joinNames(roles)),
+			"and knowledge loss and concentration, which count prod lines only, have no value for it.%s",
+			identSentence(where), MetricWhoKnows, joinNames(roles), joinNames(roles), rules),
 		Repos: slices.Compact(slices.Sorted(slices.Values(names))),
 	}, true
 }

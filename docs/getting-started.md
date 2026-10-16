@@ -28,15 +28,15 @@ stillhere week · as of 2026-10-15 UTC
 landed window 2026-10-08 → 2026-10-15 UTC: 7 days (policy), sorted by lines_added (policy)
 …
   What landed, 2026-10-08 → 2026-10-15 UTC, by lines added
-    17 landings · 20 commits · 15 merges · 1,892 lines added, 801 prod
+    17 landings · 20 commits · 15 merges · 1,989 lines added, 801 prod
     person           landings  commits  lines added  prod lines added  merges
-    Person A                7        8        1,881               790      13
+    Person A                7        8        1,970               790      13
     Person B                1        1            9                 9       1
     Person C                1        1            2                 2       0
     Person D                1        1            0                 0       0
     Person E                0        0            0                 0       1
     bots
-    dependabot[bot]         8        8            0                 0       0
+    dependabot[bot]         8        8            8                 0       0
     cli automation          1        1            0                 0       0
 ```
 
@@ -112,7 +112,7 @@ stillhere identities --format mailmap >> ~/cli.mailmap
 
 ```text
 identities · every repository · run 7 · as of 2026-10-15 UTC
-  557 addresses of people in 1 repository, 7 bots and agents left out, … · 58 candidates, and 34
+  565 addresses of people in 1 repository, 7 bots and agents left out, … · 59 candidates, and 34
   hand-off guesses (--all lists them)
 
 1. (name withheld) · high confidence · same-name, same-forge-account
@@ -139,7 +139,7 @@ stillhere who-knows pkg/cmd/pr
 
 ```text
 Repository cli · 9,983 surviving prod lines in 40 prod files, 21 with a majority owner · not
-  counted: 3,116 iac lines in 37 files, 18,478 test lines in 30 files
+  counted: 5 doc lines in 1 file, 3,116 iac lines in 37 files, 18,478 test lines in 30 files
   knowledge loss   74.4% (7,422 of 9,979 human-held lines) · 119 of 126 people gone quiet
   concentration    4 authors (0 bots) hold the majority in half of the 21 files with a majority
                    owner (not a truck factor)
@@ -224,7 +224,7 @@ stillhere explain knowledge_loss --area cli:pkg   # a top-level directory's know
 stillhere explain review_coverage --all-repos     # every repository's changes, for a run in no group
 ```
 
-`--repo` takes a repository as the report names it (or its key, or `GROUP/NAME`), `--group` a group's name, `--area` a repository and one of its top-level directories, and `--all-repos` the whole run's own numbers. `explain` lists no lines behind knowledge loss yet ([#129](https://github.com/IHaveASegway/stillhere/issues/129)): `stillhere who-knows pkg` lists who holds the most of them and who landed or reviewed there in the last 90 days. `--days` reaches back as far as the history the run read, 365 days for a scan, and no further: what landed before it is unknown, not none. `stillhere me --email you@example.com` is your own page: every value and rank the run holds about you.
+`--repo` takes a repository as the report names it (or its key, `GROUP/NAME`, `OWNER/NAME` or its remote URL, as who-knows and paths do), `--group` a group's name, `--area` a repository and one of its top-level directories, and `--all-repos` the whole run's own numbers. `explain` lists no lines behind knowledge loss yet ([#129](https://github.com/IHaveASegway/stillhere/issues/129)): `stillhere who-knows pkg` lists who holds the most of them and who landed or reviewed there in the last 90 days. `--days` reaches back as far as the history the run read, 365 days for a scan, and no further: what landed before it is unknown, not none. `stillhere me --email you@example.com` is your own page: every value and rank the run holds about you.
 
 ## 8. Reviews (optional, needs GitHub)
 

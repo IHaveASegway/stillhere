@@ -34,7 +34,8 @@ The subject is one of:
                      or their canonical email from --format json; two
                      people of one name are refused, listed with their ids
   --repo NAME        a repository's own numbers, named as the report names
-                     it, by its key, or as GROUP/NAME (review_coverage@1,
+                     it, by its key, as GROUP/NAME, OWNER/NAME or its
+                     remote URL (review_coverage@1,
                      landed@2, surviving@1, ai_assisted@1, knowledge_loss@1,
                      knowledge_concentration@1)
   --group NAME       a group's own numbers (the same metrics)
@@ -84,7 +85,7 @@ scan: what landed before it is unknown, not none.`,
 		},
 	}
 	cmd.Flags().StringVar(&person, "person", "", "a person: a display name, @login, id (p-…) or canonical email")
-	cmd.Flags().StringVar(&repo, "repo", "", "a repository's own numbers: its name, key, or GROUP/NAME")
+	cmd.Flags().StringVar(&repo, "repo", "", "a repository's own numbers: its name, key, GROUP/NAME, OWNER/NAME or remote URL")
 	cmd.Flags().StringVar(&group, "group", "", "a group's own numbers: its name")
 	cmd.Flags().StringVar(&area, "area", "", "a top-level directory of a repository: REPO:DIR")
 	cmd.Flags().BoolVar(&allRepos, "all-repos", false, "the whole run's own numbers, over every repository")
