@@ -162,10 +162,13 @@ func TestDeterminism(t *testing.T) {
 		// each before a run begins, and --db, a URL where a local path
 		// belongs, with an error line that holds no token and says why. A
 		// sync run records its options scrubbed, as a scan does, here one
-		// that GitHub's stand-in refuses after the run began. --db names a
-		// directory in the sync rows, which no open accepts: a check gone
-		// missing ends there, before GitHub could be asked anything, and
-		// only the reason tells it apart.
+		// whose organization GitHub's stand-in lists no repository of: the
+		// run begins, records them and fails. One GitHub refuses, an
+		// organization it does not know, is a usage error that begins no
+		// run (#111's review). --db names a directory in the sync rows,
+		// which no open accepts: a check gone missing ends there, before
+		// GitHub could be asked anything, and only the reason tells it
+		// apart.
 		org := "https://x-access-token:" + fixture.DiscoveryToken + "@github.com/acme"
 		mirrors := filepath.Join(t.TempDir(), "https:", "x-access-token:"+fixture.DiscoveryToken+"@github.com", "mirrors")
 		noDB := t.TempDir()
@@ -185,12 +188,19 @@ func TestDeterminism(t *testing.T) {
 			}
 			noToken(t, "the error line of stillhere "+c.args[2], stderr.Bytes())
 		}
-		_, syncErr := app.Sync(t.Context(), app.Deps{Forge: refusingForge{}, ForgeStore: s.store, Store: s.store, Log: log},
+		var usage *domain.UsageError
+		sum, syncErr := app.Sync(t.Context(), app.Deps{Forge: refusingForge{}, ForgeStore: s.store, Store: s.store, Log: log},
 			app.SyncRequest{Org: org, Mirrors: mirrors, Now: fixture.Now})
-		if syncErr == nil {
-			t.Fatal("a sync GitHub refused succeeded")
+		if sum != nil || !errors.As(syncErr, &usage) {
+			t.Fatalf("a sync GitHub refused: summary %v, error %v; want no run and a usage error", sum, syncErr)
 		}
 		noToken(t, "the refused sync's error", []byte(syncErr.Error()))
+		_, syncErr = app.Sync(t.Context(), app.Deps{Forge: emptyForge{}, ForgeStore: s.store, Store: s.store, Log: log},
+			app.SyncRequest{Org: org, Mirrors: mirrors, Now: fixture.Now})
+		if !errors.Is(syncErr, domain.ErrNoFacts) {
+			t.Fatalf("a sync of an organization with no repository: %v; want no repository synced", syncErr)
+		}
+		noToken(t, "the empty sync's error", []byte(syncErr.Error()))
 		// While the store is open its writes sit in the write-ahead log,
 		// which must exist then; once it is closed they are checkpointed
 		// into facts.db.
@@ -222,12 +232,23 @@ func TestDeterminism(t *testing.T) {
 }
 
 // refusingForge stands in for GitHub answering that it has no such
-// organization: a sync through it begins its run, records its options and
-// fails, and nothing else of it is called.
+// organization: a sync through it fails before it begins its run, and
+// nothing else of it is called.
 type refusingForge struct{ domain.ForgeSource }
 
 func (refusingForge) Repos(context.Context, string) ([]domain.ForgeRepo, error) {
 	return nil, &domain.UsageError{Msg: "GitHub has no such organization"}
+}
+
+// emptyForge stands in for GitHub listing no repository of an
+// organization: a sync through it begins its run, records its options,
+// moves no mirror and fails, and nothing else of it is called.
+type emptyForge struct{ domain.ForgeSource }
+
+func (emptyForge) Repos(context.Context, string) ([]domain.ForgeRepo, error) { return nil, nil }
+
+func (emptyForge) ReconcileMirrors(context.Context, string, []domain.ForgeRepo, string) ([]domain.MirrorMove, error) {
+	return nil, nil
 }
 
 // readDB reads a facts database file whole.

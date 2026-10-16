@@ -113,9 +113,9 @@ func query[T any, P interface {
 	}
 	defer func() { <-s.gate }()
 
-	var held time.Time // the hold this request set, which its own wait has served
+	var served time.Time // the end of this request's own last wait for a rate limit: the hold it has served
 	for attempt := 1; ; attempt++ {
-		if err := s.awaitHold(ctx, held); err != nil {
+		if err := s.awaitHold(ctx, served); err != nil {
 			return nil, err
 		}
 		if err := s.awaitBudget(ctx); err != nil {
@@ -147,7 +147,7 @@ func query[T any, P interface {
 			}
 		}
 		if !transient {
-			held = s.hold(wait)
+			served = s.hold(wait)
 		}
 		s.log.Info("GitHub API: waiting before a retry",
 			"query", op, "reason", reason, "wait", wait.Round(time.Second), "attempt", attempt)
@@ -158,27 +158,31 @@ func query[T any, P interface {
 }
 
 // hold makes every request wait d from now before it is sent, unless a
-// longer hold is already set, and returns when the hold ends. The request
-// that met the rate limit waits d itself and passes the returned time to
-// awaitHold as its own, so it does not wait twice; every other request
-// waits until the hold ends rather than meet the same limit and prolong it,
-// which GitHub warns can get an integration banned.
+// longer hold is already set, and returns when the caller's own wait ends:
+// now plus d. The request that met the rate limit waits d itself and passes
+// that time to awaitHold, so it does not wait twice for its own limit; every
+// other request waits until the hold ends rather than meet the same limit
+// and prolong it, which GitHub warns can get an integration banned.
 func (s *Source) hold(d time.Duration) time.Time {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if until := s.clock().Add(d); until.After(s.held) {
-		s.held = until
+	own := s.clock().Add(d)
+	if own.After(s.held) {
+		s.held = own
 	}
-	return s.held
+	return own
 }
 
-// awaitHold waits until the last hold ends, unless it is own: the hold the
-// caller set, whose wait it has served.
-func (s *Source) awaitHold(ctx context.Context, own time.Time) error {
+// awaitHold waits until the last hold ends, unless served, the end of the
+// caller's own wait, reaches it. A request that met a shorter limit while
+// another request's longer hold was set has served only its own wait, and
+// waits out the rest of the longer one here, so no request is sent before
+// a hold ends.
+func (s *Source) awaitHold(ctx context.Context, served time.Time) error {
 	s.mu.Lock()
 	until := s.held
 	s.mu.Unlock()
-	if until.IsZero() || until.Equal(own) {
+	if until.IsZero() || !until.After(served) {
 		return nil
 	}
 	if wait := until.Sub(s.clock()); wait > 0 {

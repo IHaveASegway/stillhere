@@ -1,0 +1,127 @@
+{
+  "data": {
+    "rateLimit": {
+      "cost": 1,
+      "remaining": 4990,
+      "resetAt": "2026-10-09T04:00:00Z"
+    },
+    "node": {
+      "c0": {
+        "oid": "4631a8bbeeaebc210e43be50b07b7ab9bc4c50af",
+        "author": {
+          "email": "jules@example.com",
+          "user": null
+        }
+      },
+      "c1": {
+        "oid": "d0087c6e03f86071dc89eb8c9755c072fce6105b",
+        "author": {
+          "email": "ivy@example.com",
+          "user": null
+        }
+      },
+      "c2": {
+        "oid": "d3c43d809f251424273acc304bc2df82dc8b8dfd",
+        "author": {
+          "email": "ada@other.example",
+          "user": {
+            "login": "ada"
+          }
+        }
+      },
+      "c3": {
+        "oid": "47090666bfa74df8c0de1b18038cbc7ebacf4bba",
+        "author": {
+          "email": "frank@example.com",
+          "user": {
+            "login": "frank"
+          }
+        }
+      },
+      "c4": {
+        "oid": "4d2753e47652a2fb95162d504a175f41e73fc3e6",
+        "author": {
+          "email": "erin@example.com",
+          "user": {
+            "login": "erin"
+          }
+        }
+      },
+      "c5": {
+        "oid": "3fa0614db47374eb0f01755a389eb643b5978d19",
+        "author": {
+          "email": "dana@example.com",
+          "user": null
+        }
+      },
+      "c6": {
+        "oid": "9c9559d57b63bbbdd91481ffa5d5455f2220b6f6",
+        "author": {
+          "email": "copilot@bot.example",
+          "user": null
+        }
+      },
+      "c7": {
+        "oid": "63ddd0a1952c6beefa42ca22bb868998f8e8eadf",
+        "author": {
+          "email": "bob@example.com",
+          "user": {
+            "login": "bob"
+          }
+        }
+      },
+      "c8": {
+        "oid": "feb652b354e77f62a7c2a5676b590f8e47ad765d",
+        "author": {
+          "email": "cara@example.com",
+          "user": {
+            "login": "cara"
+          }
+        }
+      },
+      "c9": {
+        "oid": "b7e47e8df2bea6e6e2e865f78a54985bf018b4bf",
+        "author": {
+          "email": "hank@example.com",
+          "user": {
+            "login": "hank"
+          }
+        }
+      },
+      "c10": {
+        "oid": "5974eed9ce8129a1a176b6efc481396ae893cb6a",
+        "author": {
+          "email": "gina@example.com",
+          "user": null
+        }
+      },
+      "c11": {
+        "oid": "890b41cc15bf5a07e513ff776db85213218936ce",
+        "author": {
+          "email": "ada@example.com",
+          "user": {
+            "login": "ada"
+          }
+        }
+      }
+    }
+  },
+  "errors": [
+    {
+      "type": "NOT_FOUND",
+      "path": [
+        "node",
+        "c10",
+        "author",
+        "user"
+      ],
+      "locations": [
+        {
+          "line": 15,
+          "column": 38
+        }
+      ],
+      "message": "Could not resolve to a User with the login of 'gina-gone'."
+    }
+  ]
+}

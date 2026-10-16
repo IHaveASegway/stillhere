@@ -24,6 +24,14 @@
     "text": "{\"data\": {\"rateLimit\": {\"cost\": 2, \"remaining\": 4988, \"resetAt\": \"2026-10-09T04:00:00Z\"}, \"node\": {\"pullRequests\": null}}, \"errors\": [{\"type\": \"FORBIDDEN\", \"path\": [\"node\", \"pullRequests\"], \"message\": \"Resource not accessible by integration\"}]}"
   },
   {
+    "name": "L1 run 1's author links: the mirror is up to date, so the links pass runs although the pull requests failed; every email of the mirror's history, newest commit first",
+    "operation": "AuthorLinks",
+    "variables": {"repo": "R_widget", "o0": "4631a8bbeeaebc210e43be50b07b7ab9bc4c50af", "o1": "d0087c6e03f86071dc89eb8c9755c072fce6105b", "o2": "d3c43d809f251424273acc304bc2df82dc8b8dfd", "o3": "47090666bfa74df8c0de1b18038cbc7ebacf4bba", "o4": "4d2753e47652a2fb95162d504a175f41e73fc3e6", "o5": "3fa0614db47374eb0f01755a389eb643b5978d19", "o6": "9c9559d57b63bbbdd91481ffa5d5455f2220b6f6", "o7": "63ddd0a1952c6beefa42ca22bb868998f8e8eadf", "o8": "feb652b354e77f62a7c2a5676b590f8e47ad765d", "o9": "b7e47e8df2bea6e6e2e865f78a54985bf018b4bf", "o10": "5974eed9ce8129a1a176b6efc481396ae893cb6a", "o11": "890b41cc15bf5a07e513ff776db85213218936ce"},
+    "status": 200,
+    "headers": {"Date": "Fri, 09 Oct 2026 00:00:04 GMT"},
+    "body": "sync-links.json"
+  },
+  {
     "name": "S4 run 2, the rerun: look the repository up",
     "operation": "Repo",
     "variables": {"owner": "acme", "name": "widget"},
@@ -112,11 +120,107 @@
     "text": "{\"data\": {\"rateLimit\": {\"cost\": 1, \"remaining\": 4975, \"resetAt\": \"2026-10-09T04:00:00Z\"}, \"search\": {\"issueCount\": 4}}}"
   },
   {
+    "name": "L2 run 3's author links, facts.db B having asked about none",
+    "operation": "AuthorLinks",
+    "variables": {"repo": "R_widget", "o0": "4631a8bbeeaebc210e43be50b07b7ab9bc4c50af", "o1": "d0087c6e03f86071dc89eb8c9755c072fce6105b", "o2": "d3c43d809f251424273acc304bc2df82dc8b8dfd", "o3": "47090666bfa74df8c0de1b18038cbc7ebacf4bba", "o4": "4d2753e47652a2fb95162d504a175f41e73fc3e6", "o5": "3fa0614db47374eb0f01755a389eb643b5978d19", "o6": "9c9559d57b63bbbdd91481ffa5d5455f2220b6f6", "o7": "63ddd0a1952c6beefa42ca22bb868998f8e8eadf", "o8": "feb652b354e77f62a7c2a5676b590f8e47ad765d", "o9": "b7e47e8df2bea6e6e2e865f78a54985bf018b4bf", "o10": "5974eed9ce8129a1a176b6efc481396ae893cb6a", "o11": "890b41cc15bf5a07e513ff776db85213218936ce"},
+    "status": 200,
+    "headers": {"Date": "Fri, 09 Oct 2026 02:00:07 GMT"},
+    "body": "sync-links.json"
+  },
+  {
     "name": "S15 run 4, sync --org acme: widget is archived now",
     "operation": "Repos",
     "variables": {"owner": "acme", "after": null},
     "status": 200,
     "headers": {"Date": "Fri, 09 Oct 2026 03:00:00 GMT"},
     "body": "sync-repos.json"
+  },
+  {
+    "name": "S16 run 5, over facts.db C, which holds the hole run 3 started from: look the repository up",
+    "operation": "Repo",
+    "variables": {"owner": "acme", "name": "widget"},
+    "status": 200,
+    "headers": {"Date": "Fri, 09 Oct 2026 04:00:00 GMT"},
+    "body": "sync-repo.json"
+  },
+  {
+    "name": "S17 run 5's pass down to the watermark, page 1",
+    "operation": "PullRequests",
+    "variables": {"repo": "R_widget", "first": 50, "after": null, "direction": "DESC"},
+    "status": 200,
+    "headers": {"Date": "Fri, 09 Oct 2026 04:00:01 GMT"},
+    "body": "sync-pulls-1.json"
+  },
+  {
+    "name": "S18 run 5's page 2: all older, the pass ends",
+    "operation": "PullRequests",
+    "variables": {"repo": "R_widget", "first": 50, "after": "sync-pulls-2", "direction": "DESC"},
+    "status": 200,
+    "headers": {"Date": "Fri, 09 Oct 2026 04:00:02 GMT"},
+    "body": "sync-pulls-2.json"
+  },
+  {
+    "name": "S19 run 5's check: GitHub counts 4 in the window, the replica holds 1",
+    "operation": "PullRequestCount",
+    "variables": {"q": "repo:acme/widget is:pr updated:2025-10-09T04:00:00Z..2026-10-09T03:55:00Z"},
+    "status": 200,
+    "headers": {"Date": "Fri, 09 Oct 2026 04:00:03 GMT"},
+    "text": "{\"data\": {\"rateLimit\": {\"cost\": 1, \"remaining\": 4970, \"resetAt\": \"2026-10-09T05:00:00Z\"}, \"search\": {\"issueCount\": 4}}}"
+  },
+  {
+    "name": "S20 run 5's full pass, page 1, fails with an error no retry fixes: the repair stops before it stores a page",
+    "operation": "PullRequests",
+    "variables": {"repo": "R_widget", "first": 50, "after": null, "direction": "DESC"},
+    "status": 200,
+    "headers": {"Date": "Fri, 09 Oct 2026 04:00:04 GMT"},
+    "text": "{\"data\": {\"rateLimit\": {\"cost\": 2, \"remaining\": 4968, \"resetAt\": \"2026-10-09T05:00:00Z\"}, \"node\": {\"pullRequests\": null}}, \"errors\": [{\"type\": \"FORBIDDEN\", \"path\": [\"node\", \"pullRequests\"], \"message\": \"Resource not accessible by integration\"}]}"
+  },
+  {
+    "name": "L3 run 5's author links, facts.db C having asked about none",
+    "operation": "AuthorLinks",
+    "variables": {"repo": "R_widget", "o0": "4631a8bbeeaebc210e43be50b07b7ab9bc4c50af", "o1": "d0087c6e03f86071dc89eb8c9755c072fce6105b", "o2": "d3c43d809f251424273acc304bc2df82dc8b8dfd", "o3": "47090666bfa74df8c0de1b18038cbc7ebacf4bba", "o4": "4d2753e47652a2fb95162d504a175f41e73fc3e6", "o5": "3fa0614db47374eb0f01755a389eb643b5978d19", "o6": "9c9559d57b63bbbdd91481ffa5d5455f2220b6f6", "o7": "63ddd0a1952c6beefa42ca22bb868998f8e8eadf", "o8": "feb652b354e77f62a7c2a5676b590f8e47ad765d", "o9": "b7e47e8df2bea6e6e2e865f78a54985bf018b4bf", "o10": "5974eed9ce8129a1a176b6efc481396ae893cb6a", "o11": "890b41cc15bf5a07e513ff776db85213218936ce"},
+    "status": 200,
+    "headers": {"Date": "Fri, 09 Oct 2026 04:00:05 GMT"},
+    "body": "sync-links.json"
+  },
+  {
+    "name": "S21 run 6, a first sync into a fresh facts.db D: look the repository up",
+    "operation": "Repo",
+    "variables": {"owner": "acme", "name": "widget"},
+    "status": 200,
+    "headers": {"Date": "Fri, 09 Oct 2026 05:00:00 GMT"},
+    "body": "sync-repo.json"
+  },
+  {
+    "name": "S22 run 6's first pass, page 1",
+    "operation": "PullRequests",
+    "variables": {"repo": "R_widget", "first": 50, "after": null, "direction": "DESC"},
+    "status": 200,
+    "headers": {"Date": "Fri, 09 Oct 2026 05:00:01 GMT"},
+    "body": "sync-pulls-1.json"
+  },
+  {
+    "name": "S23 run 6's page 2, the end of the list",
+    "operation": "PullRequests",
+    "variables": {"repo": "R_widget", "first": 50, "after": "sync-pulls-2", "direction": "DESC"},
+    "status": 200,
+    "headers": {"Date": "Fri, 09 Oct 2026 05:00:02 GMT"},
+    "body": "sync-pulls-2.json"
+  },
+  {
+    "name": "S24 run 6's check fails with an error no retry fixes: the pass completed, the check did not run",
+    "operation": "PullRequestCount",
+    "variables": {"q": "repo:acme/widget is:pr updated:2025-10-09T05:00:00Z..2026-10-09T04:55:00Z"},
+    "status": 200,
+    "headers": {"Date": "Fri, 09 Oct 2026 05:00:03 GMT"},
+    "text": "{\"data\": {\"rateLimit\": {\"cost\": 1, \"remaining\": 4960, \"resetAt\": \"2026-10-09T06:00:00Z\"}, \"search\": null}, \"errors\": [{\"type\": \"FORBIDDEN\", \"path\": [\"search\"], \"message\": \"Resource not accessible by integration\"}]}"
+  },
+  {
+    "name": "L4 run 6's author links",
+    "operation": "AuthorLinks",
+    "variables": {"repo": "R_widget", "o0": "4631a8bbeeaebc210e43be50b07b7ab9bc4c50af", "o1": "d0087c6e03f86071dc89eb8c9755c072fce6105b", "o2": "d3c43d809f251424273acc304bc2df82dc8b8dfd", "o3": "47090666bfa74df8c0de1b18038cbc7ebacf4bba", "o4": "4d2753e47652a2fb95162d504a175f41e73fc3e6", "o5": "3fa0614db47374eb0f01755a389eb643b5978d19", "o6": "9c9559d57b63bbbdd91481ffa5d5455f2220b6f6", "o7": "63ddd0a1952c6beefa42ca22bb868998f8e8eadf", "o8": "feb652b354e77f62a7c2a5676b590f8e47ad765d", "o9": "b7e47e8df2bea6e6e2e865f78a54985bf018b4bf", "o10": "5974eed9ce8129a1a176b6efc481396ae893cb6a", "o11": "890b41cc15bf5a07e513ff776db85213218936ce"},
+    "status": 200,
+    "headers": {"Date": "Fri, 09 Oct 2026 05:00:04 GMT"},
+    "body": "sync-links.json"
   }
 ]

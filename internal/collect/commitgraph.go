@@ -12,22 +12,23 @@ import (
 	"github.com/IHaveASegway/stillhere/internal/domain"
 )
 
-// ChangedPathFilters reports whether repo has a commit-graph with
-// changed-path Bloom filters (#56): git's own index, which lets blame skip
-// the commits that did not touch the file it reads. Blame on a clone
-// without one took 2.85 times as long on the same facts (#56), and a fresh
-// git clone has none. Sync writes one into every mirror; a scan never
-// writes into a clone, so a scan whose blame was slow can only say how
-// (app's commit-graph hint).
+// CommitGraph reports whether repo has a commit-graph (graph), git's own
+// index of its commits, and whether that graph has changed-path Bloom
+// filters (filters, #56), which let blame skip the commits that did not
+// touch the file it reads. On 30 public repositories a cold scan's blame
+// took 1.4 times as long without a graph and 2.85 times without filters, on
+// the same facts (#56), and a fresh git clone has neither. Sync writes one
+// into every mirror; a scan never writes into a clone, so a scan whose
+// blame was slow can only say how (app's commit-graph hint).
 //
 // It asks git where the graph lives (rev-parse --git-path, which follows a
 // relocated object directory) and reads the graph's chunk table of
 // contents, the first few hundred bytes of one file, for the BIDX chunk
 // that holds the filters (gitformat-commit-graph(5)). For a chain of
 // graphs it reads the newest one, the last line of the chain file, which
-// holds the commits written last. A missing or unreadable graph is false,
-// never an error: the answer only decides whether to print a hint.
-func ChangedPathFilters(ctx context.Context, git domain.GitRunner, repo domain.Repo) (bool, error) {
+// holds the commits written last. A missing or unreadable graph is no
+// graph, never an error: the answer only decides whether to print a hint.
+func CommitGraph(ctx context.Context, git domain.GitRunner, repo domain.Repo) (graph, filters bool, err error) {
 	out, err := git.Run(ctx, domain.GitCmd{
 		Dir: repo.Path,
 		Args: []string{"rev-parse",
@@ -35,11 +36,11 @@ func ChangedPathFilters(ctx context.Context, git domain.GitRunner, repo domain.R
 			"--git-path", "objects/info/commit-graphs/commit-graph-chain"},
 	})
 	if err != nil {
-		return false, err
+		return false, false, err
 	}
 	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
 	if len(lines) != 2 {
-		return false, nil
+		return false, false, nil
 	}
 	abs := func(p string) string {
 		if filepath.IsAbs(p) {
@@ -48,14 +49,15 @@ func ChangedPathFilters(ctx context.Context, git domain.GitRunner, repo domain.R
 		return filepath.Join(repo.Path, p)
 	}
 	single, chain := abs(lines[0]), abs(lines[1])
-	if commitGraphHasFilters(single) {
-		return true, nil
+	if ok, bidx := commitGraphChunks(single); ok {
+		return true, bidx, nil
 	}
 	newest := commitGraphNewest(chain)
 	if newest == "" {
-		return false, nil
+		return false, false, nil
 	}
-	return commitGraphHasFilters(filepath.Join(filepath.Dir(chain), "graph-"+newest+".graph")), nil
+	graph, filters = commitGraphChunks(filepath.Join(filepath.Dir(chain), "graph-"+newest+".graph"))
+	return graph, filters, nil
 }
 
 // commitGraphNewest returns the hash of the newest graph a commit-graph
@@ -80,29 +82,29 @@ func commitGraphNewest(chain string) string {
 	return last
 }
 
-// commitGraphHasFilters reports whether the commit-graph file at path holds
-// a BIDX chunk. The file starts with the signature "CGPH", a version byte,
-// a hash version byte, the number of chunks C and the number of base
-// graphs, then a table of C + 1 entries of a 4-byte chunk id and an 8-byte
-// offset, the last with id 0.
-func commitGraphHasFilters(path string) bool {
+// commitGraphChunks reports whether path is a commit-graph file (ok) and
+// whether it holds a BIDX chunk (filters). The file starts with the
+// signature "CGPH", a version byte, a hash version byte, the number of
+// chunks C and the number of base graphs, then a table of C + 1 entries of
+// a 4-byte chunk id and an 8-byte offset, the last with id 0.
+func commitGraphChunks(path string) (ok, filters bool) {
 	f, err := os.Open(path)
 	if err != nil {
-		return false
+		return false, false
 	}
 	defer func() { _ = f.Close() }()
 	head := make([]byte, 8)
 	if _, err := io.ReadFull(f, head); err != nil || !bytes.Equal(head[:4], []byte("CGPH")) {
-		return false
+		return false, false
 	}
 	table := make([]byte, 12*(int(head[6])+1))
 	if _, err := io.ReadFull(f, table); err != nil {
-		return false
+		return false, false
 	}
 	for i := 0; i+4 <= len(table); i += 12 {
 		if bytes.Equal(table[i:i+4], []byte("BIDX")) {
-			return true
+			return true, true
 		}
 	}
-	return false
+	return true, false
 }

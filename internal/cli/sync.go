@@ -28,7 +28,7 @@ func (e *env) syncCommand() *cobra.Command {
 func (e *env) syncGitHubCommand() *cobra.Command {
 	var req app.SyncRequest
 	cmd := &cobra.Command{
-		Use:   "github (--org ORG | --repo OWNER/NAME...)",
+		Use:   "github (--org ORG | --repo OWNER/NAME [--repo OWNER/NAME]...)",
 		Short: "Mirror repositories and sync their pull requests and reviews",
 		Long: `sync github keeps a bare mirror of each repository of an organization (--org),
 or of the repositories you name (--repo, repeatable), and copies their pull
@@ -40,10 +40,14 @@ A first sync reads the pull requests updated in the last 365 days, the window
 every metric reads (--since reaches further back), newest first; a later one
 reads what changed since the last. Then it checks the copy against GitHub's
 own count, and reads the window again at once if pull requests are missing.
-An interrupted sync loses nothing: the next one reads the same range again.
+It also asks GitHub, once per email, which account each author email of the
+mirror's history belongs to, a hundred emails a request: evidence of which
+addresses are one person, for 'stillhere identities'. An interrupted sync
+loses nothing: the next one reads the same range again.
 A first sync of the cli organization (cli/cli: 1,300 pull requests updated in
-a year) took 2 minutes; of go-chi's 20 repositories, 28 seconds; a sync with
-nothing new, a few seconds per repository. Three repositories sync at once.
+a year, 732 author emails) took 2 minutes 15 seconds; of go-chi's 20
+repositories, 28 seconds; a sync with nothing new, a few seconds per
+repository. Three repositories sync at once.
 
 Archived repositories and forks of an organization are left out, and their
 mirrors moved to <mirrors>/.stale, unless --include-archived or
@@ -130,7 +134,9 @@ func checkSyncTargets(cmd *cobra.Command, req app.SyncRequest) error {
 // printSyncSummary prints a sync's closing line to stdout, for every sync
 // that began its run: what a scheduled sync's log needs to tell success
 // from a partial or an incomplete sync, whose exit code is 0 too
-// (docs/spec/report-json.md#exit-codes).
+// (docs/spec/report-json.md#exit-codes). A sync whose listing failed, such
+// as one that names a repository GitHub does not have, began no run and
+// prints none: its error says why.
 func printSyncSummary(w io.Writer, s *app.SyncSummary, interrupted bool) {
 	var b strings.Builder
 	b.WriteString("sync github: ")

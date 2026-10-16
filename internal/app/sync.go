@@ -73,6 +73,13 @@ const syncProgressPages = 10
 // sync is recorded as a run of kind sync, so its outcome is kept like a
 // scan's. Sync returns domain.ErrNoFacts when no repository synced, and a
 // summary whenever it began its run, an interrupted one included.
+//
+// The repositories are listed before the run begins: a name the forge does
+// not know (a --repo or --org typo, a *domain.UsageError) is refused like
+// the command line's other usage errors, with no run recorded and no
+// summary, which would read as a sync that found nothing to do. A listing
+// that fails otherwise, such as GitHub being down, records no run either:
+// the sync began nothing it could finish or resume.
 func Sync(ctx context.Context, d Deps, r SyncRequest) (*SyncSummary, error) {
 	if d.Forge == nil || d.ForgeStore == nil || d.Store == nil {
 		return nil, errors.New("app.Sync: Deps needs Forge, ForgeStore and Store")
@@ -82,6 +89,10 @@ func Sync(ctx context.Context, d Deps, r SyncRequest) (*SyncSummary, error) {
 		log = slog.New(slog.DiscardHandler)
 	}
 	began := time.Now()
+	listed, owner, err := syncListing(ctx, d, r)
+	if err != nil {
+		return nil, err
+	}
 	runID, err := d.Store.BeginRun(ctx, domain.Run{
 		Kind:        domain.RunKindSync,
 		Status:      domain.RunStatusRunning,
@@ -94,7 +105,7 @@ func Sync(ctx context.Context, d Deps, r SyncRequest) (*SyncSummary, error) {
 		return nil, fmt.Errorf("sync: recording the run: %w", err)
 	}
 	sum := &SyncSummary{}
-	status, err := syncRepos(ctx, d, r, sum, log)
+	status, err := syncRepos(ctx, d, r, listed, owner, sum, log)
 	sum.Took = time.Since(began)
 	// The run is finished even after a cancellation, so that it does not
 	// stay running until its lease lapses, but within finishTimeout.
@@ -130,19 +141,16 @@ func (r SyncRequest) options() map[string]string {
 	return opts
 }
 
-// syncRepos syncs every selected repository into sum and returns the run's
-// status. Its messages and log lines quote the organization, the
-// repositories and the mirror paths scrubbed: the command line refuses a
-// name that is no GitHub name, but the mirrors directory may be any path
-// the user typed.
-func syncRepos(ctx context.Context, d Deps, r SyncRequest, sum *SyncSummary, log *slog.Logger) (domain.RunStatus, error) {
-	listed, owner, err := syncListing(ctx, d, r)
+// syncRepos syncs every selected repository of the listing (syncListing)
+// into sum and returns the run's status. Its messages and log lines quote
+// the organization, the repositories and the mirror paths scrubbed: the
+// command line refuses a name that is no GitHub name, but the mirrors
+// directory may be any path the user typed.
+func syncRepos(ctx context.Context, d Deps, r SyncRequest, listed []domain.ForgeRepo, owner string,
+	sum *SyncSummary, log *slog.Logger) (domain.RunStatus, error) {
 	what := redact.Scrub(r.Org)
 	if owner == "" {
 		what = redact.Scrub(strings.Join(r.Repos, ", "))
-	}
-	if err != nil {
-		return domain.RunStatusFailed, err
 	}
 	repos, left := selectRepos(listed, r, owner == "")
 	log.Info("sync github", "of", what, "listed", len(listed), "syncing", len(repos),
@@ -210,7 +218,7 @@ func syncRepos(ctx context.Context, d Deps, r SyncRequest, sum *SyncSummary, log
 // each repository --repo names, looked up one by one, with no owner, so no
 // other mirror moves (ForgeSource.ReconcileMirrors). A repository named twice
 // is synced once. A name the forge does not know fails the sync before it
-// does anything else: it is the user's typo, not a repository's failure.
+// begins its run: it is the user's typo, not a repository's failure.
 func syncListing(ctx context.Context, d Deps, r SyncRequest) ([]domain.ForgeRepo, string, error) {
 	if len(r.Repos) == 0 {
 		listed, err := d.Forge.Repos(ctx, r.Org)
@@ -337,13 +345,18 @@ type repoSync struct {
 	checked bool  // the completeness check ran
 	github  int   // the check's counts of the window's pull requests: GitHub's
 	replica int   // and the replica's
+	asked   int   // author emails the links pass asked GitHub about (#103)
+	linked  int   // of them, those GitHub links to an account
 	err     error // the mirror's or the pull requests' failure
 }
 
-// syncRepo brings one repository's mirror and pull requests up to date. The
-// two are independent: a mirror that fails to fetch, or that unmirrored
-// says to leave alone, does not stop the pull requests, and the other way
-// round.
+// syncRepo brings one repository's mirror, pull requests and author links
+// up to date. The mirror and the pull requests are independent: a mirror
+// that fails to fetch, or that unmirrored says to leave alone, does not stop
+// the pull requests, and the other way round. The links pass reads the
+// mirror, so it runs when the mirror is up to date, whatever the pull
+// requests did; a links pass that fails is logged and fails nothing, since
+// the next sync asks again about every email this one did not store.
 func syncRepo(ctx context.Context, d Deps, r SyncRequest, repo domain.ForgeRepo, unmirrored error, at syncPlace, log *slog.Logger) repoSync {
 	started := time.Now()
 	var errs []error
@@ -362,6 +375,16 @@ func syncRepo(ctx context.Context, d Deps, r SyncRequest, repo domain.ForgeRepo,
 	if err != nil {
 		errs = append(errs, fmt.Errorf("pull requests: %w", err))
 	}
+	if path != "" && ctx.Err() == nil {
+		if err := syncLinks(ctx, d, repo, path, &res); err != nil {
+			if ctx.Err() != nil {
+				errs = append(errs, ctx.Err())
+			} else {
+				log.Warn("author links not read; the next sync asks again", "repo", at.repo,
+					"asked", res.asked, "error", redact.Scrub(err.Error()))
+			}
+		}
+	}
 	res.err = errors.Join(errs...)
 	if res.err == nil {
 		attrs := []any{"repo", at.repo, "repos", at.of, "mirror", redact.Scrub(path), "pull_requests", res.pulls}
@@ -370,9 +393,42 @@ func syncRepo(ctx context.Context, d Deps, r SyncRequest, repo domain.ForgeRepo,
 			// requests: a replica that holds at least GitHub's is complete.
 			attrs = append(attrs, "window_github", res.github, "window_replica", res.replica)
 		}
+		if res.asked > 0 {
+			attrs = append(attrs, "emails_asked", res.asked, "emails_linked", res.linked)
+		}
 		log.Info("synced", append(attrs, "took", time.Since(started).Round(time.Millisecond))...)
 	}
 	return res
+}
+
+// syncLinks asks the forge which account each author email of the mirror's
+// history belongs to, but those the replica has asked about already, and
+// stores each answer as it comes (ForgeSource.LinkAuthors, #103): the
+// evidence of identity's same-forge-account rule, which the bounded passes
+// of ADR 0013 no longer read beyond the history window. An email is asked
+// about once; an email GitHub linked to no account then stays so until
+// facts.db is made anew.
+func syncLinks(ctx context.Context, d Deps, repo domain.ForgeRepo, mirror string, res *repoSync) error {
+	have, err := d.ForgeStore.ForgeLinks(ctx, repo.ID)
+	if err != nil {
+		return err
+	}
+	skip := make(map[string]bool, len(have))
+	for email := range have {
+		skip[email] = true
+	}
+	return d.Forge.LinkAuthors(ctx, repo, mirror, skip, func(links []domain.ForgeCommit) error {
+		if err := d.ForgeStore.PutForgeLinks(ctx, repo.ID, links); err != nil {
+			return err
+		}
+		res.asked += len(links)
+		for _, l := range links {
+			if l.AuthorLogin != "" {
+				res.linked++
+			}
+		}
+		return nil
+	})
 }
 
 // syncPullRequests brings the repository's replica up to date in bounded
@@ -399,8 +455,10 @@ func syncRepo(ctx context.Context, d Deps, r SyncRequest, repo domain.ForgeRepo,
 //     whole window again.
 //
 // A check that cannot run leaves the replica's last check as it was and
-// marks the repository synced: the passes completed, and the next sync
-// checks again.
+// marks the repository synced, complete from what the passes read down to:
+// the passes completed, and the next sync checks again. A shortfall the
+// first check finds is recorded before the full pass that follows, so a
+// pass that stops halfway leaves it, and the caveat, in place.
 func syncPullRequests(ctx context.Context, d Deps, r SyncRequest, repo domain.ForgeRepo, at syncPlace, log *slog.Logger) (repoSync, error) {
 	var res repoSync
 	wm, err := d.ForgeStore.ForgeWatermark(ctx, repo.ID)
@@ -470,6 +528,7 @@ func syncPullRequests(ctx context.Context, d Deps, r SyncRequest, repo domain.Fo
 		return max(0, res.github-res.replica), nil
 	}
 
+	kept := wm.Missing // the shortfall the replica records: the last check's that ran
 	start, err := pass(since, kind)
 	if err != nil {
 		return res, err
@@ -478,6 +537,13 @@ func syncPullRequests(ctx context.Context, d Deps, r SyncRequest, repo domain.Fo
 	if err == nil && missing > 0 && since.After(floor) {
 		log.Warn("GitHub counts pull requests in the window that the replica lacks; reading the whole window again",
 			"repo", at.repo, "missing", missing)
+		// The shortfall is recorded before the pass that is to fill it in:
+		// if that pass stops halfway or fails, a scan still says the data
+		// is incomplete, and the next sync reads the window again.
+		if err := d.ForgeStore.MarkForgeMissing(ctx, repo.ID, missing); err != nil {
+			return res, err
+		}
+		kept = missing
 		from = floor
 		if start, err = pass(floor, "repair"); err != nil {
 			return res, err
@@ -489,7 +555,11 @@ func syncPullRequests(ctx context.Context, d Deps, r SyncRequest, repo domain.Fo
 			return res, ctx.Err()
 		}
 		log.Warn("completeness check failed; the next sync checks again", "repo", at.repo, "error", redact.Scrub(err.Error()))
-		return res, d.ForgeStore.MarkForgeSynced(ctx, repo.ID, r.Now)
+		// The passes completed, so the replica is synced as of this sync
+		// and complete from what they read down to, from: a first pass's
+		// window, which a later --since compares against. Only the check
+		// is not known, so the last one that ran stands.
+		return res, d.ForgeStore.MarkForgeChecked(ctx, repo.ID, r.Now, from, kept)
 	}
 	res.checked, res.missing = true, missing
 	if missing > 0 {

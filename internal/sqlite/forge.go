@@ -145,10 +145,10 @@ ON CONFLICT (repo) DO UPDATE SET synced = excluded.synced`, repo, synced)
 }
 
 // MarkForgeChecked records what a sync that started at `at` found once its
-// passes completed: the replica is complete from `from`, the completeness
-// check counted `missing` pull requests it lacks, and the repository is
-// synced as of `at`. The three move together, in one transaction, so a
-// reader never sees a new "as of" beside an old check.
+// passes completed: the replica is complete from `from`, the last
+// completeness check that ran counted `missing` pull requests it lacks, and
+// the repository is synced as of `at`. The three move together, in one
+// transaction, so a reader never sees a new "as of" beside an old check.
 func (s *Store) MarkForgeChecked(ctx context.Context, repo string, at, from time.Time, missing int) error {
 	if missing < 0 {
 		return fmt.Errorf("sqlite: marking %s checked: %d missing pull requests", repo, missing)
@@ -163,6 +163,65 @@ INSERT INTO forge_watermarks (repo, updated, synced, since, missing) VALUES (?, 
 ON CONFLICT (repo) DO UPDATE SET synced = excluded.synced, since = excluded.since, missing = excluded.missing`,
 			repo, times[0], times[1], missing)
 		return err
+	})
+}
+
+// MarkForgeMissing records a completeness check's shortfall alone, before
+// the full pass that is to fill it in, leaving synced and since as they were.
+func (s *Store) MarkForgeMissing(ctx context.Context, repo string, missing int) error {
+	if missing < 0 {
+		return fmt.Errorf("sqlite: marking %s incomplete: %d missing pull requests", repo, missing)
+	}
+	return s.forgeTx(ctx, "marking "+repo+" incomplete", func(tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `
+INSERT INTO forge_watermarks (repo, updated, synced, missing) VALUES (?, NULL, NULL, ?)
+ON CONFLICT (repo) DO UPDATE SET missing = excluded.missing`, repo, missing)
+		return err
+	})
+}
+
+// ForgeLinks returns the author emails of the repository the replica has
+// asked GitHub about, each with the login of the account GitHub links it
+// to, "" for none (migrations/0007_forge_links.sql).
+func (s *Store) ForgeLinks(ctx context.Context, repo string) (map[string]string, error) {
+	out := map[string]string{}
+	err := s.forgeRead(ctx, "reading the author links of "+repo, func(tx *sql.Tx) error {
+		return forgeRows(ctx, tx, `SELECT author_email, author_login FROM forge_links WHERE repo = ?`,
+			[]any{repo}, func(rows *sql.Rows) error {
+				var email, login string
+				if err := rows.Scan(&email, &login); err != nil {
+					return err
+				}
+				out[email] = login
+				return nil
+			})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// PutForgeLinks upserts the repository's links by email in one
+// transaction. An email without one is refused: it is no address to link.
+func (s *Store) PutForgeLinks(ctx context.Context, repo string, links []domain.ForgeCommit) error {
+	return s.forgeTx(ctx, "storing the author links of "+repo, func(tx *sql.Tx) error {
+		stmt, err := tx.PrepareContext(ctx, `
+INSERT INTO forge_links (repo, author_email, sha, author_login) VALUES (?, ?, ?, ?)
+ON CONFLICT (repo, author_email) DO UPDATE SET sha = excluded.sha, author_login = excluded.author_login`)
+		if err != nil {
+			return err
+		}
+		defer func() { _ = stmt.Close() }()
+		for _, l := range links {
+			if l.AuthorEmail == "" {
+				return fmt.Errorf("a link of commit %s names no email", l.SHA)
+			}
+			if _, err := stmt.ExecContext(ctx, repo, l.AuthorEmail, l.SHA, l.AuthorLogin); err != nil {
+				return fmt.Errorf("the link of commit %s: %w", l.SHA, err)
+			}
+		}
+		return nil
 	})
 }
 

@@ -331,6 +331,23 @@ type ForgeSource interface {
 	// its count, so the count is a lower bound of what a complete replica
 	// holds.
 	CountPullRequests(ctx context.Context, repo ForgeRepo, from, start time.Time) (int, error)
+	// LinkAuthors asks the forge which account each author email of the
+	// mirror's history belongs to (#103's evidence, ADR 0013): every email
+	// a commit reachable from the mirror's HEAD was written with, but those
+	// skip holds, lowercased, each through one commit, its newest. It calls
+	// put with the answers a batch at a time, one ForgeCommit per email: the
+	// commit asked about, the email as git wrote it (lowercased) and the
+	// account's login, "" for an email the forge links to no account. An
+	// email whose commit the forge does not have is left out, to be asked
+	// again. A pass whose put fails, or that stops halfway, loses only the
+	// batches it had not handed over.
+	//
+	// The links are what identity's same-forge-account rule reads. The
+	// pull requests a sync reads hold links too, but only for the history
+	// window; the account of an email does not age, and asking per email,
+	// not per commit, costs one request per hundred emails, whatever the
+	// length of the history.
+	LinkAuthors(ctx context.Context, repo ForgeRepo, mirror string, skip map[string]bool, put func([]ForgeCommit) error) error
 }
 
 // ForgeStore is the port to the forge replica in facts.db: pull requests and
@@ -362,14 +379,30 @@ type ForgeStore interface {
 	MarkForgeSynced(ctx context.Context, repo string, at time.Time) error
 	// MarkForgeChecked records, in one transaction, what a sync that started
 	// at `at` and completed its passes found (ADR 0013): the replica is
-	// complete from `from` (ForgeWatermark.From), and the completeness check
-	// counted `missing` pull requests it lacks (ForgeWatermark.Missing). It
-	// marks the repository synced at `at`, as MarkForgeSynced does.
+	// complete from `from` (ForgeWatermark.From), and the last completeness
+	// check that ran counted `missing` pull requests it lacks
+	// (ForgeWatermark.Missing): this sync's, or, when its check could not
+	// run, the one the replica already records. It marks the repository
+	// synced at `at`, as MarkForgeSynced does.
 	MarkForgeChecked(ctx context.Context, repo string, at, from time.Time, missing int) error
+	// MarkForgeMissing records a completeness check's shortfall alone, before
+	// the full pass that is to fill it in (ADR 0013): if that pass stops
+	// halfway or fails, the replica still says pull requests are missing,
+	// so a scan carries the caveat and the next sync reads the window again.
+	// Synced and From stay as they were.
+	MarkForgeMissing(ctx context.Context, repo string, missing int) error
 	// CountForgePulls is how many pull requests of the repository the
 	// replica holds as last updated at or after since (zero: all of them):
 	// the completeness check's own side.
 	CountForgePulls(ctx context.Context, repo string, since time.Time) (int, error)
+	// ForgeLinks returns the author emails of the repository the replica
+	// has asked the forge about (ForgeSource.LinkAuthors), each with the
+	// login of the account the forge links it to, "" for none. Empty when
+	// it has asked about none.
+	ForgeLinks(ctx context.Context, repo string) (map[string]string, error)
+	// PutForgeLinks upserts the repository's links by email, in one
+	// transaction: an email asked about again keeps the newer answer.
+	PutForgeLinks(ctx context.Context, repo string, links []ForgeCommit) error
 	// LoadForge returns the replica's repositories and watermarks, and every
 	// pull request last updated at or after since, sorted; nil when the
 	// replica holds no repository.
