@@ -32,8 +32,15 @@ max_bytes = 400000
 
 [bots]
 # An identity whose canonical name or email (after the mailmap) contains one
-# of these, ignoring case, is a bot: listed apart, never ranked. A GitHub
-# noreply address is not a bot marker, because people use them.
+# of these, ignoring case, is a bot: listed apart, never ranked. A person's
+# GitHub noreply address (ID+login@users.noreply.github.com) is not a bot
+# marker, because people use them; GitHub's own address is.
+#
+# 2026-10-15: noreply@github.com, which no person has: commits a workflow
+# writes with it ("cli automation <noreply@github.com>" bumping a version
+# on a pull request's branch) were people's rows once landed@2 credited a
+# merged branch's commits to their authors. It matches no person's noreply
+# address, whose "@" follows the login, not "noreply".
 fragments = [
   "[bot]",          # GitHub Apps, such as dependabot[bot] and github-actions[bot]
   "copilot",        # GitHub Copilot's coding agent, when no person co-authored the commit
@@ -41,6 +48,7 @@ fragments = [
   "renovate",
   "github-actions",
   "gpt-engineer",
+  "noreply@github.com", # GitHub's own address: automation and workflows, never a person
 ]
 
 [ai]

@@ -1,6 +1,7 @@
 package app_test
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"maps"
@@ -745,8 +746,49 @@ func clonesOracle(t *testing.T) {
 		if got := s.stored(t, domain.MetricID{Name: "ai_assisted", Version: 1}, domain.Scope{Kind: domain.ScopeRepo, Key: r.Key}); len(got) != 0 {
 			t.Errorf("SPEC shallow clone: ai_assisted@1 has %d values, want none: the boundary cuts its window", len(got))
 		}
+		// The week, [2026-09-30, 2026-10-07), is inside the clone's history
+		// and nothing landed in it: a total of 0, which pages print as
+		// nothing, not an unknown.
+		if w := r.Week; w == nil || !reflect.DeepEqual(w.Total, &report.WeekTotal{LinesAdded: ptr(0), ProdLinesAdded: ptr(0)}) ||
+			len(w.Humans)+len(w.Bots) != 0 {
+			t.Errorf("SPEC shallow clone: the week is %+v, want a table of no rows with a total of 0: nothing landed in a window the history covers", w)
+		}
+		if text := render(t, s.model).text; !bytes.Contains(text, []byte("What landed, 2026-09-30 → 2026-10-07 UTC: nothing")) {
+			t.Errorf("SPEC shallow clone: the text does not say nothing landed in the week:\n%s", text)
+		}
+	})
+
+	t.Run("shallow clone inside the week", func(t *testing.T) {
+		t.Parallel()
+		// --depth 3 keeps rows 16 to 14 of the main fixture, whose boundary,
+		// row 14 on 2026-10-06, is inside the week: what landed there is
+		// unknown, so landed@2 has no value and no page says nothing.
+		shallow := fixture.Clone(t, fixture.Main(t), "week", "https://git.example.test/acme/week.git", "--depth", "3")
+		s := scan(t, fixture.Mailmap(t), nil, scanRanked(shallow))
+		r := onlyRepo(t, s.model)
+		if got := s.stored(t, landedV2, domain.Scope{Kind: domain.ScopeRepo, Key: r.Key}); len(got) != 0 {
+			t.Errorf("SPEC shallow clone inside the week: landed@2 has %d values, want none: the boundary cuts its window", len(got))
+		}
+		if r.Week != nil {
+			t.Errorf("SPEC shallow clone inside the week: the week is %+v, want null: unknown, not nothing", r.Week)
+		}
+		out := render(t, s.model)
+		for _, page := range []struct {
+			name, says string
+			doc        []byte
+		}{
+			{"text", "What landed, 2026-09-30 → 2026-10-07 UTC: unknown: the history", out.text},
+			{"Markdown", "Unknown: the history this run read does not cover the window", out.markdown},
+		} {
+			if !bytes.Contains(page.doc, []byte(page.says)) || bytes.Contains(page.doc, []byte(": nothing")) ||
+				bytes.Contains(page.doc, []byte("Nothing landed")) {
+				t.Errorf("SPEC shallow clone inside the week: the %s does not say what landed is unknown:\n%s", page.name, page.doc)
+			}
+		}
 	})
 }
+
+func ptr[T any](v T) *T { return &v }
 
 // checkSurviving compares surviving@1, a repository's still-here table, with
 // a SPEC table of the prod lines each person holds at HEAD, and requires

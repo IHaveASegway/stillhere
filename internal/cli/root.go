@@ -106,7 +106,7 @@ type env struct {
 	mailmapPath string
 	logLevel    string
 	format      string
-	all         bool // --all on report, scan, week and explain: every row of every table (SR-14)
+	all         bool // --all on report, scan, week, explain and who-knows: every row of every table (SR-14)
 
 	log *slog.Logger // stderr, at --log-level; built by setup
 

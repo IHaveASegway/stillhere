@@ -130,12 +130,13 @@ func planRun(disc *collect.Discovery, exclude []string) *plan {
 	for _, f := range disc.Failed {
 		// Only the path is cut to one stored line: cut together with the
 		// reason, a long path would leave no room for it, such as the
-		// repository to pass instead (discovery.md, rule 3). Discovery
-		// makes each reason one line, cut where it quotes git, and the
-		// scrub here is a second guard.
+		// repository to pass instead (discovery.md, rule 3). It keeps its
+		// end, the part a user mistyped or pasted (#93), however deep the
+		// working directory. Discovery makes each reason one line, cut
+		// where it quotes git, and the scrub here is a second guard.
 		pl.warnings = append(pl.warnings, domain.Warning{
 			Code:    warnPathFailed,
-			Message: redact.Message(f.Path) + ": " + redact.Scrub(f.Message),
+			Message: redact.PathMessage(f.Path) + ": " + redact.Scrub(f.Message),
 		})
 	}
 	for _, g := range disc.Groups {

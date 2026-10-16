@@ -558,8 +558,8 @@ type mcpClusters struct {
 // mcpChangeClusters computes durable@1's and simplifying@1's clusters in each
 // repository of repos, as explain does for one person: the metric owns its
 // window, its exclusions and its credit rule, so this restates none of
-// them. Bots' clusters are left out, as rank leaves them out: changes and
-// highlights credit people.
+// them. Bots' clusters are not in RankInput.Data, as rank leaves them out:
+// changes and highlights credit people.
 func mcpChangeClusters(s *stored, repos []*domain.RepoFacts) (mcpClusters, error) {
 	ix := mcpClusters{durable: map[mcpClusterKey]rank.Cluster{}, simplifying: map[mcpClusterKey]rank.Cluster{}}
 	in := s.input()
@@ -584,9 +584,6 @@ func mcpChangeClusters(s *stored, repos []*domain.RepoFacts) (mcpClusters, error
 				return ix, fmt.Errorf("reading %s's clusters in %q: %w", m.id, rf.Repo.Name, err)
 			}
 			for sub, cs := range ri.Data {
-				if s.who.Bot(sub.Key) {
-					continue
-				}
 				for _, c := range cs {
 					m.out[mcpClusterKey{rf.Repo.Key, c.Change, sub.Key}] = c
 				}

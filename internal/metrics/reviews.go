@@ -123,9 +123,8 @@ func (m reviewsGiven) Compute(in *Input) ([]domain.MetricValue, error) {
 // Clusters returns one cluster per person and pull request reviewed, with
 // Num 1, in the window's week block (counted back from Now,
 // domain.Window.Week) of the person's first counted review of it, for
-// rank's week-block bootstrap. A bot's are there too, as for every ranked
-// metric (#75): the ranking use case leaves bots out, and explain lists
-// them.
+// rank's week-block bootstrap. A bot's are in RankInput.Bots, as for
+// every ranked metric (#75): never ranked, and listed by explain.
 func (m reviewsGiven) Clusters(in *Input, scope domain.Scope) (RankInput, error) {
 	if in == nil || in.Facts == nil {
 		return RankInput{}, errors.New("reviews_given@1: no facts to rank")
@@ -139,20 +138,18 @@ func (m reviewsGiven) Clusters(in *Input, scope domain.Scope) (RankInput, error)
 	if rv == nil {
 		return ri, nil
 	}
+	data := map[domain.Subject][]rank.Cluster{}
 	for _, r := range rv.inScope(scope) {
-		if ri.Data == nil {
-			ri.Data = map[domain.Subject][]rank.Cluster{}
-		}
-		ri.Data[r.who] = append(ri.Data[r.who], rank.Cluster{
+		data[r.who] = append(data[r.who], rank.Cluster{
 			Change: r.pull,
 			Num:    1,
 			Block:  window.Week(r.first),
 		})
 	}
-	for _, cs := range ri.Data {
+	for _, cs := range data {
 		slices.SortFunc(cs, func(a, b rank.Cluster) int { return cmp.Compare(a.Change, b.Change) })
 	}
-	return ri, nil
+	return ri.withData(in.who(), data), nil
 }
 
 // reviewsGivenWindow is [now − 90 days, now).
@@ -371,6 +368,7 @@ type reviewsIndex struct {
 	pulls   []domain.PullRequest             // every pull request of the GitHub data, FactSet.Forge's
 	join    map[string][]string              // ForgeRepo.ID → Repo.Key of the view's repositories it is (reviewsJoin)
 	known   map[string]bool                  // Repo.Key → the run had GitHub data for it: a page or a finished sync
+	asOf    map[string]time.Time             // Repo.Key → its GitHub data's as-of (asOfMark): a pull request merged since may be missing
 	merged  map[string][]*domain.PullRequest // Repo.Key → the merged pull requests of its forge repositories, in FactSet order
 	claimed map[string]bool                  // the merge commit of every merged pull request: the landing that pull request lands
 	facts   map[string]*domain.RepoFacts     // Repo.Key → its facts, whose commits name each landing's first parent
@@ -389,7 +387,8 @@ func (v *view) reviews() *reviewsIndex {
 		in[r.key] = true
 	}
 	x := &reviewsIndex{who: v.who, pulls: v.facts.Forge.PullRequests, join: map[string][]string{}, known: map[string]bool{},
-		merged: map[string][]*domain.PullRequest{}, claimed: map[string]bool{}, facts: map[string]*domain.RepoFacts{}}
+		asOf: map[string]time.Time{}, merged: map[string][]*domain.PullRequest{}, claimed: map[string]bool{},
+		facts: map[string]*domain.RepoFacts{}}
 	for id, keys := range reviewsJoin(v.facts) {
 		if keys = slices.DeleteFunc(slices.Clone(keys), func(k string) bool { return !in[k] }); len(keys) > 0 {
 			x.join[id] = keys
@@ -402,6 +401,9 @@ func (v *view) reviews() *reviewsIndex {
 		if !wm.Updated.IsZero() || !wm.Synced.IsZero() {
 			for _, key := range x.join[wm.Repo] {
 				x.known[key] = true
+				if at, ok := x.asOf[key]; !ok || asOfMark(wm).Before(at) {
+					x.asOf[key] = asOfMark(wm)
+				}
 			}
 		}
 	}
@@ -421,6 +423,17 @@ func (v *view) reviews() *reviewsIndex {
 		}
 	}
 	return x
+}
+
+// asOfMark is how far a repository's GitHub data reaches: the start of the
+// last sync that brought it up to date (Synced), else, before one has, the
+// watermark of its pages (Updated). A pull request merged at or after it
+// may not be in the data yet.
+func asOfMark(wm domain.ForgeWatermark) time.Time {
+	if !wm.Synced.IsZero() {
+		return wm.Synced
+	}
+	return wm.Updated
 }
 
 // active returns the people, by canonical email, who submitted a review

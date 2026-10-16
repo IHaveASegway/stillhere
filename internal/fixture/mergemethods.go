@@ -79,12 +79,21 @@ func mergeMethodsHistory(b *builder) {
 	b.commit("feat: add two.py")
 
 	// #2's and #3's squash merges, which a merge queue lands in one second.
+	// A squash's subject is its pull request's title with its number, as
+	// GitHub writes it.
 	squashed := noon(2026, time.October, 2)
 	b.rowAs(squashed, ali, squashed, github) // S1: #2's merge commit
 	b.write("a.py", numbered("a", 2))
-	b.commit("feat: add a.py")
+	b.commit("feat: add a.py (#2)")
 
 	b.rowAs(squashed, bo, squashed, github) // S2: #3's merge commit
 	b.write("b.py", numbered("b", 2))
-	b.commit("feat: add b.py")
+	b.commit("feat: add b.py (#3)")
+
+	// #4, which GitHub's Copilot coding agent opened for Rob and wrote,
+	// squashed: its commit is the agent's, with Rob as its co-author.
+	agent := person{"Copilot", "198982749+Copilot@users.noreply.github.com"}
+	b.rowAs(noon(2026, time.October, 3), agent, noon(2026, time.October, 3), github) // A1: #4's merge commit
+	b.write("c.py", numbered("c", 2))
+	b.commit("feat: add c.py (#4)\n\nCo-authored-by: Rob Rebase <rob@example.com>")
 }

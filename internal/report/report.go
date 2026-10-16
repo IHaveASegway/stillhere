@@ -299,9 +299,18 @@ type ReviewCoverage struct {
 	Den    float64  `json:"den"` // human-authored landings
 	Value  float64  `json:"value"`
 	// ViaPullRequest counts the landings with a pull request; Den less it
-	// is Direct, landings with none, which no review can cover.
+	// is Direct, landings with no pull request in the GitHub data the run
+	// read, which no review can cover: pushed directly, unless the data
+	// lacks their pull request.
 	ViaPullRequest int `json:"via_pull_request"`
 	Direct         int `json:"direct"`
+	// AfterSync and Unmatched count the human landings with no pull
+	// request that Den leaves out, since whether one had a review is
+	// unknown: those at or after the GitHub data's as-of (a clone fresher
+	// than the last sync), and those whose subject names a pull request,
+	// as GitHub's merges write it, that the data lacks (#101).
+	AfterSync int `json:"after_sync"`
+	Unmatched int `json:"unmatched"`
 	// ApprovedNoComment counts the reviewed landings whose only reviews
 	// were approvals with no text and no inline comment: rubber stamps
 	// count as reviews, so they are shown beside the share.
@@ -322,7 +331,7 @@ type Totals struct {
 	ProdFiles       *int `json:"prod_files"`       // surviving@1: prod files with surviving lines
 	ProdLines       *int `json:"prod_lines"`       // surviving@1: surviving prod non-blank lines
 	People          *int `json:"people"`           // surviving@1: humans with surviving prod lines
-	Landers         int  `json:"landers"`          // humans with a landing in the landed window
+	Landers         *int `json:"landers"`          // humans with a landing in the landed window; null when what landed there is unknown (week null)
 	Bots            int  `json:"bots"`             // bots with surviving prod lines or a landing in the window
 	LandingsWindow  int  `json:"landings_window"`  // landings in the landed window
 	LandingsHistory int  `json:"landings_history"` // landings in the history window
@@ -354,10 +363,16 @@ type StillHereRow struct {
 // non-merge commits, so a merged branch counts for its authors and a bot's
 // commits for the bot, whoever merged them. The numbers are activity and
 // are not comparable to surviving lines.
+//
+// A scope whose history does not cover the window, a shallow clone's
+// boundary inside it, has no table: its week is null, unknown, where a
+// covered window in which nothing landed has a table whose total is 0
+// (#74: unknown never reads as 0).
 type WeekTable struct {
 	// Total is the scope's own numbers, each landing once, which the rows
 	// do not add up to: a landing that holds two people's commits is a
-	// row of each. null when landed@2 gave the scope no value.
+	// row of each. Over the scope's repositories whose history covers the
+	// window; a table always has one.
 	Total  *WeekTotal `json:"total"`
 	Humans []WeekRow  `json:"humans"` // by the window's sort key, descending, then email
 	Bots   []WeekRow  `json:"bots"`

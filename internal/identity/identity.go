@@ -162,6 +162,15 @@ func (d *Directory) Bot(email string) bool {
 	return d.kind(canonical(email)).bot
 }
 
+// Agent reports whether a canonical email, or a forge account's subject
+// (Reviewer), is a coding agent the [ai] table names: a bot whose commits
+// Credit gives to their first human co-author (ADR 0007), such as the
+// Copilot coding agent, which opens pull requests as
+// "@copilot-swe-agent[bot]" for the person who assigned it the work.
+func (d *Directory) Agent(email string) bool {
+	return d.kind(canonical(email)).agent
+}
+
 // AIAssisted reports whether c is a person's AI-assisted commit (ADR 0007):
 // the person it is credited to is human, and either a co-author's email is
 // one of the policy's coding-agent emails or the author is an agent. A

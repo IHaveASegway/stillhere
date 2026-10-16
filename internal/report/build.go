@@ -360,12 +360,15 @@ func (b *builder) overview(scope domain.Scope, members []*domain.RepoFacts) Over
 	}
 	if o.Week != nil {
 		// A person whose only part is a merge they landed has a row with no
-		// landing of their own: landers are the people with one.
+		// landing of their own: landers are the people with one. Unknown,
+		// null, without a table.
+		landers := 0
 		for _, r := range o.Week.Humans {
 			if r.Landings > 0 {
-				o.Totals.Landers++
+				landers++
 			}
 		}
+		o.Totals.Landers = &landers
 		for _, r := range o.Week.Bots {
 			bots[r.Email] = true
 		}
@@ -457,16 +460,21 @@ func (b *builder) totals(members []*domain.RepoFacts) Totals {
 
 // weekTable reads landed@2 in a scope (#108): each person's part, and the
 // scope's own totals, which its value about the repository, the group or
-// the whole run holds.
+// the whole run holds. landed@2 gives that value for every scope with a
+// repository whose history covers the window, 0 when nothing landed there,
+// so a scope without one is unknown, a shallow clone's window, and has no
+// table (nil), never an empty one that reads as nothing landed (#74).
 func (b *builder) weekTable(scope domain.Scope) *WeekTable {
-	t := &WeekTable{}
-	if v, ok := b.ix.aggregate(MetricLanded, scope); ok {
-		lines, prod := landedLinesOf(v)
-		t.Total = &WeekTotal{
-			Landings: count(v.Value), Commits: count(v.Detail[detailCommits]), Merged: count(v.Detail[detailMerged]),
-			LinesAdded: lines, ProdLinesAdded: prod, LinesUnknown: count(v.Detail[detailLinesUnknown]),
-		}
+	b.use(MetricLanded)
+	v, ok := b.ix.aggregate(MetricLanded, scope)
+	if !ok {
+		return nil
 	}
+	lines, prod := landedLinesOf(v)
+	t := &WeekTable{Total: &WeekTotal{
+		Landings: count(v.Value), Commits: count(v.Detail[detailCommits]), Merged: count(v.Detail[detailMerged]),
+		LinesAdded: lines, ProdLinesAdded: prod, LinesUnknown: count(v.Detail[detailLinesUnknown]),
+	}}
 	for _, v := range b.ix.people(MetricLanded, scope) {
 		email := v.Subject.Key
 		name, withheld := b.person(email)
@@ -497,7 +505,6 @@ func (b *builder) weekTable(scope domain.Scope) *WeekTable {
 	}
 	slices.SortFunc(t.Humans, order)
 	slices.SortFunc(t.Bots, order)
-	b.use(MetricLanded)
 	return t
 }
 
@@ -595,6 +602,8 @@ func (b *builder) reviewCoverage(scope domain.Scope) *ReviewCoverage {
 		Direct:            count(v.Detail[detailDirect]),
 		ApprovedNoComment: count(v.Detail[detailApprovedNoComment]),
 		BotLandings:       count(v.Detail[detailBotLandings]),
+		AfterSync:         count(v.Detail[detailAfterSync]),
+		Unmatched:         count(v.Detail[detailUnmatched]),
 		Repos:             count(v.Detail[detailRepos]),
 	}
 }

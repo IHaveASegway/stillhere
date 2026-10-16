@@ -3,6 +3,7 @@ package app_test
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -104,6 +105,20 @@ func TestDeterminism(t *testing.T) {
 		t.Fatalf("app.Report after a later sync: %v", err)
 	}
 	sameBytes(t, "report's JSON after a rename and a later sync, and the scan's", render(t, withoutTimings(m)).json, a.json)
+
+	// A run a stillhere older than landed@2 and review_coverage@1 stored
+	// holds no value of either. Its readers compute them from its facts,
+	// so its report is the scan's, what landed and review coverage
+	// included, rather than "nothing landed" over a run of landings
+	// (#108, #107).
+	forgetMetric(t, first.db, first.run, domain.MetricID{Name: "landed", Version: 2})
+	forgetMetric(t, first.db, first.run, domain.MetricID{Name: "review_coverage", Version: 1})
+	if m, err = app.Report(t.Context(), first.read, app.ReportRequest{RunID: first.run}); err != nil {
+		t.Fatalf("app.Report of a run without landed@2: %v", err)
+	}
+	old := render(t, withoutTimings(m))
+	sameBytes(t, "report's JSON of a run that holds no landed@2 or review_coverage@1 value, and the scan's", old.json, a.json)
+	sameBytes(t, "report's text of a run that holds no landed@2 or review_coverage@1 value, and the scan's", old.text, a.text)
 
 	t.Run("names that give an address away", displayNames)
 	t.Run("a token planted in a PATH", func(t *testing.T) {
@@ -453,5 +468,57 @@ func checkForgeRun(t *testing.T, s *scanned) {
 		if table.Beside != "no_comment_share" || zed == nil || zed.Beside == nil || *zed.Beside != 1 {
 			t.Errorf("the reviews_given@1 table shows %q beside the count and zed's row %+v, want no_comment_share 1", table.Beside, zed)
 		}
+	}
+}
+
+// forgetMetric deletes every value of id from run in the facts.db at db, as
+// if a stillhere older than the metric had stored the run, and numbers the
+// values left as the store numbers them. It fails the test when the run
+// held none, which would leave the case checking nothing.
+func forgetMetric(t *testing.T, db string, run int64, id domain.MetricID) {
+	t.Helper()
+	ctx := t.Context()
+	raw, err := sql.Open("sqlite", db+"?_busy_timeout=10000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = raw.Close() }()
+	tx, err := raw.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	exec := func(q string, args ...any) int64 {
+		t.Helper()
+		res, err := tx.ExecContext(ctx, q, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	exec(`DELETE FROM metric_details WHERE run_id = ? AND value_seq IN
+		(SELECT seq FROM metric_values WHERE run_id = ? AND metric = ? AND version = ?)`, run, run, id.Name, id.Version)
+	if exec(`DELETE FROM metric_values WHERE run_id = ? AND metric = ? AND version = ?`, run, id.Name, id.Version) == 0 {
+		t.Fatalf("run %d holds no value of %s to forget, so this case checks nothing", run, id)
+	}
+	// The values left, numbered from 0 again, through negative numbers so
+	// that no two rows share a key on the way.
+	exec(`CREATE TEMP TABLE remap AS SELECT seq AS old, ROW_NUMBER() OVER (ORDER BY seq) - 1 AS new
+		FROM metric_values WHERE run_id = ?`, run)
+	for _, q := range []string{
+		`UPDATE metric_details SET value_seq = -1 - (SELECT new FROM remap WHERE old = value_seq) WHERE run_id = ?`,
+		`UPDATE metric_details SET value_seq = -1 - value_seq WHERE run_id = ?`,
+		`UPDATE metric_values SET seq = -1 - (SELECT new FROM remap WHERE old = seq) WHERE run_id = ?`,
+		`UPDATE metric_values SET seq = -1 - seq WHERE run_id = ?`,
+	} {
+		exec(q, run)
+	}
+	exec(`DROP TABLE remap`)
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
 	}
 }

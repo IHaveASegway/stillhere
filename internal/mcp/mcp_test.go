@@ -365,6 +365,14 @@ func TestMCPTools(t *testing.T) {
 				t.Errorf("explain shows the subject of %s without --allow-source", c.Landing)
 			}
 		}
+		// What a value that is not ranked is made of (#109): Bob's one
+		// landing of the week that holds a commit of his, delta; the merge
+		// of Cara's branch, his only by its merge commit, holds none.
+		var l explainOut
+		decode(t, ask(t, "explain", map[string]any{"metric": "landed", "subject": "Bob Builder"}), &l)
+		if len(l.Landings) != 1 || l.Landings[0].Commits != 1 || l.Landings[0].Title != "" || l.Landings[0].Merge {
+			t.Errorf("explain(landed, Bob) lists the landings %+v, want delta's alone, 1 commit, with no subject", l.Landings)
+		}
 		refused(t, "explain", map[string]any{"metric": "ai_assisted", "subject": "Omar Ops"})
 		decode(t, ask(t, "explain", map[string]any{"metric": "knowledge_loss", "subject": "fixture", "subject_kind": "repo"}), &e)
 		if len(e.Values) != 1 || e.Values[0].Num != 4 || e.Values[0].Den != 34 {

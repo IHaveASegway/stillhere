@@ -67,10 +67,12 @@ func OpenReadOnly(ctx context.Context, path string) (*Store, error) {
 // (SQLITE_READONLY_DIRECTORY, https://sqlite.org/wal.html, "Read-Only
 // Databases"). Then, when no write-ahead log holds data, every committed
 // page is in the file itself, and it is opened immutable=1, which needs no
-// -shm: SQLite then trusts that nothing changes the file while it reads,
-// which holds where no one may write. A log that holds data cannot be read
-// that way, and the refusal says what to do. Neither refusal says the
-// reader must write (#79).
+// -shm. SQLite then trusts that nothing changes the file while it reads,
+// which this process's permissions do not promise: the directory may be
+// another user's, who scans into it while this one reads (a team server's
+// copy). So every read guards itself (immutableRead). A log that holds
+// data cannot be read that way, and the refusal says what to do. Neither
+// refusal says the reader must write (#79).
 func openReadOnly(ctx context.Context, abs, op string) (*Store, error) {
 	s := &Store{path: abs}
 	err := s.readOnlyOpen(ctx, false)
@@ -87,11 +89,46 @@ func openReadOnly(ctx context.Context, abs, op string) (*Store, error) {
 			"make the directory writable for one read, or copy %s and %s-wal to a directory that is and pass --db",
 			op, abs, filepath.Base(abs), filepath.Base(abs), filepath.Base(abs))}
 	}
-	s = &Store{path: abs}
+	s = &Store{path: abs, immutable: true}
 	if err := s.readOnlyOpen(ctx, true); err != nil {
 		return nil, readOnlyFailed(op, abs, errors.Join(err, s.Close()), true)
 	}
 	return s, nil
+}
+
+// immutableRead is read for a Store opened immutable=1, where SQLite takes
+// no lock and ignores the write-ahead log, so nothing in SQLite stops it
+// reading beside a writer: a scan or a sync another user runs into the
+// same directory. A writer in WAL mode keeps its commits in the log until
+// a checkpoint copies them into the file, which is when a lockless read
+// could see pages of two states. So a read is refused while a log holds
+// data, which is the whole time a writer works; it reads on a connection
+// of its own (no idle connection is kept), so no cached page outlives it;
+// and when the file changed while it read, a checkpoint ran under it, so
+// it reads again, once, and is refused if the file changed again.
+func (s *Store) immutableRead(ctx context.Context, fn func(*sql.Tx) error) error {
+	for attempt := 0; ; attempt++ {
+		if walHolds(s.path) {
+			return &domain.UsageError{Msg: fmt.Sprintf("%s: another process is writing the facts database now (its "+
+				"write-ahead log, %s-wal, holds commits), and this directory cannot be written here, so stillhere cannot "+
+				"read beside it safely: run the command again when the scan or sync finishes, or copy the database to a "+
+				"directory that can be written and pass --db", s.path, filepath.Base(s.path))}
+		}
+		before, err := os.Stat(s.path)
+		if err != nil {
+			return err
+		}
+		err = s.readTx(ctx, fn)
+		after, serr := os.Stat(s.path)
+		if serr == nil && after.Size() == before.Size() && after.ModTime().Equal(before.ModTime()) && !walHolds(s.path) {
+			return err
+		}
+		if attempt > 0 {
+			return &domain.UsageError{Msg: fmt.Sprintf("%s: the facts database changed while it was read, twice, and "+
+				"this directory cannot be written here, so stillhere reads it without the locks that would keep a "+
+				"writer out: run the command again when the scan or sync that writes it finishes", s.path)}
+		}
+	}
 }
 
 // readOnlyFailed words a failed read-only open, in an unwritable directory
@@ -151,6 +188,12 @@ func (s *Store) readOnlyOpen(ctx context.Context, immutable bool) error {
 	}
 	s.ro.SetMaxOpenConns(readConns)
 	s.ro.SetMaxIdleConns(readConns)
+	if immutable {
+		// A connection opened immutable=1 never checks whether the file
+		// changed, so its page cache could outlive a writer's checkpoint:
+		// each read gets a connection of its own (immutableRead).
+		s.ro.SetMaxIdleConns(0)
+	}
 	// The write path (Store.write) needs a pool too. This one is read-only
 	// like the readers, so a write fails with SQLITE_READONLY rather than
 	// on a nil pool. database/sql connects lazily: a Store that never

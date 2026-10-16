@@ -241,7 +241,7 @@ func textOverview(p *printer, m *Model, o *Overview) {
 			across(o.Scope), plural(o.People.FilesBlamed, "file", "files"))
 		textPeople(p, "    ", o.People)
 	}
-	if o.Week != nil {
+	if o.Week != nil || o.Totals.ReposOK > 0 {
 		p.blank()
 		textWeek(p, "  ", m, o.Week)
 	}
@@ -255,7 +255,12 @@ func peopleSummary(t Totals) string {
 	if t.People != nil {
 		parts = append(parts, plural(*t.People, "person", "people")+" with surviving prod lines")
 	}
-	parts = append(parts, plural(t.Landers, "person", "people")+" landed in the window", plural(t.Bots, "bot", "bots"))
+	if t.Landers != nil {
+		parts = append(parts, plural(*t.Landers, "person", "people")+" landed in the window")
+	} else {
+		parts = append(parts, "who landed in the window is unknown")
+	}
+	parts = append(parts, plural(t.Bots, "bot", "bots"))
 	return strings.Join(parts, " · ")
 }
 
@@ -275,8 +280,10 @@ func shareLine(loss, ai, bots *Share) string {
 }
 
 // coverageText is "review coverage 61.5% (24 of 39 human landings, 90 days)
-// · 12 pull requests merged without another's review · 3 pushed directly
-// · 4 reviewed only by an approval with no comment", and, for a section
+// · 12 pull requests merged without another's review · 3 landings with no
+// pull request in the GitHub data · 4 reviewed only by an approval with no
+// comment", with the landings it left out, after the last sync or naming a
+// pull request the data lacks, and, for a section
 // over more repositories than have GitHub data, "· over 3 of 5
 // repositories, those with GitHub data" (#107).
 func coverageText(c *ReviewCoverage, repos int) string {
@@ -287,7 +294,14 @@ func coverageText(c *ReviewCoverage, repos int) string {
 		parts = append(parts, plural(n, "pull request", "pull requests")+" merged without another's review")
 	}
 	if c.Direct > 0 {
-		parts = append(parts, plural(c.Direct, "landing", "landings")+" pushed directly")
+		parts = append(parts, plural(c.Direct, "landing", "landings")+" with no pull request in the GitHub data")
+	}
+	if c.AfterSync > 0 {
+		parts = append(parts, plural(c.AfterSync, "landing", "landings")+" since the last sync, left out")
+	}
+	if c.Unmatched > 0 {
+		parts = append(parts, plural(c.Unmatched, "landing", "landings")+
+			" naming a pull request the GitHub data lacks, left out (sync github again)")
 	}
 	if c.ApprovedNoComment > 0 {
 		parts = append(parts, grouped(c.ApprovedNoComment)+" reviewed only by an approval with no comment")
@@ -478,8 +492,14 @@ func otherRoles(byRole map[string]int) string {
 	return strings.Join(parts, " · ")
 }
 
+// textWeek prints a scope's what-landed table; t nil is a window its
+// history does not cover, whose landings are unknown (#74).
 func textWeek(p *printer, indent string, m *Model, t *WeekTable) {
 	w := Interval{Since: m.Window.Since, Until: m.Window.Until}
+	if t == nil {
+		p.wrapped(indent, indent+"  ", "What landed, "+interval(w)+": "+weekUnknown)
+		return
+	}
 	if len(t.Humans) == 0 && len(t.Bots) == 0 {
 		p.linef("%sWhat landed, %s: nothing", indent, interval(w))
 		return
@@ -491,6 +511,11 @@ func textWeek(p *printer, indent string, m *Model, t *WeekTable) {
 	cols, row := weekColumns(p, t, clean)
 	textPersonTable(p, indent+"  ", cols, t.Humans, t.Bots, row)
 }
+
+// weekUnknown is what a page says of a window whose landings are unknown:
+// no table, never "nothing".
+const weekUnknown = "unknown: the history this run read does not cover the window (a shallow clone's history ends " +
+	"inside it), so its landings are not counted, which is not the same as none"
 
 // weekTotalText is "9 landings · 10 commits · 1 merge · 24 lines added, 20
 // prod": landed@2's numbers about the scope, each landing once (#108).
@@ -562,7 +587,9 @@ func textRanks(p *printer, t *RankTable) {
 		p.line("  nobody has a value")
 	} else {
 		cols, rows, notes := rankRows(p, t, clean, false)
-		p.textTable("  ", cols, rows)
+		if len(rows) > 0 { // a table of no row, its people only counted, prints no header
+			p.textTable("  ", cols, rows)
+		}
 		for _, n := range notes {
 			p.wrapped("  ", "  ", n)
 		}
@@ -731,10 +758,8 @@ func textRepo(p *printer, m *Model, r *Repo) {
 		return
 	}
 	textCard(p, m, r)
-	if r.Week != nil {
-		p.blank()
-		textWeek(p, "  ", m, r.Week)
-	}
+	p.blank()
+	textWeek(p, "  ", m, r.Week)
 	if r.StillHere != nil {
 		p.blank()
 		p.linef("  Still here at %s: surviving non-blank lines (%s blamed)", short(r.Head),

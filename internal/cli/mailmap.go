@@ -27,7 +27,8 @@ const maxMailmapCheck = 16 << 20
 const maxMailmapWarnings = 10
 
 // checkMailmap logs, at warn, each line of the mailmap at path that git
-// will ignore or apply only in part, by number, as label names the file.
+// will ignore, apply only in part or apply where it looks like a comment,
+// by number, as label names the file.
 // It never fails a command: git reads the file as it is either way.
 func checkMailmap(log *slog.Logger, label, path string) {
 	f, err := os.Open(path)
@@ -62,23 +63,34 @@ func checkMailmap(log *slog.Logger, label, path string) {
 	if len(shown) > maxMailmapWarnings {
 		shown = append(shown[:maxMailmapWarnings:maxMailmapWarnings], fmt.Sprintf("and %d more", len(problems)-maxMailmapWarnings))
 	}
-	log.Warn("git ignores or cuts some lines of the mailmap: "+strings.Join(shown, "; "), "file", label)
+	log.Warn("git reads some lines of the mailmap other than they look: "+strings.Join(shown, "; "), "file", label)
 }
 
 // mailmapLineProblem says how git misreads one line of a mailmap, "" for a
 // line it reads whole: a comment (# first), a blank line, or "Name
 // <email>", "<email> <email>", "Name <email> <email>" or "Name <email>
-// Name <email>". It follows git's read_mailmap_line (mailmap.c): a line
-// without a closed, non-empty first <email> is skipped, and after it, text
-// that holds no closed second <email> is dropped, so the line maps the
-// first email alone, renaming that address's commits to the first name.
+// Name <email>". It follows git's read_mailmap_line (mailmap.c): only a #
+// in the line's first column makes a comment; a line without a closed,
+// non-empty first <email> is skipped, and after it, text that holds no
+// closed second <email> is dropped, so the line maps the first email
+// alone, renaming that address's commits to the first name. So an indented
+// "# Old Name <ann@example.com>" is no comment: git renames ann's commits
+// to "# Old Name".
 func mailmapLineProblem(line string) string {
 	line = strings.TrimRight(line, "\r")
-	if t := strings.TrimSpace(line); t == "" || strings.HasPrefix(t, "#") {
-		return "" // git skips an indented comment too, and harmlessly
+	t := strings.TrimSpace(line)
+	if t == "" || strings.HasPrefix(line, "#") {
+		return ""
 	}
 	left := strings.IndexByte(line, '<')
-	if left < 0 {
+	indented := strings.HasPrefix(t, "#") // spaces or tabs before the #
+	switch {
+	case indented && left < 0:
+		return "" // no <email>: git skips it, as the comment it looks like
+	case indented && strings.Contains(line[left:], ">"):
+		return fmt.Sprintf("starts with spaces before #, so git reads it as a mapping to the name %q, not a comment: "+
+			"put the # in the first column", strings.TrimSpace(line[:left]))
+	case left < 0:
 		return "has no <email>, so git skips it"
 	}
 	right := strings.IndexByte(line[left+1:], '>')

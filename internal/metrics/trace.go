@@ -35,11 +35,9 @@ func (landedV1) Trace(in *Input, person string) (domain.Trace, error) {
 	w := v.window(v.days, 0)
 	t := domain.Trace{Window: w}
 	for _, r := range v.repos {
-		if !r.covers(w) {
-			continue
-		}
-		for _, l := range r.landings {
-			if l.commit == nil || !w.Contains(l.time) || l.commit.credit != person {
+		landings, _ := landedIn(r, w)
+		for _, l := range landings {
+			if l.commit.credit != person {
 				continue
 			}
 			lines, prod := landedLines(r, l.commit)
@@ -65,23 +63,12 @@ func (landedV2) Trace(in *Input, person string) (domain.Trace, error) {
 	w := v.window(v.days, 0)
 	t := domain.Trace{Window: w}
 	for _, r := range v.repos {
-		if !r.covers(w) {
-			continue
-		}
-		for _, l := range r.landings {
-			if l.commit == nil || !w.Contains(l.time) {
-				continue
-			}
-			n, lines, prod := 0, 0, 0
-			for _, c := range l.commits {
-				if c.merge || c.credit != person {
-					continue
+		landings, _ := landedIn(r, w)
+		for _, l := range landings {
+			for _, p := range landedV2Parts(r, l).people {
+				if p.email == person {
+					t.Landings = append(t.Landings, tracedLanding(r, l, p.commits, p.lines, p.prod))
 				}
-				a, p := landedLines(r, c)
-				n, lines, prod = n+1, lines+a, prod+p
-			}
-			if n > 0 {
-				t.Landings = append(t.Landings, tracedLanding(r, l, n, lines, prod))
 			}
 		}
 	}

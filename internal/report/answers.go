@@ -298,9 +298,15 @@ func (p *printer) knowers(ks []Knower, esc func(string) string, what func(Knower
 	if len(ks) == 0 {
 		return "none"
 	}
+	// The first pageRows people, as every person list of a page (SR-14):
+	// a large path's majority owners can be sixty names on one line.
+	list, hidden := shown(p, ks, pageRows)
 	var parts []string
-	for _, k := range ks {
+	for _, k := range list {
 		parts = append(parts, p.person(k.Email, k.Name, k.NameWithheld, esc)+" "+what(k))
+	}
+	if s := moreText(hidden, "person", "people"); s != "" {
+		parts = append(parts, s)
 	}
 	return strings.Join(parts, " · ")
 }

@@ -114,7 +114,8 @@ func load(ctx context.Context, d Deps, runID int64) (*stored, error) {
 			// replica, another snapshot than its git facts, so it is
 			// unknown rather than half of it.
 			d.Log.Warn("the run was stored before stillhere kept the pull requests a run reads: its stored GitHub numbers "+
-				"stand, and who-knows lists no reviewers for it: scan again", "run", run.ID)
+				"stand, and who-knows lists no reviewers for it, nor has a GitHub metric newer than the run (review "+
+				"coverage) a value: scan again", "run", run.ID)
 			s.unkept = true
 		} else {
 			// A copy: a store may hand every reader the same facts (the MCP
@@ -126,7 +127,60 @@ func load(ctx context.Context, d Deps, runID int64) (*stored, error) {
 	}
 	// After the run's GitHub data: it links forge logins to the run's people.
 	s.who = identity.New(s.facts, p)
+	computed, err := s.computeUnstored()
+	if err != nil {
+		return nil, err
+	}
+	if len(computed) > 0 {
+		d.Log.Info("a stillhere older than these metrics stored the run, so it holds no value of them: they were "+
+			"computed from its facts as it was read", "run", run.ID, "metrics", strings.Join(computed, ", "))
+	}
 	return s, nil
+}
+
+// computeUnstored computes the values of each metric a scan stores (its
+// Definition declares Subjects) of which the run holds none, over the run's
+// own facts, policy and GitHub data, and adds them to s.values; it returns
+// the ids it computed. Such a metric is newer than the stillhere that
+// stored the run, as landed@2 and review_coverage@1 are for a run stored
+// before #108 and #107, whose report would otherwise print "nothing landed"
+// over a run full of landings. The old run is told by its data, not by a
+// version: a metric's function over the same inputs gives what a scan by
+// this binary stores, as rankAll bootstraps a rank table the run did not
+// store (docs/spec/codebase.md#run-model), so the answer is the same every
+// time it is read. A metric that reads GitHub data is not computed for a
+// run that read none, whose value is absent by definition, and one that
+// produced no value when it was stored is computed again, to nothing.
+func (s *stored) computeUnstored() ([]string, error) {
+	held := map[domain.MetricID]bool{}
+	for _, v := range s.values {
+		held[v.Metric] = true
+	}
+	var ids []string
+	var added []domain.MetricValue
+	for _, m := range metrics.All() {
+		def := m.Definition()
+		if held[def.ID] || len(def.Subjects) == 0 || (def.Forge && s.facts.Forge == nil) {
+			continue
+		}
+		values, err := m.Compute(s.input())
+		if err != nil {
+			return nil, fmt.Errorf("computing %s over run %d's facts: %w", def.ID, s.run.ID, err)
+		}
+		if len(values) > 0 {
+			ids = append(ids, def.ID.String())
+			added = append(added, values...)
+		}
+	}
+	if len(added) > 0 {
+		// A copy, and in the store's order, metric by metric: a store may
+		// hand every reader the same slice (the MCP server caches it).
+		s.values = append(slices.Clone(s.values), added...)
+		slices.SortStableFunc(s.values, func(a, b domain.MetricValue) int {
+			return cmp.Or(cmp.Compare(a.Metric.Name, b.Metric.Name), cmp.Compare(a.Metric.Version, b.Metric.Version))
+		})
+	}
+	return ids, nil
 }
 
 // canonicalKeys upcasts the person keys of a run stored before #69, whose
@@ -402,7 +456,8 @@ func Explain(ctx context.Context, d Deps, r ExplainRequest) (*report.Explain, er
 	var trace *domain.Trace
 	if rm, ok := m.(metrics.Ranked); ok && r.Subject.Kind == domain.SubjectPerson {
 		// A bot's clusters are listed too (#75): its values are in the
-		// report's bot tables, and the bot filter is ranking's.
+		// report's bot tables. The metric keeps them apart from the people
+		// it ranks (RankInput.Bots).
 		in := s.input()
 		for _, rf := range s.facts.Repos {
 			if rf.Status != domain.RepoStatusOK {
@@ -413,7 +468,11 @@ func Explain(ctx context.Context, d Deps, r ExplainRequest) (*report.Explain, er
 				return nil, fmt.Errorf("explaining %s: %w", def.ID, err)
 			}
 			window = ri.Window
-			if cs := ri.Data[r.Subject]; len(cs) > 0 {
+			cs := ri.Data[r.Subject]
+			if len(cs) == 0 {
+				cs = ri.Bots[r.Subject]
+			}
+			if len(cs) > 0 {
 				clusters[rf.Repo.Key] = cs
 			}
 		}

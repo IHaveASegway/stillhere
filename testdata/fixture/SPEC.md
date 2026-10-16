@@ -1,6 +1,6 @@
 # Fixture repository and oracles
 
-Status: carried over from the 2026-10-07 plan, change oracles and the sibling fixture added 2026-10-14, regression guards added 2026-10-14 (#13), the binary-file guard 2026-10-14 (#54), with a rename History does not collect, a vendored file and a later text change added by its review 2026-10-15, its text twins and the main fixture as it stood at an earlier `--now` added 2026-10-15 (#70), `landed@2`, knowledge under any path, `review_coverage@1` with a seventh pull request, the binary-changes caveat and the partial and shallow clones added 2026-10-15 (#108, #107, #64, #74), the week oracle moved to `landed@2` and explain traces and roleless paths added 2026-10-15 (#108, #109, PF-8) · the week, still-here and change oracles run as `go test` in `internal/app` (`TestWeekOracle`, `TestStillHereOracle`, `TestChangeOracles`, `TestDeterminism`, #13), web escaping in M3
+Status: carried over from the 2026-10-07 plan, change oracles and the sibling fixture added 2026-10-14, regression guards added 2026-10-14 (#13), the binary-file guard 2026-10-14 (#54), with a rename History does not collect, a vendored file and a later text change added by its review 2026-10-15, its text twins and the main fixture as it stood at an earlier `--now` added 2026-10-15 (#70), `landed@2`, knowledge under any path, `review_coverage@1` with a seventh pull request, the binary-changes caveat and the partial and shallow clones added 2026-10-15 (#108, #107, #64, #74), the week oracle moved to `landed@2` and explain traces and roleless paths added 2026-10-15 (#108, #109, PF-8), an agent's pull request, a replica's hole and a stale sync in the merge-methods guard and a week a shallow clone does not cover added 2026-10-15 by the review of #116 (#107, #101, #74) · the week, still-here and change oracles run as `go test` in `internal/app` (`TestWeekOracle`, `TestStillHereOracle`, `TestChangeOracles`, `TestDeterminism`, #13), web escaping in M3
 
 `internal/fixture` builds this repository (`fixture.Main`), the [sibling fixture](#sibling-fixture) (`fixture.Sibling`), the [regression guards](#regression-guards-testchangeoracles)' three repositories (`fixture.Backdated`, `fixture.MergedRevert`, `fixture.Binary`), the [merge-methods guard](#merge-methods-fixturemergemethods) (`fixture.MergeMethods`) and the [discovery fixture](#discovery-fixture-testdiscover)'s repositories in temporary directories for `go test`. Every number below is an oracle: a change that moves one fails CI. Each oracle exists so that one specific wrong implementation fails, and that implementation is named next to it.
 
@@ -850,9 +850,12 @@ A repository whose facts are partial gives no number its facts cannot hold, rath
 
 - **Zeros for unknown lines** (`main` before #74): every partial row has `lines_added` 0, and the run's totals look complete at 24 lines over 18 landings.
 
-**A shallow clone of the sibling** (`--depth 18`, origin `https://git.example.test/acme/shallow.git`), scanned alone with the sibling's mailmap. Its 18 commits are W1 to W9's 17 landings and O10, its boundary, committed 2026-05-18: inside the 365 days the scan collects, so the history carries a `shallow-window` warning, and older than `simplifying@1`'s window, `[2026-07-09, 2026-10-07)`, whose landings bring in no commit behind it. So that window is inside the clone's history, and `simplifying@1` is [the sibling's](#simplifying1-sibling): Lena 23 over 10 clusters, ranked, with S1's 22 and W2's 1; Omar 21 over 2; Pia 0 over 1. `ai_assisted@1`'s 365 days start before the boundary, so it has no value, and the card no share.
+**A shallow clone of the sibling** (`--depth 18`, origin `https://git.example.test/acme/shallow.git`), scanned alone with the sibling's mailmap. Its 18 commits are W1 to W9's 17 landings and O10, its boundary, committed 2026-05-18: inside the 365 days the scan collects, so the history carries a `shallow-window` warning, and older than `simplifying@1`'s window, `[2026-07-09, 2026-10-07)`, whose landings bring in no commit behind it. So that window is inside the clone's history, and `simplifying@1` is [the sibling's](#simplifying1-sibling): Lena 23 over 10 clusters, ranked, with S1's 22 and W2's 1; Omar 21 over 2; Pia 0 over 1. `ai_assisted@1`'s 365 days start before the boundary, so it has no value, and the card no share. The week, `[2026-09-30, 2026-10-07)`, is inside the history too, and nothing landed in it (W9, the last, is 2026-09-21): `landed@2`'s repository total is 0 landings, 0 commits, 0 merged and 0 lines, the card's week has that total and no rows, and the text says `What landed, 2026-09-30 → 2026-10-07 UTC: nothing`.
+
+**A shallow clone of the main fixture** (`--depth 3`, origin `https://git.example.test/acme/week.git`), scanned alone with its mailmap: rows 16 to 14, whose boundary, row 14 at 2026-10-06 18:00, is inside the week. What landed in the week is unknown, so `landed@2` has no value in the repository, the card's `week` is `null`, and text and Markdown say the history does not cover the window, never "nothing".
 
 - **A shallow boundary covers no window** (`main` before #74): no `simplifying@1` value at all.
+- **Unknown as nothing**: a week the history does not cover reads `What landed …: nothing`, with an empty table, as a covered week in which nothing landed does; or a covered week in which nothing landed has no total, the same as the unknown one.
 - **Counting what the clone holds**: `ai_assisted@1` would give a share of the 17 landings after the boundary as the year's.
 
 ## Tests that are not extra commits in this history
@@ -1067,7 +1070,7 @@ Without the replica, the main fixture has no `review_coverage@1` value: its cove
 
 ### Merge methods (`fixture.MergeMethods`)
 
-A pull request lands as its merge commit, and a rebase merge as the first-parent commits that share its committer second ([metrics.md](../../docs/metrics.md#who_knows1-per-path)): GitHub's `merge_commit_sha` is "the commit that the base branch was updated to", the last of the commits a rebase merge puts on the branch one by one, with new SHAs. The main fixture holds no two first-parent commits with one committer time, and adding them would move its oracles, so a repository of its own holds the cases (added in #38's review): `fixture.MergeMethods(t)`, a work tree named `merge-methods` on branch `main`. It is scanned alone, without a mailmap, with `--now 2026-10-07T00:00:00Z` and origin `https://git.example.test/acme/merge-methods.git`, and a replica written by hand as above. Every commit is at 12:00:00Z on the stated day, and `GitHub <noreply@github.com>` commits every merge, as its merge button does; each pull request's author wrote its commits. A file holds lines `<name>_<i> = <i>`, and the subject is `feat: add <file>`.
+A pull request lands as its merge commit, and a rebase merge as the first-parent commits that share its committer second ([metrics.md](../../docs/metrics.md#who_knows1-per-path)): GitHub's `merge_commit_sha` is "the commit that the base branch was updated to", the last of the commits a rebase merge puts on the branch one by one, with new SHAs. The main fixture holds no two first-parent commits with one committer time, and adding them would move its oracles, so a repository of its own holds the cases (added in #38's review): `fixture.MergeMethods(t)`, a work tree named `merge-methods` on branch `main`. It is scanned alone, without a mailmap, with `--now 2026-10-07T00:00:00Z` and origin `https://git.example.test/acme/merge-methods.git`, and a replica written by hand as above. Every commit is at 12:00:00Z on the stated day, and `GitHub <noreply@github.com>` commits every merge, as its merge button does; each pull request's author wrote its commits, but for #4's, which GitHub's Copilot coding agent wrote for Rob. A file holds lines `<name>_<i> = <i>`, and the subject is `feat: add <file>`, with ` (#N)` after it for a squash, as GitHub writes a squash's subject.
 
 | Row | Committed | Author | What |
 | --- | --- | --- | --- |
@@ -1076,14 +1079,16 @@ A pull request lands as its merge commit, and a rebase merge as the first-parent
 | R2 | 10-01, authored 09-29 | Rob, committed by GitHub | `two.py` (2 lines): #1's last commit, its merge commit, in the same second as R1 |
 | S1 | 10-02 | Ali Squash `<ali@example.com>`, committed by GitHub | `a.py` (2 lines): #2's squash commit |
 | S2 | 10-02 | Bo Squash `<bo@example.com>`, committed by GitHub | `b.py` (2 lines): #3's squash commit, in the same second as S1, as a merge queue or a bot lands two pull requests |
+| A1 | 10-03 | Copilot `<198982749+Copilot@users.noreply.github.com>`, committed by GitHub, trailer `Co-authored-by: Rob Rebase <rob@example.com>` | `c.py` (2 lines): #4's squash commit, which the agent wrote for Rob, so `identity.Credit` gives it to him |
 
-The replica is forge repository `R_merges` (`acme/merge-methods`), one page with watermark 10-02 12:00, which a sync that started 10-06 22:00 brought up to date. Every review has a body of 0 characters and no inline comment.
+The replica is forge repository `R_merges` (`acme/merge-methods`), one page with watermark 10-03 12:00, which a sync that started 10-06 22:00 brought up to date. Every review has a body of 0 characters and no inline comment.
 
 | # | Author | Merged | Merge commit | Its commits | Reviews: login, state, submitted |
 | --- | --- | --- | --- | --- | --- |
 | 1 | rob | 10-01 12:00, rebase | R2, login rob | 2, as written before the rebase: not in the run | sam approved 10-01 09:00 |
 | 2 | ali | 10-02 12:00, squash | S1, login ali | 1, not in the run | rita approved 10-02 09:00 |
 | 3 | bo | 10-02 12:00, squash | S2, login bo | 2, not in the run | tess approved 10-02 10:00 |
+| 4 | copilot-swe-agent, an app account (Bot) | 10-03 12:00, squash | A1, login Copilot | 1, not in the run | rob approved 10-03 09:00 |
 
 No commit of the replica is sam's, rita's or tess's, so they are `@sam`, `@rita` and `@tess`. #1 lands as R2 and R1: R1 is R2's first parent, shares its committer second and is no merge, and #1 has 2 commits. #3 has 2 commits too, and S1, its first parent, shares its committer second, but S1 is #2's merge commit: a landing that another pull request lands is not this one's, so #3 lands as S2 alone. #2 has 1 commit, so it lands as S1 alone.
 
@@ -1094,13 +1099,23 @@ No commit of the replica is sam's, rita's or tess's, so they are `@sam`, `@rita`
 | `two.py` | `@sam` (1: #1) | |
 | `a.py` | `@rita` (1: #2) | `@tess`: #3 did not land S1 |
 | `b.py` | `@tess` (1: #3) | |
+| `c.py` | Rob (1: #4) | |
 
-`review_coverage@1` (#107), over the same landings, all in `[2026-07-09, 2026-10-07)`: B0 landed with no pull request, R1 and R2 are #1's, S1 #2's and S2 #3's, and each pull request was approved before it merged, by someone other than its author: 4 / 5, with `via_pull_request` 4, `direct` 1, `approved_no_comment` 4, `bot_landings` 0 and `repos` 1, in scope `repo` and `all`.
+`review_coverage@1` (#107), over the same landings, all in `[2026-07-09, 2026-10-07)`: B0 landed with no pull request, R1 and R2 are #1's, S1 #2's and S2 #3's, and each of those pull requests was approved before it merged, by someone other than its author. A1 is #4's, which an agent opened: its author is Rob, whom its commit credits, so it is a human landing, and Rob's approval is his own, so it is unreviewed: 4 / 6, with `via_pull_request` 5, `direct` 1, `approved_no_comment` 4, `bot_landings` 0, `after_sync` 0, `unmatched` 0 and `repos` 1, in scope `repo` and `all`.
+
+Two more replicas of the same repository, each scanned on its own:
+
+- **A replica with a hole** (#101): it lacks #3 and is otherwise the same. S2's subject, `feat: add b.py (#3)`, names a pull request the data lacks, so S2 is left out, `unmatched`, not counted as pushed directly: 3 / 5, `via_pull_request` 4, `direct` 1, `approved_no_comment` 3, `unmatched` 1.
+- **A clone fresher than its sync**: the replica holds #1 alone, with watermark 10-01 12:00, from a sync that started 10-01 18:00. S1, S2 and A1 landed after it, so whether they had a pull request is unknown, and they are left out, `after_sync`: 2 / 3, `via_pull_request` 2, `direct` 1, `approved_no_comment` 2, `after_sync` 3.
 
 Wrong implementations this catches:
 
-- **The merge commit alone**, with no walk back: `one.py` has no reviewer, and R1 is direct, so `review_coverage@1` is 3 / 5.
+- **The merge commit alone**, with no walk back: `one.py` has no reviewer, and R1 is direct, so `review_coverage@1` is 3 / 6.
+- **An agent's pull request taken for a bot's** (the pull request's login alone): A1 is a bot landing, 4 / 5 with `bot_landings` 1.
+- **The review of the person an agent worked for counted**: Rob's approval reviews A1, 5 / 6.
+- **A landing whose pull request the data lacks counted as pushed directly**: with the hole, S2 is direct, 3 / 6; synced before S1, S1, S2 and A1 are, 2 / 6.
 - **A walk that passes another pull request's merge commit** (#38's first version): #3 also lands as S1, so `@tess` reviews `a.py`.
+- (`who_knows@1`, whose reviewers leave out only the pull request's author, an app here, lists Rob as `c.py`'s reviewer: he does know the code.)
 
 **Not covered.** A commit pushed straight to the branch, with no pull request, in the same second as a squash of several commits and just before it, is taken for that pull request's: nothing in the history or the replica tells the two apart. `who_knows@1`'s blind spots say so. GitHub's `Commit.associatedPullRequests`, read at sync time, would map every commit exactly (a follow-up).
 

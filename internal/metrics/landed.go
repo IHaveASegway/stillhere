@@ -67,13 +67,8 @@ func (landedV1) compute(v *view) ([]domain.MetricValue, error) {
 	w := v.window(v.days, 0)
 	accs := make(map[personKey]*landedTally)
 	for _, r := range v.repos {
-		if !r.covers(w) {
-			continue
-		}
-		for _, l := range r.landings {
-			if l.commit == nil || !w.Contains(l.time) {
-				continue
-			}
+		landings, _ := landedIn(r, w)
+		for _, l := range landings {
 			lines, prod := landedLines(r, l.commit)
 			for _, s := range r.scopes {
 				lookup(accs, personKey{s, l.commit.credit}).add(r, 1, lines, prod)
@@ -112,7 +107,8 @@ func (landedV2) Definition() Definition {
 			"own numstat insertions on paths with a role, and the prod subset), merged (merge landings whose landing commit " +
 			"is credited to them; a merge's own diff is credited to no one), and landings_lines_unknown (landings whose lines " +
 			"are unknown, a partial clone's, which the lines leave out; the lines keys are absent when none is known). Per " +
-			"repository, group and run (subject repo, group or all): the same numbers over every landing in the scope.",
+			"repository, group and run (subject repo, group or all): the same numbers over every landing in the scope, over " +
+			"its repositories whose history covers the window: 0 when nothing landed there, and no value when none covers it.",
 		Ranked:      false,
 		Subjects:    []string{domain.SubjectPerson, domain.SubjectRepo, domain.SubjectGroup, domain.SubjectAll},
 		Eligibility: "Not ranked: volume rewards volume. In the proof run a dependency bot led every activity table.",
@@ -137,49 +133,27 @@ func (landedV2) compute(v *view) ([]domain.MetricValue, error) {
 	people := make(map[personKey]*landedTally)
 	totals := make(map[domain.Scope]*landedTally)
 	for _, r := range v.repos {
-		if !r.covers(w) {
-			continue
+		landings, covered := landedIn(r, w)
+		if !covered {
+			continue // its landings in the window are unknown, not none (#74)
 		}
-		for _, l := range r.landings {
-			if l.commit == nil || !w.Contains(l.time) {
-				continue
-			}
-			// Each person's credited non-merge commits in the landing, in
-			// the order they first appear: one landing for each of them.
-			var order []string
-			mine := make(map[string]*landedTally)
-			var all landedTally
-			for _, c := range l.commits {
-				if c.merge {
-					continue
-				}
-				lines, prod := landedLines(r, c)
-				t := mine[c.credit]
-				if t == nil {
-					t = &landedTally{}
-					mine[c.credit] = t
-					order = append(order, c.credit)
-				}
-				t.commits++
-				t.lines += lines
-				t.prod += prod
-				all.commits++
-				all.lines += lines
-				all.prod += prod
-			}
+		for _, s := range r.scopes {
+			lookup(totals, s) // a window the history covers in which nothing landed: 0, not unknown
+		}
+		for _, l := range landings {
+			parts := landedV2Parts(r, l)
 			for _, s := range r.scopes {
-				for _, email := range order {
-					m := mine[email]
-					a := lookup(people, personKey{s, email})
-					a.commits += m.commits
-					a.add(r, 1, m.lines, m.prod)
+				for _, p := range parts.people {
+					a := lookup(people, personKey{s, p.email})
+					a.commits += p.commits
+					a.add(r, 1, p.lines, p.prod)
 				}
 				if l.commit.merge {
 					lookup(people, personKey{s, l.commit.credit}).merged++
 				}
 				t := lookup(totals, s)
-				t.commits += all.commits
-				t.add(r, 1, all.lines, all.prod)
+				t.commits += parts.all.commits
+				t.add(r, 1, parts.all.lines, parts.all.prod)
 				if l.commit.merge {
 					t.merged++
 				}
@@ -194,6 +168,68 @@ func (landedV2) compute(v *view) ([]domain.MetricValue, error) {
 		out = append(out, count(landedV2ID, s, scopeSubject(s), w, t.landings, t.landings, t.v2Detail()))
 	}
 	return sorted(out), nil
+}
+
+// landedIn returns the landings of r that landed@1 and landed@2 count in
+// w: those in the window whose landing commit the history holds, oldest
+// first, and whether r's history covers w at all. When it does not, a
+// shallow clone's boundary inside the window, the landings there are
+// unknown, and none is returned (#74).
+func landedIn(r *repoView, w domain.Window) ([]*landingView, bool) {
+	if !r.covers(w) {
+		return nil, false
+	}
+	var out []*landingView
+	for _, l := range r.landings {
+		if l.commit != nil && w.Contains(l.time) {
+			out = append(out, l)
+		}
+	}
+	return out, true
+}
+
+// landedPart is one person's part of a landing under landed@2: their
+// credited non-merge commits in it, and the lines those commits added.
+type landedPart struct {
+	email                string
+	commits, lines, prod int
+}
+
+// landedParts is a landing under landed@2: each person's part, in the order
+// their first commit appears in the landing's map, and the landing's own
+// numbers, each commit once.
+type landedParts struct {
+	people []landedPart
+	all    landedPart // email ""
+}
+
+// landedV2Parts is landed@2's one rule for what a landing holds of whom,
+// which both its values and its trace read (#109), so explain cannot
+// disagree with the number it explains: each non-merge commit of the
+// landing's map, the landing commit included, counts for the person it is
+// credited to (identity.Credit), with its own numstat lines; a merge
+// commit's own diff counts for no one.
+func landedV2Parts(r *repoView, l *landingView) landedParts {
+	var out landedParts
+	at := make(map[string]int)
+	for _, c := range l.commits {
+		if c.merge {
+			continue
+		}
+		lines, prod := landedLines(r, c)
+		i, ok := at[c.credit]
+		if !ok {
+			i = len(out.people)
+			at[c.credit] = i
+			out.people = append(out.people, landedPart{email: c.credit})
+		}
+		for _, p := range []*landedPart{&out.people[i], &out.all} {
+			p.commits++
+			p.lines += lines
+			p.prod += prod
+		}
+	}
+	return out
 }
 
 // landedLines returns a commit's numstat insertions, blank lines included,

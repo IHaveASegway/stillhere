@@ -609,7 +609,6 @@ func storedRuns(t *testing.T, raw *sql.DB) []string {
 	return out
 }
 
-// openStore opens the store at path and closes it when the test ends.
 // readOnlyDirectory reads a copy of the facts database at path, whose
 // latest scan run is id, in a directory the test then makes read-only, and
 // one whose write-ahead log holds a commit.
@@ -654,12 +653,38 @@ func readOnlyDirectory(t *testing.T, path string, id int64) {
 		t.Errorf("the read-only directory holds %d files after reading, want facts.db alone", len(entries))
 	}
 
+	// Another user may write the directory this reader cannot, as the owner
+	// of a team server's copy scans into it. A writer that holds commits
+	// in its log is refused, not read without the locks that keep it out,
+	// and once it has checkpointed and closed, the same reader reads what
+	// it wrote.
+	r, err := sqlite.OpenReadOnly(ctx, filepath.Join(clean, "facts.db"))
+	if err != nil {
+		t.Fatalf("OpenReadOnly(a facts database in a read-only directory) = %v", err)
+	}
+	defer func() { _ = r.Close() }()
+	if err := os.Chmod(clean, 0o755); err != nil { // the writer's permission, not the reader's
+		t.Fatal(err)
+	}
+	w := openRaw(t, filepath.Join(clean, "facts.db"))
+	execRaw(t, w, `PRAGMA wal_autocheckpoint = 0`, `CREATE TABLE scratch (a)`)
+	var usage *domain.UsageError
+	if _, err := r.LatestRun(ctx, domain.RunKindScan); !errors.As(err, &usage) || !strings.Contains(usage.Msg, "facts.db-wal") {
+		t.Errorf("an immutable reader's LatestRun while a writer's log holds a commit = %v, want a *domain.UsageError that names facts.db-wal", err)
+	}
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if run, err := r.LatestRun(ctx, domain.RunKindScan); err != nil || run.ID != id {
+		t.Errorf("an immutable reader's LatestRun after the writer closed = %d, %v; want run %d", run.ID, err, id)
+	}
+
 	// A commit left in the write-ahead log, as a writer that has not
 	// checkpointed leaves it: copied while the writer holds it open, with
 	// no shared-memory file beside it.
 	src := filepath.Join(t.TempDir(), "wal.db")
 	copyFile(path, src)
-	w := openRaw(t, src)
+	w = openRaw(t, src)
 	execRaw(t, w, `PRAGMA wal_autocheckpoint = 0`, `CREATE TABLE scratch (a)`)
 	walled := filepath.Join(t.TempDir(), "walled")
 	if err := os.Mkdir(walled, 0o700); err != nil {
@@ -668,7 +693,6 @@ func readOnlyDirectory(t *testing.T, path string, id int64) {
 	copyFile(src, filepath.Join(walled, "facts.db"))
 	copyFile(src+"-wal", filepath.Join(walled, "facts.db-wal"))
 	lock(walled)
-	var usage *domain.UsageError
 	if r, err := sqlite.OpenExisting(ctx, filepath.Join(walled, "facts.db")); !errors.As(err, &usage) ||
 		!strings.Contains(usage.Msg, "facts.db-wal") || strings.Contains(usage.Msg, "cannot be written:") {
 		if err == nil {
@@ -678,6 +702,7 @@ func readOnlyDirectory(t *testing.T, path string, id int64) {
 	}
 }
 
+// openStore opens the store at path and closes it when the test ends.
 func openStore(t *testing.T, path string) *sqlite.Store {
 	t.Helper()
 	s, err := sqlite.Open(t.Context(), path)

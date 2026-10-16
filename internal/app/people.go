@@ -131,8 +131,8 @@ func FindPerson(n *Names, query string, q PersonQuery) (NamedPerson, *report.Cav
 	// the reports withhold is no name to match (report.SubjectOf).
 	return NamedPerson{}, nil, &personMiss{fmt.Sprintf("%s Names are display names as the reports print them, after "+
 		".mailmap; %s lists the people with the most surviving lines. A display name that gives an address away (an "+
-		"address, or its local part) is withheld from every answer and matches no one: pass that person's id or email.",
-		msg, cmds.Report())}
+		"address, or its local part) is withheld from every answer and matches no one: pass that person's id or email (%s).",
+		msg, cmds.Report(), cmds.PersonKeys())}
 }
 
 // personNorm folds a name for comparison: lowercased, with runs of white

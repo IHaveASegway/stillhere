@@ -65,6 +65,8 @@ const (
 	detailDirect            = "direct"
 	detailApprovedNoComment = "approved_no_comment"
 	detailBotLandings       = "bot_landings"
+	detailAfterSync         = "after_sync"
+	detailUnmatched         = "unmatched"
 	detailNoCommentShare    = "no_comment_share"
 )
 

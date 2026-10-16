@@ -147,7 +147,7 @@ func mdOverview(p *printer, m *Model, o *Overview) {
 			across(o.Scope), plural(o.People.FilesBlamed, "file", "files")))
 		mdPeople(p, o.People)
 	}
-	if o.Week != nil {
+	if o.Week != nil || o.Totals.ReposOK > 0 {
 		mdWeek(p, "###", m, o.Week)
 	}
 	mdCaveats(p, "###", o.Caveats, true)
@@ -188,6 +188,10 @@ func mdWeek(p *printer, level string, m *Model, t *WeekTable) {
 	p.blank()
 	p.line(level + " What landed, " + interval(w))
 	p.blank()
+	if t == nil {
+		p.line(mdText(strings.ToUpper(weekUnknown[:1])+weekUnknown[1:]) + ".")
+		return
+	}
 	if len(t.Humans) == 0 && len(t.Bots) == 0 {
 		p.line("Nothing landed in the window.")
 		return
@@ -256,7 +260,9 @@ func mdRanks(p *printer, level string, t *RankTable) {
 	} else {
 		cols, rows, notes := rankRows(p, t, mdText, true)
 		cols[1].head, cols[2].head = "Person", mdText(cols[2].head)
-		p.mdTable(cols, rows)
+		if len(rows) > 0 {
+			p.mdTable(cols, rows)
+		}
 		for _, n := range notes {
 			p.blank()
 			p.line(mdText(strings.ToUpper(n[:1]) + n[1:] + "."))
@@ -292,9 +298,7 @@ func mdRepo(p *printer, m *Model, r *Repo) {
 		return
 	}
 	mdCard(p, m, r)
-	if r.Week != nil {
-		mdWeek(p, "###", m, r.Week)
-	}
+	mdWeek(p, "###", m, r.Week)
 	if r.StillHere != nil {
 		p.blank()
 		p.line("### Still here at " + mdCode(short(r.Head)))

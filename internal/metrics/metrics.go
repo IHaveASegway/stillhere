@@ -139,11 +139,38 @@ type RankInput struct {
 	// clusters) and, for Sum, the number of week Blocks in Window.
 	// Replicates 0 means rank's default, B = 1000.
 	Options rank.Options
-	// Data holds each person's clusters, sorted by Change, a bot's
-	// included (#75): bots are never ranked, so the ranking use case leaves
-	// them out of rank.Intervals, while explain lists a bot's clusters as
-	// anyone's. nil when the scope has no clusters.
+	// Data holds each person's clusters, sorted by Change: the population
+	// every caller ranks (rank.Intervals), scores (validate) or lists as
+	// people's changes. A bot's or an agent's are never in it: bots are
+	// never ranked or scored, and that rule is the metric's, here, so no
+	// caller restates it. nil when the scope has no clusters.
 	Data map[domain.Subject][]rank.Cluster
+	// Bots holds each bot's and agent's clusters (identity.Directory.Bot),
+	// sorted alike, for explain alone (#75): a bot's values are in the
+	// report's bot tables, so explain lists what they are made of. nil
+	// when there are none.
+	Bots map[domain.Subject][]rank.Cluster
+}
+
+// withData returns ri with data, every subject's clusters, split by the one
+// rule ranking follows: a bot's or an agent's go to Bots, everyone else's
+// to Data.
+func (ri RankInput) withData(who *identity.Directory, data map[domain.Subject][]rank.Cluster) RankInput {
+	ri.Data, ri.Bots = nil, nil
+	for s, cs := range data {
+		if len(cs) == 0 {
+			continue
+		}
+		into := &ri.Data
+		if who.Bot(s.Key) {
+			into = &ri.Bots
+		}
+		if *into == nil {
+			*into = map[domain.Subject][]rank.Cluster{}
+		}
+		(*into)[s] = cs
+	}
+	return ri
 }
 
 // projected is implemented by the metrics that compute over a shared

@@ -409,7 +409,15 @@ func (b *builder) noValues() []Caveat {
 	}
 	var out []Caveat
 	for _, w := range want {
-		if w.facts && !b.ix.has(w.metric) {
+		switch {
+		case !w.facts || b.ix.has(w.metric):
+		case w.metric == MetricLanded:
+			// landed@2 has a value, 0 included, for every scope whose
+			// history covers its window, so none at all means no history
+			// does: a shallow clone's (#74).
+			out = append(out, Caveat{Code: codeNoValues, Message: MetricLanded + " has no value: no repository's history " +
+				"covers its window (a shallow clone's ends inside it), so what landed there is unknown, not nothing."})
+		default:
 			out = append(out, Caveat{Code: codeNoValues, Message: w.metric + " produced no values, so the sections it fills are empty."})
 		}
 	}
