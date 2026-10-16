@@ -104,6 +104,10 @@ type IdentityAddress struct {
 	// of emails and which only a reader that may see them asks for, so no
 	// other field carries an address a .mailmap folded away.
 	Aliases int `json:"aliases"`
+	// NamesDiffer: the address's commits carry names that differ, a name
+	// change or a mailbox several people commit as, which only GitHub's link
+	// ties to the others (identity.Address.NamesDiffer).
+	NamesDiffer bool `json:"names_differ"`
 	// rewritten is what git rewrote to the address, each email with the
 	// names it was written with and where: the mailmap lines read it.
 	rewritten []identity.Alias
@@ -116,6 +120,11 @@ type IdentityLink struct {
 	Name      string           `json:"name"`      // same-name: the display name they share, "" when withheld; "" for the other rules
 	FromName  bool             `json:"from_name"` // same-local-part: the local part is made from the name, so it adds nothing to it
 	HandOff   *IdentityHandOff `json:"hand_off"`  // hand-off: from the first address to the second; null otherwise
+	// Login is same-forge-account's GitHub account, as GitHub last showed
+	// its login, "@" not included; "" for the other rules, and where it gives
+	// an address of the run away (a local part of one), as a page that
+	// prints no address must not print it (identity.Directory.LoginWithheld).
+	Login string `json:"login"`
 }
 
 // IdentityHandOff is the evidence for one hand-off: an address stopped, and
@@ -248,12 +257,15 @@ func identCandidate(c *identity.Candidate, names map[string]string, who People) 
 			Email: a.Email, Name: name, NameWithheld: withheld, DomainKind: string(a.Domain),
 			Canonical: a.Email == c.Canonical, Commits: a.Commits, CoAuthored: a.CoAuthored,
 			First: a.First, Last: a.Last, Repos: slices.Clone(a.Repos), High: slices.Contains(c.High, i),
-			Aliases: len(a.Aliases), rewritten: slices.Clone(a.Aliases),
+			Aliases: len(a.Aliases), rewritten: slices.Clone(a.Aliases), NamesDiffer: a.NamesDiffer,
 		})
 	}
 	for _, l := range c.Links {
 		name, _ := shown(l.Name)
 		link := IdentityLink{Rule: string(l.Rule), Addresses: slices.Clone(l.Addresses), Name: name, FromName: l.FromName}
+		if !l.LoginWithheld {
+			link.Login = l.Login
+		}
 		if h := l.HandOff; h != nil {
 			ho := &IdentityHandOff{GapDays: h.Gap.Hours() / 24, SharedFiles: h.SharedFiles}
 			for _, f := range h.Files {
@@ -305,8 +317,12 @@ const identIntro = "addresses that may belong to one person, with the evidence, 
 	"addresses."
 
 // identSummary is "11 addresses of people in 1 repository, 1 bot or agent
-// left out · 2 candidates".
-func identSummary(id *Identities) string {
+// left out · 2 candidates", and the hand-off guesses apart: "· 7
+// candidates, and 19 hand-off guesses (--all lists them)" on a page that
+// lists them only with --all (wave 10: on an open-source repository most
+// candidates are guesses between unrelated people, which buried the real
+// ones), "and 19 hand-off guesses, listed last" on one that lists them.
+func identSummary(id *Identities, all bool) string {
 	s := plural(id.Addresses, "address", "addresses") + " of people in " +
 		plural(len(id.Provenance.Heads), "repository", "repositories")
 	var aside []string
@@ -325,7 +341,44 @@ func identSummary(id *Identities) string {
 	if len(aside) > 0 {
 		s += ", " + strings.Join(aside, ", ")
 	}
-	return s + " · " + plural(len(id.Candidates), "candidate", "candidates")
+	guesses := identGuesses(id.Candidates)
+	s += " · " + plural(len(id.Candidates)-guesses, "candidate", "candidates")
+	switch {
+	case guesses == 0:
+	case all:
+		s += ", and " + plural(guesses, "hand-off guess", "hand-off guesses") + ", listed last"
+	default:
+		s += ", and " + plural(guesses, "hand-off guess", "hand-off guesses") + " (--all lists them)"
+	}
+	return s
+}
+
+// identGuesses counts the hand-off guesses among candidates: candidates
+// whose only evidence is one address taking over from another.
+func identGuesses(cs []IdentityCandidate) int {
+	n := 0
+	for _, c := range cs {
+		if c.Guess {
+			n++
+		}
+	}
+	return n
+}
+
+// identListed is the candidates a page lists: every one with --all (the
+// guesses last, as identity.Candidates sorts them), else those that are not
+// guesses. JSON and the mailmap form hold every candidate.
+func identListed(p *printer, cs []IdentityCandidate) []IdentityCandidate {
+	if p.all {
+		return cs
+	}
+	var out []IdentityCandidate
+	for _, c := range cs {
+		if !c.Guess {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 // identNone says what an empty answer means.
@@ -475,7 +528,27 @@ func identWhy(c IdentityCandidate, esc, path func(string) string) []string {
 		case identity.RuleSameAccount:
 			out = append(out, which+" are GitHub noreply addresses of one account")
 		case identity.RuleSameForgeAccount:
-			out = append(out, "GitHub attributes the commits of "+which+" to one account")
+			account := "one account"
+			if l.Login != "" {
+				account = "one account, @" + esc(l.Login)
+			}
+			out = append(out, "GitHub attributes the commits of "+which+" to "+account+": GitHub's own link, the "+
+				"attribution its contributor pages show, which no display name makes")
+			var differ []int
+			for _, i := range l.Addresses {
+				if c.Addresses[i].NamesDiffer {
+					differ = append(differ, i)
+				}
+			}
+			if len(differ) > 0 {
+				verb := "carry"
+				if len(differ) == 1 {
+					verb = "carries"
+				}
+				out = append(out, identWhich(differ, len(c.Addresses))+" "+verb+" names that differ, as a name change "+
+					"or a mailbox several people commit as does: GitHub gives every commit on it to that account, and so "+
+					"does the line, so check it is one person's before applying it")
+			}
 		case identity.RuleHandOff:
 			if h, ok := identHandOffText(l, esc, path); ok {
 				out = append(out, h)
@@ -636,12 +709,12 @@ func identRules(id *Identities) []IdentityRule {
 func (id *Identities) writeText(p *printer) {
 	p.wrapped("", "  ", "identities · "+scopeText(id.Scope, clean, id.Provenance)+" · "+provenanceText(id.Provenance))
 	p.wrapped("  ", "  ", identIntro)
-	p.wrapped("  ", "  ", identSummary(id))
+	p.wrapped("  ", "  ", identSummary(id, p.all))
 	if len(id.Candidates) == 0 {
 		p.blank()
 		p.wrapped("  ", "  ", identNone)
 	}
-	for i, c := range id.Candidates {
+	for i, c := range identListed(p, id.Candidates) {
 		p.blank()
 		p.wrapped(fmt.Sprintf("%d. ", i+1), "   ", identTitle(c, clean))
 		labels := identLabels(c)
@@ -670,12 +743,12 @@ func (id *Identities) writeMarkdown(p *printer) {
 	p.blank()
 	p.line("- " + provenanceText(id.Provenance))
 	p.line("- " + mdText(identSentence(identIntro)))
-	p.line("- " + mdText(identSummary(id)))
+	p.line("- " + mdText(identSummary(id, p.all)))
 	if len(id.Candidates) == 0 {
 		p.blank()
 		p.line(mdText(identSentence(identNone)) + ".")
 	}
-	for i, c := range id.Candidates {
+	for i, c := range identListed(p, id.Candidates) {
 		p.blank()
 		p.line(fmt.Sprintf("## %d. %s", i+1, identTitle(c, mdText)))
 		p.blank()
@@ -750,7 +823,7 @@ func (id *Identities) writeMailmap(p *printer) {
 		"from the name) between its addresses is written as a line; every other line is commented out: uncomment "+
 		"it only if you know the addresses are one person. "+identSentence(identNoChain(id.rewrites))+
 		". A line takes effect at the next scan.")
-	p.wrapped("# ", "# ", identSummary(id))
+	p.wrapped("# ", "# ", identSummary(id, true))
 	if len(id.Candidates) == 0 {
 		p.line("#")
 		p.wrapped("# ", "# ", identSentence(identNone)+".")

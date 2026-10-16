@@ -239,8 +239,29 @@ func mainChangeOracles(t *testing.T) {
 				top: []knows{{"gina@example.com", 2}, {"hank@example.com", 2}}},
 			{path: "side.py", lines: 2, owners: []string{"cara@example.com"},
 				top: []knows{{"cara@example.com", 2}}, landers: []string{"cara@example.com"}},
+			// No prod line under tests/: its test lines are what is known
+			// there, Ada's 2 and Ivy's 4, never "nobody" (wave 10).
+			{path: "tests", lines: 6, owners: []string{"ivy@example.com"},
+				top: []knows{{"ivy@example.com", 4}, {"ada@example.com", 2}}, landers: []string{"ivy@example.com"},
+				roles: []string{"test"}},
 		} {
 			checkWhoKnows(t, "SPEC who_knows@1 (main fixture)", s, r.Key, c)
+		}
+		w := s.whoKnows(t, "tests")
+		if !slices.ContainsFunc(w.Caveats, func(c report.Caveat) bool { return c.Code == "other-roles" }) {
+			t.Errorf("SPEC who_knows@1 (main fixture), tests: caveats %+v, want other-roles: the answer counts test lines", w.Caveats)
+		}
+		// --repo takes the name a card heads the repository with, as the MCP
+		// server's repo does (app.MatchRepos); a name the run lacks is refused
+		// with the names it holds (wave 10).
+		named, err := app.WhoKnows(t.Context(), s.read, app.WhoKnowsRequest{RunID: s.run, Path: "split.py", Repo: r.Name})
+		if err != nil || len(named.Repos) != 1 || named.Repo != r.Key {
+			t.Errorf("who-knows split.py --repo %s: %+v, %v; want the repository by its name", r.Name, named, err)
+		}
+		var usage *domain.UsageError
+		if _, err := app.WhoKnows(t.Context(), s.read, app.WhoKnowsRequest{RunID: s.run, Path: "split.py", Repo: "nope"}); !errors.As(err, &usage) ||
+			!strings.Contains(err.Error(), "the run holds "+r.Name) {
+			t.Errorf("who-knows split.py --repo nope gave %v, want a usage error naming the run's repositories", err)
 		}
 	})
 
@@ -257,10 +278,24 @@ func mainChangeOracles(t *testing.T) {
 		// no surviving line, and no one landed it lately: a real "nobody".
 		noPath := fmt.Sprintf("Repository %s of run %d has no path under %q, so this answer is missing, not a real \"nobody\": "+
 			"the run knows each path relative to its repository's root, such as src or src/pay.go.", r.Name, s.run, "fixture/service.py")
-		noRole := `"notes.csv" is in 1 repository, but no path there has a role (1 path unclassified), and who_knows@1 counts only ` +
-			"paths with one: this answer is empty because the policy leaves the path out, not because nobody knows it. " +
-			"'stillhere policy' prints the roles and the deny list; a role for it in stillhere.toml makes it count at the next scan."
-		for _, c := range []struct{ path, caveat string }{{"fixture/service.py", noPath}, {"notes.csv", noRole}, {"app.py", ""}} {
+		// Each reason the policy left a path out says what would count it
+		// (wave 10): a role does nothing for a denied path, since a deny
+		// wins over every role.
+		noRole := func(path, why, fix string) string {
+			return fmt.Sprintf("%q is in 1 repository, but no path there has a role (1 path %s), and who_knows@1 counts only "+
+				"paths with one: this answer is empty because the policy leaves the path out, not because nobody knows it. "+
+				"'stillhere policy' prints the roles and the deny list; at the next scan, %s.", path, why, fix)
+		}
+		for _, c := range []struct{ path, caveat string }{
+			{"fixture/service.py", noPath},
+			{"notes.csv", noRole("notes.csv", "unclassified", "an unclassified path counts once stillhere.toml gives it a role")},
+			{"vendor/new.py", noRole("vendor/new.py", "denied", "a denied path counts only once nothing denies it, since a deny "+
+				"wins over every role: a pattern of the run's deny list matches it, so remove that pattern from stillhere.toml's "+
+				"[paths] deny")},
+			{"gen_out.py", noRole("gen_out.py", "generated", "a path whose first lines say it is generated counts once "+
+				".gitattributes sets linguist-generated=false for it")},
+			{"app.py", ""},
+		} {
 			w := s.whoKnows(t, c.path)
 			var noValues, want []string
 			for _, cv := range w.Caveats {
@@ -390,6 +425,18 @@ func mainChangeOracles(t *testing.T) {
 		}
 		if want := []string{"service.py 6/8", "new_name.py 3/4", "ada_week.py 1/1"}; !slices.Equal(files, want) {
 			t.Errorf("SPEC explain traces, majority_owner@1 of Ada: files %v, want %v", files, want)
+		}
+		// The id of her second address, which the mailmap folds into
+		// ada@example.com (an id an answer gave before the .mailmap line),
+		// still names her, with a note (wave 10).
+		if e, err = explain("majority_owner@1", identity.Pseudonym("ada@other.example")); err != nil {
+			t.Fatalf("explain majority_owner@1 --person <the id of Ada's second address>: %v", err)
+		}
+		if e.Subject.Key != "ada@example.com" || !slices.ContainsFunc(e.Caveats, func(c report.Caveat) bool {
+			return c.Code == "alias-id" && strings.Contains(c.Message, identity.Pseudonym("ada@example.com"))
+		}) {
+			t.Errorf("SPEC explain traces, Ada by the id of ada@other.example: subject %s, caveats %+v; want Ada and an "+
+				"alias-id caveat naming her id", e.Subject.Key, e.Caveats)
 		}
 		// A value of the right kind the person has none of says why (#92):
 		// Gina's changes are January's, older than landed@2's week.
@@ -1015,10 +1062,11 @@ type knows struct {
 // whoKnowsCase is one row of a SPEC who_knows@1 table.
 type whoKnowsCase struct {
 	path    string
-	lines   int      // surviving prod lines under the path
+	lines   int      // surviving lines under the path, of roles
 	owners  []string // majority owners, by email, sorted
 	top     []knows  // top surviving-line authors, in order
 	landers []string // recent landers (90 days), by email, sorted, one landing each
+	roles   []string // the roles the answer counts; nil: prod
 }
 
 // checkWhoKnows asks app.WhoKnows about c.path and compares the answer in
@@ -1051,7 +1099,14 @@ func checkWhoKnows(t *testing.T, table string, s *scanned, key string, c whoKnow
 		top = append(top, knows{k.Email, k.Lines})
 	}
 	if r.Lines != c.lines {
-		t.Errorf("%s: %d surviving prod lines, want %d", oracle, r.Lines, c.lines)
+		t.Errorf("%s: %d surviving lines, want %d", oracle, r.Lines, c.lines)
+	}
+	want := c.roles
+	if want == nil {
+		want = []string{"prod"}
+	}
+	if !slices.Equal(r.Roles, want) {
+		t.Errorf("%s: counts the lines of %v, want %v", oracle, r.Roles, want)
 	}
 	if got := emails(r.MajorityOwners); !slices.Equal(got, c.owners) {
 		t.Errorf("%s: majority owners %v, want %v", oracle, got, c.owners)

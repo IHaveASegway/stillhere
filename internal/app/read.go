@@ -394,12 +394,17 @@ func buildReport(ctx context.Context, d Deps, r ReportRequest, scanRanks bool) (
 	if !s.run.Started.IsZero() && !s.run.Finished.IsZero() {
 		timings.TotalMS = s.run.Finished.Sub(s.run.Started).Milliseconds()
 	}
+	activity, err := metrics.LastActivity(s.input())
+	if err != nil {
+		return nil, nil, fmt.Errorf("computing last activity: %w", err)
+	}
 	run := s.run
 	return report.Build(&report.Input{
 		Kind: report.KindScan, Tool: d.Version, Run: &run, Facts: s.facts, Policy: s.policy, Who: s.who,
 		Values: s.values, Ranks: sets,
 		Landed:  report.Landed{Days: s.policy.Week.Days, Sort: s.policy.Week.Sort},
 		History: historyOf(s.facts), Timings: timings, Scope: s.scope(), Forge: s.forge, Commands: d.Commands,
+		Activity: activity,
 	}), s, nil
 }
 
@@ -603,16 +608,12 @@ func WhoKnows(ctx context.Context, d Deps, r WhoKnowsRequest) (*report.WhoKnows,
 	if err != nil {
 		return nil, err
 	}
-	repo := r.Repo
-	if repo != "" && !hasRepo(s.facts, repo) {
-		// A remote pasted with its credentials names its scrubbed key. The
-		// error quotes only the scrubbed form: it is printed and may be
-		// logged (docs/spec/git-invocation.md#url-scrubbing).
-		repo = redact.URL(repo)
-		if !hasRepo(s.facts, repo) {
-			return nil, &domain.UsageError{Msg: fmt.Sprintf(
-				"--repo %q is not a repository of run %d: it takes a repository key, as 'stillhere report --format json' lists them", repo, s.run.ID)}
-		}
+	// --repo names a repository as the reader names one: a key, a name as
+	// a card heads it, OWNER/NAME or a remote URL (MatchRepos, the one rule
+	// the MCP server's repo argument matches by too).
+	repo, err := repoArg(s.facts, s.run.ID, r.Repo)
+	if err != nil {
+		return nil, err
 	}
 	// The path is echoed in the answer, its header and its caveats, and a
 	// URL pasted as PATH can carry a token: it is scrubbed once, here, and
@@ -624,6 +625,12 @@ func WhoKnows(ctx context.Context, d Deps, r WhoKnowsRequest) (*report.WhoKnows,
 	values, err := metrics.WhoKnows(s.input(), repo, prefix)
 	if err != nil {
 		return nil, fmt.Errorf("computing %s: %w", report.MetricWhoKnows, err)
+	}
+	// Each person's last activity, by knowledge_loss@1's rule, which every
+	// person the answer lists shows beside what they know.
+	activity, err := metrics.LastActivity(s.input())
+	if err != nil {
+		return nil, fmt.Errorf("computing last activity: %w", err)
 	}
 	// The path's knowledge loss and concentration, by the computation a
 	// scan stores per top-level directory, for any path (#105).
@@ -641,11 +648,11 @@ func WhoKnows(ctx context.Context, d Deps, r WhoKnowsRequest) (*report.WhoKnows,
 	run := s.run
 	w := report.NewWhoKnows(&report.WhoKnowsInput{
 		Run: &run, Facts: underPrefix(s.facts, prefix, repo), Who: s.who, Path: prefix, Repo: repo, Values: values,
-		Knowledge: knowledge, Forge: forge, Commands: d.Commands,
+		Knowledge: knowledge, Forge: forge, Commands: d.Commands, Activity: activity,
 	})
 	if c, ok := whoKnowsNoPath(s.facts, prefix, repo, run.ID); ok {
 		w.Caveats = append(w.Caveats, c)
-	} else if c, ok := whoKnowsNoRole(s.facts, prefix, repo, len(w.Repos)); ok {
+	} else if c, ok := whoKnowsNoRole(s.facts, s.policy, prefix, repo, len(w.Repos)); ok {
 		w.Caveats = append(w.Caveats, c)
 	}
 	return w, nil
@@ -658,14 +665,23 @@ func WhoKnows(ctx context.Context, d Deps, r WhoKnowsRequest) (*report.WhoKnows,
 // deny list denies. who_knows@1 counts only paths with a role, so the
 // answer is empty because the policy leaves the path out, not because
 // nobody knows it; "nobody" would say the second. It counts the
-// repositories and the reasons the classifier gave, and names the command
-// that prints the policy.
-func whoKnowsNoRole(fs *domain.FactSet, prefix, repo string, listed int) (report.Caveat, bool) {
+// repositories and the reasons the classifier gave, as the run stored
+// them (domain.PathClass.Skip), and says for each reason what would make
+// the path count, since each takes a different change: a role for an
+// unclassified path; for a denied one, a role does nothing (a deny wins
+// over every role, spec/classification.md), so the deny pattern of the
+// run's policy that matches it (policy.Paths.Denies) is to be removed,
+// or, when none of the run's patterns matches, the linguist-vendored or
+// linguist-generated attribute that denied it is to be turned off; for a
+// generated header, linguist-generated turned off; for one too big, a
+// larger [blame] max_bytes.
+func whoKnowsNoRole(fs *domain.FactSet, p *policy.Policy, prefix, repo string, listed int) (report.Caveat, bool) {
 	if prefix == "" || listed > 0 {
 		return report.Caveat{}, false
 	}
 	holding := 0
 	reasons := map[domain.Skip]int{}
+	byPattern, byAttribute := 0, 0 // denied paths, by the run's deny list and by a linguist attribute
 	for i := range fs.Repos {
 		rf := &fs.Repos[i]
 		if rf.Status != domain.RepoStatusOK || (repo != "" && rf.Repo.Key != repo) {
@@ -681,6 +697,13 @@ func whoKnowsNoRole(fs *domain.FactSet, prefix, repo string, listed int) (report
 			}
 			found = true
 			reasons[pc.Skip]++
+			if pc.Skip == domain.SkipDeniedPath {
+				if p != nil && p.Paths.Denies(pc.Path) {
+					byPattern++
+				} else {
+					byAttribute++
+				}
+			}
 		}
 		if found {
 			holding++
@@ -689,19 +712,42 @@ func whoKnowsNoRole(fs *domain.FactSet, prefix, repo string, listed int) (report
 	if holding == 0 {
 		return report.Caveat{}, false
 	}
-	var why []string
-	for _, s := range []struct {
-		skip  domain.Skip
-		label string
-	}{{domain.SkipUnclassified, "unclassified"}, {domain.SkipDeniedPath, "denied"},
-		{domain.SkipGeneratedHeader, "generated"}, {domain.SkipTooBig, "too big"}} {
-		if n := reasons[s.skip]; n > 0 {
-			path := "paths"
-			if n == 1 {
-				path = "path"
-			}
-			why = append(why, fmt.Sprintf("%d %s %s", n, path, s.label))
+	var why, fix []string
+	count := func(n int, label string) string {
+		path := "paths"
+		if n == 1 {
+			path = "path"
 		}
+		return fmt.Sprintf("%d %s %s", n, path, label)
+	}
+	if n := reasons[domain.SkipUnclassified]; n > 0 {
+		why = append(why, count(n, "unclassified"))
+		fix = append(fix, "an unclassified path counts once stillhere.toml gives it a role")
+	}
+	if n := reasons[domain.SkipDeniedPath]; n > 0 {
+		why = append(why, count(n, "denied"))
+		switch {
+		case byPattern > 0 && byAttribute > 0:
+			fix = append(fix, "a denied path counts only once nothing denies it, since a deny wins over every role: "+
+				"the run's deny list denies some (remove the pattern from stillhere.toml's [paths] deny), and a "+
+				"linguist-vendored or linguist-generated attribute in .gitattributes the others (set it to false)")
+		case byPattern > 0:
+			fix = append(fix, "a denied path counts only once nothing denies it, since a deny wins over every role: "+
+				"a pattern of the run's deny list matches it, so remove that pattern from stillhere.toml's [paths] deny")
+		default:
+			fix = append(fix, "a denied path counts only once nothing denies it, since a deny wins over every role: "+
+				"no pattern of the run's deny list matches it, so a linguist-vendored or linguist-generated attribute "+
+				"in .gitattributes does; set it to false for the path")
+		}
+	}
+	if n := reasons[domain.SkipGeneratedHeader]; n > 0 {
+		why = append(why, count(n, "generated"))
+		fix = append(fix, "a path whose first lines say it is generated counts once .gitattributes sets "+
+			"linguist-generated=false for it")
+	}
+	if n := reasons[domain.SkipTooBig]; n > 0 {
+		why = append(why, count(n, "too big"))
+		fix = append(fix, "a path too big to blame counts once stillhere.toml's [blame] max_bytes is larger than it")
 	}
 	where := "1 repository"
 	if holding > 1 {
@@ -709,8 +755,8 @@ func whoKnowsNoRole(fs *domain.FactSet, prefix, repo string, listed int) (report
 	}
 	return report.NoValuesCaveat(fmt.Sprintf("%q is in %s, but no path there has a role (%s), and %s counts only "+
 		"paths with one: this answer is empty because the policy leaves the path out, not because nobody knows it. "+
-		"'stillhere policy' prints the roles and the deny list; a role for it in stillhere.toml makes it count at the next scan.",
-		prefix, where, strings.Join(why, ", "), report.MetricWhoKnows)), true
+		"'stillhere policy' prints the roles and the deny list; at the next scan, %s.",
+		prefix, where, strings.Join(why, ", "), report.MetricWhoKnows, strings.Join(fix, "; "))), true
 }
 
 // whoKnowsNoPathNames is how many repositories that hold the path a

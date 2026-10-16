@@ -356,6 +356,18 @@ type StillHereRow struct {
 	LinesByRole       map[string]int `json:"lines_by_role"`       // every role, prod included
 	Repos             int            `json:"repos"`               // breadth: repositories with surviving prod lines
 	Landings365d      int            `json:"landings_365d"`       // activity: landings credited in the last 365 days
+	// LastActive is the person's last activity in the run by
+	// knowledge_loss@1's rule (a landing, a review, a pull request opened or
+	// pushed to, a commit on another ref) and LastActivity what it was
+	// (domain.Activity's kinds), "none" with a null time when none is in the
+	// 365-day history, "" when the reader cannot tell. QuietInDays: whole days left
+	// before 180 days have passed since it, when knowledge_loss@1 starts to
+	// count the person as gone quiet; null once they have. GoingQuiet:
+	// within 30 days of it.
+	LastActive   *time.Time `json:"last_active"`
+	LastActivity string     `json:"last_activity"`
+	QuietInDays  *int       `json:"quiet_in_days"`
+	GoingQuiet   bool       `json:"going_quiet"`
 }
 
 // WeekTable is what landed in the window: landed@2, who wrote what landed
@@ -459,6 +471,23 @@ type Share struct {
 	// every other share, otherwise, and in a run stored before stillhere
 	// computed it.
 	IfMerged *ShareIfMerged `json:"if_merged"`
+	// GoingQuiet is knowledge_loss@1's going_quiet detail: the people
+	// holding lines in the scope who go quiet within 30 days unless they
+	// are active again, their lines, and the share once they have; null
+	// when no one is, for every other share, and in a run stored before
+	// stillhere computed it.
+	GoingQuiet *ShareGoingQuiet `json:"going_quiet"`
+}
+
+// ShareGoingQuiet is knowledge_loss@1's Detail going_quiet_people and
+// going_quiet_num over the share's own Den. The overview of every
+// repository adds its repositories' up, so a person holding lines in two
+// of them counts in People twice; the lines add up exactly.
+type ShareGoingQuiet struct {
+	People int     `json:"people"` // people holding lines here whose last activity is 150 to 180 days old
+	Lines  float64 `json:"lines"`  // the lines they hold here
+	Num    float64 `json:"num"`    // Num once they have gone quiet: Num + Lines
+	Value  float64 `json:"value"`  // Num / Den
 }
 
 // ShareIfMerged is knowledge_loss@1 with the run's identity candidates
@@ -548,6 +577,11 @@ type Author struct {
 	NameWithheld bool    `json:"name_withheld"` // as StillHereRow's
 	ProdLines    int     `json:"prod_lines"`
 	Share        float64 `json:"share"` // of the repository's surviving prod lines
+	// The person's last activity, as their still-here row's.
+	LastActive   *time.Time `json:"last_active"`
+	LastActivity string     `json:"last_activity"`
+	QuietInDays  *int       `json:"quiet_in_days"`
+	GoingQuiet   bool       `json:"going_quiet"`
 }
 
 // Landings counts a repository's landings.

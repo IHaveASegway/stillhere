@@ -1,6 +1,6 @@
 # Fixture repository and oracles
 
-Status: carried over from the 2026-10-07 plan, change oracles and the sibling fixture added 2026-10-14, regression guards added 2026-10-14 (#13), the binary-file guard 2026-10-14 (#54), with a rename History does not collect, a vendored file and a later text change added by its review 2026-10-15, its text twins and the main fixture as it stood at an earlier `--now` added 2026-10-15 (#70), `landed@2`, knowledge under any path, `review_coverage@1` with a seventh pull request, the binary-changes caveat and the partial and shallow clones added 2026-10-15 (#108, #107, #64, #74), the week oracle moved to `landed@2` and explain traces and roleless paths added 2026-10-15 (#108, #109, PF-8), an agent's pull request, a replica's hole and a stale sync in the merge-methods guard and a week a shallow clone does not cover added 2026-10-15 by the review of #116 (#107, #101, #74) · the week, still-here and change oracles run as `go test` in `internal/app` (`TestWeekOracle`, `TestStillHereOracle`, `TestChangeOracles`, `TestDeterminism`, #13), web escaping in M3
+Status: carried over from the 2026-10-07 plan, change oracles and the sibling fixture added 2026-10-14, regression guards added 2026-10-14 (#13), the binary-file guard 2026-10-14 (#54), with a rename History does not collect, a vendored file and a later text change added by its review 2026-10-15, its text twins and the main fixture as it stood at an earlier `--now` added 2026-10-15 (#70), `landed@2`, knowledge under any path, `review_coverage@1` with a seventh pull request, the binary-changes caveat and the partial and shallow clones added 2026-10-15 (#108, #107, #64, #74), the week oracle moved to `landed@2` and explain traces and roleless paths added 2026-10-15 (#108, #109, PF-8), an agent's pull request, a replica's hole and a stale sync in the merge-methods guard and a week a shallow clone does not cover added 2026-10-15 by the review of #116 (#107, #101, #74), test and doc paths in who-knows, the deny advice, an alias's id, Hank's #8, a shared mailbox high and activity off the default branch added 2026-10-16 (wave 10) · the week, still-here and change oracles run as `go test` in `internal/app` (`TestWeekOracle`, `TestStillHereOracle`, `TestChangeOracles`, `TestDeterminism`, #13), web escaping in M3
 
 `internal/fixture` builds this repository (`fixture.Main`), the [sibling fixture](#sibling-fixture) (`fixture.Sibling`), the [regression guards](#regression-guards-testchangeoracles)' three repositories (`fixture.Backdated`, `fixture.MergedRevert`, `fixture.Binary`), the [merge-methods guard](#merge-methods-fixturemergemethods) (`fixture.MergeMethods`) and the [discovery fixture](#discovery-fixture-testdiscover)'s repositories in temporary directories for `go test`. Every number below is an oracle: a change that moves one fails CI. Each oracle exists so that one specific wrong implementation fails, and that implementation is named next to it.
 
@@ -358,7 +358,14 @@ Paths that hold no one's knowledge say why (#71, PF-8):
 | --- | --- | --- |
 | `fixture/service.py` | missing, a `no-values` caveat: the run knows each path relative to its repository's root | a filesystem path, which names nothing in the repository |
 | `notes.csv` | empty, a `no-values` caveat: `"notes.csv" is in 1 repository, but no path there has a role (1 path unclassified)` | `notes.csv` has no role, and `who_knows@1` counts only paths with one |
+| `vendor/new.py` | empty, a `no-values` caveat: `(1 path denied)`, and that a denied path counts only once nothing denies it, a pattern of the run's deny list matching it (wave 10) | a role does nothing for a denied path: a deny wins over every role |
+| `gen_out.py` | empty, a `no-values` caveat: `(1 path generated)`, and that `linguist-generated=false` in `.gitattributes` counts it (wave 10) | the header sniff skipped it |
 | `app.py` | a real "nobody" | renamed to `service.py` on 2026-01-05: a path the history knows, with role `prod`, no surviving line and no landing in 90 days |
+
+A path whose files have roles, but no `prod` one, is answered for its own lines (wave 10), with an `other-roles` caveat: `tests` holds `tests/test_service.py`'s 6 `test` lines, Ada's 2 (her init) and Ivy's 4 (row 15), so its majority owner is Ivy (4 of 6), its top authors Ivy 4 and Ada 2, its recent lander Ivy, and its `roles` `["test"]`.
+
+- **Test and doc paths counted for their prod lines** (`main` before wave 10): `tests` has 0 surviving lines, no owner and no author, only Ivy as a recent lander; a path no one landed lately, such as encode/httpx's `tests`, answered "nobody".
+- **A role suggested for a denied path** (`main` before wave 10): `vendor/new.py`'s caveat says a role in `stillhere.toml` makes it count, which it does not.
 
 - **A path with no role answered "nobody"** (`main` before PF-8): `notes.csv` has no caveat.
 
@@ -372,6 +379,7 @@ Paths that hold no one's knowledge say why (#71, PF-8):
 | `landed@1`, "bob" (by the start of a word, with a `name-match` caveat) | row 8, `Merge branch 'feature'`, 9 and 9 (its first-parent diff), then row 9, `add delta_bob_added`, 2 and 2 |
 | `surviving@1`, `ada@example.com` | 3 commits, most lines first: `init` 7 (`service.py`'s beta and alpha blocks, 4, through `-M`, and `new_name.py`'s `x`, `y` and `z`, 3, through Erin's rename), `add gamma_added_later` 2 (her second address, mailmapped), `add ada_week.py` 1: her 10 lines |
 | `majority_owner@1`, Ada's id (`p-` and 10 hex digits of the SHA-256 of `ada@example.com`) | `service.py` 6 of 8, `new_name.py` 3 of 4, `ada_week.py` 1 of 1 |
+| `majority_owner@1`, the id of `ada@other.example`, which the mailmap folds into `ada@example.com` (an id an answer gave before the `.mailmap` line) | Ada, the same files, with an `alias-id` caveat naming her id in the run (wave 10) |
 | `landed@2`, "Gina Split" | no value, and a `no-values` caveat naming the week, `2026-09-30 → 2026-10-07 UTC`: her commits landed in January (#92) |
 | `landed@2`, "Cara Deb" | not found, suggesting "Cara Dev" |
 
@@ -999,16 +1007,16 @@ Two repositories in a group directory `ids`, written with `git fast-import` (eac
 
 The replica holds `two` (`R_two`) and one pull request, #31, last updated 2025-06-01, before the history window, so the run keeps only its links. Its commits, none of whose SHAs is in the run, link: (1) `kim@home.example` to `KimLee`, (2) `kim@corp.example` to `kimlee`, (3) `alice@x.example` to `alice`, (4) `ngroe@shared.example` to `alice`, (5) `111+zed@…` to `zed`, (6) `222+zed@…` to `zed`, (7) `kim@home.example` to `kimlee` again, (8) `nobody@else.example`, an address the run never shows, to `ghost`; its merge commit (9) `kim@corp.example` to `kimlee`. The run keeps 1 to 6: one link for each repository, address and account, so not 7 or 9, and not 8, which counts for nothing.
 
-10 addresses, no bot; `shared` and `oversized` are 0: `ngroe@shared.example` carries two names, so it is a shared address, but the forge rule links it, and `kim@home.example`'s other name, `kimlee`, is the login its link names, so it agrees with any name. No address is quiet for the hand-off rule but `pat@old.example`, which a candidate holds. No domain is the main one (each is one address's), so every address but the noreply ones is `other`. The candidates, by suggested name (all medium):
+10 addresses, no bot; `shared` and `oversized` are 0: `ngroe@shared.example` carries two names, so it is a shared address, but the forge rule links it, and `kim@home.example`'s other name, `kimlee`, is the login its link names, so it agrees with any name. No address is quiet for the hand-off rule but `pat@old.example`, which a candidate holds. No domain is the main one (each is one address's), so every address but the noreply ones is `other`. The candidates, Alice's high first (wave 10), then the medium ones by suggested name:
 
-- **Alice Ng**, rule `same-forge-account` only (the shared address is in no name group): `alice@x.example` (1 commit, 2026-08-20, canonical, as the address that is not shared) and `ngroe@shared.example` (named Bob Roe, its newer name, 2 commits, 2026-08-21 → 08-22). GitHub's link to a shared address is medium, so there is no high set and the line is commented out: `# Alice Ng <alice@x.example> <ngroe@shared.example>`.
+- **Alice Ng**, rule `same-forge-account` only (the shared address is in no name group): `alice@x.example` (1 commit, 2026-08-20, canonical, as the address that is not shared) and `ngroe@shared.example` (named Bob Roe, its newer name, 2 commits, 2026-08-21 → 08-22, `names_differ`). GitHub's link is high whatever names an address carries (wave 10: a name change looks exactly like this, and was the commoner case in every organization the dogfood read), so both addresses are the high set and the line is written: `Alice Ng <alice@x.example> <ngroe@shared.example>`; the evidence says the second address carries names that differ, so a reviewer checks it. The link's `login` is `""`: `alice` is `alice@x.example`'s local part, which printing the login would give away.
 - **Kim Lee**, rules `same-name`, `same-local-part` (`kim`, made from the name) and `same-forge-account`: `kim@home.example` (3 commits, 2026-08-01 → 08-03), `4242+kimlee@users.noreply.github.com` (co-author of 1, 2026-08-04: no link names it, so it is its login's account, `kimlee`, which the run links), `kim@corp.example` (4 commits, 2026-08-04 → 08-07, canonical) and `k.lee@legacy.example` (1 commit, 2026-08-10). The first three are one account's to GitHub, every pair high, and the high set; `k.lee@legacy.example` matches them by the name alone, medium, which makes the candidate medium. The canonical address is the high set's preferred one: not the noreply address, then the most commits. Lines: `Kim Lee <kim@corp.example> <kim@home.example>` and `Kim Lee <kim@corp.example> <4242+kimlee@users.noreply.github.com>` as lines, `# Kim Lee <kim@corp.example> <k.lee@legacy.example>` commented out.
 - **Pat Doe**, rules `same-name` and `same-local-part` (`pat`, made from the name): `pat@new.example` (3 commits, in `one`: 2025-11-03 → 2026-09-02, canonical, the most commits; `aliases` 1) and `pat@old.example` (2 commits, in `two`: 2025-11-10 → 11-11). `one`'s `.mailmap` maps `pat@old.example` there, but only in `one`, so its line is written, commented out as a medium one's: `# Pat Doe <pat@new.example> <pat@old.example>`. `git check-mailmap <pat@old.example>` in `two`, with that line uncommented as the organisation's mailmap, gives `Pat Doe <pat@new.example>`.
 - **Zed** is no candidate: the forge rule's group `zed` and the local part `zed` hold two account ids, 111 and 222, so neither links them, and the names differ.
 
 A scope of `local:one` lists Pat's candidate, both addresses, with 1 address of its own; a scope of `two` lists all three, with 9.
 
-`two`'s card: `knowledge_loss@1` is 8 / 34 (Pat's 8 lines in `two` are `pat@old.example`'s, quiet since 2025-11-11, while everyone else landed in August), with `if_merged` `{candidates 3, high 1, high_num 8, all_num 0}`: Kim's high set moves no quiet line, and Pat merged is active through `pat@new.example`. Its concentration is 3 authors (`kim@corp.example`'s 4 files, `kim@home.example`'s 3, then `pat@old.example`'s 2 reach 9 of the 15 files), with `if_merged` `{3, 1, 2, 1}`: Kim's high set holds 7 files, and every candidate merged gives Kim 8, past half. The card's caveat says "3 identity candidates hold lines here", "Knowledge loss is 23.5% as the run keys people, 23.5% with the high-confidence lines merged and 0.0% with every one merged." and "Majority-owner concentration is 3 authors as keyed, 2 with the high-confidence lines merged and 1 with every one merged.". `one`'s card: 0 / 9 with `if_merged` `{candidates 1, high 0, high_num 0, all_num 0}` and 1 author either way, so it carries no `unmerged-identities` caveat.
+`two`'s card: `knowledge_loss@1` is 8 / 34 (Pat's 8 lines in `two` are `pat@old.example`'s, quiet since 2025-11-11, while everyone else landed in August), with `if_merged` `{candidates 3, high 2, high_num 8, all_num 0}`: Kim's and Alice's high sets move no quiet line, and Pat merged is active through `pat@new.example`. Its concentration is 3 authors (`kim@corp.example`'s 4 files, `kim@home.example`'s 3, then `pat@old.example`'s 2 reach 9 of the 15 files), with `if_merged` `{3, 2, 2, 1}`: Kim's high set holds 7 files, and every candidate merged gives Kim 8, past half. The card's caveat says "3 identity candidates hold lines here", "Knowledge loss is 23.5% as the run keys people, 23.5% with the high-confidence lines merged and 0.0% with every one merged." and "Majority-owner concentration is 3 authors as keyed, 2 with the high-confidence lines merged and 1 with every one merged.". `one`'s card: 0 / 9 with `if_merged` `{candidates 1, high 0, high_num 0, all_num 0}` and 1 author either way, so it carries no `unmerged-identities` caveat.
 
 Wrong implementations this catches:
 
@@ -1018,7 +1026,7 @@ Wrong implementations this catches:
 - **A noreply address linked only by a link.** Kim's noreply address matches the others by name alone, and its line is commented out (ID-2).
 - **The login name read as another person's.** `kim@home.example` is shared, so its link to `kim@corp.example` is medium, and its line is commented out.
 - **Two account ids merged.** Zed is a high candidate (ID-3).
-- **A shared mailbox high.** Alice's line is written, giving Bob's commit to Alice (ID-5).
+- **A shared mailbox medium** (`main` before wave 10, which reversed ID-5's call on round 2's evidence): Alice's line is commented out, and a person whose name changed stays split, their lines under the former name counted as gone.
 - **A link per commit kept.** The run keeps 9 links (ADR 0011's amendment).
 - **A caveat where nothing moves.** `one`'s card carries an `unmerged-identities` caveat that says 0.0% three times (ID-8).
 
@@ -1055,6 +1063,10 @@ The [main fixture](#history), scanned alone with its mailmap and `--now 2026-10-
 | 6 | erin | created 10-04, merged 10-06 16:00, squash | row 12, Erin's rename, login erin | 2, not in the run | Zoe approved 10-05 08:00 |
 | 7 | ivy | created 10-05, merged 10-06 19:00, squash | row 15, Ivy's tests, login ivy | 1, not in the run | copilot-pull-request-reviewer (an app) approved 10-06 17:00 · ivy commented 10-06 18:00, on her own pull request · bob approved 10-06 20:00, after the merge |
 
+| 8 | hank | open, created 03-01, updated 09-15 by someone else's comment | none | none | none |
+
+#8 was added in wave 10: its update falls inside every window, its creation before them, and an update is anyone's, so it is no activity of Hank's, and nothing below moves.
+
 #7 was added for `review_coverage@1` (#107): every review it has is one that metric must not count. It lands row 15, whose paths (`tests/test_service.py`, `test`, and `notes.csv`, no role) hold no `prod` line and no oracle path, so nothing above moves but `reviews_given@1`'s counts below.
 
 **Who a login is** (`identity.Directory.Reviewer`, the rule `reviews_given@1` counts by): the run's mailmapped author of the commits GitHub attributes to the login. gina is `gina@example.com` (#1's merge commit), hank `hank@example.com` (#2's), cara `cara@example.com` (#3's two commits), bob `bob@example.com` (#3's and #4's merge commits), erin `erin@example.com` (#6's) and ivy `ivy@example.com` (#7's). No commit of the replica is frank's or zoe's, so they are `@frank` and `@zoe`, although frank's own commit (row 13) is in the run: no pull request carries it. The copilot reviewer is an app account, `@copilot-pull-request-reviewer[bot]`, a bot.
@@ -1066,7 +1078,7 @@ The [main fixture](#history), scanned alone with its mailmap and `--now 2026-10-
 A person is active when they landed (as [above](#knowledge_loss1-main-fixture)) or submitted a review in `[2026-04-10, 2026-10-07)` on any pull request of the run's repository, open, closed or merged, their own included:
 
 - **Gina is active**: she commented on #5 on 05-20, 140 days before `Now`, on her own pull request, still open. GitHub records a reply in a review thread of one's own pull request as a review, and it says she is still around, which is all activity asks. (#38's review made #5 Gina's own, so that the rule is pinned; it was Bob's, and the value is the same.)
-- **Hank stays inactive**: his only review, of #1 on 01-06, is before the window.
+- **Hank stays inactive**: his only review, of #1 on 01-06, is before the window, and #8, his pull request, was opened on 03-01, before it too; its update on 09-15 is not his (wave 10).
 - bob and cara landed anyway, and `@zoe` and `@frank` hold no line, so only a linked reviewer can move the value.
 
 | Surviving `prod` lines | Lines |
@@ -1084,6 +1096,7 @@ Wrong implementations this catches:
 - **`reviews_given@1`'s rule that a review is someone else's.** #5 is Gina's own, so she is inactive: 4/34.
 - **A 90-day window, `who_knows@1`'s.** Gina's review is outside it: 4/34.
 - **No window.** Hank's January review counts: 0/34.
+- **A pull request's update time read as its author's activity** (wave 10). #8 makes Hank active: 0/34.
 - **Today's replica** (the later sync below): Hank is active, 0/34.
 
 ### who_knows@1 with reviews
@@ -1111,6 +1124,34 @@ Wrong implementations this catches:
 - **Unlinked logins dropped.** `@zoe` is missing from `service.py`.
 - **A login's case kept.** `new_name.py`'s reviewer is `@Zoe`, not `@zoe`.
 - **Today's replica** (the later sync below): hank reviews `side.py`.
+
+### Activity off the default branch (main fixture, wave 10)
+
+`knowledge_loss@1`'s activity also counts a pull request its author opened, or pushed a commit of their own to, and a commit on any other ref of the clone ([metrics.md](../../docs/metrics.md#knowledge_loss1-per-area)); every page shows each person's last activity, and a card warns of people within 30 days of the line. The [main fixture](#history), scanned alone with its mailmap at `--now 2026-10-07T00:00:00Z`, with its origin as above, gets three more commits, written with `git fast-import` on refs of their own (each adds a one-line file, author and committer the same, at 12:00 UTC):
+
+| Ref | Author as written | Day | Parent |
+| --- | --- | --- | --- |
+| `refs/heads/release-1` | Hank Split `<hank@laptop.example>`, an address the history never shows | 2026-09-20 | row 6, Hank's `split.py` |
+| `refs/heads/old-work` | Gina Split `<gina@example.com>` | 2026-04-20 | row 5, Gina's `split.py` |
+| `refs/tags/later` | Gina Split `<gina@example.com>` | 2026-10-08, after `--now` | row 5 |
+
+The replica holds one pull request, #8, Hank's (login `hank`), open, created 2026-03-20 (before the window) and updated 09-20, whose one commit is `release-1`'s, attributed to `hank`; and the links pass's answer for `hank@example.com` (row 6's commit, login `hank`), as `forge_links` holds it. No pull request of the replica holds a commit of the history, so only that answer ties the login `hank` to Hank (#117).
+
+| Person | Last activity | Days left | |
+| --- | --- | --- | --- |
+| Gina | 2026-04-20 12:00, a commit on `old-work` | 10 | going quiet: within 30 days of the line |
+| Hank | 2026-09-20 12:00, a pull request: #8's commit, his own, which the clone holds | 163 | |
+
+So nobody holding a line has gone quiet: `knowledge_loss@1` 0 / 34, `people_inactive` 0, and `going_quiet` 1 person, 2 lines (Gina's), 2 / 34 once she crosses, with a `going-quiet` caveat on the card. The run keeps two commits of other refs, `release-1`'s and `old-work`'s: the tag's was made after `--now`.
+
+Wrong implementations this catches:
+
+- **Reviewer reading pull request commits only** (`main` before #117): `hank` is `@hank`, Hank is quiet, 2/34, and his row shows no activity.
+- **Other refs not read.** Gina is quiet: 2/34.
+- **A branch commit credited only by its address.** `release-1`'s author is `hank@laptop.example`, who holds no line, so without #8's commit Hank is quiet: 2/34.
+- **A pull request's creation alone.** #8 was opened before the window: Hank is quiet, 2/34.
+- **No `--now` bound on other refs.** The tag's commit makes Gina's last activity 10-08, after `--now`, and no one goes quiet.
+- **The committer time where the author's counts.** The same here (author and committer are one); the definition reads the author's, which a rebase by someone else keeps.
 
 ### A later sync changes nothing in the stored run
 

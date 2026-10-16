@@ -312,10 +312,16 @@ func (p *printer) knowers(ks []Knower, esc func(string) string, what func(Knower
 }
 
 // pathTotals is "37 surviving prod lines in 12 prod files, 10 with a
-// majority owner".
+// majority owner", or, for a path with no prod line, "16,679 surviving
+// test lines in 38 test files (no prod line), 30 with a majority owner".
 func pathTotals(r WhoKnowsRepo) string {
-	return fmt.Sprintf("%s surviving prod lines in %s, %d with a majority owner",
-		grouped(r.Lines), plural(r.ProdFiles, "prod file", "prod files"), r.FilesWithMajority)
+	if len(r.Roles) == 0 || slices.Equal(r.Roles, []string{string(domain.RoleProd)}) {
+		return fmt.Sprintf("%s surviving prod lines in %s, %d with a majority owner",
+			grouped(r.Lines), plural(r.ProdFiles, "prod file", "prod files"), r.FilesWithMajority)
+	}
+	roles := joinNames(r.Roles)
+	return fmt.Sprintf("%s surviving %s lines in %s (no prod line), %d with a majority owner",
+		grouped(r.Lines), roles, plural(r.Files, roles+" file", roles+" files"), r.FilesWithMajority)
 }
 
 // pathKnowledge is "55.1% (1,308 of 2,376 human-held lines) · 4 of 9 people
@@ -331,8 +337,29 @@ func pathKnowledge(r WhoKnowsRepo) string {
 	return s
 }
 
-func ownerCount(k Knower) string { return "(" + plural(k.MajorityFiles, "file", "files") + ")" }
-func lineCount(k Knower) string  { return grouped(k.Lines) }
+func ownerCount(k Knower) string {
+	return "(" + withActivity(plural(k.MajorityFiles, "file", "files"), k) + ")"
+}
+func lineCount(k Knower) string {
+	if act := knowerActivity(k); act != "" {
+		return grouped(k.Lines) + " (" + act + ")"
+	}
+	return grouped(k.Lines)
+}
+
+// knowerActivity is a person's last activity as a who-knows list says it
+// (activityPhrase); "" when the answer cannot tell.
+func knowerActivity(k Knower) string {
+	return activityPhrase(k.LastActive, k.LastActivity, k.QuietInDays, k.GoingQuiet)
+}
+
+// withActivity adds a person's last activity to what a list says of them.
+func withActivity(what string, k Knower) string {
+	if act := knowerActivity(k); act != "" {
+		return what + ", " + act
+	}
+	return what
+}
 func landingCount(k Knower) string {
 	return "(" + plural(k.RecentLandings, "landing", "landings") + ")"
 }
@@ -353,9 +380,11 @@ func (w *WhoKnows) reviewsShown(r WhoKnowsRepo) bool {
 // whoKnowsIntro says what the answer lists, reviewers included where it
 // shows them.
 func (w *WhoKnows) whoKnowsIntro() string {
-	lists := "majority owners, the top authors of surviving prod lines, and recent landers (90 days)"
+	lists := "majority owners, the top authors of surviving prod lines (a path's own tests or docs where it holds none), " +
+		"and recent landers (90 days)"
 	if slices.ContainsFunc(w.Repos, w.reviewsShown) {
-		lists = "majority owners, the top authors of surviving prod lines, and recent landers and reviewers (90 days)"
+		lists = "majority owners, the top authors of surviving prod lines (a path's own tests or docs where it holds none), " +
+			"and recent landers and reviewers (90 days)"
 	}
 	return "a routing answer, not a rank: " + lists
 }

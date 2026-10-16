@@ -2,6 +2,7 @@ package report
 
 import (
 	"cmp"
+	"fmt"
 	"slices"
 	"strings"
 
@@ -235,6 +236,9 @@ type WhoKnowsInput struct {
 	// Knowledge are knowledge_loss@1's and knowledge_concentration@1's
 	// values about the path, per repository (metrics.PathKnowledge, #105).
 	Knowledge []domain.MetricValue
+	// Activity is each person's last activity in the run
+	// (metrics.LastActivity), which each person listed shows; nil: none.
+	Activity map[string]domain.Activity
 }
 
 // NewWhoKnows builds the who-knows answer: per repository, the majority
@@ -261,6 +265,7 @@ func NewWhoKnows(in *WhoKnowsInput) *WhoKnows {
 				// file or a directory.
 				r.Lines, r.ProdFiles = count(v.Value), count(v.Detail[detailProdFiles])
 				r.FilesWithMajority = count(v.Detail[detailFilesWithMajority])
+				r.Roles, r.Files = countedRoles(v.Detail)
 				break
 			}
 		}
@@ -292,6 +297,7 @@ func NewWhoKnows(in *WhoKnowsInput) *WhoKnows {
 				}
 				continue
 			}
+			k.LastActive, k.LastActivity, k.QuietInDays, k.GoingQuiet = lastActive(in.Activity, email)
 			humans = append(humans, k)
 			if place := count(v.Detail[detailTopAuthor]); place > 0 {
 				top[email] = place
@@ -338,6 +344,9 @@ func NewWhoKnows(in *WhoKnowsInput) *WhoKnows {
 	w.Provenance = datedProvenance(in.Run, in.Facts, in.Forge, asked, metrics)
 	w.Caveats = answerCaveats(asked)
 	if c, ok := whoKnowsMissing(in.Path, asked, ix); ok {
+		w.Caveats = append(w.Caveats, c)
+	}
+	if c, ok := whoKnowsOtherRoles(in.Path, w.Repos); ok {
 		w.Caveats = append(w.Caveats, c)
 	}
 	// Two people the answer lists under one name may be one person whose
@@ -402,6 +411,59 @@ func NewWhoKnows(in *WhoKnowsInput) *WhoKnows {
 		}
 	}
 	return w
+}
+
+// whoKnowsOtherRoles is the caveat of a who-knows answer that counts the
+// lines of roles other than prod in some repository: the path holds no
+// surviving prod line there, so who_knows@1 answers for its tests, docs or
+// build files, whose people know those, not the product code; and
+// knowledge loss and concentration, which count prod lines only, have no
+// value for it. A page that listed them as the path's owners without
+// saying so would read as product knowledge (round 2: tests/ and docs/
+// answered "nobody", although blame held thousands of lines there).
+func whoKnowsOtherRoles(prefix string, repos []WhoKnowsRepo) (Caveat, bool) {
+	var names, roles []string
+	for _, r := range repos {
+		if len(r.Roles) > 0 && !slices.Equal(r.Roles, []string{string(domain.RoleProd)}) {
+			names = append(names, r.Repo)
+			roles = append(roles, r.Roles...)
+		}
+	}
+	if len(names) == 0 {
+		return Caveat{}, false
+	}
+	roles = slices.Compact(slices.Sorted(slices.Values(roles)))
+	where := "this path holds no surviving prod line"
+	if prefix == "" {
+		where = "the repository holds no surviving prod line"
+	}
+	return Caveat{
+		Code: codeOtherRoles,
+		Message: fmt.Sprintf("%s, so %s counts its %s lines instead: the people listed hold %s files, not product code, "+
+			"and knowledge loss and concentration, which count prod lines only, have no value for it.",
+			identSentence(where), MetricWhoKnows, joinNames(roles), joinNames(roles)),
+		Repos: slices.Compact(slices.Sorted(slices.Values(names))),
+	}, true
+}
+
+// countedRoles reads which roles a who_knows@1 path value counts, and how
+// many of their files: its <role>_files Detail beside prod_files, which
+// the metric gives only under a path with no surviving prod line; else
+// prod and its prod files.
+func countedRoles(d map[string]float64) ([]string, int) {
+	var roles []string
+	files := 0
+	for k, n := range d {
+		if role, ok := strings.CutSuffix(k, detailFilesSuffix); ok && k != detailProdFiles && n > 0 {
+			roles = append(roles, role)
+			files += count(n)
+		}
+	}
+	if len(roles) == 0 {
+		return []string{string(domain.RoleProd)}, count(d[detailProdFiles])
+	}
+	slices.Sort(roles)
+	return roles, files
 }
 
 // whoKnowsMissing is the no-values caveat of a who-knows answer: some

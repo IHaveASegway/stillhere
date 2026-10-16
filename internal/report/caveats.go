@@ -30,6 +30,8 @@ const (
 	codeDuplicate     = "duplicate-repo" // a repository's warning: another clone of its remote was skipped
 	codePathFailed    = "path-failed"
 	codeIdentities    = "unmerged-identities"
+	codeGoingQuiet    = "going-quiet" // knowledge_loss@1's going_quiet: people holding lines here who go quiet within 30 days
+	codeOtherRoles    = "other-roles" // who_knows@1 counted test, doc or other non-prod lines: the path holds no prod line
 	codeNoValues      = "no-values"
 	codeAILowerBound  = "ai-lower-bound"
 	codeValidity      = "validity"
@@ -379,6 +381,35 @@ func sharedNames(who People, emails map[string]bool, cmds Commands) (Caveat, boo
 		Code: codeIdentities,
 		Message: msg + joinNames(named) + ". If the emails of a name are one person, a .mailmap line merges them: " +
 			identitiesHint(cmds),
+	}, true
+}
+
+// goingQuietCaveat is the going-quiet caveat of a section that shows
+// knowledge_loss@1 while people holding lines in its scope are within 30
+// days of the 180-day line (Share.GoingQuiet): the number is about to jump,
+// and a lead wants to see it coming, not read it after it has (round 2's
+// knowledge cliff: a top holder's 20,377 lines would move a repository from
+// 34% to 89%). It names no one: each person's row on the page says when
+// they were last active and how many days are left. repos is how many
+// repositories the section adds up, as for candidatesCaveat.
+func goingQuietCaveat(loss *Share, repos int) (Caveat, bool) {
+	if loss == nil || loss.GoingQuiet == nil {
+		return Caveat{}, false
+	}
+	q := loss.GoingQuiet
+	who, hold, goes := plural(q.People, "person", "people"), "holds", "goes"
+	if q.People != 1 {
+		hold, goes = "hold", "go"
+	}
+	if repos > 1 {
+		who += " (counted once in each repository where they hold lines)"
+	}
+	return Caveat{
+		Code: codeGoingQuiet,
+		Message: fmt.Sprintf("%s who %s %s lines here %s quiet within 30 days unless they land, review, open a pull "+
+			"request or commit to a branch: knowledge loss would then be %s (%s of %s), up from %s. Each person's last "+
+			"activity is on their row.", who, hold, grouped(int(q.Lines)), goes, percent(q.Value), grouped(int(q.Num)),
+			grouped(int(loss.Den)), percent(loss.Value)),
 	}, true
 }
 

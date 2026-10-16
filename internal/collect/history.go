@@ -80,6 +80,11 @@ type HistoryFacts struct {
 	// collected, their authors' (%ae beside %aE) and their trailers' (git
 	// check-mailmap), sorted (#53, domain.RepoFacts.Aliases).
 	Aliases []domain.Alias
+	// RefCommits are the commits on the clone's branches, remote-tracking
+	// branches and tags that Head does not hold, committed in the window
+	// (scan runs; domain.RepoFacts.RefCommits), sorted by SHA, with no
+	// Parents or Subject, co-authors canonicalised as Commits' are.
+	RefCommits []domain.Commit
 }
 
 // History walks the first-parent history of repo.Head over opt.Window and
@@ -115,7 +120,9 @@ type HistoryFacts struct {
 //     --no-walk --stdin -p over the mapped commits, never --first-parent,
 //     under which git prints a merge's first-parent diff as the merger's;
 //   - the revert query over the same mapped commits, so a revert that a
-//     merge brought in is found too, and the repository's first commit.
+//     merge brought in is found too, and the repository's first commit;
+//   - the commits on the clone's other refs that Head does not hold
+//     (readRefCommits): knowledge_loss@1's activity off the default branch.
 //
 // Co-authors are canonicalised with one git check-mailmap --stdin in both
 // modes. A partial clone gets commit facts only. In a shallow clone, a
@@ -134,6 +141,7 @@ func History(ctx context.Context, git domain.GitRunner, repo domain.Repo, opt Hi
 		scan:    opt.Mode == HistoryScan,
 		lines:   !repo.Partial,
 		commits: make(map[string]*historyCommit),
+		refs:    make(map[string]*historyCommit),
 		changes: make(map[historyChangeKey]*domain.FileChange),
 		aliases: aliasSet{},
 	}
@@ -170,6 +178,7 @@ type historyRun struct {
 	lines bool // numstat and patches; false in a partial clone
 
 	commits  map[string]*historyCommit // every commit collected, by SHA
+	refs     map[string]*historyCommit // the other refs' commits Head does not hold (scan), by SHA
 	landings []string                  // the window's landings, in first-parent order from Head
 	maps     map[string][]string       // landing SHA → the commits it brought in, sorted (scan)
 	changes  map[historyChangeKey]*domain.FileChange
@@ -214,6 +223,9 @@ func (h *historyRun) run(ctx context.Context) error {
 			}
 		}
 		if err := h.readReverts(ctx); err != nil {
+			return err
+		}
+		if err := h.readRefCommits(ctx); err != nil {
 			return err
 		}
 	}
@@ -382,6 +394,52 @@ func (h *historyRun) readBroughtIn(ctx context.Context) error {
 	return nil
 }
 
+// readRefCommits reads the commits on the clone's other refs that Head
+// does not hold, committed in the window: one log over every branch,
+// remote-tracking branch and tag (--branches --remotes --tags), less what
+// Head reaches (--not), so a commit the default branch already holds, as
+// a landing or inside one, is never read twice, and refs/stash, notes and
+// replace refs are no one's work in progress. It reads commit headers
+// only, as the landing log does: no diff, so a partial clone reads it
+// too. A user's clone holds its remote's branches as remote-tracking ones
+// and a sync's mirror as its own (refs/heads), so either shows a release
+// branch or a pull request's branch the remote has; a branch from a fork
+// is in neither.
+//
+// The window is the history's, by committer time, as the landing log
+// reads it (windowArgs: --since-as-filter, so a commit with a backdated
+// committer time hides none after it, then Window.Contains), so no commit
+// made at or after --now is read: a run stays a function of its inputs. A
+// commit's own times are kept; knowledge_loss@1 decides which one counts.
+func (h *historyRun) readRefCommits(ctx context.Context) error {
+	args := []string{"log", "--branches", "--remotes", "--tags", "--not", h.repo.Head}
+	args = append(args, h.windowArgs()...)
+	args = append(args, "-z", "--no-color", "--encoding=UTF-8", "--pretty=format:"+historyLogFormat, "--")
+	err := h.git.Stream(ctx, domain.GitCmd{Dir: h.repo.Path, Args: args}, func(r io.Reader) error {
+		return historyParseLog(r, func(rec *historyRecord) error {
+			if !h.opt.Window.Contains(rec.commit.CommitTime) {
+				return nil
+			}
+			sha := rec.commit.SHA
+			if _, dup := h.refs[sha]; dup {
+				return fmt.Errorf("git printed commit %s twice", sha)
+			}
+			if _, held := h.commits[sha]; held {
+				return fmt.Errorf("commit %s is both on another ref and in Head's history", sha)
+			}
+			c := rec.commit
+			c.Parents, c.Subject = nil, "" // activity reads who and when, nothing else
+			h.refs[sha] = &historyCommit{commit: c, coAuthors: rec.coAuthors}
+			h.aliases.add(rec.written, c.Author.Email)
+			return nil
+		})
+	})
+	if err != nil {
+		return fmt.Errorf("reading the commits on other refs: %w", err)
+	}
+	return nil
+}
+
 // readRoots reads the parentless commits reachable from Head. In a full
 // clone they are the roots, and the earliest author time among them is
 // FirstCommit (scan runs). In a shallow clone they are the boundary, and
@@ -454,13 +512,17 @@ func (h *historyRun) warn(code, msg string) {
 	h.warnings = append(h.warnings, domain.Warning{Code: code, Message: msg, Repo: h.repo.Key})
 }
 
-// canonicalise maps every collected commit's co-authors through the
-// mailmap with one git check-mailmap --stdin.
+// canonicalise maps every collected commit's co-authors, the other refs'
+// commits' included, through the mailmap with one git check-mailmap
+// --stdin. readRefCommits keeps the two sets apart, so a SHA names one
+// commit of one of them.
 func (h *historyRun) canonicalise(ctx context.Context) error {
 	raw := make(map[string][]domain.Person)
-	for sha, c := range h.commits {
-		if c.coAuthors != nil {
-			raw[sha] = c.coAuthors
+	for _, set := range []map[string]*historyCommit{h.commits, h.refs} {
+		for sha, c := range set {
+			if c.coAuthors != nil {
+				raw[sha] = c.coAuthors
+			}
 		}
 	}
 	canonical, err := coAuthorCanonical(ctx, h.git, h.repo, raw, h.aliases)
@@ -468,7 +530,11 @@ func (h *historyRun) canonicalise(ctx context.Context) error {
 		return err
 	}
 	for sha, people := range canonical {
-		h.commits[sha].commit.CoAuthors = people
+		if c, ok := h.commits[sha]; ok {
+			c.commit.CoAuthors = people
+		} else {
+			h.refs[sha].commit.CoAuthors = people
+		}
 	}
 	return nil
 }
@@ -480,6 +546,10 @@ func (h *historyRun) facts() *HistoryFacts {
 		f.Commits = append(f.Commits, c.commit)
 	}
 	slices.SortFunc(f.Commits, func(a, b domain.Commit) int { return strings.Compare(a.SHA, b.SHA) })
+	for _, c := range h.refs {
+		f.RefCommits = append(f.RefCommits, c.commit)
+	}
+	slices.SortFunc(f.RefCommits, func(a, b domain.Commit) int { return strings.Compare(a.SHA, b.SHA) })
 
 	for _, sha := range h.landings {
 		c := h.commits[sha].commit

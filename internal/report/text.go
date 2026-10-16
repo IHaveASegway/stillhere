@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
 )
@@ -437,9 +438,17 @@ func textPeople(p *printer, indent string, t *StillHere) {
 	}
 	cols := []column{{head: "person"}, {head: "prod lines", right: true}, {head: "majority files", right: true},
 		{head: "repos", right: true}, {head: "landings 365d", right: true}}
+	activity := activityShown(t.Humans)
+	if activity {
+		cols = append(cols, column{head: "last active"})
+	}
 	row := func(r StillHereRow) []string {
-		return []string{p.person(r.Email, r.Name, r.NameWithheld, clean), grouped(r.ProdNonblankLines),
+		cells := []string{p.person(r.Email, r.Name, r.NameWithheld, clean), grouped(r.ProdNonblankLines),
 			grouped(r.MajorityFiles), grouped(r.Repos), grouped(r.Landings365d)}
+		if activity {
+			cells = append(cells, activityCell(r.LastActive, r.LastActivity, r.QuietInDays, r.GoingQuiet))
+		}
+		return cells
 	}
 	textPersonTable(p, indent, cols, t.Humans, t.Bots, row)
 }
@@ -450,10 +459,19 @@ func textStillHere(p *printer, indent string, t *StillHere) {
 		return
 	}
 	cols := []column{{head: "person"}, {head: "prod lines", right: true}, {head: "majority files", right: true},
-		{head: "landings 365d", right: true}, {head: "other roles"}}
+		{head: "landings 365d", right: true}}
+	activity := activityShown(t.Humans)
+	if activity {
+		cols = append(cols, column{head: "last active"})
+	}
+	cols = append(cols, column{head: "other roles"})
 	row := func(r StillHereRow) []string {
-		return []string{p.person(r.Email, r.Name, r.NameWithheld, clean), grouped(r.ProdNonblankLines),
-			grouped(r.MajorityFiles), grouped(r.Landings365d), otherRoles(r.LinesByRole)}
+		cells := []string{p.person(r.Email, r.Name, r.NameWithheld, clean), grouped(r.ProdNonblankLines),
+			grouped(r.MajorityFiles), grouped(r.Landings365d)}
+		if activity {
+			cells = append(cells, activityCell(r.LastActive, r.LastActivity, r.QuietInDays, r.GoingQuiet))
+		}
+		return append(cells, otherRoles(r.LinesByRole))
 	}
 	textPersonTable(p, indent, cols, t.Humans, t.Bots, row)
 }
@@ -474,6 +492,61 @@ func textPersonTable[R any](p *printer, indent string, cols []column, humans, bo
 	if len(more) > 0 {
 		p.wrapped(indent, indent, strings.Join(more, " · "))
 	}
+}
+
+// madeOfDetail is what a card's made-of list says beside a person's lines:
+// their share, and their last activity where the page can tell.
+func madeOfDetail(a Author) string {
+	if act := activityPhrase(a.LastActive, a.LastActivity, a.QuietInDays, a.GoingQuiet); act != "" {
+		return percent(a.Share) + ", " + act
+	}
+	return percent(a.Share)
+}
+
+// activityPhrase is a person's last activity as a sentence part: "active
+// 2026-10-01", "active 2026-04-20, quiet in 10 days" within 30 days of
+// knowledge_loss@1's line, "quiet since 2025-12-10" past it, "no activity
+// in 365 days"; "" when the page cannot tell.
+func activityPhrase(last *time.Time, kind string, quiet *int, going bool) string {
+	switch {
+	case kind == "":
+		return ""
+	case kind == activityNone || last == nil:
+		return "no activity in 365 days"
+	case quiet == nil:
+		return "quiet since " + date(*last)
+	case going:
+		return "active " + date(*last) + ", quiet in " + plural(*quiet, "day", "days")
+	}
+	return "active " + date(*last)
+}
+
+// activityCell is a person's last activity in a table: "2026-10-01",
+// "2026-04-20 · quiet in 10d", "2025-12-10 · quiet", "none in 365d"; ""
+// when the page cannot tell.
+func activityCell(last *time.Time, kind string, quiet *int, going bool) string {
+	switch {
+	case kind == "":
+		return ""
+	case kind == activityNone || last == nil:
+		return "none in 365d"
+	case quiet == nil:
+		return date(*last) + " · quiet"
+	case going:
+		return date(*last) + " · quiet in " + strconv.Itoa(*quiet) + "d"
+	}
+	return date(*last)
+}
+
+// activityShown reports whether a table's people carry their last
+// activity, so it gets a column: the page could tell for some.
+func activityShown(rows ...[]StillHereRow) bool {
+	for _, rs := range rows {
+		if slices.ContainsFunc(rs, func(r StillHereRow) bool { return r.LastActivity != "" }) {
+			return true
+		}
+	}
+	return false
 }
 
 // otherRoles is "test 6 · iac 2": the lines a person holds outside prod.
@@ -840,7 +913,7 @@ func textCard(p *printer, m *Model, r *Repo) {
 		var who []string
 		for _, a := range c.MadeOf {
 			who = append(who, fmt.Sprintf("%s %s (%s)", p.person(a.Email, a.Name, a.NameWithheld, clean),
-				grouped(a.ProdLines), percent(a.Share)))
+				grouped(a.ProdLines), madeOfDetail(a)))
 		}
 		p.wrapped("  made of: ", "    ", strings.Join(who, ", "))
 	}

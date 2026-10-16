@@ -10,7 +10,6 @@ import (
 	"github.com/IHaveASegway/stillhere/internal/app"
 	"github.com/IHaveASegway/stillhere/internal/domain"
 	"github.com/IHaveASegway/stillhere/internal/identity"
-	"github.com/IHaveASegway/stillhere/internal/redact"
 	"github.com/IHaveASegway/stillhere/internal/report"
 )
 
@@ -196,30 +195,11 @@ func (r *resolver) repo(query string) (app.NamedRepo, error) {
 }
 
 // repos finds the repositories a name or key names: a key, the scrubbed
-// form of a remote pasted with its credentials, a name, or GROUP/NAME.
+// form of a remote pasted with its credentials, a name, GROUP/NAME, or a
+// remote URL or OWNER/NAME of its origin, by the rule the command line's
+// --repo matches by too (app.MatchRepos).
 func (r *resolver) repos(q string) []app.NamedRepo {
-	var found []app.NamedRepo
-	scrubbed := redact.URL(q)
-	for _, rp := range r.names.Repos {
-		if rp.Key == q || rp.Key == scrubbed {
-			return []app.NamedRepo{rp}
-		}
-	}
-	for _, rp := range r.names.Repos {
-		if strings.EqualFold(rp.Name, q) {
-			found = append(found, rp)
-		}
-	}
-	if len(found) == 0 {
-		if group, name, ok := strings.Cut(q, "/"); ok {
-			for _, rp := range r.names.Repos {
-				if rp.Group != "" && strings.EqualFold(rp.Group, group) && strings.EqualFold(rp.Name, name) {
-					found = append(found, rp)
-				}
-			}
-		}
-	}
-	return found
+	return app.MatchRepos(r.names.Repos, q)
 }
 
 // within finds the repository an absolute path is inside, at the path the

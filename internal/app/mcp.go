@@ -104,6 +104,11 @@ type NamedPerson struct {
 	// (identity.Directory.LoginWithheld), as a display name that does is
 	// printed nowhere.
 	ShownLogins []string
+	// aliases are the emails git's mailmap rewrote to the person's key in
+	// the run's commits (domain.RepoFacts.Aliases), sorted: an id (or an
+	// email) an earlier answer gave before a .mailmap change names them by
+	// one (FindPerson). Unexported: no adapter sends them anywhere.
+	aliases []string
 }
 
 // RunNames returns a stored run's vocabulary: its groups, repositories and
@@ -178,10 +183,18 @@ func runNames(s *stored) (*Names, error) {
 			}
 		}
 	}
+	for _, rf := range s.facts.Repos {
+		for _, al := range rf.Aliases {
+			if a := people[al.Canonical]; a != nil && al.Email != al.Canonical && !slices.Contains(a.p.aliases, al.Email) {
+				a.p.aliases = append(a.p.aliases, al.Email)
+			}
+		}
+	}
 	for _, a := range people {
 		if len(a.repos) > 0 {
 			a.p.Repos = slices.Sorted(maps.Keys(a.repos))
 		}
+		slices.Sort(a.p.aliases)
 		n.People = append(n.People, a.p)
 	}
 	slices.SortFunc(n.People, func(a, b NamedPerson) int { return cmp.Or(cmp.Compare(a.Name, b.Name), cmp.Compare(a.Key, b.Key)) })

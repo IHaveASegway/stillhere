@@ -234,6 +234,15 @@ type RepoFacts struct {
 	// hold (#53): sorted by Email, Name, then Canonical, distinct; nil when
 	// it rewrote none, and in a run stored before facts.db kept them.
 	Aliases []Alias
+	// RefCommits are the commits on the clone's other refs, its branches,
+	// remote-tracking branches and tags, that Head does not hold, committed
+	// in History's window (scan runs): work that has not reached the default
+	// branch, such as a release branch or a pull request's branch, which
+	// knowledge_loss@1 counts as its author's activity. Sorted by SHA, with
+	// no Parents or Subject; Author and CoAuthors mailmapped as Commits'
+	// are. nil when there are none, in week runs, and in a run stored
+	// before facts.db kept them.
+	RefCommits []Commit
 }
 
 // Alias is an email git's mailmap rewrote in a repository: a commit of the

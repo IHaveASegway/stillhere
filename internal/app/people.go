@@ -74,8 +74,19 @@ func FindPerson(n *Names, query string, q PersonQuery) (NamedPerson, *report.Cav
 				return p, nil, nil
 			}
 		}
-		return NamedPerson{}, nil, &personMiss{fmt.Sprintf("id %s names no one in run %d: ids are stable across runs, so "+
-			"this person is not in this one.", lower, run)}
+		// An id is its canonical email's, so a .mailmap change that gave
+		// the person another canonical address gave them another id; the
+		// run's aliases still name the old address (wave 10: an agent holding
+		// ids from an earlier session concluded the person had left).
+		for _, p := range n.People {
+			if slices.ContainsFunc(p.aliases, func(a string) bool { return identity.Pseudonym(a) == lower }) {
+				return p, aliasCaveat(lower, identity.Pseudonym(p.Key)), nil
+			}
+		}
+		return NamedPerson{}, nil, &personMiss{fmt.Sprintf("id %s names no one in run %d: an id is the canonical "+
+			"email's, the same in every run that keeps that address, so this address is in no commit of this run, as "+
+			"its own or as one git's mailmap maps to another. Pass a display name, or an id from an answer about this "+
+			"run.", lower, run)}
 	case strings.Contains(lower, "@") && !strings.ContainsAny(lower, " \t"):
 		// Every key is lowercased where it is made (an email by the
 		// collectors, a login by identity.Reviewer), so a lowercased query
@@ -133,6 +144,17 @@ func FindPerson(n *Names, query string, q PersonQuery) (NamedPerson, *report.Cav
 		".mailmap; %s lists the people with the most surviving lines. A display name that gives an address away (an "+
 		"address, or its local part) is withheld from every answer and matches no one: pass that person's id or email (%s).",
 		msg, cmds.Report(), cmds.PersonKeys())}
+}
+
+// aliasCaveat is the note of a person named by the id of an address git's
+// mailmap rewrote to their canonical one: the id asked about, and the one
+// that names them in this run, which says nothing of either address. An
+// email is not resolved so: --me and every email a reader passes must be
+// the canonical one, as each page keys people by it.
+func aliasCaveat(asked, id string) *report.Caveat {
+	return &report.Caveat{Code: "alias-id", Message: fmt.Sprintf("Id %s is of an address git's mailmap maps to this "+
+		"person's canonical address in this run, so it names them; their id here is %s. An id follows the canonical "+
+		"email, so a .mailmap change gives a person a new one.", asked, id)}
 }
 
 // personNorm folds a name for comparison: lowercased, with runs of white

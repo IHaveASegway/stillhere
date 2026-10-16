@@ -89,7 +89,7 @@ Repository cli · trunk @ ff67d76 · ok
 How to read it:
 
 - **made of** and **still here** are surviving lines: what blame still credits to each person at HEAD. They reward tenure, so they describe the code, not the people.
-- **knowledge loss** is the share of people's surviving lines held by people with no landing and no review in 180 days. 61.8% says most of this code was written by people who have gone quiet here (not necessarily left). The **areas** say where: `pkg/` holds most of it.
+- **knowledge loss** is the share of people's surviving lines held by people with no activity in 180 days: no landing, no review, no pull request opened or pushed to, and no commit on any branch or tag of the clone. 61.8% says most of this code was written by people who have gone quiet here (not necessarily left). The **areas** say where: `pkg/` holds most of it. Activity is the whole run's, so a repository scanned alone can read higher than in its organization's scan: someone active in a sibling repository looks gone here. Each person in **made of** and **still here** shows when they were last active, and "quiet in N days" when they are within 30 days of the line; a `going-quiet` caveat says what knowledge loss becomes once they cross it.
 - **review coverage** needs GitHub data (step 8). Without it the line is absent, not 0. It is the share of human landings whose pull request someone other than its author reviewed before it merged. "With no pull request in the GitHub data" is what the data says, not proof of a direct push: here those 9 are security fixes merged from private forks. A landing after the last sync, or whose subject names a pull request (`Merge pull request #N`, `… (#N)`) the data lacks, is left out rather than counted as unreviewed, and the line says how many. Here 35 are, because this replica has a hole (an interrupted first sync): syncing again fills it.
 - **concentration** is how few people hold the majority of half the files that have a majority owner. It is not a truck factor.
 - **AI-assisted** counts landings with an agent's commit or co-author trailer: a lower bound, since editor completions leave no trace.
@@ -115,7 +115,7 @@ identities · every repository · run 7 · as of 2026-10-15 UTC
 …
 ```
 
-Read the file: the high-confidence lines are written, every other candidate is commented out, and stillhere applies none of them. Keep it outside the repository, which may have a `.mailmap` of its own that git applies too, and append to it (`>>`) rather than write over it: once a scan applies a line, the suggestions leave it out, so a file written anew would lose it. Scan again with it:
+Read the file: the high-confidence lines are written, every other candidate is commented out, and stillhere applies none of them. Hand-off guesses (one address stopping as another starts in the same files) are listed last and counted apart in the headline; on an open-source repository most of them link unrelated people, so the text form lists them only with `--all`. A candidate GitHub links to one account is high even when an address carries two names, and says so: a name change looks exactly like a mailbox two people share, so check those before you apply them. Keep it outside the repository, which may have a `.mailmap` of its own that git applies too, and append to it (`>>`) rather than write over it: once a scan applies a line, the suggestions leave it out, so a file written anew would lose it. Scan again with it:
 
 ```sh
 stillhere --mailmap ~/cli.mailmap scan .             # here: 468 people become 465
@@ -139,7 +139,7 @@ Repository cli · 9,983 surviving prod lines in 40 prod files, 21 with a majorit
   recent reviewers Person H (24 pull requests) · Person E (3 pull requests) · Person A (3 pull requests) · …
 ```
 
-It is a routing answer, not a rank: who holds the code (owners, authors) against who works on it now (landers, reviewers). Here three quarters of `pkg/cmd/pr` is held by people gone quiet, and the people landing and reviewing it are others: the ones to ask, and the ones to pair with the owners while they can. Person F appearing twice is one person on two addresses (step 4), and `(name withheld 3)` someone whose display name would give an address away. `PATH` is relative to the repository's root, down to one file. A path with no role, such as `go.mod`, says so instead of "nobody".
+It is a routing answer, not a rank: who holds the code (owners, authors) against who works on it now (landers, reviewers). Here three quarters of `pkg/cmd/pr` is held by people gone quiet, and the people landing and reviewing it are others: the ones to ask, and the ones to pair with the owners while they can. Person F appearing twice is one person on two addresses (step 4), and `(name withheld 3)` someone whose display name would give an address away. `PATH` is relative to the repository's root, down to one file; `--repo` takes the repository's name as a card heads it, `OWNER/NAME` or its remote URL. Each owner and author also shows when they were last active (`active 2026-10-02`, `quiet in 12 days`, `quiet since 2025-12-10`), so you can tell a holder you can still ask from one who has gone. A path with no prod line, such as `tests` or `docs`, is answered for its own test or doc lines, and says so; a path with no role at all, such as `go.mod`, says why and what would make it count instead of "nobody".
 
 ## 6. Ranks, and why so few people have one
 
@@ -207,9 +207,13 @@ Review coverage, recent reviewers, `reviews_given@1` and the review half of know
 
 ```sh
 stillhere sync github --org your-org      # mirrors and pull requests; a first sync of a large org takes a while
-stillhere scan ~/.stillhere/mirrors/your-org
+stillhere --mailmap ~/your.mailmap scan ~/.stillhere/mirrors/your-org
+stillhere identities --format mailmap >> ~/your.mailmap   # again: GitHub's links make most of the sure merges
+stillhere --mailmap ~/your.mailmap scan ~/.stillhere/mirrors/your-org
 stillhere report --rank reviews_given
 ```
+
+Run step 4 again after the first sync: GitHub's own links from commits to accounts arrive with it, and they make most of the high-confidence merges (on honojs/hono, 4 lines before the sync and 18 after). Keep passing the same `--mailmap`, or the scan loses step 4's merges.
 
 The `reviews_given@1` table shows each reviewer's share of approvals with no comment beside the count, because rubber stamps count as reviews.
 

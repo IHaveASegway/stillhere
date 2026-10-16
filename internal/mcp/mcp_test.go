@@ -584,7 +584,7 @@ func TestMCPTools(t *testing.T) {
 			Repos []repoSummary `json:"repos"`
 			Page  page          `json:"page"`
 		}
-		text, isErr := callTool(t, small, "overview", map[string]any{"scope": "platform"})
+		text, isErr := callTool(t, small, "overview", map[string]any{"scope": "platform", "limit": overviewLimit})
 		if isErr || len(text) > budget {
 			t.Fatalf("overview(platform) under a %d-character budget: %d characters, error %v: %s", budget, len(text), isErr, text)
 		}
@@ -592,6 +592,10 @@ func TestMCPTools(t *testing.T) {
 		if o.Page.Limit >= overviewLimit || len(o.Repos) != 1 || o.Repos[0].Name != "fixture" || o.Page.NextCursor == nil {
 			t.Fatalf("overview(platform) under the budget: %d repositories, page %+v; want fixture alone on a halved page with a cursor",
 				len(o.Repos), o.Page)
+		}
+		// A page cut below the limit the agent asked for says so (wave 10).
+		if want := fmt.Sprintf("limit %d, not the %d asked: the answer is cut to fit", o.Page.Limit, overviewLimit); !strings.HasPrefix(o.Page.Note, want) {
+			t.Errorf("overview(platform, limit %d) under the budget: page note %q, want it to start %q", overviewLimit, o.Page.Note, want)
 		}
 		text, _ = callTool(t, small, "overview", map[string]any{"scope": "platform", "cursor": *o.Page.NextCursor})
 		decode(t, text, &o)

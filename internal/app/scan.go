@@ -107,12 +107,13 @@ func Scan(ctx context.Context, d Deps, r ScanRequest) (*report.Model, error) {
 	// After the run's GitHub data: it links forge logins to the run's people.
 	who := identity.New(fs, d.Policy)
 	landed := report.Landed{Days: d.Policy.Week.Days, Sort: d.Policy.Week.Sort}
+	var activity map[string]domain.Activity // each person's last activity, once the metrics are computed
 	build := func(run *domain.Run, values []domain.MetricValue, sets []report.RankSet) *report.Model {
 		finish(timings, started)
 		return report.Build(&report.Input{
 			Kind: report.KindScan, Tool: d.Version, Run: run, Facts: fs, Policy: d.Policy, Who: who,
 			Values: values, Ranks: sets, Landed: landed, History: window, Timings: timings, Scope: scope,
-			Forge: forge,
+			Forge: forge, Activity: activity,
 		})
 	}
 	if !produced(fs) {
@@ -129,6 +130,11 @@ func Scan(ctx context.Context, d Deps, r ScanRequest) (*report.Model, error) {
 	values, err := metrics.Compute(in)
 	if err != nil {
 		return nil, fmt.Errorf("computing metrics: %w", err)
+	}
+	// Per query, as a reader computes it: each person's last activity by
+	// knowledge_loss@1's rule, which the pages show beside their lines.
+	if activity, err = metrics.LastActivity(in); err != nil {
+		return nil, fmt.Errorf("computing last activity: %w", err)
 	}
 	timings.MetricsMS = time.Since(start).Milliseconds()
 	start = time.Now()

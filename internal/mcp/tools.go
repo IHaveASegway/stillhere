@@ -72,7 +72,7 @@ func (c common) format(limit, rows, detailedRows int) (format, int64, error) {
 		f.rows, f.allHeads = detailedRows, true
 	}
 	if c.Limit > 0 {
-		f.limit = min(c.Limit, maxLimit)
+		f.limit, f.asked = min(c.Limit, maxLimit), c.Limit
 	}
 	run, offset, err := parseCursor(c.Cursor)
 	f.offset = offset
@@ -122,15 +122,17 @@ func (s *server) addTools(srv *sdk.Server) {
 	tool(s, srv, "who_knows", "Who knows this code",
 		"Who knows the code under a path, per repository: majority owners (people credited with at least half of a file's "+
 			"surviving lines), the top five authors of surviving prod lines, recent landers and recent reviewers (the last 90 "+
-			"days; reviewers only in repositories whose GitHub data the run read, an empty list elsewhere) and bots apart; "+
-			"for a top-level directory, also its area: knowledge loss, people gone quiet and concentration, as overview's "+
-			"areas give them (null for a deeper path). "+
+			"days; reviewers only in repositories whose GitHub data the run read, an empty list elsewhere) and bots apart, "+
+			"each person with last_active and quiet_in_days (their last landing, review, pull request or commit on any "+
+			"branch, and the days left before knowledge loss counts them as gone quiet); a path with no prod line, such as "+
+			"tests or docs, is answered for its own lines (roles says which); and the path's knowledge loss, people gone "+
+			"quiet and concentration (a top-level directory's match overview's areas). "+
 			"A routing answer for who to ask or who should review, not a rank. path is repo-relative, any prefix down to one "+
 			"file, or absolute inside a clone the scan read; repo narrows it to one repository, and without it every "+
 			"repository with code under the path is listed, paged."+untrusted,
 		schema(nil,
 			`"path": {"type": "string", "description": "A repo-relative path prefix, such as src/payments or a file, or an absolute path inside a scanned clone; empty for the whole repository."}`,
-			`"repo": {"type": "string", "description": "A repository by name or key; empty searches every repository of the run."}`,
+			`"repo": {"type": "string", "description": "A repository by name, GROUP/NAME, OWNER/NAME, remote URL or key; empty searches every repository of the run."}`,
 			propFormat, propLimit, propCursor),
 		s.whoKnows)
 	tool(s, srv, "changes", "What landed",
