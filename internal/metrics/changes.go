@@ -20,13 +20,28 @@ import (
 // metric's own measure in its own file; no second definition of any metric
 // lives here.
 
-// betaValidity is every ranked metric's validity note until a lead's labels
-// clear the bar (docs/metrics.md#validity-checks, ADR 0014): the rank
-// tables, explain and the MCP server print it wherever the metric's values
-// are, one caveat for the metrics that share it. A reference result, once
-// the model panel has run, is added beside it, never in its place.
+// betaValidity opens every ranked metric's validity note until a lead's
+// labels clear the bar (docs/metrics.md#validity-checks, ADR 0014): the rank
+// tables, explain and the MCP server print the note wherever the metric's
+// values are. Each metric's note adds its own model-panel reference beside
+// the mark, never in its place, so the notes differ and each ranked metric
+// gets its own caveat.
 const betaValidity = "Beta: not yet checked against a lead's labels (stillhere label, then stillhere validate: " +
-	"AUC >= 0.7 on at least 50 scored labels; docs/validation.md). The model-panel reference has not run yet."
+	"AUC >= 0.7 on at least 50 scored labels; docs/validation.md). "
+
+// The model panel's reference results (docs/validation.md#reference-results):
+// validate's AUC of each ranked metric on the panel's majority labels, pooled
+// over four public repositories, with its interval, n and the AUC of plain
+// size on the same changes. They are docs/metrics.md's Validity lines, word
+// for word; a new panel run changes the three together.
+const (
+	durableReference = "Reference: AUC 0.42 (0.30–0.55) on 76 model-panel labels " +
+		"(2026-10-15; 4 public repositories; size baseline 0.82), not yet a lead's labels."
+	simplifyingReference = "Reference: AUC 0.76 (0.63–0.88) on 65 model-panel labels " +
+		"(2026-10-15; 4 public repositories; size baseline 0.87), not yet a lead's labels."
+	reviewsReference = "Reference: AUC 0.55 (0.40–0.71) on 49 model-panel labels " +
+		"(2026-10-15; 4 public repositories; size baseline 0.89), not yet a lead's labels."
+)
 
 // Change is one change of a run: a merged pull request of the run's GitHub
 // data with the landings that put it on its repository's default branch

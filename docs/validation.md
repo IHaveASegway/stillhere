@@ -147,11 +147,70 @@ Why models, and why only as reference: model annotation can match or beat crowd 
 
 ### Reference results
 
-Not run yet. The panel runs after the current wave's code is integrated; its results go here, one row per metric and repository plus the pooled row, and into each ranked metric's Validity line in [metrics.md](metrics.md) in the form "AUC x.xx (lo–hi) on n model-panel labels (date), not yet a lead's labels".
+The panel ran on 2026-10-15, with stillhere at commit eb77769, on four public repositories scanned at `--now 2026-10-15`: cli/cli (Go), pallets/flask (Python), BurntSushi/ripgrep (Rust) and vitejs/vite (TypeScript). Each repository's own `STILLHERE_HOME` gave its sheet and its rows below; one more home that scanned the four mirrors together (the same heads, landings and pull requests) gave the pooled rows. Its GitHub data is as of 2026-10-16 03:08 UTC (the single homes' 03:01), with no pull request missing.
 
-| Metric | Repositories | n (meaningful / routine) | AUC (95%) | Size baseline AUC | Alpha | Raters | Date |
+| Repository | Branch at `--now` | Head |
+| --- | --- | --- |
+| cli/cli | `trunk` | `ff67d7622da2503223b8437e8cfaa39e1f6bf0e2` |
+| pallets/flask | `main` | `d086db856be187255b8ec61ef409357393020f32` |
+| BurntSushi/ripgrep | `master` | `3fce3b5bb0236da2df6d99672afb8a719642eca7` |
+| vitejs/vite | `main` | `c2c9ef4dcd05b3e4d88844ea3a13dc23819ca2a5` |
+
+- **Sample**: `label --sheet --n 38 --seed 20261015`, 143 changes: 38 of cli's 290 scored changes, 38 of vite's 674, and every change flask's and ripgrep's runs score (29 and 38).
+- **Raters**: `claude-opus-5-5`, `claude-sonnet-5-5` and `claude-fable-5-1`, one session per rater and repository. Their transcripts show no read of another rater's labels, of stillhere's output or of git's author fields.
+- **Agreement**: Krippendorff's alpha 0.851 pooled, with pairwise agreement of 91%, 95% and 92%. Per repository it is cli 0.791, flask 1.000, ripgrep 0.771 and vite 0.865. Every alpha is above 0.667, so the AUCs are published. cli's and ripgrep's are below 0.800, so their rows are tentative by Krippendorff's bar.
+- **Majority**: every change has one: 61 meaningful, 80 routine and 2 noise.
+- **Size baseline**: the AUC of added + removed lines, computed on the changes the metric scored and with `validate`'s bootstrap. Over all 143 changes it is 0.84.
+
+| Metric | Repositories | n (meaningful / routine) | AUC (95%) | Size baseline AUC (95%) | Alpha | Raters | Date · `--now` · head |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| — | — | — | — | — | — | — | — |
+| `durable@1` | all 4 | 76 (40 / 36) | 0.42 (0.30–0.55) | 0.82 (0.71–0.90) | 0.851 | opus-5-5, sonnet-5-5, fable-5-1 | 2026-10-15 · 2026-10-15 · the four above |
+| `durable@1` | cli | 19 (12 / 7) | 0.38 (0.12–0.64) | 0.93 (0.76–1.00) | 0.791 | the same | 2026-10-15 · 2026-10-15 · ff67d76 |
+| `durable@1` | flask | 16 (9 / 7) | 0.56 (0.28–0.81) | 0.87 (0.65–1.00) | 1.000 | the same | 2026-10-15 · 2026-10-15 · d086db8 |
+| `durable@1` | ripgrep | 22 (7 / 15) | 0.30 (0.09–0.52) | 0.86 (0.64–0.98) | 0.771 | the same | 2026-10-15 · 2026-10-15 · 3fce3b5 |
+| `durable@1` | vite | 19 (12 / 7) | 0.50 (0.26–0.74) | 0.54 (0.23–0.85) | 0.865 | the same | 2026-10-15 · 2026-10-15 · c2c9ef4 |
+| `simplifying@1` | all 4 | 65 (21 / 44) | 0.76 (0.63–0.88) | 0.87 (0.77–0.95) | 0.851 | opus-5-5, sonnet-5-5, fable-5-1 | 2026-10-15 · 2026-10-15 · the four above |
+| `simplifying@1` | cli | 19 (7 / 12) | 0.90 (0.74–1.00) | 0.96 (0.86–1.00) | 0.791 | the same | 2026-10-15 · 2026-10-15 · ff67d76 |
+| `simplifying@1` | flask | 13 (3 / 10) | 0.43 (0.08–0.80) | 0.47 (0.10–0.80) | 1.000 | the same | 2026-10-15 · 2026-10-15 · d086db8 |
+| `simplifying@1` | ripgrep | 15 (6 / 9) | 0.92 (0.75–1.00) | 0.96 (0.85–1.00) | 0.771 | the same | 2026-10-15 · 2026-10-15 · 3fce3b5 |
+| `simplifying@1` | vite | 18 (5 / 13) | 0.64 (0.37–0.91) | 0.77 (0.54–0.95) | 0.865 | the same | 2026-10-15 · 2026-10-15 · c2c9ef4 |
+| `reviews_given@1` | all 4 | 49 (19 / 30) | 0.55 (0.40–0.71) | 0.89 (0.78–0.96) | 0.851 | opus-5-5, sonnet-5-5, fable-5-1 | 2026-10-15 · 2026-10-15 · the four above |
+| `reviews_given@1` | cli | 18 (6 / 12) | 0.69 (0.50–0.88) | 0.97 (0.88–1.00) | 0.791 | the same | 2026-10-15 · 2026-10-15 · ff67d76 |
+| `reviews_given@1` | flask | 3 (2 / 1) | 0.75 (0.50–1.00) | 0.00 (0.00–0.00) | 1.000 | the same | 2026-10-15 · 2026-10-15 · d086db8 |
+| `reviews_given@1` | ripgrep | 10 (6 / 4) | 0.38 (0.04–0.71) | 0.92 (0.67–1.00) | 0.771 | the same | 2026-10-15 · 2026-10-15 · 3fce3b5 |
+| `reviews_given@1` | vite | 18 (5 / 13) | 0.72 (0.58–0.88) | 0.77 (0.54–0.95) | 0.865 | the same | 2026-10-15 · 2026-10-15 · c2c9ef4 |
+
+`validate` prints "clears the bar" for one row only: `simplifying@1` pooled. Pooled `durable@1` is below the AUC of 0.7, and pooled `reviews_given@1` is short of n 50. Every repository row is short of n 50.
+
+Each rater's own labels, run through `validate` pooled, give AUCs within 0.06 of the majority's. Those AUCs do not depend on the majority vote:
+
+| Metric | Majority | `claude-opus-5-5` | `claude-sonnet-5-5` | `claude-fable-5-1` |
+| --- | --- | --- | --- | --- |
+| `durable@1` | 0.42 (0.30–0.55), 40 / 36 | 0.40 (0.28–0.53), 43 / 33 | 0.45 (0.32–0.57), 39 / 37 | 0.42 (0.30–0.55), 40 / 36 |
+| `simplifying@1` | 0.76 (0.63–0.88), 21 / 44 | 0.74 (0.61–0.86), 22 / 43 | 0.70 (0.56–0.83), 17 / 50 | 0.74 (0.61–0.86), 22 / 43 |
+| `reviews_given@1` | 0.55 (0.40–0.71), 19 / 30 | 0.52 (0.37–0.68), 20 / 29 | 0.61 (0.46–0.76), 15 / 36 | 0.56 (0.41–0.71), 20 / 29 |
+
+What it says, per metric:
+
+- **`durable@1` does not separate.** Its AUC is 0.42 (0.30–0.55) on 76, and 0.40 to 0.45 for each rater. Plain size scores 0.82 (0.71–0.90) on the same changes, and the two intervals do not overlap. If anything, the changes the panel called meaningful kept fewer of their lines than the routine ones. One possible reason, not tested here: a large change touches code that is still being worked on, while a one-line fix rarely gets rewritten.
+- **`simplifying@1` separates, but no better than size.** Its AUC is 0.76 (0.63–0.88) on 65, and 0.70 to 0.74 for each rater. The lower bound, 0.63, is below 0.7. Plain size scores 0.87 (0.77–0.95) on the same changes, and in every repository the metric is at or below that repository's size baseline. So the panel shows that it ranks big changes high, which its definition predicts (it counts removed lines). The panel does not show that it says more than size.
+- **`reviews_given@1`: cannot tell.** It has 49 scored labels, one short of the bar's 50, and its AUC of 0.55 (0.40–0.71) spans chance. The raters give 0.52 to 0.61. 16 of the 65 recent changes labelled meaningful or routine are no pull request of the GitHub data (direct pushes, most of them flask's and ripgrep's), so the metric does not score them.
+
+No metric loses "beta" on this ([ADR 0014](adr/0014-labels-are-evidence-not-the-gate.md)). The same numbers from a lead would still not justify it: `simplifying@1` would clear the AUC bar but not the size baseline.
+
+What could make this result wrong, beyond the limits above:
+
+- **One vendor.** The three raters are three models of one vendor, so their alpha overstates what independent people would reach. flask's 1.000 on 29 changes is the extreme case.
+- **Raters see size.** The row gives the line counts and the patch has its length, so part of the size baseline may be the raters reading size. Then size is a harder bar to beat than it would be with labels made without it. A lead sees the same evidence.
+- **Departures from the protocol.** Each rater labelled a whole sheet in one session and ran the evidence script itself, instead of answering one prompt per row, so it saw the sheet's other rows. `claude-sonnet-5-5` read the patches in batches, with lines cut at 150 to 220 characters.
+- **Evidence gaps.** Four of ripgrep's rebase-merged changes showed the patch of one of their landings only; the worst showed 130 of 894 lines. The blinding leaked:
+  - 31 of cli's 38 commit subjects are "Merge pull request #N from <account>/<branch>";
+  - 16 rows (6 of cli's, 10 of vite's) carry identity trailers such as `Signed-off-by` and `Co-authored-by`;
+  - 6 ripgrep patches show a Cargo.toml `authors` line.
+- **The GitHub data is about 27 hours newer than `--now`.** A review given in those hours counts for `reviews_given@1`. The sync's history also starts about 27 hours after the scan's, so two ripgrep changes at the old end of `durable@1`'s window have no pull request in the data, and their sheet title is the commit subject.
+- **Small n.** Per repository, n is 3 to 22. Those intervals are 0.4 to 0.9 wide, and no repository row says much alone. flask's `reviews_given@1` row (n 3) says nothing.
+
+The sheets, the raters' labels and the scripts that aggregated them stay outside the repository ([ADR 0014](adr/0014-labels-are-evidence-not-the-gate.md)). The sample is reproducible from the run, `--n`, `--seed` and `--now` above.
 
 ## Limits
 

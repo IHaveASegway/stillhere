@@ -55,7 +55,7 @@ func (durableV1) Definition() Definition {
 		Gaming: "Writing in stable, low-traffic code and avoiding risky areas. Load-bearing (M5) is the counterweight.",
 		Oracle: "testdata/fixture/SPEC.md#change-oracles-m1-testchangeoracles (main fixture and sibling) and " +
 			"testdata/fixture/SPEC.md#binary-files-fixturebinary (binary files, and text files moved across roles)",
-		Validity: betaValidity,
+		Validity: betaValidity + durableReference,
 	}
 }
 

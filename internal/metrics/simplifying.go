@@ -31,7 +31,7 @@ func (simplifyingV1) Definition() Definition {
 			"back later is not detected in v1.",
 		Gaming:   "Deleting then re-adding. Revert detection catches the plain case: neither the reverted landing nor the revert counts.",
 		Oracle:   "testdata/fixture/SPEC.md#change-oracles-m1-testchangeoracles (main fixture and sibling)",
-		Validity: betaValidity,
+		Validity: betaValidity + simplifyingReference,
 	}
 }
 

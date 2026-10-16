@@ -361,8 +361,12 @@ func TestMCPTools(t *testing.T) {
 		if len(c.Changes) != 3 {
 			t.Fatalf("sibling changes since 2026-09-01: %d, want W9, W8 and S1", len(c.Changes))
 		}
-		if !hasCaveat(c.Caveats, "validity", "durable@1 and simplifying@1") {
-			t.Errorf("changes carries %v, want the validity of the two metrics whose clusters it shows", c.Caveats)
+		// Each ranked metric's note holds its own model-panel reference, so
+		// the two metrics no longer share one caveat.
+		if !hasCaveat(c.Caveats, "validity", "Validity of durable@1: Beta") ||
+			!hasCaveat(c.Caveats, "validity", "Validity of simplifying@1: Beta") ||
+			!hasCaveat(c.Caveats, "validity", "model-panel labels") {
+			t.Errorf("changes carries %v, want the validity of each of the two metrics whose clusters it shows, with its reference", c.Caveats)
 		}
 		s1 := c.Changes[2]
 		if len(s1.People) != 1 || s1.People[0].Name != "Lena Lead" || s1.People[0].Removed == nil ||
@@ -515,8 +519,9 @@ func TestMCPTools(t *testing.T) {
 		if !slices.ContainsFunc(h.Caveats, func(c report.Caveat) bool { return c.Code == "no-standout" }) {
 			t.Errorf("highlights caveats %v, want no-standout for tiers of everyone eligible", h.Caveats)
 		}
-		if !hasCaveat(h.Caveats, "validity", "durable@1 and simplifying@1") {
-			t.Errorf("highlights caveats %v, want the validity of the ranked metrics it picks from", h.Caveats)
+		if !hasCaveat(h.Caveats, "validity", "Validity of durable@1: Beta") ||
+			!hasCaveat(h.Caveats, "validity", "Validity of simplifying@1: Beta") {
+			t.Errorf("highlights caveats %v, want the validity of each ranked metric it picks from", h.Caveats)
 		}
 		if len(h.Removed) < 2 || h.Removed[0].Person.Name != "Lena Lead" || h.Removed[0].Num != 22 ||
 			h.Removed[1].Person.Name != "Omar Ops" || h.Removed[1].Num != 21 {
