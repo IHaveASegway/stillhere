@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -82,7 +83,7 @@ type LabelChange struct {
 	Size        string      `json:"size"`
 	Pull        *LabelPull  `json:"pull"`    // null for a landing no pull request landed
 	Title       string      `json:"title"`   // the pull request's title, else the landing commit's subject
-	Commits     []string    `json:"commits"` // the subjects of the commits a merge brought in, oldest first; [] otherwise
+	Commits     []string    `json:"commits"` // the subjects of the commits a merge brought in, or of a rebase merge's landings, oldest first; [] otherwise
 	MoreCommits int         `json:"more_commits"`
 	Added       int         `json:"added"` // numstat lines on paths with a role, as Size counts them
 	Removed     int         `json:"removed"`
@@ -458,6 +459,54 @@ func Sheet(w io.Writer, s *LabelSample) error {
 	cw.Flush()
 	if err := cw.Error(); err != nil {
 		return fmt.Errorf("report: write sheet: %w", err)
+	}
+	return nil
+}
+
+// ScoreColumns are the first columns of validate's scores (--scores), named
+// as the sheet names them; one column per ranked metric follows, by id.
+var ScoreColumns = []string{"change", "label", "repo", "pull_request", "landed", "size", "added", "removed"}
+
+// Scores writes a Validation's per-change scores (Validation.Scores) as a
+// CSV: ScoreColumns, then each of its metrics' measure of the change, empty
+// where the metric does not score it. With it, anyone can recompute each
+// AUC, or compare it with size on exactly the changes the metric scored.
+// Its text is withheld and kept from formulas as the sheet's is.
+func Scores(w io.Writer, v *Validation) error {
+	d, err := page(v)
+	if err != nil {
+		return err
+	}
+	v = d.(*Validation)
+	cw := csv.NewWriter(w)
+	head := slices.Clone(ScoreColumns)
+	for _, a := range v.Metrics {
+		head = append(head, a.Metric)
+	}
+	if err := cw.Write(head); err != nil {
+		return fmt.Errorf("report: write scores: %w", err)
+	}
+	for _, c := range v.Scores {
+		pull := ""
+		if c.Pull != nil {
+			pull = (&LabelChange{Pull: c.Pull}).pullText()
+		}
+		row := []string{c.Change, c.Label, sheetCell(c.Repo), sheetCell(pull), date(c.Landed), c.Size,
+			strconv.Itoa(c.Added), strconv.Itoa(c.Removed)}
+		for _, a := range v.Metrics {
+			cell := ""
+			if x := c.Scores[a.Metric]; x != nil {
+				cell = strconv.FormatFloat(*x, 'f', -1, 64)
+			}
+			row = append(row, cell)
+		}
+		if err := cw.Write(row); err != nil {
+			return fmt.Errorf("report: write scores: %w", err)
+		}
+	}
+	cw.Flush()
+	if err := cw.Error(); err != nil {
+		return fmt.Errorf("report: write scores: %w", err)
 	}
 	return nil
 }

@@ -93,7 +93,7 @@ On cli/cli at `--now 2026-10-15` (run of the dogfood, partial GitHub data), 292 
 
 ### Blinding
 
-A card shows the repository, the landing date, the window, the size, the pull request's number and title (or the landing's subject), the subjects of the commits a merge brought in (oldest first, at most 10), and the files with their lines and class. `d` adds the patch of the files with a role. It never shows a metric value, a rank or an author: a label that knew the metric's verdict would measure agreement with the metric, and one that knew the author would judge the person. The login in GitHub's merge subject ("Merge pull request #950 from owner/branch") is removed for the same reason. A subject that names its author some other way still does, and so does a patch.
+A card shows the repository, the landing date, the window, the size, the pull request's number and title (or the landing's subject), the subjects of the commits a merge brought in or, for a rebase merge, of each commit it put on the branch (oldest first, at most 10), and the files with their lines and class. `d` adds the patch of the files with a role, of the whole change: a rebase merge's several landings from the parent of the oldest, not its newest landing alone. It never shows a metric value, a rank or an author: a label that knew the metric's verdict would measure agreement with the metric, and one that knew the author would judge the person. The login in GitHub's merge subject ("Merge pull request #950 from owner/branch") is removed for the same reason, and the card shows subjects, never a commit's message body, so no `Signed-off-by` or `Co-authored-by` trailer reaches it. A subject that names its author some other way still does, and so does a patch (a `Cargo.toml` `authors` line, say).
 
 ### The labels file
 
@@ -126,28 +126,30 @@ cli/cli#952,meaningful,lead
 
 Only a change that landed in the metric's window is scored. A change counts once: each labeller's last row for it, and over several labellers the label most of them gave; a tie is left out, and a caveat says how many changes several labellers labelled and how often they agreed. When a metric scored fewer of the labelled changes of its window than were labelled, a caveat says how many, and what it scores; when it scored none and it reads GitHub data, the caveat says whether the run has any.
 
+`validate --scores > scores.csv` writes each labelled change with its label, its size (the lines it added and removed on paths with a role) and each metric's measure of it, empty where the metric does not score it: the very numbers each AUC is computed from, so anyone can recompute one, or look for a size confound on exactly the changes a metric scored. `--format json` adds them to the answer as `scores`. Keep the file beside the labels: it judges the same work.
+
 Then, per metric, the AUC: the chance that a change labelled meaningful scores above one labelled routine, a tie counting one half (Mann-Whitney; `rank.AUC`). Noise is left out of every AUC: it is the class the noise rules already strip, and it says nothing about the order of the rest. The interval in parentheses is a 95% bootstrap interval: 1,000 replicates that resample the meaningful and the routine changes apart, so each keeps the sample's counts (`rank.AUCInterval`); it depends on the scores alone, not on the order of the file's rows. At 50 labels an AUC's interval is about ±0.15 wide, so a 0.72 does not yet say the metric beats 0.6.
 
 The status column says whether the labels clear the bar (AUC ≥ 0.7 on at least 50 scored labels), or what is short. Labels that clear it are evidence about the code they judge, whoever made them: the model panel's majority labels, run through `validate`, print "clears the bar" too. A metric loses its beta mark only on a lead's labels ([ADR 0014](adr/0014-labels-are-evidence-not-the-gate.md)), and only in its published Validity line: the mark in stillhere's output is the metric's, not your installation's, so a lead whose labels clear the bar changes nothing it prints, and can report the result (an issue with the AUC, its interval, n and the kind of codebase) for the next release to weigh.
 
-Read an AUC beside the size of the changes: big changes are more often meaningful, and a metric that grows with size (`simplifying@1` counts removed lines) can separate the classes through size alone. The sheet's `added` and `removed` columns give the AUC of plain size on the same labels; a metric worth ranking by beats it.
+Read an AUC beside the size of the changes: big changes are more often meaningful, and a metric that grows with size (`simplifying@1` counts removed lines) can separate the classes through size alone. So beside each metric's AUC, `validate` prints **size alone**: the AUC of change size (lines added and removed on paths with a role) over the same changes the metric scored, with its interval from the same bootstrap. A metric worth ranking by beats it.
 
 ## Reference validation: a model panel
 
-A lead's labels are the gate. Before any lead has labelled, stillhere publishes a reference result so that someone trying it has evidence about the ranks, and so that the protocol is exercised end to end. It is evidence, not the gate, and no AI judgment ever ships in stillhere's outputs ([product.md](product.md#non-goals-v1)).
+A model panel is three AI models that label public changes blind, by this page's rubric. A lead's labels are the gate. Before any lead has labelled, stillhere publishes the panel's result as a reference so that someone trying it has evidence about the ranks, and so that the protocol is exercised end to end. It is evidence, not the gate, and no AI judgment ever ships in stillhere's outputs ([product.md](product.md#non-goals-v1)).
 
 - **Repositories**: three or four public repositories in different languages, each synced so `reviews_given@1` can score its changes.
 - **Sample**: `stillhere label --sheet`, about 38 changes per repository, about 150 in all, at one fixed `--now` and seed.
-- **Raters**: three model raters, each in a fresh session that sees only this page's rubric, one sheet row, and `git show --stat` and `--patch` of the change printed without author lines; blinded to every metric value and to each other. A sheet row holds the pull request's title and the commits' subjects, which stillhere never sends to an AI (`metrics.Pull.Title` and `forge_snapshot_pulls.title` are "local only"). The panel is the one exception, and only because of where it runs: the maintainers run it, outside stillhere, on public repositories whose titles and patches anyone can read; stillhere's own output never goes to a model, and the rule stands for every user's repositories.
+- **Raters**: three model raters, each in a fresh session that sees only this page's rubric, one sheet row, and the stat and patch of the whole change (for a rebase merge, from the parent of its oldest landing), with no author line, no message body (its trailers name people) and no login in a merge subject: what `label`'s card and `d` show; blinded to every metric value and to each other. A sheet row holds the pull request's title and the commits' subjects, which stillhere never sends to an AI (`metrics.Pull.Title` and `forge_snapshot_pulls.title` are "local only"). The panel is the one exception, and only because of where it runs: the maintainers run it, outside stillhere, on public repositories whose titles and patches anyone can read; stillhere's own output never goes to a model, and the rule stands for every user's repositories.
 - **Agreement**: Krippendorff's alpha, nominal, over the three raters, skips as missing values (Krippendorff, "Computing Krippendorff's Alpha-Reliability", 2011). Below 0.667 the result is published as "raters disagree", with no AUC claim.
 - **Labels**: the majority label of each change (two of three); a change with no majority is left out.
-- **Scores**: `stillhere validate` on the majority labels, per repository and pooled, each AUC with its interval and n, beside the size baseline.
+- **Scores**: `stillhere validate` on the majority labels, per repository and pooled, each AUC with its interval and n, beside its size alone; and `validate --scores` for an analysis of size outside stillhere.
 
 Why models, and why only as reference: model annotation can match or beat crowd workers on text classification (Gilardi, Alizadeh and Kubli, "ChatGPT outperforms crowd workers for text-annotation tasks", PNAS 2023), but its quality varies by task and must be checked against human labels task by task (Pangakis, Wolken and Fasching, "Automated Annotation with Generative AI Requires Validation", 2023). Labels of software changes are hard for people too: Herzig, Just and Zeller found a third of the bug reports they reviewed misclassified ("It's Not a Bug, It's a Feature", ICSE 2013), which is why labels here follow a written rubric with worked examples. A panel of three sessions of one model family shares that family's biases, so its alpha overstates the agreement independent people would reach.
 
 ### Reference results
 
-The panel ran on 2026-10-15, with stillhere at commit eb77769, on four public repositories scanned at `--now 2026-10-15`: cli/cli (Go), pallets/flask (Python), BurntSushi/ripgrep (Rust) and vitejs/vite (TypeScript). Each repository's own `STILLHERE_HOME` gave its sheet and its rows below; one more home that scanned the four mirrors together (the same heads, landings and pull requests) gave the pooled rows. Its GitHub data is as of 2026-10-16 03:08 UTC (the single homes' 03:01), with no pull request missing.
+The panel labelled four public repositories as they stood at `--now 2026-10-15`, the date its result goes by: cli/cli (Go), pallets/flask (Python), BurntSushi/ripgrep (Rust) and vitejs/vite (TypeScript), scanned by stillhere at commit eb77769; the raters worked on 2026-10-16 UTC. Each repository's own `STILLHERE_HOME` gave its sheet and its rows below; one more home that scanned the four mirrors together (the same heads, landings and pull requests) gave the pooled rows. Its GitHub data is as of 2026-10-16 03:08 UTC (the single homes' 03:01), with no pull request missing.
 
 | Repository | Branch at `--now` | Head |
 | --- | --- | --- |
@@ -160,29 +162,29 @@ The panel ran on 2026-10-15, with stillhere at commit eb77769, on four public re
 - **Raters**: `claude-opus-5-5`, `claude-sonnet-5-5` and `claude-fable-5-1`, one session per rater and repository. Their transcripts show no read of another rater's labels, of stillhere's output or of git's author fields.
 - **Agreement**: Krippendorff's alpha 0.851 pooled, with pairwise agreement of 91%, 95% and 92%. Per repository it is cli 0.791, flask 1.000, ripgrep 0.771 and vite 0.865. Every alpha is above 0.667, so the AUCs are published. cli's and ripgrep's are below 0.800, so their rows are tentative by Krippendorff's bar.
 - **Majority**: every change has one: 61 meaningful, 80 routine and 2 noise.
-- **Size baseline**: the AUC of added + removed lines, computed on the changes the metric scored and with `validate`'s bootstrap. Over all 143 changes it is 0.84.
+- **Size alone**: `validate`'s column, the AUC of the lines a change added and removed on paths with a role, over the changes the metric scored, with the metric's own bootstrap. Over all 143 changes it is 0.84.
 
-| Metric | Repositories | n (meaningful / routine) | AUC (95%) | Size baseline AUC (95%) | Alpha | Raters | Date · `--now` · head |
+| Metric | Repositories | n (meaningful / routine) | AUC (95%) | Size alone (95%) | Alpha | Raters | Date · `--now` · head |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| `durable@1` | all 4 | 76 (40 / 36) | 0.42 (0.30–0.55) | 0.82 (0.71–0.90) | 0.851 | opus-5-5, sonnet-5-5, fable-5-1 | 2026-10-15 · 2026-10-15 · the four above |
+| `durable@1` | all 4 | 76 (40 / 36) | 0.42 (0.30–0.55) | 0.82 (0.70–0.90) | 0.851 | opus-5-5, sonnet-5-5, fable-5-1 | 2026-10-15 · 2026-10-15 · the four above |
 | `durable@1` | cli | 19 (12 / 7) | 0.38 (0.12–0.64) | 0.93 (0.76–1.00) | 0.791 | the same | 2026-10-15 · 2026-10-15 · ff67d76 |
 | `durable@1` | flask | 16 (9 / 7) | 0.56 (0.28–0.81) | 0.87 (0.65–1.00) | 1.000 | the same | 2026-10-15 · 2026-10-15 · d086db8 |
-| `durable@1` | ripgrep | 22 (7 / 15) | 0.30 (0.09–0.52) | 0.86 (0.64–0.98) | 0.771 | the same | 2026-10-15 · 2026-10-15 · 3fce3b5 |
-| `durable@1` | vite | 19 (12 / 7) | 0.50 (0.26–0.74) | 0.54 (0.23–0.85) | 0.865 | the same | 2026-10-15 · 2026-10-15 · c2c9ef4 |
-| `simplifying@1` | all 4 | 65 (21 / 44) | 0.76 (0.63–0.88) | 0.87 (0.77–0.95) | 0.851 | opus-5-5, sonnet-5-5, fable-5-1 | 2026-10-15 · 2026-10-15 · the four above |
+| `durable@1` | ripgrep | 22 (7 / 15) | 0.30 (0.09–0.52) | 0.86 (0.66–0.99) | 0.771 | the same | 2026-10-15 · 2026-10-15 · 3fce3b5 |
+| `durable@1` | vite | 19 (12 / 7) | 0.50 (0.26–0.74) | 0.54 (0.25–0.83) | 0.865 | the same | 2026-10-15 · 2026-10-15 · c2c9ef4 |
+| `simplifying@1` | all 4 | 65 (21 / 44) | 0.76 (0.63–0.88) | 0.87 (0.76–0.95) | 0.851 | opus-5-5, sonnet-5-5, fable-5-1 | 2026-10-15 · 2026-10-15 · the four above |
 | `simplifying@1` | cli | 19 (7 / 12) | 0.90 (0.74–1.00) | 0.96 (0.86–1.00) | 0.791 | the same | 2026-10-15 · 2026-10-15 · ff67d76 |
-| `simplifying@1` | flask | 13 (3 / 10) | 0.43 (0.08–0.80) | 0.47 (0.10–0.80) | 1.000 | the same | 2026-10-15 · 2026-10-15 · d086db8 |
+| `simplifying@1` | flask | 13 (3 / 10) | 0.43 (0.08–0.80) | 0.47 (0.10–0.83) | 1.000 | the same | 2026-10-15 · 2026-10-15 · d086db8 |
 | `simplifying@1` | ripgrep | 15 (6 / 9) | 0.92 (0.75–1.00) | 0.96 (0.85–1.00) | 0.771 | the same | 2026-10-15 · 2026-10-15 · 3fce3b5 |
-| `simplifying@1` | vite | 18 (5 / 13) | 0.64 (0.37–0.91) | 0.77 (0.54–0.95) | 0.865 | the same | 2026-10-15 · 2026-10-15 · c2c9ef4 |
+| `simplifying@1` | vite | 18 (5 / 13) | 0.64 (0.37–0.91) | 0.77 (0.54–0.97) | 0.865 | the same | 2026-10-15 · 2026-10-15 · c2c9ef4 |
 | `reviews_given@1` | all 4 | 49 (19 / 30) | 0.55 (0.40–0.71) | 0.89 (0.78–0.96) | 0.851 | opus-5-5, sonnet-5-5, fable-5-1 | 2026-10-15 · 2026-10-15 · the four above |
-| `reviews_given@1` | cli | 18 (6 / 12) | 0.69 (0.50–0.88) | 0.97 (0.88–1.00) | 0.791 | the same | 2026-10-15 · 2026-10-15 · ff67d76 |
+| `reviews_given@1` | cli | 18 (6 / 12) | 0.69 (0.50–0.88) | 0.97 (0.89–1.00) | 0.791 | the same | 2026-10-15 · 2026-10-15 · ff67d76 |
 | `reviews_given@1` | flask | 3 (2 / 1) | 0.75 (0.50–1.00) | 0.00 (0.00–0.00) | 1.000 | the same | 2026-10-15 · 2026-10-15 · d086db8 |
 | `reviews_given@1` | ripgrep | 10 (6 / 4) | 0.38 (0.04–0.71) | 0.92 (0.67–1.00) | 0.771 | the same | 2026-10-15 · 2026-10-15 · 3fce3b5 |
 | `reviews_given@1` | vite | 18 (5 / 13) | 0.72 (0.58–0.88) | 0.77 (0.54–0.95) | 0.865 | the same | 2026-10-15 · 2026-10-15 · c2c9ef4 |
 
 `validate` prints "clears the bar" for one row only: `simplifying@1` pooled. Pooled `durable@1` is below the AUC of 0.7, and pooled `reviews_given@1` is short of n 50. Every repository row is short of n 50.
 
-Each rater's own labels, run through `validate` pooled, give AUCs within 0.06 of the majority's. Those AUCs do not depend on the majority vote:
+Each rater's own labels, run through `validate` pooled, give AUCs within 0.07 of the majority's. Those AUCs do not depend on the majority vote:
 
 | Metric | Majority | `claude-opus-5-5` | `claude-sonnet-5-5` | `claude-fable-5-1` |
 | --- | --- | --- | --- | --- |
@@ -190,27 +192,30 @@ Each rater's own labels, run through `validate` pooled, give AUCs within 0.06 of
 | `simplifying@1` | 0.76 (0.63–0.88), 21 / 44 | 0.74 (0.61–0.86), 22 / 43 | 0.70 (0.56–0.83), 17 / 50 | 0.74 (0.61–0.86), 22 / 43 |
 | `reviews_given@1` | 0.55 (0.40–0.71), 19 / 30 | 0.52 (0.37–0.68), 20 / 29 | 0.61 (0.46–0.76), 15 / 36 | 0.56 (0.41–0.71), 20 / 29 |
 
-What it says, per metric:
+What it says, per metric, in the words of its Validity line ([metrics.md](metrics.md#validity-checks) gives the rule that picks them):
 
-- **`durable@1` does not separate.** Its AUC is 0.42 (0.30–0.55) on 76, and 0.40 to 0.45 for each rater. Plain size scores 0.82 (0.71–0.90) on the same changes, and the two intervals do not overlap. If anything, the changes the panel called meaningful kept fewer of their lines than the routine ones. One possible reason, not tested here: a large change touches code that is still being worked on, while a one-line fix rarely gets rewritten.
-- **`simplifying@1` separates, but no better than size.** Its AUC is 0.76 (0.63–0.88) on 65, and 0.70 to 0.74 for each rater. The lower bound, 0.63, is below 0.7. Plain size scores 0.87 (0.77–0.95) on the same changes, and in every repository the metric is at or below that repository's size baseline. So the panel shows that it ranks big changes high, which its definition predicts (it counts removed lines). The panel does not show that it says more than size.
-- **`reviews_given@1`: cannot tell.** It has 49 scored labels, one short of the bar's 50, and its AUC of 0.55 (0.40–0.71) spans chance. The raters give 0.52 to 0.61. 16 of the 65 recent changes labelled meaningful or routine are no pull request of the GitHub data (direct pushes, most of them flask's and ripgrep's), so the metric does not score them.
+- **`durable@1` does not separate meaningful from routine changes.** Its AUC is 0.42 (0.30–0.55) on 76, and 0.40 to 0.45 for each rater. Change size alone scores 0.82 (0.70–0.90) on the same changes, and the two intervals do not overlap. If anything, the changes the panel called meaningful kept fewer of their lines than the routine ones. One possible reason, not tested here: a large change touches code that is still being worked on, while a one-line fix rarely gets rewritten.
+- **`simplifying@1` separates, but no better than change size.** Its AUC is 0.76 (0.63–0.88) on 65, and 0.70 to 0.74 for each rater. The lower bound, 0.63, is below 0.7. Change size alone scores 0.87 (0.76–0.95) on the same changes, and in every repository the metric is below that repository's size alone. So the panel shows that it ranks big changes high, which its definition predicts (it counts removed lines). The panel does not show that it says more than size.
+- **`reviews_given@1`: cannot tell yet.** It has 49 scored labels, one short of the bar's 50, and its AUC of 0.55 (0.40–0.71) spans chance. The raters give 0.52 to 0.61. 16 of the 65 recent changes labelled meaningful or routine are no pull request of the GitHub data (flask's 10: 8 small commits and 2 merges of its `stable` branch, pushed to the branch; ripgrep's 5 release commits; and cli's 1, a security advisory's "Merge commit from fork", which GitHub's API does not list), so the metric does not score them.
 
-No metric loses "beta" on this ([ADR 0014](adr/0014-labels-are-evidence-not-the-gate.md)). The same numbers from a lead would still not justify it: `simplifying@1` would clear the AUC bar but not the size baseline.
+**Beyond size.** An AUC beside size alone cannot say whether a metric adds anything once size is known, so the per-change scores (`validate --scores` on the pooled majority labels) were analysed outside stillhere for the two metrics with enough labels. Within label's size strata (small, medium and large), `durable@1`'s AUC is 0.38, 0.55 and 0.28 (25, 31 and 20 changes), and 0.48 (0.35–0.61) over the 390 pairs of a meaningful and a routine change of one stratum; `simplifying@1`'s is 0.90, 0.55 and 0.54 (30, 23 and 12 changes; the small stratum holds one meaningful change), and 0.60 (0.43–0.78) over 188 such pairs. A logistic regression of meaningful against routine on log(1 + size) gains nothing from either score: `durable@1`'s coefficient is −0.47 (95% −2.02 to 1.08; likelihood-ratio χ² 0.36, p 0.55), and `simplifying@1`'s, on log(1 + removed `prod` lines), −0.13 (−0.81 to 0.54; χ² 0.15, p 0.70; on the raw count, p 0.94), while log size alone has a coefficient of 0.88 (SE 0.22) and 0.84 (SE 0.21) in the two samples. So on these labels neither metric says anything about which changes mattered beyond their size. That is evidence about these 76 and 65 changes, not a new definition: no metric is changed on the sample that tests it, as no rubric example was chosen after a metric was scored.
+
+No metric loses "beta" on this ([ADR 0014](adr/0014-labels-are-evidence-not-the-gate.md)). The same numbers from a lead would still not justify it: `simplifying@1` would clear the AUC bar but not size alone.
 
 What could make this result wrong, beyond the limits above:
 
 - **One vendor.** The three raters are three models of one vendor, so their alpha overstates what independent people would reach. flask's 1.000 on 29 changes is the extreme case.
-- **Raters see size.** The row gives the line counts and the patch has its length, so part of the size baseline may be the raters reading size. Then size is a harder bar to beat than it would be with labels made without it. A lead sees the same evidence.
+- **Raters see size.** The row gives the line counts and the patch has its length, so part of size alone's AUC may be the raters reading size. Then size is a harder bar to beat than it would be with labels made without it. A lead sees the same evidence.
 - **Departures from the protocol.** Each rater labelled a whole sheet in one session and ran the evidence script itself, instead of answering one prompt per row, so it saw the sheet's other rows. `claude-sonnet-5-5` read the patches in batches, with lines cut at 150 to 220 characters.
-- **Evidence gaps.** Four of ripgrep's rebase-merged changes showed the patch of one of their landings only; the worst showed 130 of 894 lines. The blinding leaked:
-  - 31 of cli's 38 commit subjects are "Merge pull request #N from <account>/<branch>";
-  - 16 rows (6 of cli's, 10 of vite's) carry identity trailers such as `Signed-off-by` and `Co-authored-by`;
-  - 6 ripgrep patches show a Cargo.toml `authors` line.
-- **The GitHub data is about 27 hours newer than `--now`.** A review given in those hours counts for `reviews_given@1`. The sync's history also starts about 27 hours after the scan's, so two ripgrep changes at the old end of `durable@1`'s window have no pull request in the data, and their sheet title is the commit subject.
-- **Small n.** Per repository, n is 3 to 22. Those intervals are 0.4 to 0.9 wide, and no repository row says much alone. flask's `reviews_given@1` row (n 3) says nothing.
+- **Evidence gaps.** The raters read each change through `git show` of its first landing, not through `label`'s card, and that leaked where the card does not:
+  - four of ripgrep's rebase-merged changes showed the patch of their newest landing only; the worst, 16 landings, showed 130 of 894 lines (`label`'s `d` now shows the whole change);
+  - 31 of cli's 38 commit subjects are "Merge pull request #N from <account>/<branch>", whose login the card removes;
+  - 16 rows (6 of cli's, 10 of vite's) carry identity trailers such as `Signed-off-by` and `Co-authored-by` in their message body, which the card never shows;
+  - 6 ripgrep patches show a Cargo.toml `authors` line, which a patch cannot hide.
+- **The GitHub data is about 27 hours newer than `--now`.** A review given in those hours counts for `reviews_given@1`. The sync's history also starts about 27 hours after the scan's, so two ripgrep changes at the old end of `durable@1`'s window, which landed in those hours, have no pull request in the data, and their sheet title is the commit subject.
+- **Small n.** Per repository, n is 3 to 22. Those intervals are 0.25 to 0.72 wide, and no repository row says much alone. flask's `reviews_given@1` row (n 3) says nothing.
 
-The sheets, the raters' labels and the scripts that aggregated them stay outside the repository ([ADR 0014](adr/0014-labels-are-evidence-not-the-gate.md)). The sample is reproducible from the run, `--n`, `--seed` and `--now` above.
+The sheets, the raters' labels and the scripts that aggregated and analysed them stay outside the repository ([ADR 0014](adr/0014-labels-are-evidence-not-the-gate.md)). The sample is reproducible from the run, `--n`, `--seed` and `--now` above; a sheet written by a later stillhere lists each landing's subject for the four rebase-merged rows, which the panel's sheet did not.
 
 ## Limits
 
@@ -219,4 +224,4 @@ The sheets, the raters' labels and the scripts that aggregated them stay outside
 - **A change is the grain of the labels, not of every metric.** `reviews_given@1` ranks reviewers by the pull requests they reviewed; its validity check asks whether review goes to the changes that matter, which is the property its ranks reward.
 - **What the card cannot hide.** A subject or a patch can name its author; a lead who recognises the code may know who wrote it.
 - **Missing GitHub data is never read as no review.** `reviews_given@1` scores only the pull requests the run's GitHub data holds, so a sync that missed pull requests leaves their changes unscored (fewer labels for its bar, which the caveats count), not scored 0. What it cannot see is a review missing from a pull request the data holds; and a repository whose changes are mostly direct pushes gives it few changes to score.
-- **Rebase merges.** A pull request merged by rebase is one change when its landings share the merge's committer second ([metrics.md](metrics.md#who_knows1-per-path)); the diff `d` shows is its last landing's.
+- **Rebase merges.** A pull request merged by rebase is one change when its landings share the merge's committer second ([metrics.md](metrics.md#who_knows1-per-path)); its card lists each of them, and `d` shows the whole change, from the oldest one's parent.

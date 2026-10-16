@@ -333,7 +333,10 @@ func (ls *labelSession) ask(ctx context.Context, card *report.LabelCard) (quit b
 		case 's':
 			value = "skip"
 		case 'd':
-			diff, err := app.Diff(ctx, ls.d, app.DiffRequest{RunID: ls.req.RunID, Repo: card.Change.RepoKey, Change: card.Change.Change})
+			// The whole change: a rebase merge's several landings from the
+			// oldest one's parent, not its newest landing alone.
+			diff, err := app.Diff(ctx, ls.d, app.DiffRequest{RunID: ls.req.RunID, Repo: card.Change.RepoKey, Change: card.Change.Change,
+				Earlier: card.Change.Landings[min(1, len(card.Change.Landings)):]})
 			if err != nil {
 				out.say("  no diff: %s\n", terminalSafe(ls.e.userMessage(err, false)))
 				continue

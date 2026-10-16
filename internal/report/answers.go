@@ -572,14 +572,20 @@ func (m *Me) writeMarkdown(p *printer) {
 // Validation.
 
 func aucRow(a MetricAUC) []string {
-	auc := "—"
-	if a.AUC != nil {
-		auc = fmt.Sprintf("%.2f", *a.AUC)
-		if a.Lo != nil && a.Hi != nil {
-			auc += fmt.Sprintf(" (%.2f–%.2f)", *a.Lo, *a.Hi)
-		}
+	return []string{a.Metric, aucText(a.AUC, a.Lo, a.Hi), grouped(a.N), grouped(a.Meaningful), grouped(a.Routine),
+		aucText(a.SizeAUC, a.SizeLo, a.SizeHi), a.status()}
+}
+
+// aucText is an AUC with its interval, "0.42 (0.30–0.55)", or "—".
+func aucText(auc, lo, hi *float64) string {
+	if auc == nil {
+		return "—"
 	}
-	return []string{a.Metric, auc, grouped(a.N), grouped(a.Meaningful), grouped(a.Routine), a.status()}
+	s := fmt.Sprintf("%.2f", *auc)
+	if lo != nil && hi != nil {
+		s += fmt.Sprintf(" (%.2f–%.2f)", *lo, *hi)
+	}
+	return s
 }
 
 // status says whether the labels clear the bar, and when not, what is
@@ -614,13 +620,14 @@ func (v *Validation) summary() string {
 func (v *Validation) writeText(p *printer) {
 	p.line("validate · " + provenanceText(v.Provenance))
 	p.wrapped("  ", "  ", v.summary())
-	p.wrapped("  ", "  ", "AUC: the chance a meaningful change scores above a routine one; 0.5 is chance; in parentheses, its 95% interval")
+	p.wrapped("  ", "  ", "AUC: the chance a meaningful change scores above a routine one; 0.5 is chance; in parentheses, its 95% interval. "+
+		"Size alone: the same for change size (lines added and removed), over the same changes")
 	p.blank()
 	if len(v.Metrics) == 0 {
 		p.line("  no ranked metric scored a labelled change")
 	} else {
 		cols := []column{{head: "metric"}, {head: "AUC", right: true}, {head: "n", right: true},
-			{head: "meaningful", right: true}, {head: "routine", right: true}, {head: "status"}}
+			{head: "meaningful", right: true}, {head: "routine", right: true}, {head: "size alone", right: true}, {head: "status"}}
 		var rows [][]string
 		for _, a := range v.Metrics {
 			rows = append(rows, aucRow(a))
@@ -637,13 +644,14 @@ func (v *Validation) writeMarkdown(p *printer) {
 	p.blank()
 	p.line("- " + provenanceText(v.Provenance))
 	p.line("- " + v.summary())
-	p.line("- AUC: the chance a meaningful change scores above a routine one; 0.5 is chance. In parentheses, its 95% bootstrap interval.")
+	p.line("- AUC: the chance a meaningful change scores above a routine one; 0.5 is chance. In parentheses, its 95% bootstrap interval. " +
+		"Size alone: the same for change size (lines added and removed), over the same changes.")
 	p.blank()
 	if len(v.Metrics) == 0 {
 		p.line("No ranked metric scored a labelled change.")
 	} else {
 		cols := []column{{head: "Metric"}, {head: "AUC", right: true}, {head: "n", right: true},
-			{head: "Meaningful", right: true}, {head: "Routine", right: true}, {head: "Status"}}
+			{head: "Meaningful", right: true}, {head: "Routine", right: true}, {head: "Size alone", right: true}, {head: "Status"}}
 		var rows [][]string
 		for _, a := range v.Metrics {
 			row := aucRow(a)

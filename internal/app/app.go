@@ -155,4 +155,7 @@ type ValidateRequest struct {
 	Labels     []byte // the labels CSV (change id, label, labeller), read by the command line
 	LabelsName string // where Labels came from, for messages
 	Labeller   string // "": every labeller's rows, a change counting once by its majority label; else that labeller's alone
+	// Scores asks for each labelled change's scores (Validation.Scores): its
+	// label, its size, and each ranked metric's measure of it.
+	Scores bool
 }

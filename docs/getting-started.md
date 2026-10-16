@@ -165,7 +165,7 @@ How to read it:
 - A rank is an interval, from a bootstrap over each person's changes. `1–3` three times means the three cannot be told apart: no one here is first.
 - Only people with at least 10 changes in the metric's window are ranked; everyone else is listed and counted, not ranked. On most repositories that is a handful of people, which is the honest answer: fewer changes than that give intervals too wide to mean anything.
 - `durable@1` is the share of a person's added lines, in changes 90 to 365 days old, that blame still attributes to them. `simplifying@1` is lines removed that stayed removed, in the last 90 days.
-- Every ranked metric is **beta** until it is checked against a lead's labels (`stillhere validate`), and the caveat says so.
+- Every ranked metric is **beta** until it is checked against a lead's labels (`stillhere validate`), and the caveat says so. It also gives a reference result from a model panel: three AI models that labelled public changes blind, which is evidence, not a lead's judgment. On those labels `durable@1` does not separate meaningful from routine changes, and `simplifying@1` separates no better than change size alone ([validation.md](validation.md#reference-results)).
 
 ## 7. Trace any number to its changes
 

@@ -361,11 +361,13 @@ func TestMCPTools(t *testing.T) {
 		if len(c.Changes) != 3 {
 			t.Fatalf("sibling changes since 2026-09-01: %d, want W9, W8 and S1", len(c.Changes))
 		}
-		// Each ranked metric's note holds its own model-panel reference, so
-		// the two metrics no longer share one caveat.
+		// Each ranked metric's note holds its own model-panel reference, a
+		// verdict with what a model panel is, so the two metrics no longer
+		// share one caveat.
 		if !hasCaveat(c.Caveats, "validity", "Validity of durable@1: Beta") ||
 			!hasCaveat(c.Caveats, "validity", "Validity of simplifying@1: Beta") ||
-			!hasCaveat(c.Caveats, "validity", "model-panel labels") {
+			!hasCaveat(c.Caveats, "validity", "Reference (model panel, 4 public repositories, 2026-10-15): does not separate") ||
+			!hasCaveat(c.Caveats, "validity", "The model panel is three AI models that labelled public changes blind") {
 			t.Errorf("changes carries %v, want the validity of each of the two metrics whose clusters it shows, with its reference", c.Caveats)
 		}
 		s1 := c.Changes[2]

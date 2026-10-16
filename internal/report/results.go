@@ -228,7 +228,30 @@ type Validation struct {
 	Noise      int         `json:"noise"`     // read and left out of every AUC
 	Unmatched  int         `json:"unmatched"` // rows that name no change of the run (a landing or a pull request), or several
 	Metrics    []MetricAUC `json:"metrics"`   // sorted by metric id
-	Caveats    []Caveat    `json:"caveats"`
+	// Scores is each labelled change as validate scored it (--scores), in
+	// the run's order of changes, so anyone can recompute an AUC or set it
+	// against the change's size; absent unless asked for.
+	Scores  []ChangeScore `json:"scores,omitzero"`
+	Caveats []Caveat      `json:"caveats"`
+}
+
+// ChangeScore is one labelled change of a Validation (--scores): the label
+// it counts by, its size as label's strata measure it, and each ranked
+// metric's measure of it (metrics.Scorer), which is what that metric's AUC
+// is computed from.
+type ChangeScore struct {
+	Change  string     `json:"change"` // the full SHA of its first landing, as a labels row names it
+	Repo    string     `json:"repo"`   // repository name
+	Pull    *LabelPull `json:"pull"`   // null for a landing no pull request of the run's GitHub data landed
+	Landed  time.Time  `json:"landed"`
+	Label   string     `json:"label"` // meaningful, routine or noise: the one it counts by, over every labeller
+	Size    string     `json:"size"`  // LabelSizes, by Added + Removed
+	Added   int        `json:"added"` // numstat lines of its landings' own diffs on paths with a role
+	Removed int        `json:"removed"`
+	// Scores holds every ranked metric of the Validation by id: its
+	// measure of the change, or null when it does not score the change.
+	// Noise is in no AUC, but its scores are here too.
+	Scores map[string]*float64 `json:"scores"`
 }
 
 // The bar a ranked metric's labels clear (product.md, ADR 0014): an AUC of
@@ -247,6 +270,13 @@ type MetricAUC struct {
 	N          int      `json:"n"` // distinct labelled changes the metric scored, each at its own grain (metrics.Scorer)
 	Meaningful int      `json:"meaningful"`
 	Routine    int      `json:"routine"`
+	// SizeAUC is the AUC of change size alone (the lines added and removed
+	// on paths with a role) over the very changes the metric scored, with
+	// its interval by the same bootstrap: the bar a metric must beat to say
+	// more than "big changes matter". nil with AUC.
+	SizeAUC *float64 `json:"size_auc"`
+	SizeLo  *float64 `json:"size_lo"`
+	SizeHi  *float64 `json:"size_hi"`
 	// Beta is true when these labels do not clear the bar (AUC 0.7 on 50
 	// scored labels). False says they clear it, which is evidence about the
 	// labelled code: the beta mark in stillhere's output changes only with

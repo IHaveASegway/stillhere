@@ -24,23 +24,34 @@ import (
 // labels clear the bar (docs/metrics.md#validity-checks, ADR 0014): the rank
 // tables, explain and the MCP server print the note wherever the metric's
 // values are. Each metric's note adds its own model-panel reference beside
-// the mark, never in its place, so the notes differ and each ranked metric
-// gets its own caveat.
+// the mark, never in its place (panelReference), so the notes differ and
+// each ranked metric gets its own caveat.
 const betaValidity = "Beta: not yet checked against a lead's labels (stillhere label, then stillhere validate: " +
 	"AUC >= 0.7 on at least 50 scored labels; docs/validation.md). "
 
-// The model panel's reference results (docs/validation.md#reference-results):
-// validate's AUC of each ranked metric on the panel's majority labels, pooled
-// over four public repositories, with its interval, n and the AUC of plain
-// size on the same changes. They are docs/metrics.md's Validity lines, word
-// for word; a new panel run changes the three together.
+// panelReference is a ranked metric's reference result, the model panel's
+// (docs/validation.md#reference-results), as a verdict a reader need not
+// interpret: one of the three of docs/metrics.md's template (does not
+// separate; separates, but no better than change size; cannot tell yet),
+// then validate's numbers on the panel's pooled majority labels, and what a
+// model panel is, in plain words, since the term alone is jargon. The
+// metric's Validity line in docs/metrics.md holds the same words, which
+// TestChangeOracles checks; a new panel run changes them together.
+func panelReference(verdict string) string {
+	return "Reference (model panel, 4 public repositories, 2026-10-15): " + verdict + ". " +
+		"The model panel is three AI models that labelled public changes blind: evidence, not a lead's judgment."
+}
+
+// The panel's verdicts and numbers (validate --labels on its majority
+// labels, pooled; change size alone is the AUC of the lines added and
+// removed, over the same changes).
 const (
-	durableReference = "Reference: AUC 0.42 (0.30–0.55) on 76 model-panel labels " +
-		"(2026-10-15; 4 public repositories; size baseline 0.82), not yet a lead's labels."
-	simplifyingReference = "Reference: AUC 0.76 (0.63–0.88) on 65 model-panel labels " +
-		"(2026-10-15; 4 public repositories; size baseline 0.87), not yet a lead's labels."
-	reviewsReference = "Reference: AUC 0.55 (0.40–0.71) on 49 model-panel labels " +
-		"(2026-10-15; 4 public repositories; size baseline 0.89), not yet a lead's labels."
+	durableReference = "does not separate meaningful from routine changes: AUC 0.42 (0.30–0.55) on 76, " +
+		"while change size alone gives 0.82"
+	simplifyingReference = "separates, but no better than change size: AUC 0.76 (0.63–0.88) on 65, " +
+		"while change size alone gives 0.87"
+	reviewsReference = "cannot tell yet: n 49 is under 50, and AUC 0.55 (0.40–0.71) spans chance, " +
+		"while change size alone gives 0.89"
 )
 
 // Change is one change of a run: a merged pull request of the run's GitHub
