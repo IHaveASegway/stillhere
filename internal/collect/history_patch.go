@@ -52,28 +52,11 @@ import (
 // earlier author. The diff is pinned like numstat's (attrSource,
 // historyDiffArgs), so the two queries read every file the same way.
 func (h *historyRun) readPatches(ctx context.Context) error {
-	var want []string
-	for _, landing := range h.landings {
-		for _, sha := range h.maps[landing] {
-			c := h.commits[sha].commit
-			switch {
-			case len(c.Parents) > 1: // a merge: no patch of its own in v1
-			case h.repo.Boundary(&c): // the clone's boundary
-			default:
-				want = append(want, sha)
-			}
-		}
-	}
+	want := h.ownPatchCommits()
 	if len(want) == 0 {
 		return nil
 	}
-	slices.Sort(want)
-
-	args := []string{attrSource(h.repo.Head), "log", "--no-walk", "--stdin", "--diff-merges=off", "-p", "-U0", "-w"}
-	args = append(args, historyDiffArgs()...)
-	args = append(args, "--no-color", "--no-ext-diff", "--default-prefix", "--pretty=format:%x00%H", "--")
-
-	cmd := domain.GitCmd{Dir: h.repo.Path, Args: args, Stdin: historyStdin(want)}
+	cmd := domain.GitCmd{Dir: h.repo.Path, Args: h.ownPatchArgs("%x00%H"), Stdin: historyStdin(want)}
 	err := h.git.Stream(ctx, cmd, func(r io.Reader) error {
 		return historyParsePatch(r, func(commit, path string, added, removed int) error {
 			fc, ok := h.changes[historyChangeKey{commit: commit, path: path}]
@@ -92,6 +75,36 @@ func (h *historyRun) readPatches(ctx context.Context) error {
 		return fmt.Errorf("reading own patches: %w", err)
 	}
 	return nil
+}
+
+// ownPatchCommits returns, sorted, the commits that have a patch of their
+// own: every commit of the window's landings' maps, the landings
+// included, but merges, which have none in v1, and a shallow clone's
+// boundary, whose diff against the empty tree is its whole tree.
+func (h *historyRun) ownPatchCommits() []string {
+	var want []string
+	for _, landing := range h.landings {
+		for _, sha := range h.maps[landing] {
+			c := h.commits[sha].commit
+			switch {
+			case len(c.Parents) > 1: // a merge: no patch of its own in v1
+			case h.repo.Boundary(&c): // the clone's boundary
+			default:
+				want = append(want, sha)
+			}
+		}
+	}
+	slices.Sort(want)
+	return want
+}
+
+// ownPatchArgs is the own-patch query, its commits read from stdin, with
+// format as each commit's header: the query readPatches counts lines in
+// and readPatchIDs fingerprints, so both read one diff of each commit.
+func (h *historyRun) ownPatchArgs(format string) []string {
+	args := []string{attrSource(h.repo.Head), "log", "--no-walk", "--stdin", "--diff-merges=off", "-p", "-U0", "-w"}
+	args = append(args, historyDiffArgs()...)
+	return append(args, "--no-color", "--no-ext-diff", "--default-prefix", "--pretty=format:"+format, "--")
 }
 
 // historyParsePatch reads the output of the own-patch query and calls fn

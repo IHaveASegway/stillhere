@@ -99,6 +99,14 @@ type Commit struct {
 	CommitTime time.Time
 	CoAuthors  []Person // Co-authored-by trailers, canonicalised with git check-mailmap, in trailer order (credit reads the first human)
 	Subject    string   // local only; never sent to an AI
+	// PatchID is git patch-id --stable of the commit's own -U0 -w patch
+	// against its first parent: what a cherry-pick or a backport keeps, so
+	// a commit with the patch of one an earlier landing holds is a copy
+	// (docs/metrics.md#change-facts-shared-by-durable1-and-simplifying1).
+	// "" for a merge, a shallow clone's boundary, a commit whose patch is
+	// empty (whitespace only, or a mode change) and a partial clone's, and
+	// in a run stored before it was collected.
+	PatchID string
 }
 
 // Landing is a first-parent commit of the default branch, with the commits

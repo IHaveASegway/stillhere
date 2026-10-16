@@ -410,14 +410,19 @@ func reviewsJoin(fs *domain.FactSet) map[string][]string {
 // the repositories and reads the pull requests once, not once per
 // repository.
 type reviewsIndex struct {
-	who     *identity.Directory
-	pulls   []domain.PullRequest             // every pull request of the GitHub data, FactSet.Forge's
-	join    map[string][]string              // ForgeRepo.ID → Repo.Key of the view's repositories it is (reviewsJoin)
-	known   map[string]bool                  // Repo.Key → the run had GitHub data for it: a page or a finished sync
-	asOf    map[string]time.Time             // Repo.Key → its GitHub data's as-of (asOfMark): a pull request merged since may be missing
-	merged  map[string][]*domain.PullRequest // Repo.Key → the merged pull requests of its forge repositories, in FactSet order
-	claimed map[string]bool                  // the merge commit of every merged pull request: the landing that pull request lands
-	facts   map[string]*domain.RepoFacts     // Repo.Key → its facts, whose commits name each landing's first parent
+	who    *identity.Directory
+	pulls  []domain.PullRequest             // every pull request of the GitHub data, FactSet.Forge's
+	join   map[string][]string              // ForgeRepo.ID → Repo.Key of the view's repositories it is (reviewsJoin)
+	known  map[string]bool                  // Repo.Key → the run had GitHub data for it: a page or a finished sync
+	asOf   map[string]time.Time             // Repo.Key → its GitHub data's as-of (asOfMark): a pull request merged since may be missing
+	merged map[string][]*domain.PullRequest // Repo.Key → the merged pull requests of its forge repositories, in FactSet order
+	// numbered is every pull request of a repository's forge repositories,
+	// merged or not, by number: the one a landing's subject names, the
+	// first the data lists (review_coverage@1's unmatched and
+	// named_elsewhere).
+	numbered map[string]map[int]*domain.PullRequest
+	claimed  map[string]bool              // the merge commit of every merged pull request: the landing that pull request lands
+	facts    map[string]*domain.RepoFacts // Repo.Key → its facts, whose commits name each landing's first parent
 }
 
 // reviews indexes the GitHub data of the view's repositories: those the
@@ -434,7 +439,7 @@ func (v *view) reviews() *reviewsIndex {
 	}
 	x := &reviewsIndex{who: v.who, pulls: v.facts.Forge.PullRequests, join: map[string][]string{}, known: map[string]bool{},
 		asOf: map[string]time.Time{}, merged: map[string][]*domain.PullRequest{}, claimed: map[string]bool{},
-		facts: map[string]*domain.RepoFacts{}}
+		numbered: map[string]map[int]*domain.PullRequest{}, facts: map[string]*domain.RepoFacts{}}
 	for id, keys := range reviewsJoin(v.facts) {
 		if keys = slices.DeleteFunc(slices.Clone(keys), func(k string) bool { return !in[k] }); len(keys) > 0 {
 			x.join[id] = keys
@@ -455,6 +460,14 @@ func (v *view) reviews() *reviewsIndex {
 	}
 	for i := range x.pulls {
 		p := &x.pulls[i]
+		for _, key := range x.join[p.Repo] {
+			if x.numbered[key] == nil {
+				x.numbered[key] = map[int]*domain.PullRequest{}
+			}
+			if x.numbered[key][p.Number] == nil {
+				x.numbered[key][p.Number] = p
+			}
+		}
 		if p.State != domain.PullMerged || p.MergeCommit.SHA == "" {
 			continue
 		}

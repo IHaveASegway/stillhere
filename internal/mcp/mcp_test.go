@@ -220,7 +220,7 @@ func TestMCPTools(t *testing.T) {
 			t.Fatalf("platform durable ranks %+v, want one table with one ranked person", ranks.Ranks)
 		}
 		lena := ranks.Ranks[0].Ranked[0]
-		if lena.Name != "Lena Lead" || lena.RankLo != 1 || lena.RankHi != 1 || lena.N != 10 || !near(lena.Estimate, 26.0/30) {
+		if lena.Name != "Lena Lead" || lena.RankLo == nil || *lena.RankLo != 1 || *lena.RankHi != 1 || lena.N != 10 || !near(lena.Estimate, 26.0/30) {
 			t.Errorf("platform durable@1 rank %+v, want Lena Lead 1-1, 26/30, n 10", lena)
 		}
 		if lena.Email != pseudonym("lena@example.com") {
@@ -267,7 +267,7 @@ func TestMCPTools(t *testing.T) {
 				durable = &p.Ranks[i]
 			}
 		}
-		if durable == nil || !durable.Eligible || durable.RankLo != 1 || durable.RankHi != 1 || durable.N != 10 ||
+		if durable == nil || !durable.Eligible || durable.RankLo == nil || *durable.RankLo != 1 || *durable.RankHi != 1 || durable.N != 10 ||
 			!near(durable.Estimate, 26.0/30) {
 			t.Errorf("Lena's durable@1 rank %+v, want eligible at 1-1, 26/30, n 10", durable)
 		}
@@ -1383,7 +1383,7 @@ func TestMCPTools(t *testing.T) {
 		decode(t, ask(t, "highlights", map[string]any{"period": "quarter"}), &h)
 		i := slices.IndexFunc(h.TopTier, func(tt app.TopTier) bool { return tt.Metric == "simplifying@1" })
 		if i < 0 || h.TopTier[i].Of != 2 || h.TopTier[i].PeopleTotal != 1 || len(h.TopTier[i].People) != 1 ||
-			h.TopTier[i].People[0].Name != "Ann Apart" || h.TopTier[i].People[0].RankHi != 1 {
+			h.TopTier[i].People[0].Name != "Ann Apart" || h.TopTier[i].People[0].RankHi == nil || *h.TopTier[i].People[0].RankHi != 1 {
 			t.Errorf("highlights' simplifying@1 tiers %+v, want Ann Apart named, 1-1 of 2", h.TopTier)
 		}
 		if hasCaveat(h.Caveats, "no-standout", "simplifying@1") {

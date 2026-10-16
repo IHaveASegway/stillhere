@@ -148,7 +148,10 @@ func (s *server) addTools(srv *sdk.Server) {
 		s.changes)
 	tool(s, srv, "explain", "The facts behind a number",
 		"The facts behind one number: a metric's values for a subject in every scope it was computed in, and for a ranked "+
-			"metric about a person, each change it counted with its contribution, so a number can be traced to its commits. "+
+			"metric about a person, each change it counted with its contribution, so a number can be traced to its commits; "+
+			"for review_coverage about a repository or a group, each change of its window with whether someone else "+
+			"reviewed it, or why it was left out (coverage, the unreviewed first); for landed, its landings, over days days "+
+			"when set. "+
 			"metric is an id such as durable@1, or a bare name for the latest version (metrics lists them). subject_kind is "+
 			"person (default), repo, group or area; for an area, subject is the repository and path its top-level directory. "+
 			"A repository or a group may be passed as overview's scope_arg gives it (repo:NAME, group:NAME). "+
@@ -163,6 +166,7 @@ func (s *server) addTools(srv *sdk.Server) {
 			`"subject": {"type": "string", "description": "Who or what the number is about: a person's name or id, a repository, or a group (a name, or overview's scope_arg); empty for the user the server runs for."}`,
 			`"subject_kind": {"type": "string", "enum": ["person", "repo", "group", "area"], "description": "What subject names; person when empty."}`,
 			`"path": {"type": "string", "description": "For subject_kind area: the repository's top-level directory, such as src."}`,
+			`"days": {"type": "integer", "minimum": 1, "maximum": 36500, "description": "landed@1's and landed@2's window in days, for the values and the landings listed alike: 365 traces a still-here table's landings_365d. Default: the run's week. Other metrics read their own window."}`,
 			propFormat, propLimit, propCursor),
 		s.explain)
 	tool(s, srv, "highlights", "Highlights for recognition",
@@ -504,6 +508,7 @@ type explainIn struct {
 	Subject     string `json:"subject"`
 	SubjectKind string `json:"subject_kind"`
 	Path        string `json:"path"`
+	Days        int    `json:"days"`
 	common
 }
 
@@ -578,7 +583,7 @@ func (s *server) explain(ctx context.Context, in explainIn) *sdk.CallToolResult 
 		if err != nil {
 			return nil, err
 		}
-		e, err := app.Explain(ctx, d, app.ExplainRequest{RunID: c.run(), Metric: id, Subject: subject})
+		e, err := app.Explain(ctx, d, app.ExplainRequest{RunID: c.run(), Metric: id, Subject: subject, Days: in.Days})
 		switch {
 		case errors.Is(err, domain.ErrNotFound) && who != "":
 			return nil, notFoundf("%q holds no value in run %d: none of their changes left a surviving prod line or "+

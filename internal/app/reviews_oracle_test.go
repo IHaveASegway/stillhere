@@ -46,6 +46,7 @@ func reviewAt(month time.Month, day, hour int) time.Time {
 // leaves as it was; and on the merge-methods guard, how pull requests land.
 func reviewOracles(t *testing.T) {
 	t.Run("merge methods", func(t *testing.T) { t.Parallel(); reviewMergeMethods(t) })
+	t.Run("merge back", func(t *testing.T) { t.Parallel(); reviewMergeBack(t) })
 	repo := fixture.Main(t)
 	setOrigin(t, repo, reviewRepo.Key)
 	commits := reviewCommits(t, repo)
@@ -236,11 +237,12 @@ func reviewMergeMethods(t *testing.T) {
 	} {
 		reviewCheckReviewers(t, "SPEC merge methods, who_knows@1, "+c.path, s.whoKnows(t, c.path), r.Key, c.want)
 	}
-	// review_coverage@1: B0 landed with no pull request; R1 and R2 are #1's,
-	// S1 #2's and S2 #3's, each approved before it merged; A1 is #4's,
-	// which the Copilot coding agent opened and wrote for Rob, so it is
-	// Rob's landing, and his approval is his own.
-	want := reviewCoverageRow{Num: 4, Den: 6, Via: 5, Direct: 1, ApprovedOnly: 4, Repos: 1}
+	// review_coverage@1 counts changes: B0 landed with no pull request; #1
+	// is one change of two landings, R1 and R2, S1 is #2's and S2 #3's,
+	// each approved before it merged; A1 is #4's, which the Copilot coding
+	// agent opened and wrote for Rob, so it is Rob's change, and his
+	// approval is his own.
+	want := reviewCoverageRow{Num: 3, Den: 5, Via: 4, Direct: 1, ApprovedOnly: 3, Repos: 1}
 	reviewCheckCoverage(t, "SPEC merge methods, review_coverage@1", s,
 		map[string]reviewCoverageRow{"repo:" + r.Key: want}, map[string]reviewCoverageRow{"all:": want})
 
@@ -250,7 +252,7 @@ func reviewMergeMethods(t *testing.T) {
 	holed := scan(t, "", nil, scanRanked(repo), func(st *sqlite.Store) {
 		reviewSeed(t, st, reviewMergesRepo, slices.Delete(slices.Clone(pulls), 2, 3), reviewAt(time.October, 3, 12))
 	})
-	want = reviewCoverageRow{Num: 3, Den: 5, Via: 4, Direct: 1, ApprovedOnly: 3, Unmatched: 1, Repos: 1}
+	want = reviewCoverageRow{Num: 2, Den: 4, Via: 3, Direct: 1, ApprovedOnly: 2, Unmatched: 1, Repos: 1}
 	reviewCheckCoverage(t, "SPEC merge methods, review_coverage@1 with #3 missing", holed,
 		map[string]reviewCoverageRow{"repo:" + r.Key: want}, map[string]reviewCoverageRow{"all:": want})
 
@@ -260,15 +262,161 @@ func reviewMergeMethods(t *testing.T) {
 	stale := scan(t, "", nil, scanRanked(repo), func(st *sqlite.Store) {
 		reviewSeedAt(t, st, reviewMergesRepo, pulls[:1], reviewAt(time.October, 1, 12), reviewAt(time.October, 1, 18))
 	})
-	want = reviewCoverageRow{Num: 2, Den: 3, Via: 2, Direct: 1, ApprovedOnly: 2, AfterSync: 3, Repos: 1}
+	want = reviewCoverageRow{Num: 1, Den: 2, Via: 1, Direct: 1, ApprovedOnly: 1, AfterSync: 3, Repos: 1}
 	reviewCheckCoverage(t, "SPEC merge methods, review_coverage@1 synced before S1", stale,
 		map[string]reviewCoverageRow{"repo:" + r.Key: want}, map[string]reviewCoverageRow{"all:": want})
+}
+
+// reviewMergeBackRepo is the merge-back guard's forge repository.
+var reviewMergeBackRepo = domain.ForgeRepo{ID: "R_mergeback", Key: "https://git.example.test/acme/merge-back.git",
+	Owner: "acme", Name: "merge-back", DefaultBranch: "main"}
+
+// reviewMergeBack checks SPEC's merge-back guard (wave 10): a maintenance
+// branch merged back into main brings copies of main's fixes, which no
+// metric credits a second time, and pull requests merged into it, which
+// review_coverage@1 counts as changes of their own, while a merge that
+// brought nothing else is no change, and a cherry-pick onto main naming a
+// pull request merged into stable is left out without sync advice.
+func reviewMergeBack(t *testing.T) {
+	repo := fixture.MergeBack(t)
+	setOrigin(t, repo, reviewMergeBackRepo.Key)
+	at := reviewCommits(t, repo) // by committer time: every row has a day of its own
+	row := func(month time.Month, day int) string {
+		return at[rfc3339(time.Date(2026, month, day, 12, 0, 0, 0, time.UTC))]
+	}
+	s := scan(t, "", nil, scanRanked(repo), func(st *sqlite.Store) {
+		reviewSeed(t, st, reviewMergeBackRepo, reviewMergeBackPulls(row), reviewAt(time.September, 14, 12))
+	})
+	r := onlyRepo(t, s.model)
+	const table = "SPEC merge-back guard"
+
+	// The copies: K1 and K2, cherry-picks of C1 and C2 that M1 and M2
+	// bring back. Bea's C1 is her one durable@1 cluster; K1, to which blame
+	// gives none of guard.py's lines, is none.
+	checkDurable(t, s, r.Key, table+", durable@1", map[string]durableRow{
+		"ann@example.com": {"Ann Maint", 7, 10, 1, 0, false},
+		"bea@example.com": {"Bea Fix", 4, 4, 1, 0, false},
+		"dan@example.com": {"Dan Stable", 3, 3, 1, 0, false},
+	}, map[string]map[string]cluster{
+		"ann@example.com": {"2026-01-05T12:00:00Z": {7, 10}}, // B0
+		"bea@example.com": {"2026-01-12T12:00:00Z": {4, 4}},  // C1
+		"dan@example.com": {"2026-01-26T12:00:00Z": {3, 3}},  // M1, S1 alone
+	})
+	checkSimplifying(t, s, r.Key, table+", simplifying@1", map[string]simplifyingRow{
+		"bea@example.com": {"Bea Fix", 3, 0, 2, false, false},
+		"cal@example.com": {"Cal Release", 1, 0, 2, false, false},
+		"dan@example.com": {"Dan Stable", 0, 0, 2, false, false},
+	}, map[string]map[string]cluster{
+		"bea@example.com": {"2026-08-03T12:00:00Z": {3, 0}, "2026-09-14T12:00:00Z": {}}, // C2 and C8; K2 in M2 is a copy
+		"cal@example.com": {"2026-08-17T12:00:00Z": {}, "2026-09-08T12:00:00Z": {1, 0}}, // R1 in M2, C7
+		"dan@example.com": {"2026-08-17T12:00:00Z": {}, "2026-08-31T12:00:00Z": {}},     // P2 and P3 in M2, P5 in M3
+	})
+
+	// landed@2 over the year, as explain --days 365 reads it: the eight
+	// landings, ten commits credited, the two copies credited to no one.
+	year, err := app.Explain(t.Context(), s.read, app.ExplainRequest{RunID: s.run, Metric: landedV2,
+		Subject: domain.Subject{Kind: domain.SubjectRepo, Key: r.Key}, Days: 365})
+	if err != nil {
+		t.Fatalf("app.Explain(landed@2, repo, 365 days): %v", err)
+	}
+	if v, ok := repoValue(t, table+", landed@2 over 365 days", year, r.Key); ok &&
+		(v.Value != 8 || v.Detail["commits"] != 10 || v.Detail["copies"] != 2 || v.Detail["merged"] != 3) {
+		t.Errorf("%s: landed@2 over 365 days is %s, want 8 landings, commits 10, copies 2, merged 3", table, describe(v))
+	}
+	copies := map[string]int{}
+	for _, l := range year.Landings {
+		if l.Copies > 0 {
+			copies[l.Time.UTC().Format(time.RFC3339)] = l.Copies
+		}
+	}
+	sameRows(t, table+", landed@2's landings holding copies", copies,
+		map[string]int{"2026-01-26T12:00:00Z": 1, "2026-08-17T12:00:00Z": 1}) // M1 brings K1, M2 K2
+	bea, err := app.Explain(t.Context(), s.read, app.ExplainRequest{RunID: s.run, Metric: landedV2,
+		Person: "Bea Fix", Days: 365})
+	if err != nil {
+		t.Fatalf("app.Explain(landed@2, Bea Fix, 365 days): %v", err)
+	}
+	if got := len(bea.Landings); got != 3 {
+		t.Errorf("%s: explain landed@2 --person 'Bea Fix' --days 365 lists %d landings, want 3: C1, C2 and C8", table, got)
+	}
+
+	// surviving@1's landings_365d follows landed@2's credit, merges apart.
+	held := map[string][2]int{}
+	for _, h := range r.StillHere.Humans {
+		held[h.Email] = [2]int{h.Landings365d, h.Merged365d}
+	}
+	sameRows(t, table+", landings_365d and merged_365d", held, map[string][2]int{
+		"ann@example.com": {1, 3}, "bea@example.com": {3, 0}, "dan@example.com": {3, 0}, "cal@example.com": {2, 0},
+	})
+
+	// review_coverage@1 counts changes: #9, #4 (R1 is its own work; K2 a
+	// copy, #2 and #3 their own changes), #2, #3, #5 and #8; M3, #6, brought
+	// #5 alone, and C7 names #7, merged into stable.
+	want := reviewCoverageRow{Num: 4, Den: 6, Via: 3, ViaOther: 3, ApprovedOnly: 4, BranchMerges: 1, Elsewhere: 1, Repos: 1}
+	reviewCheckCoverage(t, table+", review_coverage@1", s, map[string]reviewCoverageRow{"repo:" + r.Key: want},
+		map[string]reviewCoverageRow{"all:": want})
+	e := s.explain(t, domain.MetricID{Name: "review_coverage", Version: 1}, domain.Subject{Kind: domain.SubjectRepo, Key: r.Key})
+	outcomes := map[string]string{}
+	for _, c := range e.Coverage {
+		name := shortSHA(c.Landing)
+		if c.Pull != nil {
+			name = "#" + strconv.Itoa(*c.Pull)
+		}
+		outcomes[name] = c.Outcome
+	}
+	sameRows(t, table+", explain review_coverage@1 --repo", outcomes, map[string]string{
+		"#9": "reviewed", "#4": "unreviewed", "#2": "reviewed", "#3": "unreviewed", "#5": "reviewed",
+		"#6": "branch_merge", shortSHA(row(time.September, 8)): "named_elsewhere", "#8": "reviewed",
+	})
+	if len(e.Coverage) > 0 && e.Coverage[0].Outcome != "unreviewed" {
+		t.Errorf("%s: explain lists %s first, want the changes no one else reviewed first", table, e.Coverage[0].Outcome)
+	}
+}
+
+// reviewMergeBackPulls is SPEC's replica of the merge-back guard, with the
+// merge commits found by the rows' committer days.
+func reviewMergeBackPulls(row func(time.Month, int) string) []domain.PullRequest {
+	commit := func(sha, login string) domain.ForgeCommit {
+		return domain.ForgeCommit{SHA: sha, AuthorEmail: login + "@example.com", AuthorLogin: login}
+	}
+	merged := func(n int, author, base string, month time.Month, day int, commits []domain.ForgeCommit,
+		reviewed bool) domain.PullRequest {
+		at := reviewAt(month, day, 12)
+		id := "PR_b" + strconv.Itoa(n)
+		p := domain.PullRequest{ID: id, Repo: reviewMergeBackRepo.ID, Number: n, Title: "b" + strconv.Itoa(n),
+			Author: domain.ForgeUser{Login: author}, State: domain.PullMerged, BaseBranch: base, Created: at.Add(-48 * time.Hour),
+			Updated: at, Closed: at, Merged: at, MergeCommit: commit(row(month, day), author), Commits: commits}
+		if reviewed {
+			p.Reviews = []domain.Review{{ID: id + "a", Author: domain.ForgeUser{Login: "eve"}, State: domain.ReviewApproved,
+				Submitted: at.Add(-time.Hour)}}
+		}
+		return p
+	}
+	squashed := func(c byte, login string) []domain.ForgeCommit { // written before the squash: no run holds it
+		return []domain.ForgeCommit{commit(strings.Repeat(string(c), 40), login)}
+	}
+	stable := []domain.ForgeCommit{commit(row(time.August, 5), "bea"), commit(row(time.August, 10), "dan"),
+		commit(row(time.August, 11), "dan"), commit(row(time.August, 12), "cal")}
+	return []domain.PullRequest{
+		merged(1, "bea", "main", time.January, 12, squashed('1', "bea"), true),
+		merged(2, "dan", "stable", time.August, 10, squashed('2', "dan"), true),
+		merged(3, "dan", "stable", time.August, 11, squashed('3', "dan"), false),
+		merged(4, "ann", "main", time.August, 17, stable, false),
+		merged(5, "dan", "stable", time.August, 24, squashed('5', "dan"), true),
+		merged(6, "ann", "main", time.August, 31, []domain.ForgeCommit{commit(row(time.August, 24), "dan")}, false),
+		merged(7, "cal", "stable", time.September, 7, squashed('7', "cal"), false),
+		merged(8, "bea", "main", time.September, 14, squashed('8', "bea"), true),
+		merged(9, "bea", "main", time.August, 3, squashed('9', "bea"), true),
+	}
 }
 
 // reviewCoverageRow is one review_coverage@1 value: Num and Den, and Detail
 // via_pull_request, direct, approved_no_comment, bot_landings, after_sync,
 // unmatched and repos.
-type reviewCoverageRow struct{ Num, Den, Via, Direct, ApprovedOnly, Bots, AfterSync, Unmatched, Repos int }
+type reviewCoverageRow struct {
+	Num, Den, Via, Direct, ApprovedOnly, Bots, AfterSync, Unmatched, Repos int
+	ViaOther, BranchMerges, Copies, Elsewhere                              int // via_other_branch, branch_merges, copies, named_elsewhere
+}
 
 // reviewCheckCoverage compares the run's review_coverage@1 values in its
 // one repository's scope and in scope all with SPEC's.
@@ -283,7 +431,8 @@ func reviewCheckCoverage(t *testing.T, oracle string, s *scanned, inRepo, inAll 
 			}
 			got[key] = reviewCoverageRow{int(v.Num), int(v.Den), int(v.Detail["via_pull_request"]), int(v.Detail["direct"]),
 				int(v.Detail["approved_no_comment"]), int(v.Detail["bot_landings"]), int(v.Detail["after_sync"]),
-				int(v.Detail["unmatched"]), int(v.Detail["repos"])}
+				int(v.Detail["unmatched"]), int(v.Detail["repos"]), int(v.Detail["via_other_branch"]),
+				int(v.Detail["branch_merges"]), int(v.Detail["copies"]), int(v.Detail["named_elsewhere"])}
 		}
 		return got
 	}
@@ -297,7 +446,7 @@ func reviewCheckCoverage(t *testing.T, oracle string, s *scanned, inRepo, inAll 
 			return reviewCoverageRow{}
 		}
 		return reviewCoverageRow{int(c.Num), int(c.Den), c.ViaPullRequest, c.Direct, c.ApprovedNoComment, c.BotLandings,
-			c.AfterSync, c.Unmatched, c.Repos}
+			c.AfterSync, c.Unmatched, c.Repos, c.ViaOtherBranch, c.BranchMerges, c.Copies, c.NamedElsewhere}
 	}
 	if got, want := shown(r.Card.ReviewCoverage), inRepo["repo:"+r.Key]; got != want {
 		t.Errorf("%s: the card's review coverage %+v, want %+v", oracle, got, want)

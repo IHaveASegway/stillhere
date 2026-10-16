@@ -485,6 +485,7 @@ func (b *builder) weekTable(scope domain.Scope) *WeekTable {
 	lines, prod := landedLinesOf(v)
 	t := &WeekTable{Total: &WeekTotal{
 		Landings: count(v.Value), Commits: count(v.Detail[detailCommits]), Merged: count(v.Detail[detailMerged]),
+		Copies:     count(v.Detail[detailCopies]),
 		LinesAdded: lines, ProdLinesAdded: prod, LinesUnknown: count(v.Detail[detailLinesUnknown]),
 	}}
 	for _, v := range b.ix.people(MetricLanded, scope) {
@@ -559,6 +560,7 @@ func (b *builder) stillHere(scope domain.Scope, blamed int) *StillHere {
 			LinesByRole:       linesByRole(v.Detail),
 			Repos:             count(v.Detail[detailRepos]),
 			Landings365d:      count(v.Detail[detailLandings365d]),
+			Merged365d:        count(v.Detail[detailMerged365d]),
 		}
 		if row.Bot {
 			t.Bots = append(t.Bots, row)
@@ -617,6 +619,10 @@ func (b *builder) reviewCoverage(scope domain.Scope) *ReviewCoverage {
 		BotLandings:       count(v.Detail[detailBotLandings]),
 		AfterSync:         count(v.Detail[detailAfterSync]),
 		Unmatched:         count(v.Detail[detailUnmatched]),
+		ViaOtherBranch:    count(v.Detail[detailViaOtherBranch]),
+		NamedElsewhere:    count(v.Detail[detailNamedElsewhere]),
+		BranchMerges:      count(v.Detail[detailBranchMerges]),
+		Copies:            count(v.Detail[detailCopies]),
 		Repos:             count(v.Detail[detailRepos]),
 	}
 }
@@ -711,6 +717,17 @@ func (b *builder) population(scope domain.Scope, members []*domain.RepoFacts, st
 	return p, true
 }
 
+// RankedRow is the row of an eligible person (ri.Eligible), the person as
+// sub names them, with their intervals; any other row leaves them null.
+func RankedRow(sub Subject, ri domain.RankInterval) RankRow {
+	r := RankRow{Email: sub.Key, Name: sub.Name, NameWithheld: sub.NameWithheld, Estimate: ri.Estimate, N: ri.N}
+	if ri.Eligible {
+		rankLo, rankHi, lo, hi := ri.RankLo, ri.RankHi, ri.Lo, ri.Hi
+		r.RankLo, r.RankHi, r.Lo, r.Hi = &rankLo, &rankHi, &lo, &hi
+	}
+	return r
+}
+
 // rankTable lays out one ranked metric in one scope.
 func (b *builder) rankTable(rs RankSet) RankTable {
 	t := RankTable{
@@ -739,19 +756,18 @@ func (b *builder) rankTable(rs RankSet) RankTable {
 		}
 		email := ri.Subject.Key
 		name, withheld := b.person(email)
-		row := RankRow{
-			Email: email, Name: name, NameWithheld: withheld,
-			RankLo: ri.RankLo, RankHi: ri.RankHi,
-			Estimate: ri.Estimate, Lo: ri.Lo, Hi: ri.Hi, N: ri.N, Beside: beside(email),
+		bot := b.bot(email)
+		if bot {
+			ri.Eligible = false // a bot is never ranked: its row has no interval
 		}
+		row := RankedRow(Subject{Key: email, Name: name, NameWithheld: withheld}, ri)
+		row.Beside = beside(email)
 		switch {
-		case b.bot(email):
-			row.RankLo, row.RankHi = 0, 0
+		case bot:
 			t.Bots = append(t.Bots, row)
 		case ri.Eligible:
 			t.Ranked = append(t.Ranked, row)
 		default:
-			row.RankLo, row.RankHi = 0, 0
 			t.BelowMin = append(t.BelowMin, row)
 		}
 	}
@@ -763,13 +779,13 @@ func (b *builder) rankTable(rs RankSet) RankTable {
 		if email := v.Subject.Key; b.bot(email) && !listed[email] && sameWindow(v.Window, rs.Window) {
 			name, withheld := b.person(email)
 			t.Bots = append(t.Bots, RankRow{Email: email, Name: name, NameWithheld: withheld,
-				Estimate: v.Value, Lo: v.Value, Hi: v.Value, N: v.N, Beside: beside(email)})
+				Estimate: v.Value, N: v.N, Beside: beside(email)})
 		}
 	}
 	slices.SortFunc(t.Ranked, func(x, y RankRow) int {
 		return cmp.Or(
-			cmp.Compare(x.RankLo, y.RankLo),
-			cmp.Compare(x.RankHi, y.RankHi),
+			cmp.Compare(*x.RankLo, *y.RankLo),
+			cmp.Compare(*x.RankHi, *y.RankHi),
 			cmp.Compare(y.Estimate, x.Estimate),
 			cmp.Compare(x.Email, y.Email),
 		)

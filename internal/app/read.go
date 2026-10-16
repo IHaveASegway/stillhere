@@ -423,29 +423,49 @@ func Explain(ctx context.Context, d Deps, r ExplainRequest) (*report.Explain, er
 		return nil, &domain.UsageError{Msg: fmt.Sprintf(
 			"%s about a person is shown only on their own page (ADR 0007): %s", def.ID, d.commands().OwnPage())}
 	}
-	if r.Person != "" {
-		r.Subject = domain.Subject{Kind: domain.SubjectPerson}
-		if report.OwnPageOnly(def.ID) {
-			return nil, &domain.UsageError{Msg: fmt.Sprintf(
-				"%s about a person is shown only on their own page (ADR 0007): %s", def.ID, d.commands().OwnPage())}
+	named := 0
+	for kind, name := range map[string]string{domain.SubjectPerson: r.Person, domain.SubjectRepo: r.Repo,
+		domain.SubjectGroup: r.Group, domain.SubjectArea: r.Area} {
+		if strings.TrimSpace(name) != "" {
+			r.Subject = domain.Subject{Kind: kind}
+			named++
 		}
+	}
+	if named > 1 {
+		return nil, &domain.UsageError{Msg: "explain answers about one subject: a person, a repository, a group or an area"}
+	}
+	if r.Person != "" && report.OwnPageOnly(def.ID) {
+		return nil, &domain.UsageError{Msg: fmt.Sprintf(
+			"%s about a person is shown only on their own page (ADR 0007): %s", def.ID, d.commands().OwnPage())}
 	}
 	if !slices.Contains(def.Subjects, r.Subject.Kind) {
 		// No run holds an answer, so none is read.
 		return nil, explainKindError(d.commands(), def, r.Subject.Kind)
+	}
+	if err := explainDays(def, r.Days); err != nil {
+		return nil, err
 	}
 	s, err := load(ctx, d, r.RunID)
 	if err != nil {
 		return nil, err
 	}
 	var matched *report.Caveat
-	if r.Person != "" {
+	switch {
+	case r.Person != "":
 		// The reader named the person as a page names them (PF-7).
 		p, caveat, err := s.findPerson(r.Person, d.commands())
 		if err != nil {
 			return nil, err
 		}
 		r.Subject.Key, matched = p.Key, caveat
+	case r.Repo != "", r.Group != "", r.Area != "":
+		if r.Subject, err = s.findSubject(r); err != nil {
+			return nil, err
+		}
+	}
+	in := s.input()
+	if r.Days > 0 {
+		in.Days = r.Days
 	}
 	var values []domain.MetricValue
 	known := false
@@ -454,8 +474,21 @@ func Explain(ctx context.Context, d Deps, r ExplainRequest) (*report.Explain, er
 			continue
 		}
 		known = true
-		if v.Metric == def.ID {
+		if v.Metric == def.ID && in.Days == s.policy.Week.Days {
 			values = append(values, v)
+		}
+	}
+	if known && in.Days != s.policy.Week.Days {
+		// A window the scan did not store, computed from the run's facts
+		// as a scan computes the stored one.
+		computed, err := m.Compute(in)
+		if err != nil {
+			return nil, fmt.Errorf("explaining %s over %d days: %w", def.ID, in.Days, err)
+		}
+		for _, v := range computed {
+			if v.Subject == r.Subject {
+				values = append(values, v)
+			}
 		}
 	}
 	if !known {
@@ -470,7 +503,6 @@ func Explain(ctx context.Context, d Deps, r ExplainRequest) (*report.Explain, er
 		// A bot's clusters are listed too (#75): its values are in the
 		// report's bot tables. The metric keeps them apart from the people
 		// it ranks (RankInput.Bots).
-		in := s.input()
 		for _, rf := range s.facts.Repos {
 			if rf.Status != domain.RepoStatusOK {
 				continue
@@ -489,9 +521,11 @@ func Explain(ctx context.Context, d Deps, r ExplainRequest) (*report.Explain, er
 			}
 		}
 	}
-	if tm, ok := m.(metrics.Traced); ok && r.Subject.Kind == domain.SubjectPerson {
-		// What a value that is not ranked is made of (#109).
-		t, err := tm.Trace(s.input(), r.Subject.Key)
+	if tm, ok := m.(metrics.Traced); ok {
+		// What a value that is not ranked is made of (#109): a person's,
+		// or a repository's, a group's or the run's own (review_coverage@1's
+		// changes, landed@2's landings).
+		t, err := tm.Trace(in, r.Subject)
 		if err != nil {
 			return nil, fmt.Errorf("explaining %s: %w", def.ID, err)
 		}
@@ -506,6 +540,54 @@ func Explain(ctx context.Context, d Deps, r ExplainRequest) (*report.Explain, er
 		e.Caveats = append(e.Caveats, *matched)
 	}
 	return e, nil
+}
+
+// explainDays refuses a window of days for a metric whose window is not
+// the week's, or one outside the policy's bounds: landed@1 and landed@2
+// read [now - days, now), so explain can trace them over any span the
+// run's history holds (the 365 days of a still-here table's
+// landings_365d), while every other metric's window is its definition's.
+func explainDays(def metrics.Definition, days int) error {
+	switch {
+	case days == 0:
+		return nil
+	case def.ID.Name != "landed":
+		return &domain.UsageError{Msg: fmt.Sprintf("%s reads a window of its own definition; --days sets landed@1's and "+
+			"landed@2's", def.ID)}
+	case days < 1 || days > policy.MaxWeekDays:
+		return &domain.UsageError{Msg: fmt.Sprintf("--days %d: want 1 to %d", days, policy.MaxWeekDays)}
+	}
+	return nil
+}
+
+// findSubject resolves a reader's --repo, --group or --area (r) in the
+// stored run (FindScopes): a repository's or a group's own numbers, or an
+// area, REPO:DIR, a top-level directory of a repository, as a scan stores
+// knowledge_loss@1 and knowledge_concentration@1 for it.
+func (s *stored) findSubject(r ExplainRequest) (domain.Subject, error) {
+	n, err := runNames(s)
+	if err != nil {
+		return domain.Subject{}, err
+	}
+	switch {
+	case r.Group != "":
+		sc, err := findScope(n, domain.ScopeGroup, r.Group, "--group")
+		return domain.Subject{Kind: domain.SubjectGroup, Key: sc.Key}, err
+	case r.Repo != "":
+		sc, err := findScope(n, domain.ScopeRepo, r.Repo, "--repo")
+		return domain.Subject{Kind: domain.SubjectRepo, Key: sc.Key}, err
+	}
+	i := strings.LastIndex(r.Area, ":")
+	dir := ""
+	if i > 0 {
+		dir = strings.Trim(strings.TrimSpace(r.Area[i+1:]), "/")
+	}
+	if i <= 0 || dir == "" || strings.Contains(dir, "/") {
+		return domain.Subject{}, &domain.UsageError{Msg: fmt.Sprintf("--area %q: pass REPO:DIR, a repository as the report "+
+			"names it and one of its top-level directories, such as click:src; who-knows answers any path", r.Area)}
+	}
+	sc, err := findScope(n, domain.ScopeRepo, r.Area[:i], "--area")
+	return domain.Subject{Kind: domain.SubjectArea, Key: sc.Key + ":" + dir + "/"}, err
 }
 
 // findPerson resolves a reader's name for a person in the stored run

@@ -63,7 +63,7 @@ Repository cli · trunk @ ff67d76 · ok
     (8.5%), Person H 7,750 (8.3%)
   knowledge loss 61.8% (57,553 of 93,196 human-held lines) · AI-assisted 33.6% (202 of 602 landings)
   · bot share 0.2% (160 of 93,356 lines)
-  review coverage 78.5% (102 of 130 human landings, 90 days) · 19 pull requests merged without
+  review coverage 78.5% (102 of 130 human changes, 90 days) · 19 pull requests merged without
     another's review · 9 landings with no pull request in the GitHub data · 35 landings naming a
     pull request the GitHub data lacks, left out (sync github again) · 55 reviewed only by an
     approval with no comment
@@ -90,7 +90,8 @@ How to read it:
 
 - **made of** and **still here** are surviving lines: what blame still credits to each person at HEAD. They reward tenure, so they describe the code, not the people.
 - **knowledge loss** is the share of people's surviving lines held by people with no landing and no review in 180 days. 61.8% says most of this code was written by people who have gone quiet here (not necessarily left). The **areas** say where: `pkg/` holds most of it.
-- **review coverage** needs GitHub data (step 8). Without it the line is absent, not 0. It is the share of human landings whose pull request someone other than its author reviewed before it merged. "With no pull request in the GitHub data" is what the data says, not proof of a direct push: here those 9 are security fixes merged from private forks. A landing after the last sync, or whose subject names a pull request (`Merge pull request #N`, `… (#N)`) the data lacks, is left out rather than counted as unreviewed, and the line says how many. Here 35 are, because this replica has a hole (an interrupted first sync): syncing again fills it.
+- **review coverage** needs GitHub data (step 8). Without it the line is absent, not 0. It is the share of human changes whose pull request someone other than its author reviewed before it merged. A change is a pull request (a rebase merge's landings together), a pull request merged into another branch, such as `stable`, which a merge brought, or a landing with no pull request. "With no pull request in the GitHub data" is what the data says, not proof of a direct push: here those 9 are security fixes merged from private forks. A landing after the last sync, or whose subject names a pull request (`Merge pull request #N`, `… (#N)`) the data lacks, is left out rather than counted as unreviewed, and the line says how many. Here 35 are, because this replica has a hole (an interrupted first sync): syncing again fills it. One naming a pull request the data holds, merged into another branch, is left out too, and no sync changes it. A merge that only brought another branch's pull requests, each counted on its own, is no change. `stillhere explain review_coverage --repo cli` lists every change with whether someone else reviewed it, the unreviewed first.
+- **landings 365d** counts the landings that hold a commit of the person's, as the week table credits them: who wrote what landed, not who merged it, and a cherry-pick a maintenance branch brings back counts once. `stillhere explain landed --person "Person E" --days 365` lists them; the merges a person made are `merged_365d` in `--format json`.
 - **concentration** is how few people hold the majority of half the files that have a majority owner. It is not a truck factor.
 - **AI-assisted** counts landings with an agent's commit or co-author trailer: a lower bound, since editor completions leave no trace.
 - Each table prints its first 10 rows; `--all` prints every row, and `--format json` or `--format md` the same report for tools or for pasting.
@@ -157,7 +158,7 @@ Ranks · durable@1 · repository cli · 2025-10-15 → 2026-07-17 UTC
        bots
   —    Copilot App     85%                 2
   53 people listed, not ranked: fewer than 10 changes each (--all lists them)
-  intervals are 95% · ranks overlap when intervals do · bots are never ranked
+  intervals are 95% · people whose rank intervals overlap are not ordered · bots are never ranked
 ```
 
 How to read it:
@@ -199,7 +200,15 @@ explain durable@1 · Person P · run 7 · as of 2026-10-15 UTC · policy <hash>
     17 more changes (--all lists them)
 ```
 
-`--person` takes a display name (or the start of each word), a GitHub login (`@name`), an id, or an email. `explain landed`, `explain surviving` and `explain majority_owner` list the landings, the commits and the files behind those numbers. `stillhere me --email you@example.com` is your own page: every value and rank the run holds about you.
+`--person` takes a display name (or the start of each word), a GitHub login (`@name`), an id, or an email. `explain landed`, `explain surviving` and `explain majority_owner` list the landings, the commits and the files behind those numbers, and `explain landed --days 365` the year behind a still-here row's "landings 365d". A number about a repository, a group or a top-level directory is traced the same way:
+
+```sh
+stillhere explain review_coverage --repo cli      # every change of the 90 days: reviewed, not, or left out and why
+stillhere explain landed --repo cli --days 365    # the year's landings, with the copies each brought
+stillhere explain knowledge_loss --area cli:pkg   # a top-level directory's knowledge loss
+```
+
+`--repo` takes a repository as the report names it (or its key, or `GROUP/NAME`), `--group` a group's name, `--area` a repository and one of its top-level directories. `stillhere me --email you@example.com` is your own page: every value and rank the run holds about you.
 
 ## 8. Reviews (optional, needs GitHub)
 

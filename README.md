@@ -90,6 +90,7 @@ stillhere scan ~/src/acme                           # record a run: the default 
 stillhere report --rank durable@1                   # the run as a report, with durable@1's rank table
 stillhere who-knows services/billing                # who knows the code under a path
 stillhere explain durable@1 --person "Ada Example"  # the changes behind one person's value: a name, @login, id or email
+stillhere explain review_coverage --repo api        # each change behind a repository's number: reviewed, not, or left out and why
 stillhere me --email you@example.com                # your own page
 stillhere identities --format mailmap               # .mailmap suggestions with their evidence, never applied
 stillhere sync github --org acme                    # mirrors, pull requests and reviews: the one network command

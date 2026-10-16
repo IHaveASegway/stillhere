@@ -95,12 +95,18 @@ type repoView struct {
 
 // commitView is one commit of the history, with its credit and counts.
 type commitView struct {
+	sha      string
 	credit   string // identity.Credit over its author and co-authors
 	ai       bool   // identity.AIAssisted
 	merge    bool   // more than one parent: excluded from both change metrics
 	ignored  bool   // listed in the ignore-revs file blame used
 	boundary bool   // a shallow clone's boundary (domain.Repo.Boundary): its parents are not in the clone
-	changes  []*domain.FileChange
+	patchID  string // domain.Commit.PatchID: "" for none
+	// copy is true when a landing earlier than its own holds a commit with
+	// its patch id (markCopies): a cherry-pick or a backport that a merge
+	// brought onto the branch again, which no metric credits a second time.
+	copy    bool
+	changes []*domain.FileChange
 	// added and removed count non-blank lines on prod paths in the commit's
 	// own patch. traced is the part of added whose fate blame can tell, and
 	// surviving the non-blank lines blame attributes to the commit at HEAD
@@ -200,11 +206,13 @@ func newRepoView(f *domain.RepoFacts, who *identity.Directory) *repoView {
 	for i := range f.Commits {
 		c := &f.Commits[i]
 		r.commits[c.SHA] = &commitView{
+			sha:      c.SHA,
 			credit:   who.Credit(c.Author, c.CoAuthors),
 			ai:       who.AIAssisted(c),
 			merge:    len(c.Parents) > 1,
 			ignored:  ignored[strings.ToLower(c.SHA)],
 			boundary: f.Repo.Boundary(c),
+			patchID:  c.PatchID,
 		}
 		if f.Repo.Boundary(c) && c.CommitTime.After(r.boundary) {
 			r.boundary = c.CommitTime
@@ -260,11 +268,51 @@ func newRepoView(f *domain.RepoFacts, who *identity.Directory) *repoView {
 		}
 		r.landings = append(r.landings, lv)
 	}
+	r.markCopies()
 
 	if r.lines {
 		r.indexLines(f, who, untraced)
 	}
 	return r
+}
+
+// markCopies marks each copy among the repository's commits
+// (docs/metrics.md#change-facts-shared-by-durable1-and-simplifying1): a
+// non-merge commit whose patch id a commit of an earlier landing has, by
+// landing time, so the change it makes was already on the default branch
+// when it landed. A cherry-pick of a fix onto a maintenance branch that a
+// merge brings back is the common case, and a rebased commit that a
+// stacked pull request lands again another. The first landing to bring a
+// change is its original, however many copies follow; two landings of one
+// second are not earlier than each other, so neither holds a copy of the
+// other, nor does one landing hold a copy of its own commit. A reverted
+// landing (a revert names a commit of its map, which scan runs read) is no
+// original: the revert took its change off the branch, so landing it again
+// lands it anew, and durable@1 scores that landing. Only the history the
+// run collected is compared: a copy whose original landed before it is
+// credited as the original would be.
+func (r *repoView) markCopies() {
+	first := make(map[string]time.Time) // patch id → the earliest landing time that holds it
+	for _, l := range r.landings {
+		if l.reverted {
+			continue
+		}
+		for _, c := range l.commits {
+			if c.patchID == "" || c.merge {
+				continue
+			}
+			if t, ok := first[c.patchID]; !ok || l.time.Before(t) {
+				first[c.patchID] = l.time
+			}
+		}
+	}
+	for _, l := range r.landings {
+		for _, c := range l.commits {
+			if t, ok := first[c.patchID]; ok && c.patchID != "" && !c.merge && t.Before(l.time) {
+				c.copy = true
+			}
+		}
+	}
 }
 
 // untracedIndex holds the lines whose survival blame cannot tell. Both
@@ -482,18 +530,6 @@ func inScope(s domain.Scope, key, group string) bool {
 	default:
 		return false
 	}
-}
-
-// people returns the distinct people credited with a commit in the
-// landing's map, merge commits included: who "has had" this landing.
-func (l *landingView) people() []string {
-	var out []string
-	for _, c := range l.commits {
-		if !slices.Contains(out, c.credit) {
-			out = append(out, c.credit)
-		}
-	}
-	return out
 }
 
 // sortedFiles returns the repository's prod files, sorted by path.

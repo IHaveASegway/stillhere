@@ -3,6 +3,7 @@ package report
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
@@ -156,15 +157,42 @@ type traceTable struct {
 func (e *Explain) traceTables(p *printer, esc, code func(string) string) []traceTable {
 	var out []traceTable
 	if n := len(e.Landings); n > 0 {
+		copies := slices.ContainsFunc(e.Landings, func(l ExplainLanding) bool { return l.Copies > 0 })
 		t := traceTable{title: fmt.Sprintf("The %s behind it, by repository and time", plural(n, "landing", "landings")),
-			cols: []column{{head: "landing"}, {head: "repo"}, {head: "landed (UTC)"}, {head: "commits", right: true},
-				{head: "lines added", right: true}, {head: "prod lines added", right: true}, {head: "title"}}}
+			cols: []column{{head: "landing"}, {head: "repo"}, {head: "landed (UTC)"}, {head: "commits", right: true}}}
+		if copies {
+			t.cols = append(t.cols, column{head: "copies", right: true})
+		}
+		t.cols = append(t.cols, column{head: "lines added", right: true}, column{head: "prod lines added", right: true},
+			column{head: "title"})
 		list, hidden := shown(p, e.Landings, pageRows)
 		for _, l := range list {
-			t.rows = append(t.rows, []string{code(short(l.Landing)), esc(l.Repo), day(l.Time), grouped(l.Commits),
-				knownCount(l.LinesAdded), knownCount(l.ProdLinesAdded), esc(l.Title)})
+			row := []string{code(short(l.Landing)), esc(l.Repo), day(l.Time), grouped(l.Commits)}
+			if copies {
+				row = append(row, grouped(l.Copies))
+			}
+			t.rows = append(t.rows, append(row, knownCount(l.LinesAdded), knownCount(l.ProdLinesAdded), esc(l.Title)))
 		}
 		t.more = moreText(hidden, "landing", "landings")
+		if copies {
+			t.more = strings.TrimPrefix(t.more+" · copies: commits whose change an earlier landing brought, credited to no one", " · ")
+		}
+		out = append(out, t)
+	}
+	if n := len(e.Coverage); n > 0 {
+		t := traceTable{title: fmt.Sprintf("The %s in its window, those no one else reviewed first", plural(n, "change", "changes")),
+			cols: []column{{head: "change"}, {head: "repo"}, {head: "landed (UTC)"}, {head: "author"}, {head: "outcome"},
+				{head: "title"}}}
+		list, hidden := shown(p, e.Coverage, pageRows)
+		for _, c := range list {
+			author := ""
+			if c.Author != nil {
+				author = p.person(c.Author.Key, c.Author.Name, c.Author.NameWithheld, esc)
+			}
+			t.rows = append(t.rows, []string{code(coverageChangeText(c)), esc(c.Repo), day(c.Time), author,
+				esc(coverageOutcomeText(c)), esc(c.Title)})
+		}
+		t.more = moreText(hidden, "change", "changes")
 		out = append(out, t)
 	}
 	if n := len(e.Commits); n > 0 {
@@ -194,6 +222,55 @@ func (e *Explain) traceTables(p *printer, esc, code func(string) string) []trace
 		out = append(out, t)
 	}
 	return out
+}
+
+// coverageChangeText names a change of review_coverage@1's list: its pull
+// request, with the branch it merged into ("#3780 into stable"), else its
+// landing.
+func coverageChangeText(c CoverageChange) string {
+	if c.Pull == nil {
+		return short(c.Landing)
+	}
+	s := "#" + strconv.Itoa(*c.Pull)
+	if c.OtherBranch {
+		s += " into " + c.Base
+	}
+	return s
+}
+
+// coverageOutcomeText says what review_coverage@1 made of a change: in Den,
+// reviewed or not, or left out, and why.
+func coverageOutcomeText(c CoverageChange) string {
+	named := ""
+	if c.Named != nil {
+		named = "#" + strconv.Itoa(*c.Named)
+	}
+	switch c.Outcome {
+	case "reviewed":
+		s := "reviewed by " + plural(c.Reviewers, "other", "others")
+		if c.ApprovedOnly {
+			s += ", approval only"
+		}
+		return s
+	case "unreviewed":
+		return "no review by anyone else"
+	case "direct":
+		return "no pull request: pushed directly"
+	case "bot":
+		return "left out: a bot's"
+	case "branch_merge":
+		return "left out: merged another branch's pull requests, counted on their own"
+	case "copies":
+		return "left out: copies of changes counted when they first landed"
+	case "after_sync":
+		return "left out: landed after the last sync"
+	case "unmatched":
+		return "left out: names " + named + ", which the GitHub data lacks (sync github again)"
+	case "named_elsewhere":
+		return "left out: names " + named + ", which did not land by its merge commit (merged into another branch, " +
+			"or the branch rewritten)"
+	}
+	return c.Outcome
 }
 
 func textDefinition(p *printer, d MetricInfo) {
@@ -465,8 +542,8 @@ func meRankText(r MeRank) (rank, estimate string) {
 	if !r.Eligible {
 		return "—", fmt.Sprintf("listed, not ranked: %s, below %d", plural(r.N, "change", "changes"), r.MinN)
 	}
-	return rankText(r.RankLo, r.RankHi) + " of " + grouped(r.Of),
-		estimateText(r.Estimate, r.Percent) + " (" + intervalText(r.Lo, r.Hi, r.Percent) + ")"
+	return rankText(*r.RankLo, *r.RankHi) + " of " + grouped(r.Of),
+		estimateText(r.Estimate, r.Percent) + " (" + intervalText(*r.Lo, *r.Hi, r.Percent) + ")"
 }
 
 // meIntro says what a person's own page holds, and that their AI-assisted

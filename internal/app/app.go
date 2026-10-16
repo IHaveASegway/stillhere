@@ -130,6 +130,17 @@ type ExplainRequest struct {
 	// the use case resolves against the run's people (FindPerson, PF-7);
 	// the command line sends it, and Subject is then ignored.
 	Person string
+	// Repo, Group and Area, when one is set, name the subject the same
+	// way, as the reports print them (FindScopes): a repository by name,
+	// key or GROUP/NAME; a group by name; an area as REPO:DIR, a
+	// repository and one of its top-level directories. The command line
+	// sends one of Person, Repo, Group and Area.
+	Repo, Group, Area string
+	// Days is landed@1's and landed@2's window in days, for the values
+	// and the landings listed alike, such as 365 for the year a still-here
+	// table's landings_365d counts; 0: the run's policy's [week] days. Any
+	// other metric's window is its definition's, so Days is refused there.
+	Days int
 }
 
 // WhoKnowsRequest asks who knows the code under a path.

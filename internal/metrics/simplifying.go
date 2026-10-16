@@ -21,7 +21,8 @@ func (simplifyingV1) Definition() Definition {
 		Question: "Did a person remove code, and did the removal stick?",
 		Unit: "Σ removed per person over their clusters in [now - 90d, now), per repository, group and all: non-blank prod " +
 			"lines removed by each counted commit's own -U0 -w patch. Every cluster counts, including one that removed nothing. " +
-			"Merge commits, ignore-revs commits and revert landings are excluded, and so is every commit of a reverted landing. " +
+			"Merge commits, ignore-revs commits, copies (a commit whose patch id a commit of an earlier landing has) and revert " +
+			"landings are excluded, and so is every commit of a reverted landing. " +
 			"Detail: simplifying_landings, the person's landings whose counted commits net Σ added - Σ removed <= -20.",
 		Ranked:      true,
 		Subjects:    []string{domain.SubjectPerson},
