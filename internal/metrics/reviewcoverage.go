@@ -99,12 +99,12 @@ func (reviewCoverageV1) compute(v *view) ([]domain.MetricValue, error) {
 			if l.commit == nil || !w.Contains(l.time) {
 				continue
 			}
-			p := pullOf[l]
-			author := reviewCoverageAuthor(v, l, p)
-			if v.who.Bot(author) {
-				t.bots++
+			if v.botLandings(l) {
+				t.bots++ // a bot's change, by the one rule label and validate read too
 				continue
 			}
+			p := pullOf[l]
+			author := reviewCoverageAuthor(v, l, p)
 			if p == nil {
 				switch {
 				case !l.time.Before(asOf):

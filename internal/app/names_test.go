@@ -188,23 +188,29 @@ func displayNames(t *testing.T) {
 	// The unmerged-identities caveat reads names as the identities command
 	// does (identity.Directory.NameKey, #69): Sam's two ways are one name,
 	// "Your Name" is a default and no name, and jdoe's, shared and withheld,
-	// is counted. who-knows, which lists both Sams as owners, says so too.
+	// is counted. who-knows, which lists both Sams as owners, says so too,
+	// and of the whole repository it gives the card's knowledge numbers, so
+	// it says, in the same caveat, what the card's says of the identity
+	// candidates who hold lines there (#104).
 	const unmerged = `2 display names belong to more than one email and were not merged: "SAM SAME." and 1 name withheld ` +
 		`because it gives an address away. If the emails of a name are one person, a .mailmap line merges them: ` +
 		`'stillhere identities' suggests the lines, with the evidence for each.`
-	for _, page := range []struct {
-		name    string
-		caveats []report.Caveat
-	}{{"report", first.model.Caveats}, {"who-knows", first.whoKnows(t, "").Caveats}} {
+	messages := func(caveats []report.Caveat) []string {
 		var got []string
-		for _, c := range page.caveats {
+		for _, c := range caveats {
 			if c.Code == "unmerged-identities" {
 				got = append(got, c.Message)
 			}
 		}
-		if len(got) != 1 || got[0] != unmerged {
-			t.Errorf("the names repository's %s says %q of unmerged identities, want %q", page.name, got, unmerged)
-		}
+		return got
+	}
+	if got := messages(first.model.Caveats); len(got) != 1 || got[0] != unmerged {
+		t.Errorf("the names repository's report says %q of unmerged identities, want %q", got, unmerged)
+	}
+	card := messages(first.model.Repos[0].Card.Caveats)
+	if got := messages(first.whoKnows(t, "").Caveats); len(card) != 1 || !strings.HasPrefix(card[0], "2 identity candidates hold lines here: ") ||
+		len(got) != 1 || got[0] != unmerged+" "+card[0] {
+		t.Errorf("the names repository's who-knows says %q of unmerged identities, want %q and the card's %q", got, unmerged, card)
 	}
 }
 

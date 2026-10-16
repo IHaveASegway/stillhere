@@ -14,7 +14,7 @@ import (
 
 // Week reports what landed on each repository's default branch in the
 // window, without storing anything: discovery, then each repository's
-// history and classification as a bulkhead, then landed@1. It returns
+// history and classification as a bulkhead, then landed@2 (report.MetricLanded). It returns
 // domain.ErrNoFacts, alongside the report, when no repository produced
 // facts, so the command can still print each repository's error.
 func Week(ctx context.Context, d Deps, r WeekRequest) (*report.Model, error) {

@@ -102,7 +102,7 @@ Unmerged addresses split one person into two, which makes knowledge loss and own
 
 ```sh
 stillhere identities                                 # candidates, with the evidence for each
-stillhere identities --format mailmap > ~/cli.mailmap
+stillhere identities --format mailmap >> ~/cli.mailmap
 ```
 
 ```text
@@ -115,7 +115,7 @@ identities · every repository · run 7 · as of 2026-10-15 UTC
 …
 ```
 
-Read the file: the high-confidence lines are written, every other candidate is commented out, and stillhere applies none of them. Keep it outside the repository, which may have a `.mailmap` of its own that git applies too, and scan again with it:
+Read the file: the high-confidence lines are written, every other candidate is commented out, and stillhere applies none of them. Keep it outside the repository, which may have a `.mailmap` of its own that git applies too, and append to it (`>>`) rather than write over it: once a scan applies a line, the suggestions leave it out, so a file written anew would lose it. Scan again with it:
 
 ```sh
 stillhere --mailmap ~/cli.mailmap scan .             # here: 468 people become 465

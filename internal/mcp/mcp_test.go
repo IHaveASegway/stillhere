@@ -857,22 +857,28 @@ func TestMCPTools(t *testing.T) {
 		}
 		decode(t, ask(t, "overview", map[string]any{"scope": "odd"}), &oa)
 		if kl := oa.Repos[0].Card.KnowledgeLoss; len(oa.Areas) != 1 || oa.AreasTotal != 1 || oa.Areas[0].Path != "src/" ||
-			kl == nil || oa.Areas[0].KnowledgeLoss == nil || *oa.Areas[0].KnowledgeLoss != *kl ||
+			kl == nil || !reflect.DeepEqual(oa.Areas[0].KnowledgeLoss, kl) ||
 			oa.Areas[0].Lines != int(kl.Den) || oa.Areas[0].Concentration == nil {
 			t.Errorf("overview(odd) areas %+v of %d, want src/ alone, with the repository's knowledge loss %+v and a concentration",
 				oa.Areas, oa.AreasTotal, kl)
 		}
-		// who_knows of that directory carries the same row, and of a deeper
-		// path, for which a scan stores none, no row.
+		// who_knows of that directory gives the same knowledge numbers, by
+		// the one computation a scan stores (metrics.PathKnowledge), and of
+		// a deeper path, which no scan stores, its own (#106).
 		var wa whoKnowsOut
 		decode(t, ask(t, "who_knows", map[string]any{"path": "src/", "repo": "odd"}), &wa)
-		if len(wa.Repos) != 1 || len(oa.Areas) == 0 || wa.Repos[0].Area == nil || !reflect.DeepEqual(*wa.Repos[0].Area, oa.Areas[0]) {
-			t.Errorf("who_knows(src/, odd) area %+v, want overview's %+v", wa.Repos, oa.Areas)
+		if len(wa.Repos) != 1 || len(oa.Areas) == 0 || wa.Repos[0].KnowledgeLoss == nil ||
+			!reflect.DeepEqual(wa.Repos[0].KnowledgeLoss, oa.Areas[0].KnowledgeLoss) ||
+			!reflect.DeepEqual(wa.Repos[0].People, oa.Areas[0].People) ||
+			!reflect.DeepEqual(wa.Repos[0].PeopleInactive, oa.Areas[0].PeopleInactive) ||
+			!reflect.DeepEqual(wa.Repos[0].Concentration, oa.Areas[0].Concentration) {
+			t.Errorf("who_knows(src/, odd) %+v, want overview's area numbers %+v", wa.Repos, oa.Areas)
 		}
 		var wd whoKnowsOut
 		decode(t, ask(t, "who_knows", map[string]any{"path": "src/pins", "repo": "odd"}), &wd)
-		if len(wd.Repos) != 1 || wd.Repos[0].Area != nil {
-			t.Errorf("who_knows(src/pins, odd) area %+v, want none: no scan stores a deeper path's", wd.Repos)
+		if len(wd.Repos) != 1 || wd.Repos[0].KnowledgeLoss == nil || len(oa.Areas) == 0 ||
+			wd.Repos[0].KnowledgeLoss.Den <= 0 || wd.Repos[0].KnowledgeLoss.Den > float64(oa.Areas[0].Lines) {
+			t.Errorf("who_knows(src/pins, odd) %+v, want its own knowledge loss over at most src/'s %d lines", wd.Repos, oa.Areas[0].Lines)
 		}
 
 		// A path with a version pin in it is the repository's path, which

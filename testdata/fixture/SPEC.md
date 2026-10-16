@@ -422,6 +422,7 @@ Wrong implementations this catches:
 Wrong implementations this catches:
 
 - **A second implementation of either metric** that drifts from the stored one: the root's values differ from the repository's.
+- **A reader's input without the run's identity candidates** (#104): given the candidates a scan passes, the root's values carry the stored ones' `identity_candidates` 1 and `if_merged_num` 4 (`if_merged` 2 for concentration), so who-knows of a top-level directory shows the range its row of the card's `areas` does; without them the detail is missing and the root differs from the stored value.
 - **Activity read over the asked repository alone**: the same here (one repository), and the reason the function reads every repository of the run.
 - **A substring prefix**: `side` gives `side.py` and `side_week.py`, Cara's 9 lines.
 

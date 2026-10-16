@@ -627,7 +627,7 @@ func (b *builder) reviewCoverage(scope domain.Scope) *ReviewCoverage {
 // counts (lines, landings) that add across repositories.
 func (b *builder) share(metric string, scope domain.Scope, members []*domain.RepoFacts) *Share {
 	if v, ok := b.ix.aggregate(metric, scope); ok {
-		return &Share{Metric: metric, Num: v.Num, Den: v.Den, Value: v.Value, IfMerged: shareIfMerged(v)}
+		return shareOf(metric, v)
 	}
 	if scope.Kind == domain.ScopeRepo {
 		return nil

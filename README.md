@@ -60,7 +60,7 @@ stillhere week .                                   # 1. what landed this week, a
 stillhere scan .                                   # 2. record a run: history, blame, metrics, ranks (seconds to minutes)
 stillhere report                                   # 3. read it again: each card says what the code is made of, where
                                                    #    knowledge has gone quiet, and what could make the numbers wrong
-stillhere identities --format mailmap > ~/your.mailmap   # 4. one person, two addresses? review the suggestions,
+stillhere identities --format mailmap >> ~/your.mailmap  # 4. one person, two addresses? review the suggestions,
 stillhere --mailmap ~/your.mailmap scan .          #    then scan with them
 stillhere who-knows src/payments                   # 5. who holds a path, and who works on it now
 stillhere report --rank durable --rank simplifying # 6. ranks, as 95% intervals: only people with 10 or more changes are ranked
@@ -101,12 +101,12 @@ A first `sync github` reads the pull requests updated in the last 365 days, the 
 
 Each mirror gets a commit-graph with changed-path filters (git 2.46 or later; on 2.45, a commit-graph without them), which made `scan`'s blame about three times faster on the same facts. `scan` never writes into your own clones; when blame in one is slow, it logs the command that does the same there: `git -c commitGraph.changedPathsVersion=2 commit-graph write --reachable --changed-paths` (version 2 filters, which read the same on every platform; on git 2.45, `git commit-graph write --reachable`).
 
-One person who committed from several addresses counts as several people, and an old address of someone still active looks like knowledge that left. `report` says so where the numbers are: knowledge loss and concentration carry an `unmerged-identities` caveat with the range (as keyed, with the high-confidence lines merged, with every candidate merged) wherever merging would move them. To merge them, review and add the suggested lines, then scan again; the high-confidence ones, such as two addresses GitHub attributes to one account after `sync github`, are written as lines and the rest commented out:
+One person who committed from several addresses counts as several people, and an old address of someone still active looks like knowledge that left. `report` says so where the numbers are: knowledge loss and concentration carry an `unmerged-identities` caveat with the range (as keyed, with the high-confidence lines merged, with every candidate merged) wherever merging would move them. To merge them, review and add the suggested lines, then scan again; the high-confidence ones, such as two addresses GitHub attributes to one account after `sync github`, are written as lines and the rest commented out. Append (`>>`) to a file outside the repositories: the suggestions leave out a line a scan already applied, so writing over the file would drop the merges an earlier scan made, and a repository's own `.mailmap` is git's, to commit there if you want everyone to get the merge:
 
 ```sh
-stillhere identities                                # the candidates, with the evidence for each
-stillhere identities --format mailmap >> .mailmap   # review, uncomment what you know to be one person
-stillhere scan ~/src/acme                           # the merges take effect at the next scan
+stillhere identities                                         # the candidates, with the evidence for each
+stillhere identities --format mailmap >> ~/acme.mailmap      # review, uncomment what you know to be one person
+stillhere --mailmap ~/acme.mailmap scan ~/src/acme           # the merges take effect at the next scan
 ```
 
 In Docker, mount the repositories and run as the user who owns them, because git refuses to read a repository that belongs to someone else ("dubious ownership"):

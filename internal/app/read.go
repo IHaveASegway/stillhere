@@ -8,6 +8,7 @@ import (
 	"path"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
@@ -57,11 +58,19 @@ type stored struct {
 	// as a run stored before schema version 4 did, so a number computed
 	// from them when the run is read (who_knows@1's reviewers) is unknown.
 	unkept bool
+	// candidates are the run's identity candidates over the whole run
+	// (identity.Candidates with who), computed once, the first time a
+	// reader asks for a metric's input.
+	candidates func() []identity.Candidate
 }
 
-// input is the metrics input over a stored run's facts.
+// input is the metrics input over a stored run's facts, with the run's
+// identity candidates as a scan passes them (#104), so what a reader
+// computes with the metrics' own functions (the knowledge under any path,
+// metrics.PathKnowledge; a metric newer than the run) carries the Detail a
+// scan stores: a top-level directory's answer is its stored area value.
 func (s *stored) input() *metrics.Input {
-	return &metrics.Input{Facts: s.facts, Policy: s.policy, Who: s.who, Days: s.policy.Week.Days}
+	return &metrics.Input{Facts: s.facts, Policy: s.policy, Who: s.who, Days: s.policy.Week.Days, Candidates: s.candidates()}
 }
 
 // scope is the rank scope the run's scan was given: group unless it said
@@ -102,6 +111,7 @@ func load(ctx context.Context, d Deps, runID int64) (*stored, error) {
 	}
 	// After the run's GitHub data: it links forge logins to the run's people.
 	s.who = identity.New(s.facts, p)
+	s.candidates = sync.OnceValue(func() []identity.Candidate { return identity.Candidates(s.facts, s.who).Candidates })
 	computed, err := s.computeUnstored()
 	if err != nil {
 		return nil, err
@@ -638,7 +648,6 @@ func WhoKnows(ctx context.Context, d Deps, r WhoKnowsRequest) (*report.WhoKnows,
 	} else if c, ok := whoKnowsNoRole(s.facts, prefix, repo, len(w.Repos)); ok {
 		w.Caveats = append(w.Caveats, c)
 	}
-	whoKnowsArea(w, s.values, prefix)
 	return w, nil
 }
 
@@ -702,24 +711,6 @@ func whoKnowsNoRole(fs *domain.FactSet, prefix, repo string, listed int) (report
 		"paths with one: this answer is empty because the policy leaves the path out, not because nobody knows it. "+
 		"'stillhere policy' prints the roles and the deny list; a role for it in stillhere.toml makes it count at the next scan.",
 		prefix, where, strings.Join(why, ", "), report.MetricWhoKnows)), true
-}
-
-// whoKnowsArea gives each repository of a who-knows answer the path's
-// knowledge loss and concentration, when the path is a top-level
-// directory: a scan stores both metrics for those areas (report.Areas reads
-// them), and computes them for no deeper path.
-func whoKnowsArea(w *report.WhoKnows, values []domain.MetricValue, prefix string) {
-	if prefix == "" || strings.Contains(prefix, "/") {
-		return
-	}
-	for i := range w.Repos {
-		for _, a := range report.Areas(values, w.Repos[i].Key) {
-			if a.Path == prefix+"/" {
-				w.Repos[i].Area = &a
-				break
-			}
-		}
-	}
 }
 
 // whoKnowsNoPathNames is how many repositories that hold the path a

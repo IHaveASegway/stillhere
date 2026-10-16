@@ -403,7 +403,7 @@ func Overview(ctx context.Context, d Deps, r OverviewRequest) (*OverviewAnswer, 
 	// metrics lists every number's (docs/spec/mcp.md), as the whole run's
 	// above does by listing every metric of its report. The scope's own provenance names only its overview's or
 	// its card's, so add those of the repositories the answer holds, each
-	// with its week table (landed@1) beside its card, and the rank tables'.
+	// with its week table (report.MetricLanded: landed@2) beside its card, and the rank tables'.
 	metrics := slices.Clone(a.Provenance.Metrics)
 	for _, rp := range a.Repos {
 		metrics = append(metrics, rp.Card.Provenance.Metrics...)
@@ -1140,20 +1140,22 @@ func Diff(ctx context.Context, d Deps, r DiffRequest) (*DiffAnswer, error) {
 		return nil, err
 	}
 	a := &DiffAnswer{Repo: rf.Repo.Name, RepoKey: rf.Repo.Key, Landing: l.SHA, Time: l.Time, Merge: l.Merge, Path: cleanPrefix(r.Path)}
-	for _, c := range rf.Commits {
-		if c.SHA == l.SHA {
+	boundary := false
+	for i := range rf.Commits {
+		if c := &rf.Commits[i]; c.SHA == l.SHA {
 			a.Title = c.Subject
 			if len(c.Parents) > 0 {
 				a.Base = c.Parents[0]
 			}
+			boundary = rf.Repo.Boundary(c)
 		}
 	}
-	if a.Base == "" && rf.Repo.Shallow {
+	if boundary {
 		// In a shallow clone a parentless commit is where the clone's
-		// history ends, as the history collector reads it (collect.History:
-		// its boundary gets no change rows). Its parent is not in the
-		// clone, so its diff against nothing would be its whole tree, not
-		// its change (RB-5).
+		// history ends, by the one rule the history collector reads it by
+		// (domain.Repo.Boundary: its boundary gets no change rows). Its
+		// parent is not in the clone, so its diff against nothing would be
+		// its whole tree, not its change (RB-5).
 		return nil, &domain.UsageError{Msg: fmt.Sprintf("landing %s is where %q's shallow clone ends: the clone does not "+
 			"hold its parent, so its diff would be its whole tree, not its change. Its change shows once the user deepens "+
 			"the clone (git fetch --unshallow) and scans again.", mcpShort(l.SHA), rf.Repo.Name)}

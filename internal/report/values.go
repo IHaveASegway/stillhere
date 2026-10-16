@@ -64,6 +64,15 @@ const (
 	detailPeopleInactive = "people_inactive"
 )
 
+// shareOf reads one value of a ratio metric as a Share, with
+// knowledge_loss@1's identity range where its Detail holds one (#104): the
+// one reading of a stored share, which a card's and an overview's numbers,
+// an area's row (Areas) and a who-knows answer's path share, so each shows
+// the same range the unmerged-identities caveat states.
+func shareOf(metric string, v domain.MetricValue) *Share {
+	return &Share{Metric: metric, Num: v.Num, Den: v.Den, Value: v.Value, IfMerged: shareIfMerged(v)}
+}
+
 // shareIfMerged reads knowledge_loss@1's identity detail (#104): nil when
 // no candidate holds lines in the value's area, or the run predates it.
 func shareIfMerged(v domain.MetricValue) *ShareIfMerged {
@@ -454,7 +463,7 @@ func Areas(values []domain.MetricValue, repo string) []Area {
 		case MetricKnowledgeLoss:
 			if a := row(v); a != nil {
 				a.Lines = count(v.Den)
-				a.KnowledgeLoss = &Share{Metric: MetricKnowledgeLoss, Num: v.Num, Den: v.Den, Value: v.Value}
+				a.KnowledgeLoss = shareOf(MetricKnowledgeLoss, v)
 				people, inactive := count(v.Detail[detailPeople]), count(v.Detail[detailPeopleInactive])
 				a.People, a.PeopleInactive = &people, &inactive
 			}

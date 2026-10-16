@@ -238,11 +238,14 @@ type ForgeFacts struct {
 	Watermarks   []ForgeWatermark // sorted by Repo: the replica's, of which a run keeps those of its own repositories (RunWatermark)
 	// Links holds, of the pull requests LoadForge leaves out (those last
 	// updated before its since: older than every metric's window), only
-	// their commits' links to an account, distinct (#103). No metric reads
-	// it: GitHub's attribution of an address to an account is evidence of
-	// who it is however old the pull request, so identity's
-	// same-forge-account rule reads it beside the pull requests' own
-	// commits. Sorted by Repo, SHA, AuthorLogin, then AuthorEmail.
+	// their commits' links to an account, and the account each author email
+	// of the repository's history belongs to, as sync's links pass asked
+	// GitHub through the email's newest commit (ForgeSource.LinkAuthors,
+	// ForgeStore.ForgeLinks), distinct (#103). No metric reads it: GitHub's
+	// attribution of an address to an account is evidence of who it is
+	// however old the commit, so identity's same-forge-account rule reads
+	// it beside the pull requests' own commits. Sorted by Repo, SHA,
+	// AuthorLogin, then AuthorEmail.
 	Links []ForgeLink
 	// Join is the run's join of these forge repositories to its own
 	// repositories, as its scan made it with ForgeJoin and recorded it
@@ -255,10 +258,10 @@ type ForgeFacts struct {
 	Join map[string][]string
 }
 
-// ForgeLink is one commit of a pull request with the account the forge
-// resolved its author email to (ForgeFacts.Links): a pull request's own
-// commit or its merge commit, in the forge repository Repo. AuthorLogin is
-// never "".
+// ForgeLink is one commit with the account the forge resolved its author
+// email to (ForgeFacts.Links): a pull request's own commit or its merge
+// commit, or the newest commit of an author email the links pass asked
+// about, in the forge repository Repo. AuthorLogin is never "".
 type ForgeLink struct {
 	Repo string // ForgeRepo.ID
 	ForgeCommit
@@ -422,8 +425,8 @@ type ForgeStore interface {
 	PutForgeLinks(ctx context.Context, repo string, links []ForgeCommit) error
 	// LoadForge returns the replica's repositories and watermarks, and every
 	// pull request last updated at or after since, sorted, with the
-	// commit-to-account links of the others (Links, #103); nil when the
-	// replica holds no repository.
+	// commit-to-account links of the others and of the history's author
+	// emails (Links, #103); nil when the replica holds no repository.
 	LoadForge(ctx context.Context, since time.Time) (*ForgeFacts, error)
 	// PutRunWatermarks records, for a run that is being written, the
 	// watermark of each of its forge repositories as it read them with

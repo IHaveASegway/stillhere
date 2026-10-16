@@ -191,30 +191,34 @@ gives it.
    (`knowledge_loss.num`) or the fewest authors holding their files
    (`concentration.authors_in_prefix`): `who_knows(path: AREA, repo: R)`, its
    majority owners against its recent landers and reviewers, which is who holds
-   the code against who works on it now; its `area` repeats the area's knowledge
-   loss and concentration beside them (`null` for a deeper path).
+   the code against who works on it now; its `knowledge_loss`, `people`,
+   `people_inactive` and `concentration` are the path's own, for any path, so
+   a top-level directory's match its row of `areas` and a dominant area can
+   be followed down (`who_knows(path: "pkg/sync", repo: R)`).
    `explain(metric: "knowledge_loss", subject: R, subject_kind: "area",
    path: AREA)` traces the share.
 5. **Rank tables.** `overview(scope: G, rank: M)` for `durable`,
    `simplifying` and `reviews_given`, one call each, then
    `highlights(scope: G, period: "quarter")`: the top tiers, the changes that
    lasted, the removals that stuck. Read them as intervals (above).
-6. **Review coverage.** When the run read GitHub data and `metrics()` lists
-   `review_coverage@1`: `explain(metric: "review_coverage", subject: G,
-   subject_kind: "group")`, then `subject: R, subject_kind: "repo"` for the
-   repositories of step 3, say how much of what landed someone other than its
-   author reviewed, with its detail: landings by pull request, reviewed,
-   approved without a comment, pushed directly. Set it beside `reviews_given`'s
-   table: one person giving most reviews, or merging most landings, is a gate,
-   which no ownership number shows.
+6. **Review coverage.** The group's overview of step 2, each of its
+   repository rows and each card of step 3 carry `review_coverage`
+   (`review_coverage@1`, `null` without GitHub data, which is not 0): say how
+   much of what landed in 90 days someone other than its author reviewed,
+   with its detail: landings by pull request, reviewed, approved without a
+   comment, and `direct`, landings with no pull request in the GitHub data
+   (not "pushed directly": the data may lack theirs); `after_sync` and
+   `unmatched` landings are left out because whether they were reviewed is
+   unknown. `explain(metric: "review_coverage", subject: G, subject_kind:
+   "group")` gives every scope's value. Set it beside `reviews_given`'s
+   table: one person giving most reviews, or merging most landings, is a
+   gate, which no ownership number shows.
 7. **Identities.** `identity_candidates(scope: G, limit: 100)`, following
    `cursor`: addresses that may be one person, most confident first. Unmerged
    identities split one person's numbers and make knowledge loss look larger.
    When a knowledge number carries `unmerged-identities`, say it may be
    overstated, and when the answer also gives the number with the
-   high-confidence merges applied, state both as its range. The fix is the
-   user's: `stillhere identities --format mailmap > .mailmap`, review it
-   (uncommented lines are high-confidence), commit it, and scan again. It lists the
+   high-confidence merges applied, state both as its range. It lists the
    run's candidates with an address in the scope, each with all its
    addresses, so one whose old address is in this repository and active one
    in another is there: every candidate the scope's caveat counts, and those
@@ -227,8 +231,10 @@ gives it.
    give the value as keyed, with the high-confidence lines merged and with
    every candidate merged, such as "56.6% as keyed, 52.2% with the
    high-confidence merges, as low as 17.6% with every candidate merged".
-   To fix the numbers, the user adds the lines (`stillhere identities --format
-   mailmap`) to the `.mailmap` and scans again.
+   The fix is the user's: `stillhere identities --format mailmap >>
+   ~/acme.mailmap` (appended, outside the repositories: uncommented lines are
+   high-confidence, and the user uncomments the others they know), then
+   `stillhere --mailmap ~/acme.mailmap scan ...` again.
 8. **Before you explain a number**, `metrics(metric: M)` for its definition, then
    `explain(metric, subject, subject_kind)` for a number worth tracing;
    `changes(scope: G, since: "90d", limit: 100)` when the user asks what landed.

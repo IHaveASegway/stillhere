@@ -166,12 +166,15 @@ func mainChangeOracles(t *testing.T) {
 	t.Run("knowledge under a path", func(t *testing.T) {
 		// SPEC, "Knowledge under any path (main fixture)": metrics.PathKnowledge
 		// computes the stored values' metrics for any prefix, the root's
-		// being the repository's own.
+		// being the repository's own, the identity candidates' detail
+		// included when the input holds them, as a scan's does (#104).
 		p, err := policy.Default()
 		if err != nil {
 			t.Fatal(err)
 		}
-		in := &metrics.Input{Facts: s.facts(t), Policy: p}
+		fs := s.facts(t)
+		who := identity.New(fs, p)
+		in := &metrics.Input{Facts: fs, Policy: p, Who: who, Candidates: identity.Candidates(fs, who).Candidates}
 		loss := domain.MetricID{Name: "knowledge_loss", Version: 1}
 		conc := domain.MetricID{Name: "knowledge_concentration", Version: 1}
 		under := func(prefix string) map[string]domain.MetricValue {

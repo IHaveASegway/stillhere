@@ -11,6 +11,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/cgi"
 	"net/http/httptest"
@@ -518,6 +519,37 @@ func syncScenario(t *testing.T) {
 	if !strings.Contains(doc.String(), `"code": "forge-incomplete"`) &&
 		!strings.Contains(doc.String(), `"code":"forge-incomplete"`) {
 		t.Errorf("the scan of an incomplete replica carries no forge-incomplete caveat:\n%s", doc.String())
+	}
+	// A scan reads the links pass's answers with the replica (LoadForge's
+	// Links), the history's every author email GitHub links to an account,
+	// beside the pull requests' own commits, which a zero since leaves none
+	// of in Links; and identity's same-forge-account rule links ada's two
+	// addresses, as GitHub attributes both to one account (#103).
+	whole, err := a.LoadForge(ctx, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := map[string]string{}
+	for _, l := range whole.Links {
+		read[l.AuthorEmail] = l.AuthorLogin
+	}
+	accounts := maps.Clone(wantLinks)
+	maps.DeleteFunc(accounts, func(_, login string) bool { return login == "" })
+	equal(t, "LoadForge's links over every pull request", read, accounts)
+	ids, err := app.Identities(ctx, app.Deps{Store: a, ForgeStore: a, Policy: pol, Log: logger}, app.IdentitiesRequest{})
+	if err != nil {
+		t.Fatalf("identities of the mirror's scan: %v", err)
+	}
+	linked := slices.ContainsFunc(ids.Candidates, func(c report.IdentityCandidate) bool {
+		var emails []string
+		for _, ad := range c.Addresses {
+			emails = append(emails, ad.Email)
+		}
+		return slices.Contains(c.Rules, "same-forge-account") && slices.Contains(emails, "ada@example.com") &&
+			slices.Contains(emails, "ada@other.example")
+	})
+	if !linked {
+		t.Errorf("identities of the mirror's scan %+v: want ada's two addresses linked by same-forge-account", ids.Candidates)
 	}
 
 	// Run 3, over a replica an earlier stillhere left with a hole (S8 to

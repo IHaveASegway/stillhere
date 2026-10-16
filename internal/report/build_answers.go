@@ -122,13 +122,11 @@ func explainCandidates(values []domain.MetricValue, cmds Commands) (Caveat, bool
 	for _, v := range values {
 		switch v.Metric.String() {
 		case MetricKnowledgeLoss:
-			s := &Share{Metric: MetricKnowledgeLoss, Num: v.Num, Den: v.Den, Value: v.Value, IfMerged: shareIfMerged(v)}
-			if c, ok := candidatesCaveat(s, nil, 0, cmds); ok {
+			if c, ok := candidatesCaveat(shareOf(MetricKnowledgeLoss, v), nil, 0, cmds); ok {
 				return c, true
 			}
 		case MetricConcentration:
-			conc := &Concentration{Metric: MetricConcentration, AuthorsInPrefix: count(v.Value), IfMerged: concentrationIfMerged(v)}
-			if c, ok := candidatesCaveat(nil, conc, 0, cmds); ok {
+			if c, ok := candidatesCaveat(nil, concentrationOf(v), 0, cmds); ok {
 				return c, true
 			}
 		}
@@ -267,7 +265,7 @@ func NewWhoKnows(in *WhoKnowsInput) *WhoKnows {
 			}
 		}
 		for _, v := range kx[MetricKnowledgeLoss][scope] {
-			r.KnowledgeLoss = &Share{Metric: MetricKnowledgeLoss, Num: v.Num, Den: v.Den, Value: v.Value}
+			r.KnowledgeLoss = shareOf(MetricKnowledgeLoss, v)
 			people, inactive := count(v.Detail[detailPeople]), count(v.Detail[detailPeopleInactive])
 			r.People, r.PeopleInactive = &people, &inactive
 			metrics = append(metrics, MetricKnowledgeLoss)
@@ -355,6 +353,26 @@ func NewWhoKnows(in *WhoKnowsInput) *WhoKnows {
 	}
 	if c, ok := sharedNames(in.Who, listed, in.Commands); ok {
 		w.Caveats = append(w.Caveats, c)
+	}
+	// The path's knowledge loss and concentration count each address
+	// apart, as a card's do: where merging the run's identity candidates
+	// would move them, say how far, in the one caveat the shared names
+	// share (#104).
+	var moved []string
+	for _, r := range w.Repos {
+		c, ok := candidatesCaveat(r.KnowledgeLoss, r.Concentration, 0, in.Commands)
+		if !ok {
+			continue
+		}
+		if len(w.Repos) > 1 {
+			c.Message = r.Repo + ": " + c.Message
+		}
+		moved = append(moved, r.Repo)
+		w.Caveats = withCaveat(w.Caveats, c)
+	}
+	if len(moved) > 0 && len(w.Repos) > 1 {
+		i := slices.IndexFunc(w.Caveats, func(c Caveat) bool { return c.Code == codeIdentities })
+		w.Caveats[i].Repos = slices.Compact(slices.Sorted(slices.Values(append(w.Caveats[i].Repos, moved...))))
 	}
 	if in.Forge.reads(MetricWhoKnows) {
 		// The reviewers of each repository the answer lists come from its

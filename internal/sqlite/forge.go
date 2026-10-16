@@ -244,7 +244,8 @@ func (s *Store) CountForgePulls(ctx context.Context, repo string, since time.Tim
 // LoadForge returns the replica's repositories and watermarks, and every
 // pull request last updated at or after since (all of them for a zero
 // since), sorted like domain.ForgeFacts, with the commit-to-account links
-// of the others (Links, #103); nil when the replica holds no repository.
+// of the others and of the history's author emails (Links, #103); nil when
+// the replica holds no repository.
 // It reads in one transaction, so a sync writing at the same time is seen
 // whole or not at all.
 func (s *Store) LoadForge(ctx context.Context, since time.Time) (*domain.ForgeFacts, error) {
@@ -383,7 +384,10 @@ FROM forge_reviews WHERE pull IN (` + forgeSincePulls + `) ORDER BY pull, submit
 SELECT pull, sha, author_email, author_login
 FROM forge_pull_commits WHERE pull IN (` + forgeSincePulls + `) ORDER BY pull, position`
 	// The commit-to-account links of the pull requests left out (#103):
-	// each one's own commits and its merge commit, distinct.
+	// each one's own commits and its merge commit, and the account each
+	// author email of a mirror's history belongs to (forge_links, which
+	// sync's links pass asks GitHub for, ADR 0013), distinct. An email
+	// GitHub links to no account is no link.
 	forgeSelectLinks = `
 SELECT DISTINCT repo, sha, author_email, author_login FROM (
     SELECT p.repo AS repo, c.sha AS sha, c.author_email AS author_email, c.author_login AS author_login
@@ -392,6 +396,8 @@ SELECT DISTINCT repo, sha, author_email, author_login FROM (
     UNION ALL
     SELECT repo, merge_sha, merge_author_email, merge_author_login FROM forge_pull_requests
     WHERE merge_sha <> '' AND merge_author_login <> '' AND id NOT IN (` + forgeSincePulls + `)
+    UNION ALL
+    SELECT repo, sha, author_email, author_login FROM forge_links WHERE author_login <> ''
 ) ORDER BY repo, sha, author_login, author_email`
 )
 
