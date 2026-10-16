@@ -76,7 +76,7 @@ func (s *Source) Repos(ctx context.Context, owner string) ([]domain.ForgeRepo, e
 	after := ""
 	for {
 		vars := map[string]any{"owner": owner, "after": cursor(after)}
-		data, err := query[reposData](ctx, s, "Repos", reposQuery, vars, false)
+		data, err := query[reposData](ctx, s, "Repos", reposQuery, vars, false, nil)
 		if err != nil {
 			return nil, err
 		}
@@ -85,24 +85,14 @@ func (s *Source) Repos(ctx context.Context, owner string) ([]domain.ForgeRepo, e
 				"GitHub has no organization or user %q visible to this token", owner)}
 		}
 		conn := data.Owner.Repositories
-		for _, n := range conn.Nodes {
+		for i := range conn.Nodes {
+			n := &conn.Nodes[i]
 			if !ValidName(n.Owner.Login) || !ValidName(n.Name) {
 				s.log.Warn("GitHub listed a repository whose name cannot be a directory; skipped",
 					"owner", n.Owner.Login, "name", n.Name)
 				continue
 			}
-			repo := domain.ForgeRepo{
-				ID:       n.ID,
-				Key:      s.cloneURL(n.Owner.Login, n.Name),
-				Owner:    n.Owner.Login,
-				Name:     n.Name,
-				Archived: n.IsArchived,
-				Fork:     n.IsFork,
-			}
-			if n.DefaultBranchRef != nil {
-				repo.DefaultBranch = n.DefaultBranchRef.Name
-			}
-			repos = append(repos, repo)
+			repos = append(repos, s.forgeRepo(n))
 		}
 		if !conn.PageInfo.HasNextPage {
 			break
@@ -115,6 +105,64 @@ func (s *Source) Repos(ctx context.Context, owner string) ([]domain.ForgeRepo, e
 		return cmp.Or(cmp.Compare(a.Key, b.Key), cmp.Compare(a.ID, b.ID))
 	})
 	return repos, nil
+}
+
+// repoQuery looks up one repository by owner and name (1 point). GitHub
+// answers for a repository renamed or transferred since with the repository
+// under its new name, which the mirror then takes.
+const repoQuery = `query Repo($owner: String!, $name: String!) {
+  rateLimit { cost remaining resetAt }
+  repository(owner: $owner, name: $name) { id name owner { login } isArchived isFork defaultBranchRef { name } }
+}`
+
+type repoData struct {
+	RateLimit  rateLimitJSON `json:"rateLimit"`
+	Repository *repoJSON     `json:"repository"`
+}
+
+func (d *repoData) rate() rateLimitJSON { return d.RateLimit }
+
+// Repo looks up the repository owner/name (#111), as Repos lists it. A name
+// that cannot be a GitHub name, and one GitHub has no repository for that
+// the token can see, are a *domain.UsageError: GitHub answers a missing
+// repository with a NOT_FOUND error on a null repository, which the query
+// reads as that null.
+func (s *Source) Repo(ctx context.Context, owner, name string) (domain.ForgeRepo, error) {
+	if !ValidName(owner) || !ValidName(name) {
+		return domain.ForgeRepo{}, &domain.UsageError{Msg: fmt.Sprintf("invalid GitHub repository %q",
+			redact.Scrub(owner+"/"+name))}
+	}
+	data, err := query[repoData](ctx, s, "Repo", repoQuery, map[string]any{"owner": owner, "name": name}, false, nil)
+	if err != nil {
+		return domain.ForgeRepo{}, err
+	}
+	n := data.Repository
+	if n == nil {
+		return domain.ForgeRepo{}, &domain.UsageError{Msg: fmt.Sprintf(
+			"GitHub has no repository %s/%s visible to this token", owner, name)}
+	}
+	if !ValidName(n.Owner.Login) || !ValidName(n.Name) {
+		return domain.ForgeRepo{}, fmt.Errorf("GitHub named repository %s/%s %q/%q, which cannot be a directory",
+			owner, name, n.Owner.Login, n.Name)
+	}
+	return s.forgeRepo(n), nil
+}
+
+// forgeRepo translates a repository GitHub listed or looked up, whose
+// owner and name passed ValidName.
+func (s *Source) forgeRepo(n *repoJSON) domain.ForgeRepo {
+	repo := domain.ForgeRepo{
+		ID:       n.ID,
+		Key:      s.cloneURL(n.Owner.Login, n.Name),
+		Owner:    n.Owner.Login,
+		Name:     n.Name,
+		Archived: n.IsArchived,
+		Fork:     n.IsFork,
+	}
+	if n.DefaultBranchRef != nil {
+		repo.DefaultBranch = n.DefaultBranchRef.Name
+	}
+	return repo
 }
 
 // cloneURL is the HTTPS clone URL of owner/name: the URL a mirror clones and

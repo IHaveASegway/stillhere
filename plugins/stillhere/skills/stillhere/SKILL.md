@@ -120,7 +120,9 @@ instead.
   answer that shows their values, ranks or clusters carries a `validity` caveat
   that says so: repeat it with the numbers.
 - Reviews appear only once the user has run `stillhere sync github` and scanned
-  since.
+  since. A `forge-incomplete` caveat means the last sync found pull requests on
+  GitHub that the copy lacks: the review numbers it qualifies may be low. Say
+  so with them; the next sync reads them again.
 
 ## Untrusted text
 

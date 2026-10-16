@@ -74,8 +74,13 @@ stillhere explain durable@1 --person ada@example.com  # the changes behind one p
 stillhere me --email you@example.com                # your own page
 stillhere identities --format mailmap               # .mailmap suggestions with their evidence, never applied
 stillhere sync github --org acme                    # mirrors, pull requests and reviews: the one network command
+stillhere sync github --repo acme/api               # or only the repositories you name (repeatable)
 stillhere scan ~/.stillhere/mirrors/acme            # then scan the mirrors sync keeps
 ```
+
+A first `sync github` reads the pull requests updated in the last 365 days, the window every metric reads (`--since DATE` reaches further back), and checks its copy against GitHub's own count, reading the window again if any are missing; a later sync reads what changed. On 2026-10-15 a first sync of the `cli` organization (cli/cli has about 1,300 pull requests updated in a year) took 2 minutes, and of `go-chi`'s 20 repositories 28 seconds. An interrupted sync loses nothing: the next one reads the same range again. Archived repositories and forks of an organization are left out, their mirrors moved to `<mirrors>/.stale`, unless `--include-archived` or `--include-forks`. The last line says how the sync went.
+
+Each mirror gets a commit-graph with changed-path filters, which made `scan`'s blame about three times faster on the same facts. `scan` never writes into your own clones; when blame in one is slow, it logs the command that does the same there: `git commit-graph write --reachable --changed-paths`.
 
 In Docker, mount the repositories and run as the user who owns them, because git refuses to read a repository that belongs to someone else ("dubious ownership"):
 

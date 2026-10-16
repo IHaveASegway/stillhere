@@ -56,24 +56,47 @@ ON CONFLICT (id) DO UPDATE SET
 func (s *Store) ForgeWatermark(ctx context.Context, repo string) (domain.ForgeWatermark, error) {
 	wm := domain.ForgeWatermark{Repo: repo}
 	err := s.forgeRead(ctx, "reading the forge watermark of "+repo, func(tx *sql.Tx) error {
-		var updated, synced sql.NullString
+		var c forgeMarkCols
 		err := tx.QueryRowContext(ctx,
-			`SELECT updated, synced FROM forge_watermarks WHERE repo = ?`, repo).Scan(&updated, &synced)
+			`SELECT `+forgeMarkSelect+` FROM forge_watermarks WHERE repo = ?`, repo).Scan(c.dest()...)
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil
 		}
 		if err != nil {
 			return err
 		}
-		return forgeDecodeTimes([]*time.Time{&wm.Updated, &wm.Synced}, updated, synced)
+		return c.decode(&wm)
 	})
 	return wm, err
 }
 
+// forgeMarkSelect names a watermark's columns, in forge_watermarks and
+// forge_run_watermarks alike, in the order forgeMarkCols scans them.
+const forgeMarkSelect = `updated, synced, since, missing, pending`
+
+// forgeMarkCols holds a watermark's columns as scanned.
+type forgeMarkCols struct {
+	updated, synced, since sql.NullString
+	missing, pending       int64
+}
+
+func (c *forgeMarkCols) dest() []any {
+	return []any{&c.updated, &c.synced, &c.since, &c.missing, &c.pending}
+}
+
+// decode fills wm's times and completeness from the columns, leaving Repo.
+func (c *forgeMarkCols) decode(wm *domain.ForgeWatermark) error {
+	wm.Missing, wm.Pending = int(c.missing), c.pending != 0
+	return forgeDecodeTimes([]*time.Time{&wm.Updated, &wm.Synced, &wm.From}, c.updated, c.synced, c.since)
+}
+
 // PutForgePage stores a page in one transaction: each pull request
 // replaces what the replica held for it, unless the replica's copy was
-// updated later, and the repository's watermark rises to page.Updated. It
-// never falls, so a page from an older pass cannot undo a newer one.
+// updated later. A page that completes its pass (page.Updated set) raises
+// the repository's watermark to page.Updated and clears pending; any other
+// page sets pending and leaves the watermark as it was, so a pass that stops
+// halfway moves it nowhere (#101). The watermark never falls, so a page from
+// an older pass cannot undo a newer one.
 func (s *Store) PutForgePage(ctx context.Context, page *domain.ForgePage) error {
 	return s.forgeTx(ctx, "storing a page of forge pull requests", func(tx *sql.Tx) error {
 		w, err := newForgePullWriter(ctx, tx)
@@ -95,12 +118,13 @@ func (s *Store) PutForgePage(ctx context.Context, page *domain.ForgePage) error 
 			return err
 		}
 		_, err = tx.ExecContext(ctx, `
-INSERT INTO forge_watermarks (repo, updated, synced) VALUES (?, ?, NULL)
+INSERT INTO forge_watermarks (repo, updated, synced, pending) VALUES (?, ?, NULL, ?)
 ON CONFLICT (repo) DO UPDATE SET updated = CASE
     WHEN excluded.updated IS NOT NULL
          AND (forge_watermarks.updated IS NULL OR excluded.updated > forge_watermarks.updated)
-    THEN excluded.updated ELSE forge_watermarks.updated END`,
-			page.Repo, updated)
+    THEN excluded.updated ELSE forge_watermarks.updated END,
+    pending = excluded.pending`,
+			page.Repo, updated, forgeFlag(page.Updated.IsZero()))
 		return err
 	})
 }
@@ -118,6 +142,44 @@ INSERT INTO forge_watermarks (repo, updated, synced) VALUES (?, NULL, ?)
 ON CONFLICT (repo) DO UPDATE SET synced = excluded.synced`, repo, synced)
 		return err
 	})
+}
+
+// MarkForgeChecked records what a sync that started at `at` found once its
+// passes completed: the replica is complete from `from`, the completeness
+// check counted `missing` pull requests it lacks, and the repository is
+// synced as of `at`. The three move together, in one transaction, so a
+// reader never sees a new "as of" beside an old check.
+func (s *Store) MarkForgeChecked(ctx context.Context, repo string, at, from time.Time, missing int) error {
+	if missing < 0 {
+		return fmt.Errorf("sqlite: marking %s checked: %d missing pull requests", repo, missing)
+	}
+	return s.forgeTx(ctx, "marking "+repo+" checked", func(tx *sql.Tx) error {
+		times, err := forgeEncodeTimes(at, from)
+		if err != nil {
+			return err
+		}
+		_, err = tx.ExecContext(ctx, `
+INSERT INTO forge_watermarks (repo, updated, synced, since, missing) VALUES (?, NULL, ?, ?, ?)
+ON CONFLICT (repo) DO UPDATE SET synced = excluded.synced, since = excluded.since, missing = excluded.missing`,
+			repo, times[0], times[1], missing)
+		return err
+	})
+}
+
+// CountForgePulls is how many of the repository's pull requests the replica
+// holds as last updated at or after since, all of them for a zero since.
+func (s *Store) CountForgePulls(ctx context.Context, repo string, since time.Time) (int, error) {
+	bound, err := forgeEncodeTime(since)
+	if err != nil {
+		return 0, err
+	}
+	var n int
+	err = s.forgeRead(ctx, "counting the forge pull requests of "+repo, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx,
+			`SELECT count(*) FROM forge_pull_requests WHERE repo = ? AND (? IS NULL OR updated >= ?)`,
+			repo, bound, bound).Scan(&n)
+	})
+	return n, err
 }
 
 // LoadForge returns the replica's repositories and watermarks, and every
@@ -151,8 +213,9 @@ func (s *Store) PutRunWatermarks(ctx context.Context, runID int64, watermarks []
 		if _, err := tx.ExecContext(ctx, `DELETE FROM forge_run_watermarks WHERE run_id = ?`, runID); err != nil {
 			return err
 		}
-		mark, err := tx.PrepareContext(ctx,
-			`INSERT INTO forge_run_watermarks (run_id, repo, name, updated, synced) VALUES (?, ?, ?, ?, ?)`)
+		mark, err := tx.PrepareContext(ctx, `
+INSERT INTO forge_run_watermarks (run_id, repo, name, updated, synced, since, missing, pending)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
 		if err != nil {
 			return err
 		}
@@ -168,11 +231,12 @@ func (s *Store) PutRunWatermarks(ctx context.Context, runID int64, watermarks []
 				// before migration 3, whose repositories it cannot tell.
 				return fmt.Errorf("watermark of %s: it joins none of the run's repositories", wm.Repo)
 			}
-			times, err := forgeEncodeTimes(wm.Updated, wm.Synced)
+			times, err := forgeEncodeTimes(wm.Updated, wm.Synced, wm.From)
 			if err != nil {
 				return fmt.Errorf("watermark of %s: %w", wm.Repo, err)
 			}
-			if _, err := mark.ExecContext(ctx, runID, wm.Repo, wm.Name, times[0], times[1]); err != nil {
+			if _, err := mark.ExecContext(ctx, runID, wm.Repo, wm.Name, times[0], times[1], times[2],
+				wm.Missing, forgeFlag(wm.Pending)); err != nil {
 				return fmt.Errorf("watermark of %s: %w", wm.Repo, err)
 			}
 			for _, key := range wm.Keys {
@@ -203,15 +267,18 @@ func (s *Store) RunWatermarks(ctx context.Context, runID int64) ([]domain.RunWat
 			return fmt.Errorf("run %d is %s: %w", runID, status, domain.ErrNotFound)
 		}
 		if err := forgeRows(ctx, tx, `
-SELECT repo, updated, synced, name FROM forge_run_watermarks WHERE run_id = ? ORDER BY repo`,
+SELECT repo, `+forgeMarkSelect+`, name FROM forge_run_watermarks WHERE run_id = ? ORDER BY repo`,
 			[]any{runID}, func(rows *sql.Rows) error {
 				var wm domain.RunWatermark
-				var updated, synced sql.NullString
-				if err := rows.Scan(&wm.Repo, &updated, &synced, &wm.Name); err != nil {
+				var c forgeMarkCols
+				if err := rows.Scan(append(append([]any{&wm.Repo}, c.dest()...), &wm.Name)...); err != nil {
+					return err
+				}
+				if err := c.decode(&wm.ForgeWatermark); err != nil {
 					return err
 				}
 				out = append(out, wm)
-				return forgeDecodeTimes([]*time.Time{&out[len(out)-1].Updated, &out[len(out)-1].Synced}, updated, synced)
+				return nil
 			}); err != nil {
 			return err
 		}
@@ -276,7 +343,7 @@ SELECT id, key, owner, name, default_branch, archived, fork FROM forge_repos ORD
 	if len(f.Repos) == 0 {
 		return nil, nil
 	}
-	if err := forgeRows(ctx, tx, `SELECT repo, updated, synced FROM forge_watermarks ORDER BY repo`,
+	if err := forgeRows(ctx, tx, `SELECT repo, `+forgeMarkSelect+` FROM forge_watermarks ORDER BY repo`,
 		nil, func(rows *sql.Rows) error {
 			wm, err := forgeScanWatermark(rows)
 			f.Watermarks = append(f.Watermarks, wm)
@@ -372,14 +439,14 @@ SELECT id, key, owner, name, default_branch, archived, fork FROM forge_repos ORD
 	return &f, nil
 }
 
-// forgeScanWatermark scans a (repo, updated, synced) row.
+// forgeScanWatermark scans a row of repo and forgeMarkSelect's columns.
 func forgeScanWatermark(rows *sql.Rows) (domain.ForgeWatermark, error) {
 	var wm domain.ForgeWatermark
-	var updated, synced sql.NullString
-	if err := rows.Scan(&wm.Repo, &updated, &synced); err != nil {
+	var c forgeMarkCols
+	if err := rows.Scan(append([]any{&wm.Repo}, c.dest()...)...); err != nil {
 		return wm, err
 	}
-	return wm, forgeDecodeTimes([]*time.Time{&wm.Updated, &wm.Synced}, updated, synced)
+	return wm, c.decode(&wm)
 }
 
 // forgePullWriter holds the prepared statements that replace pull requests.

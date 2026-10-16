@@ -185,7 +185,7 @@ func TestDeterminism(t *testing.T) {
 			}
 			noToken(t, "the error line of stillhere "+c.args[2], stderr.Bytes())
 		}
-		syncErr := app.Sync(t.Context(), app.Deps{Forge: refusingForge{}, ForgeStore: s.store, Store: s.store, Log: log},
+		_, syncErr := app.Sync(t.Context(), app.Deps{Forge: refusingForge{}, ForgeStore: s.store, Store: s.store, Log: log},
 			app.SyncRequest{Org: org, Mirrors: mirrors, Now: fixture.Now})
 		if syncErr == nil {
 			t.Fatal("a sync GitHub refused succeeded")

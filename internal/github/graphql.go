@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -48,6 +49,13 @@ const (
 
 	// minPage is the smallest pull request page a timeout shrinks to.
 	minPage = 5
+
+	// maxInFlight is how many API requests a Source sends at once (#100):
+	// one per repository, for up to three repositories. GitHub's guidance
+	// on secondary rate limits is to avoid many concurrent requests, with
+	// a documented ceiling of 100; three keeps a sync far below it, and a
+	// rate limit any of them meets pauses all of them (hold).
+	maxInFlight = 3
 )
 
 // budget is the rate-limit state of the last successful response.
@@ -80,17 +88,24 @@ func (e *apiError) Error() string { return "GitHub " + e.op + ": " + e.msg }
 func (e *apiError) Unwrap() error { return e.err }
 
 // query sends one GraphQL operation and decodes its data into a new T,
-// retrying through rate limits and transient failures. API requests take
-// the gate one at a time, as GitHub asks of clients, and a wait holds the
-// gate, because a rate limit applies to the whole token, not to one caller.
+// retrying through rate limits and transient failures. At most maxInFlight
+// requests are in flight at once (the gate), and a rate limit one of them
+// meets holds every other one until its wait is over, because a rate limit
+// applies to the whole token, not to one caller (hold).
 //
 // When shrink is true, a server error or a timeout halves the "first"
 // variable before the retry, down to minPage: GitHub's advice for a query
 // that times out is a smaller page. The caller reads the new size from vars.
+//
+// A response whose only errors are GitHub's NOT_FOUND on a field the data
+// holds as null, such as the account of a commit's author that was deleted
+// since (#99), is read as that null, and tolerated, when it is not nil,
+// counts them, so a pass can say how many it took (tolerable). Any other
+// error fails the request.
 func query[T any, P interface {
 	*T
 	rated
-}](ctx context.Context, s *Source, op, document string, vars map[string]any, shrink bool) (*T, error) {
+}](ctx context.Context, s *Source, op, document string, vars map[string]any, shrink bool, tolerated *int) (*T, error) {
 	select {
 	case s.gate <- struct{}{}:
 	case <-ctx.Done():
@@ -98,12 +113,23 @@ func query[T any, P interface {
 	}
 	defer func() { <-s.gate }()
 
+	var held time.Time // the hold this request set, which its own wait has served
 	for attempt := 1; ; attempt++ {
+		if err := s.awaitHold(ctx, held); err != nil {
+			return nil, err
+		}
 		if err := s.awaitBudget(ctx); err != nil {
 			return nil, err
 		}
 		out := P(new(T))
 		err := s.api.DoWithContext(ctx, document, vars, out)
+		if n, ok := tolerable(err, out); ok {
+			if tolerated != nil {
+				*tolerated += n
+			}
+			s.log.Debug("GitHub API: fields GitHub could not resolve read as null", "query", op, "fields", n)
+			err = nil
+		}
 		if err == nil {
 			s.spent(ctx, op, out.rate())
 			return (*T)(out), nil
@@ -120,12 +146,112 @@ func query[T any, P interface {
 				vars["first"] = max(first/2, minPage)
 			}
 		}
+		if !transient {
+			held = s.hold(wait)
+		}
 		s.log.Info("GitHub API: waiting before a retry",
 			"query", op, "reason", reason, "wait", wait.Round(time.Second), "attempt", attempt)
 		if err := s.sleep(ctx, wait); err != nil {
 			return nil, err
 		}
 	}
+}
+
+// hold makes every request wait d from now before it is sent, unless a
+// longer hold is already set, and returns when the hold ends. The request
+// that met the rate limit waits d itself and passes the returned time to
+// awaitHold as its own, so it does not wait twice; every other request
+// waits until the hold ends rather than meet the same limit and prolong it,
+// which GitHub warns can get an integration banned.
+func (s *Source) hold(d time.Duration) time.Time {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if until := s.clock().Add(d); until.After(s.held) {
+		s.held = until
+	}
+	return s.held
+}
+
+// awaitHold waits until the last hold ends, unless it is own: the hold the
+// caller set, whose wait it has served.
+func (s *Source) awaitHold(ctx context.Context, own time.Time) error {
+	s.mu.Lock()
+	until := s.held
+	s.mu.Unlock()
+	if until.IsZero() || until.Equal(own) {
+		return nil
+	}
+	if wait := until.Sub(s.clock()); wait > 0 {
+		return s.sleep(ctx, wait)
+	}
+	return nil
+}
+
+// tolerable reports whether err is a GraphQL response whose every error is
+// GitHub's NOT_FOUND on a field that data holds as null, and how many there
+// were: the Tolerant Reader (Martin Fowler, "TolerantReader", 2011). The
+// GraphQL specification lets a response carry both data and errors, and
+// when the field an error names is itself null, the schema declared it
+// nullable and the error is that field's own: the account of a commit's
+// author, of a pull request's or of a review's author, deleted since (#99),
+// which the adapter already reads as no login. A field that is not null in
+// data took a null from a non-nullable field below it, or is no null at
+// all; that, any other type of error, and a response without data stay
+// failures. data is the response as decoded, which go-gh fills before it
+// returns the errors (pkg/api, GraphQLClient.DoWithContext).
+func tolerable(err error, data any) (int, bool) {
+	var gerr *api.GraphQLError
+	if err == nil || !errors.As(err, &gerr) || len(gerr.Errors) == 0 {
+		return 0, false
+	}
+	b, merr := json.Marshal(data)
+	if merr != nil {
+		return 0, false
+	}
+	var tree any
+	if json.Unmarshal(b, &tree) != nil {
+		return 0, false
+	}
+	for _, e := range gerr.Errors {
+		if e.Type != "NOT_FOUND" || !nullAt(tree, e.Path) {
+			return 0, false
+		}
+	}
+	return len(gerr.Errors), true
+}
+
+// nullAt reports whether the field a GraphQL error's path names is in
+// tree, the response's data as JSON, and null. A path names an object's
+// member by its name and a list's item by its index.
+func nullAt(tree any, path []any) bool {
+	node := tree
+	for i, step := range path {
+		var next any
+		switch k := step.(type) {
+		case string:
+			m, ok := node.(map[string]any)
+			if !ok {
+				return false
+			}
+			if next, ok = m[k]; !ok {
+				return false
+			}
+		case float64:
+			a, ok := node.([]any)
+			idx := int(k)
+			if !ok || float64(idx) != k || idx < 0 || idx >= len(a) {
+				return false
+			}
+			next = a[idx]
+		default:
+			return false
+		}
+		if i == len(path)-1 {
+			return next == nil
+		}
+		node = next
+	}
+	return false
 }
 
 // spent records the budget a successful response reported. A response

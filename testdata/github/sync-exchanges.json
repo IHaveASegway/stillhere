@@ -1,0 +1,122 @@
+[
+  {
+    "name": "S1 run 1, sync --repo acme/widget: look the repository up",
+    "operation": "Repo",
+    "variables": {"owner": "acme", "name": "widget"},
+    "status": 200,
+    "headers": {"Date": "Fri, 09 Oct 2026 00:00:00 GMT"},
+    "body": "sync-repo.json"
+  },
+  {
+    "name": "S2 run 1's first pass, page 1",
+    "operation": "PullRequests",
+    "variables": {"repo": "R_widget", "first": 50, "after": null, "direction": "DESC"},
+    "status": 200,
+    "headers": {"Date": "Fri, 09 Oct 2026 00:00:02 GMT"},
+    "body": "sync-pulls-1.json"
+  },
+  {
+    "name": "S3 run 1's page 2 fails with an error no retry fixes, and no null explains: the pass stops halfway",
+    "operation": "PullRequests",
+    "variables": {"repo": "R_widget", "first": 50, "after": "sync-pulls-2", "direction": "DESC"},
+    "status": 200,
+    "headers": {"Date": "Fri, 09 Oct 2026 00:00:03 GMT"},
+    "text": "{\"data\": {\"rateLimit\": {\"cost\": 2, \"remaining\": 4988, \"resetAt\": \"2026-10-09T04:00:00Z\"}, \"node\": {\"pullRequests\": null}}, \"errors\": [{\"type\": \"FORBIDDEN\", \"path\": [\"node\", \"pullRequests\"], \"message\": \"Resource not accessible by integration\"}]}"
+  },
+  {
+    "name": "S4 run 2, the rerun: look the repository up",
+    "operation": "Repo",
+    "variables": {"owner": "acme", "name": "widget"},
+    "status": 200,
+    "headers": {"Date": "Fri, 09 Oct 2026 01:00:00 GMT"},
+    "body": "sync-repo.json"
+  },
+  {
+    "name": "S5 run 2's first pass, page 1 again",
+    "operation": "PullRequests",
+    "variables": {"repo": "R_widget", "first": 50, "after": null, "direction": "DESC"},
+    "status": 200,
+    "headers": {"Date": "Fri, 09 Oct 2026 01:00:01 GMT"},
+    "body": "sync-pulls-1.json"
+  },
+  {
+    "name": "S6 run 2's page 2, the end of the list",
+    "operation": "PullRequests",
+    "variables": {"repo": "R_widget", "first": 50, "after": "sync-pulls-2", "direction": "DESC"},
+    "status": 200,
+    "headers": {"Date": "Fri, 09 Oct 2026 01:00:02 GMT"},
+    "body": "sync-pulls-2.json"
+  },
+  {
+    "name": "S7 run 2's check: GitHub counts one pull request more in the window than any page listed",
+    "operation": "PullRequestCount",
+    "variables": {"q": "repo:acme/widget is:pr updated:2025-10-09T01:00:00Z..2026-10-09T00:55:00Z"},
+    "status": 200,
+    "headers": {"Date": "Fri, 09 Oct 2026 01:00:03 GMT"},
+    "text": "{\"data\": {\"rateLimit\": {\"cost\": 1, \"remaining\": 4985, \"resetAt\": \"2026-10-09T04:00:00Z\"}, \"search\": {\"issueCount\": 5}}}"
+  },
+  {
+    "name": "S8 run 3, over a replica with a hole an earlier stillhere left (#101): look the repository up",
+    "operation": "Repo",
+    "variables": {"owner": "acme", "name": "widget"},
+    "status": 200,
+    "headers": {"Date": "Fri, 09 Oct 2026 02:00:00 GMT"},
+    "body": "sync-repo.json"
+  },
+  {
+    "name": "S9 run 3's pass down to the watermark, page 1: PR 8 is new, PR 5 older",
+    "operation": "PullRequests",
+    "variables": {"repo": "R_widget", "first": 50, "after": null, "direction": "DESC"},
+    "status": 200,
+    "headers": {"Date": "Fri, 09 Oct 2026 02:00:01 GMT"},
+    "body": "sync-pulls-1.json"
+  },
+  {
+    "name": "S10 run 3's page 2: all older, the pass ends",
+    "operation": "PullRequests",
+    "variables": {"repo": "R_widget", "first": 50, "after": "sync-pulls-2", "direction": "DESC"},
+    "status": 200,
+    "headers": {"Date": "Fri, 09 Oct 2026 02:00:02 GMT"},
+    "body": "sync-pulls-2.json"
+  },
+  {
+    "name": "S11 run 3's check: GitHub counts 4 in the window, the replica holds 1",
+    "operation": "PullRequestCount",
+    "variables": {"q": "repo:acme/widget is:pr updated:2025-10-09T02:00:00Z..2026-10-09T01:55:00Z"},
+    "status": 200,
+    "headers": {"Date": "Fri, 09 Oct 2026 02:00:03 GMT"},
+    "text": "{\"data\": {\"rateLimit\": {\"cost\": 1, \"remaining\": 4980, \"resetAt\": \"2026-10-09T04:00:00Z\"}, \"search\": {\"issueCount\": 4}}}"
+  },
+  {
+    "name": "S12 run 3 reads the whole window again, page 1",
+    "operation": "PullRequests",
+    "variables": {"repo": "R_widget", "first": 50, "after": null, "direction": "DESC"},
+    "status": 200,
+    "headers": {"Date": "Fri, 09 Oct 2026 02:00:04 GMT"},
+    "body": "sync-pulls-1.json"
+  },
+  {
+    "name": "S13 run 3's whole window, page 2",
+    "operation": "PullRequests",
+    "variables": {"repo": "R_widget", "first": 50, "after": "sync-pulls-2", "direction": "DESC"},
+    "status": 200,
+    "headers": {"Date": "Fri, 09 Oct 2026 02:00:05 GMT"},
+    "body": "sync-pulls-2.json"
+  },
+  {
+    "name": "S14 run 3's check again: the replica holds all 4",
+    "operation": "PullRequestCount",
+    "variables": {"q": "repo:acme/widget is:pr updated:2025-10-09T02:00:00Z..2026-10-09T01:55:03Z"},
+    "status": 200,
+    "headers": {"Date": "Fri, 09 Oct 2026 02:00:06 GMT"},
+    "text": "{\"data\": {\"rateLimit\": {\"cost\": 1, \"remaining\": 4975, \"resetAt\": \"2026-10-09T04:00:00Z\"}, \"search\": {\"issueCount\": 4}}}"
+  },
+  {
+    "name": "S15 run 4, sync --org acme: widget is archived now",
+    "operation": "Repos",
+    "variables": {"owner": "acme", "after": null},
+    "status": 200,
+    "headers": {"Date": "Fri, 09 Oct 2026 03:00:00 GMT"},
+    "body": "sync-repos.json"
+  }
+]

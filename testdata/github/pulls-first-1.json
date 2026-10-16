@@ -1,0 +1,205 @@
+{
+  "data": {
+    "rateLimit": {
+      "cost": 2,
+      "remaining": 4996,
+      "resetAt": "2026-10-01T13:00:00Z"
+    },
+    "node": {
+      "pullRequests": {
+        "pageInfo": {
+          "hasNextPage": true,
+          "endCursor": "pulls-first-2"
+        },
+        "nodes": [
+          {
+            "id": "PR_08",
+            "number": 8,
+            "title": "feat: widget export",
+            "state": "OPEN",
+            "isDraft": false,
+            "baseRefName": "main",
+            "createdAt": "2026-10-01T11:00:00Z",
+            "updatedAt": "2026-10-01T12:00:00Z",
+            "closedAt": null,
+            "mergedAt": null,
+            "author": {
+              "__typename": "User",
+              "login": "bob"
+            },
+            "mergeCommit": null,
+            "labels": {
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": "labels-08-end"
+              },
+              "nodes": [
+                {
+                  "name": "feature"
+                }
+              ]
+            },
+            "reviews": {
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": "reviews-08-end"
+              },
+              "nodes": [
+                {
+                  "id": "PRR_08a",
+                  "state": "APPROVED",
+                  "submittedAt": "2026-10-01T12:00:00Z",
+                  "body": "",
+                  "author": {
+                    "__typename": "User",
+                    "login": "ada"
+                  },
+                  "comments": {
+                    "totalCount": 0
+                  }
+                }
+              ]
+            },
+            "commits": {
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": "MQ"
+              },
+              "nodes": [
+                {
+                  "commit": {
+                    "oid": "0800000000000000000000000000000000000001",
+                    "author": {
+                      "email": "bob@example.com",
+                      "user": {
+                        "login": "bob"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "id": "PR_10",
+            "number": 10,
+            "title": "wip: widget themes",
+            "state": "OPEN",
+            "isDraft": true,
+            "baseRefName": "main",
+            "createdAt": "2026-10-01T11:30:00Z",
+            "updatedAt": "2026-10-01T11:58:00Z",
+            "closedAt": null,
+            "mergedAt": null,
+            "author": {
+              "__typename": "User",
+              "login": "bob"
+            },
+            "mergeCommit": null,
+            "labels": {
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": null
+              },
+              "nodes": []
+            },
+            "reviews": {
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": null
+              },
+              "nodes": []
+            },
+            "commits": {
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": "MQ"
+              },
+              "nodes": [
+                {
+                  "commit": {
+                    "oid": "1000000000000000000000000000000000000001",
+                    "author": {
+                      "email": "bob@example.com",
+                      "user": {
+                        "login": "bob"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "id": "PR_05",
+            "number": 5,
+            "title": "refactor: split the widget module",
+            "state": "OPEN",
+            "isDraft": false,
+            "baseRefName": "main",
+            "createdAt": "2026-09-29T09:00:00Z",
+            "updatedAt": "2026-10-01T10:00:00Z",
+            "closedAt": null,
+            "mergedAt": null,
+            "author": {
+              "__typename": "User",
+              "login": "erin"
+            },
+            "mergeCommit": null,
+            "labels": {
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": "labels-05-end"
+              },
+              "nodes": [
+                {
+                  "name": "refactor"
+                }
+              ]
+            },
+            "reviews": {
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": "reviews-05-end"
+              },
+              "nodes": [
+                {
+                  "id": "PRR_05a",
+                  "state": "APPROVED",
+                  "submittedAt": "2026-10-01T10:00:00Z",
+                  "body": "Nice split.",
+                  "author": {
+                    "__typename": "User",
+                    "login": "ada"
+                  },
+                  "comments": {
+                    "totalCount": 0
+                  }
+                }
+              ]
+            },
+            "commits": {
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": "MQ"
+              },
+              "nodes": [
+                {
+                  "commit": {
+                    "oid": "0500000000000000000000000000000000000001",
+                    "author": {
+                      "email": "erin@old.example",
+                      "user": {
+                        "login": "erin"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  }
+}

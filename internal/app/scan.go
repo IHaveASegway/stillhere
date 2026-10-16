@@ -344,7 +344,8 @@ func forgeRead(watermarks []domain.RunWatermark) *report.ForgeRead {
 	for _, wm := range watermarks {
 		for _, key := range wm.Keys {
 			read.Repos = append(read.Repos, report.ForgeSync{Repo: wm.Name, Key: key,
-				Updated: instant(wm.Updated), Synced: instant(wm.Synced)})
+				Updated: instant(wm.Updated), Synced: instant(wm.Synced), From: instant(wm.From),
+				Missing: wm.Missing, Pending: wm.Pending})
 		}
 	}
 	slices.SortFunc(read.Repos, func(a, b report.ForgeSync) int {

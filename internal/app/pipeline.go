@@ -318,6 +318,9 @@ func collectRepo(ctx context.Context, d Deps, job repoJob, opt collectOptions) (
 		if err != nil {
 			return fail("blame", err)
 		}
+		if lineFacts {
+			commitGraphHint(ctx, d, repo, time.Duration(t.BlameMS)*time.Millisecond)
+		}
 		rf.LineFacts = lineFacts
 		rf.Owners, rf.IgnoreRevs, rf.BlameErrors = bf.Owners, bf.IgnoreRevs, bf.Errors
 		rf.Warnings = repoWarnings(repo, rf.Warnings, bf.Warnings)

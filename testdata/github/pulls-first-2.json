@@ -1,0 +1,334 @@
+{
+  "data": {
+    "rateLimit": {
+      "cost": 2,
+      "remaining": 40,
+      "resetAt": "2026-10-01T13:00:00Z"
+    },
+    "node": {
+      "pullRequests": {
+        "pageInfo": {
+          "hasNextPage": true,
+          "endCursor": "pulls-first-3"
+        },
+        "nodes": [
+          {
+            "id": "PR_09",
+            "number": 9,
+            "title": "feat: widget import",
+            "state": "MERGED",
+            "isDraft": false,
+            "baseRefName": "main",
+            "createdAt": "2026-09-21T10:00:00Z",
+            "updatedAt": "2026-09-25T18:00:00Z",
+            "closedAt": "2026-09-25T18:00:00Z",
+            "mergedAt": "2026-09-25T18:00:00Z",
+            "author": {
+              "__typename": "User",
+              "login": "ada"
+            },
+            "mergeCommit": {
+              "oid": "f090000000000000000000000000000000000000",
+              "author": {
+                "email": "ada@example.com",
+                "user": {
+                  "login": "ada"
+                }
+              }
+            },
+            "labels": {
+              "pageInfo": {
+                "hasNextPage": true,
+                "endCursor": "labels-09-2"
+              },
+              "nodes": [
+                {
+                  "name": "needs-review"
+                }
+              ]
+            },
+            "reviews": {
+              "pageInfo": {
+                "hasNextPage": true,
+                "endCursor": "reviews-09-2"
+              },
+              "nodes": [
+                {
+                  "id": "PRR_09a",
+                  "state": "COMMENTED",
+                  "submittedAt": "2026-09-22T09:00:00Z",
+                  "body": "A few questions.",
+                  "author": {
+                    "__typename": "User",
+                    "login": "bob"
+                  },
+                  "comments": {
+                    "totalCount": 3
+                  }
+                },
+                {
+                  "id": "PRR_09b",
+                  "state": "DISMISSED",
+                  "submittedAt": "2026-09-23T10:00:00Z",
+                  "body": "",
+                  "author": {
+                    "__typename": "User",
+                    "login": "erin"
+                  },
+                  "comments": {
+                    "totalCount": 0
+                  }
+                }
+              ]
+            },
+            "commits": {
+              "pageInfo": {
+                "hasNextPage": true,
+                "endCursor": "commits-09-2"
+              },
+              "nodes": [
+                {
+                  "commit": {
+                    "oid": "0900000000000000000000000000000000000001",
+                    "author": {
+                      "email": "ada@example.com",
+                      "user": {
+                        "login": "ada"
+                      }
+                    }
+                  }
+                },
+                {
+                  "commit": {
+                    "oid": "0900000000000000000000000000000000000002",
+                    "author": {
+                      "email": "ada@other.example",
+                      "user": {
+                        "login": "ada"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "id": "PR_04",
+            "number": 4,
+            "title": "chore(deps): bump golang.org/x/text from 0.40.0 to 0.41.0",
+            "state": "MERGED",
+            "isDraft": false,
+            "baseRefName": "main",
+            "createdAt": "2026-09-19T06:00:00Z",
+            "updatedAt": "2026-09-20T11:00:00Z",
+            "closedAt": "2026-09-20T11:00:00Z",
+            "mergedAt": "2026-09-20T11:00:00Z",
+            "author": {
+              "__typename": "Bot",
+              "login": "dependabot"
+            },
+            "mergeCommit": {
+              "oid": "f040000000000000000000000000000000000000",
+              "author": {
+                "email": "49699333+dependabot[bot]@users.noreply.github.com",
+                "user": {
+                  "login": "dependabot[bot]"
+                }
+              }
+            },
+            "labels": {
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": "labels-04-end"
+              },
+              "nodes": [
+                {
+                  "name": "dependencies"
+                }
+              ]
+            },
+            "reviews": {
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": "reviews-04-end"
+              },
+              "nodes": [
+                {
+                  "id": "PRR_04a",
+                  "state": "COMMENTED",
+                  "submittedAt": "2026-09-19T06:05:00Z",
+                  "body": "Copilot reviewed 1 out of 1 changed files in this pull request and generated 1 comment.",
+                  "author": {
+                    "__typename": "Bot",
+                    "login": "copilot-pull-request-reviewer"
+                  },
+                  "comments": {
+                    "totalCount": 1
+                  }
+                },
+                {
+                  "id": "PRR_04b",
+                  "state": "APPROVED",
+                  "submittedAt": "2026-09-20T10:30:00Z",
+                  "body": "",
+                  "author": {
+                    "__typename": "User",
+                    "login": "bob"
+                  },
+                  "comments": {
+                    "totalCount": 0
+                  }
+                }
+              ]
+            },
+            "commits": {
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": "MQ"
+              },
+              "nodes": [
+                {
+                  "commit": {
+                    "oid": "0400000000000000000000000000000000000001",
+                    "author": {
+                      "email": "49699333+dependabot[bot]@users.noreply.github.com",
+                      "user": {
+                        "login": "dependabot[bot]"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "id": "PR_02",
+            "number": 2,
+            "title": "fix: handle empty input",
+            "state": "MERGED",
+            "isDraft": false,
+            "baseRefName": "main",
+            "createdAt": "2026-09-10T08:00:00Z",
+            "updatedAt": "2026-09-15T16:00:00Z",
+            "closedAt": "2026-09-15T16:00:00Z",
+            "mergedAt": "2026-09-15T16:00:00Z",
+            "author": {
+              "__typename": "User",
+              "login": "bob"
+            },
+            "mergeCommit": {
+              "oid": "f020000000000000000000000000000000000000",
+              "author": {
+                "email": "bob@example.com",
+                "user": {
+                  "login": "bob"
+                }
+              }
+            },
+            "labels": {
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": "labels-02-end"
+              },
+              "nodes": [
+                {
+                  "name": "bug"
+                }
+              ]
+            },
+            "reviews": {
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": "reviews-02-end"
+              },
+              "nodes": [
+                {
+                  "id": "PRR_02a",
+                  "state": "CHANGES_REQUESTED",
+                  "submittedAt": "2026-09-14T11:00:00Z",
+                  "body": "Please add a test for empty input.",
+                  "author": {
+                    "__typename": "User",
+                    "login": "ada"
+                  },
+                  "comments": {
+                    "totalCount": 1
+                  }
+                },
+                {
+                  "id": "PRR_02b",
+                  "state": "COMMENTED",
+                  "submittedAt": "2026-09-14T13:00:00Z",
+                  "body": "Added the test.",
+                  "author": {
+                    "__typename": "User",
+                    "login": "bob"
+                  },
+                  "comments": {
+                    "totalCount": 1
+                  }
+                },
+                {
+                  "id": "PRR_02c",
+                  "state": "APPROVED",
+                  "submittedAt": "2026-09-15T14:00:00Z",
+                  "body": "  \n",
+                  "author": {
+                    "__typename": "User",
+                    "login": "ada"
+                  },
+                  "comments": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "id": "PRR_02d",
+                  "state": "APPROVED",
+                  "submittedAt": "2026-09-15T15:00:00Z",
+                  "body": "",
+                  "author": {
+                    "__typename": "User",
+                    "login": "renovate-approver"
+                  },
+                  "comments": {
+                    "totalCount": 0
+                  }
+                }
+              ]
+            },
+            "commits": {
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": "Mg"
+              },
+              "nodes": [
+                {
+                  "commit": {
+                    "oid": "0200000000000000000000000000000000000001",
+                    "author": {
+                      "email": "bob@example.com",
+                      "user": {
+                        "login": "bob"
+                      }
+                    }
+                  }
+                },
+                {
+                  "commit": {
+                    "oid": "0200000000000000000000000000000000000002",
+                    "author": {
+                      "email": "bob@example.com",
+                      "user": {
+                        "login": "bob"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  }
+}

@@ -67,7 +67,7 @@ A context's facts are written by its own collector only. The Forge context trans
 | Data | System of record | Writes it | Reads it | How it crosses into stillhere | Consistency readers need |
 |---|---|---|---|---|---|
 | Code, history, default branch | Each git repo (GitHub is origin) | Developers, via git | `scan`, through the git CLI | `sync` fetches mirrors; or your own clones as they are | Snapshot at the recorded HEAD SHAs |
-| Pull requests, reviews, comments, labels | GitHub | People on GitHub | `sync` | GraphQL, incremental by `updated_at`, upsert by node ID | As of the last sync watermark, shown on every page |
+| Pull requests, reviews, comments, labels | GitHub | People on GitHub | `sync` | GraphQL, newest update first, in passes bounded by the 365-day window or the last completed pass's start on GitHub's clock; upsert by node ID; each pass checked against GitHub's search count ([ADR 0013](adr/0013-sync-reads-bounded-passes-and-checks-the-replica.md)) | Complete within the window, as of the last sync, shown on every page; a caveat where the check found pull requests missing |
 | Who is a lead | A GitHub org team | Org admins | `serve` (M3), at login | The user's token at sign-in, re-checked hourly | Fresh within an hour |
 | A user's verified emails | GitHub | The user | `serve` (M3), at login | The user's token at sign-in; not stored | Fresh at sign-in |
 | Email aliases | `.mailmap` in each repo, plus an org mailmap file | Users, in reviewed files | git itself (`-c mailmap.file=`) | Applied by git during scan | Same run |
@@ -82,7 +82,7 @@ stillhere creates no second owner of any fact. Identity in particular stays with
 
 | Side | Command | Network | Writes |
 |---|---|---|---|
-| Write | `sync github` | GitHub API, git fetch | mirrors, forge facts; an unwritable facts.db is refused before any network call |
+| Write | `sync github` | GitHub API, git fetch | mirrors (with a commit-graph each), forge facts; an unwritable facts.db is refused before any network call |
 | Write | `scan` (later `backfill ownership`) | None | a run: history, authorship facts, metric values; an unwritable facts.db is refused before any git work |
 | Analysis | `week` | None | Nothing: it prints what landed |
 | Analysis | `policy` | None | Nothing: it prints the policy `week` and `scan` would use, as a complete file to edit |
@@ -121,7 +121,7 @@ The core (classification, metrics, ranking) imports no adapter package: no `os/e
 ## Reliability
 
 - **Bulkheads**: one repo, or one repo's GitHub sync, failing is recorded on that repo and the run continues. A run with failures is marked `partial`, and pages say so.
-- **Idempotent, resumable sync**: upserts keyed by GitHub node ID, a watermark per repo, and resuming after a crash or a rate limit. GraphQL allows 5,000 points per hour; requests run with bounded concurrency to stay under GitHub's secondary limits.
+- **Idempotent, resumable sync**: upserts keyed by GitHub node ID, and a watermark per repo that only a completed pass moves, to the time it began on GitHub's clock, so a crash, a rate limit or an interrupt costs a re-read of a bounded range and never leaves a hole; a count of the window's pull requests on GitHub and in the replica reconciles the two after every pass, and the same sync repairs a shortfall ([ADR 0013](adr/0013-sync-reads-bounded-passes-and-checks-the-replica.md)). GraphQL allows 5,000 points per hour; at most three requests are in flight, one per repository, and a rate limit holds them all, to stay under GitHub's secondary limits.
 - **Determinism**: an explicit `--now`, seeded bootstrap, stable sort orders. A CI test scans the fixtures twice and compares the bytes, once the wall-clock `timings` are removed.
 - **One version floor, git 2.45**: it brings `GIT_NO_LAZY_FETCH` (a partial clone's missing blobs read as missing, not fetched) and also covers `check-attr --source` (2.40, needed to read attributes at the scanned revision and in bare mirrors) and `--diff-merges` (2.31). Older git exits with a usage error. See [spec/git-invocation.md](spec/git-invocation.md#version-floors).
 - **Oracles**: synthetic fixture repos with hand-derived expected values for every metric version ([testdata/fixture/SPEC.md](../testdata/fixture/SPEC.md)), plus recorded GitHub API responses for sync.

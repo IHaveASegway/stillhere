@@ -1,6 +1,6 @@
 {
   "data": {
-    "rateLimit": {"cost": 1, "remaining": 4998, "resetAt": "2026-10-02T01:00:00Z"},
+    "rateLimit": {"cost": 1, "remaining": 4998, "resetAt": "2026-10-01T13:00:00Z"},
     "repositoryOwner": {
       "repositories": {
         "pageInfo": {"hasNextPage": false, "endCursor": "repos-end"},

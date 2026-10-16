@@ -1,0 +1,209 @@
+{
+  "data": {
+    "rateLimit": {
+      "cost": 2,
+      "remaining": 4990,
+      "resetAt": "2026-10-09T04:00:00Z"
+    },
+    "node": {
+      "pullRequests": {
+        "pageInfo": {
+          "hasNextPage": false,
+          "endCursor": "sync-pulls-end"
+        },
+        "nodes": [
+          {
+            "id": "PR_10",
+            "number": 10,
+            "title": "wip: widget themes",
+            "state": "OPEN",
+            "isDraft": true,
+            "baseRefName": "main",
+            "createdAt": "2026-10-01T11:30:00Z",
+            "updatedAt": "2026-10-01T11:58:00Z",
+            "closedAt": null,
+            "mergedAt": null,
+            "author": {
+              "__typename": "User",
+              "login": "bob"
+            },
+            "mergeCommit": null,
+            "labels": {
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": null
+              },
+              "nodes": []
+            },
+            "reviews": {
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": null
+              },
+              "nodes": []
+            },
+            "commits": {
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": "MQ"
+              },
+              "nodes": [
+                {
+                  "commit": {
+                    "oid": "1000000000000000000000000000000000000001",
+                    "author": {
+                      "email": "bob@example.com",
+                      "user": {
+                        "login": "bob"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          {
+            "id": "PR_09",
+            "number": 9,
+            "title": "feat: widget import",
+            "state": "MERGED",
+            "isDraft": false,
+            "baseRefName": "main",
+            "createdAt": "2026-09-21T10:00:00Z",
+            "updatedAt": "2026-09-25T18:00:00Z",
+            "closedAt": "2026-09-25T18:00:00Z",
+            "mergedAt": "2026-09-25T18:00:00Z",
+            "author": {
+              "__typename": "User",
+              "login": "ada"
+            },
+            "mergeCommit": {
+              "oid": "f090000000000000000000000000000000000000",
+              "author": {
+                "email": "ada@example.com",
+                "user": {
+                  "login": "ada"
+                }
+              }
+            },
+            "labels": {
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": "labels-09-end"
+              },
+              "nodes": [
+                {
+                  "name": "needs-review"
+                },
+                {
+                  "name": "enhancement"
+                }
+              ]
+            },
+            "reviews": {
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": "reviews-09-end"
+              },
+              "nodes": [
+                {
+                  "id": "PRR_09a",
+                  "state": "COMMENTED",
+                  "submittedAt": "2026-09-22T09:00:00Z",
+                  "body": "A few questions.",
+                  "author": {
+                    "__typename": "User",
+                    "login": "bob"
+                  },
+                  "comments": {
+                    "totalCount": 3
+                  }
+                },
+                {
+                  "id": "PRR_09b",
+                  "state": "DISMISSED",
+                  "submittedAt": "2026-09-23T10:00:00Z",
+                  "body": "",
+                  "author": {
+                    "__typename": "User",
+                    "login": "erin"
+                  },
+                  "comments": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "id": "PRR_09c",
+                  "state": "APPROVED",
+                  "submittedAt": "2026-09-24T15:00:00Z",
+                  "body": "",
+                  "author": {
+                    "__typename": "User",
+                    "login": "bob"
+                  },
+                  "comments": {
+                    "totalCount": 0
+                  }
+                },
+                {
+                  "id": "PRR_09d",
+                  "state": "APPROVED",
+                  "submittedAt": "2026-09-25T17:00:00Z",
+                  "body": "",
+                  "author": {
+                    "__typename": "User",
+                    "login": "cara"
+                  },
+                  "comments": {
+                    "totalCount": 0
+                  }
+                }
+              ]
+            },
+            "commits": {
+              "pageInfo": {
+                "hasNextPage": false,
+                "endCursor": "commits-09-end"
+              },
+              "nodes": [
+                {
+                  "commit": {
+                    "oid": "0900000000000000000000000000000000000001",
+                    "author": {
+                      "email": "ada@example.com",
+                      "user": {
+                        "login": "ada"
+                      }
+                    }
+                  }
+                },
+                {
+                  "commit": {
+                    "oid": "0900000000000000000000000000000000000002",
+                    "author": {
+                      "email": "ada@other.example",
+                      "user": {
+                        "login": "ada"
+                      }
+                    }
+                  }
+                },
+                {
+                  "commit": {
+                    "oid": "0900000000000000000000000000000000000003",
+                    "author": {
+                      "email": "ada@example.com",
+                      "user": {
+                        "login": "ada"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  }
+}

@@ -282,19 +282,23 @@ func wantNotFound(t *testing.T, s *sqlite.Store, id int64) {
 }
 
 // sampleRunWatermarks are the forge watermarks of the sample run, with
-// times in zone: one forge repository that two clones of the run name, and
-// one the replica held no page of, whose times are zero.
+// times in zone: one forge repository that two clones of the run name,
+// complete from a year back but for the pull requests its last check found
+// missing (ADR 0013), and one whose first sync stopped halfway, whose times
+// are zero.
 func sampleRunWatermarks(zone *time.Location) []domain.RunWatermark {
 	return []domain.RunWatermark{{
 		ForgeWatermark: domain.ForgeWatermark{
 			Repo:    "R_api",
 			Updated: time.Date(2026, time.October, 6, 18, 0, 0, 123456789, time.UTC).In(zone),
+			From:    time.Date(2025, time.October, 6, 17, 59, 0, 0, time.UTC).In(zone),
 			Synced:  time.Date(2026, time.October, 6, 22, 0, 0, 0, time.UTC).In(zone),
+			Missing: 3,
 		},
 		Name: "acme/api",
 		Keys: []string{"git@github.com:acme/api.git", "https://github.com/acme/api"},
 	}, {
-		ForgeWatermark: domain.ForgeWatermark{Repo: "R_docs"},
+		ForgeWatermark: domain.ForgeWatermark{Repo: "R_docs", Pending: true},
 		Name:           "acme/docs",
 		Keys:           []string{"https://github.com/acme/docs"},
 	}}

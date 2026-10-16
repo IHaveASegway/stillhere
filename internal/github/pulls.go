@@ -3,6 +3,7 @@ package github
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -18,12 +19,12 @@ const (
 	// dryRun on 2026-10-14); a timeout halves it for the rest of the pass.
 	pageSize = 50
 
-	// overlap is how far before the watermark a later pass keeps reading.
-	// It re-reads the pull requests updated in the same second as the
-	// watermark, and any whose new updatedAt GitHub's list showed late. A
-	// re-read pull request is stored again unchanged, so the cost is a few
-	// pull requests per pass. GitHub documents no consistency bound; this
-	// is a judgment, cheap to change.
+	// overlap is how far below since a pass keeps reading. It re-reads the
+	// pull requests updated in the second the last pass began, any whose
+	// new updatedAt GitHub's list showed late, and covers a few minutes of
+	// difference between GitHub's clocks. A re-read pull request is stored
+	// again unchanged, so the cost is a few pull requests per pass. GitHub
+	// documents no consistency bound; this is a judgment, cheap to change.
 	overlap = 5 * time.Minute
 )
 
@@ -189,45 +190,48 @@ func (d *commitsData) rate() rateLimitJSON { return d.RateLimit }
 func (d *labelsData) rate() rateLimitJSON  { return d.RateLimit }
 
 // PullRequests calls put with every pull request of repo last updated at or
-// after since, a page at a time.
+// after since, a page at a time, newest update first.
 //
 // GitHub's pull request list has no "updated since" filter, only an order by
-// updatedAt, so the pass depends on the watermark:
+// updatedAt, which is GitHub's and can disagree with the updatedAt values it
+// returns: on cli/cli one pull request updated in July was listed among
+// those updated in March (#101). Two rules make a pass safe anyway
+// (ADR 0013):
 //
-//   - The first pass (since is zero) reads oldest update first. Every page
-//     is then a checkpoint: all pull requests updated before its last one
-//     have been read, so each page carries the new watermark, and a pass
-//     that stops halfway resumes after the last page stored. A pull request
-//     updated during the pass moves to the end of the order and is read
-//     again there.
-//   - A later pass reads newest update first and stops at the first pull
-//     request older than since less the overlap. Only the last page raises
-//     the watermark, to the newest update read: one that happens during the
-//     pass moves to the front, behind the reader, and its new updatedAt is
-//     after that watermark, so the next pass reads it.
+//   - The watermark is a position GitHub owns, never a value read from the
+//     pull requests: the time the pass began on GitHub's clock (passStart),
+//     carried by the last page only, and only when the pass read down to
+//     since. A pass that stops halfway, for any reason, moves no watermark,
+//     and the next one reads the same range again.
+//   - The stop is tolerant: a pull request updated before the stop point
+//     (since less the overlap) is skipped, not taken for the end of the
+//     range, and the pass ends at the first page that holds none at or
+//     after the stop point, or at the end of the list. So one pull request
+//     out of order near the top cannot end a pass early.
 //
-// This is Airbyte's GitHub connector's approach (ascending until the first
-// state is saved, descending after). Each page's pull requests are complete:
-// a list longer than the page asked for is finished with follow-up queries
+// A pull request updated during the pass moves to the front, behind the
+// reader; its new update is after the pass began, so the next pass, which
+// reads down to this one's start less the overlap, reads it. A zero since
+// reads the whole list.
+//
+// This is how Kafka's consumers and Postgres's replication slots keep their
+// place, by an offset or a log sequence number the source owns, not by a
+// field of the records (Kleppmann, Designing Data-Intensive Applications,
+// ch. 11, "Logs and offsets"). Each page's pull requests are complete: a
+// list longer than the page asked for is finished with follow-up queries
 // before the page is handed to put.
 func (s *Source) PullRequests(ctx context.Context, repo domain.ForgeRepo, since time.Time, put func(*domain.ForgePage) error) error {
-	if since.IsZero() {
-		return s.pass(ctx, repo, "ASC", time.Time{}, put)
+	start := s.passStart()
+	var stop time.Time
+	if !since.IsZero() {
+		stop = since.Add(-overlap)
 	}
-	return s.pass(ctx, repo, "DESC", since, put)
-}
-
-// pass runs one pass in direction, ASC from the beginning or DESC down to
-// since less the overlap.
-func (s *Source) pass(ctx context.Context, repo domain.ForgeRepo, direction string, since time.Time, put func(*domain.ForgePage) error) error {
-	stop := since.Add(-overlap)
-	watermark := since // what the replica can claim once a page is stored
-	newest := since    // DESC: the newest update read, the watermark after the last page
+	tolerated := 0 // fields GitHub could not resolve, read as null (#99)
 	first := pageSize
 	after := ""
 	for {
-		vars := map[string]any{"repo": repo.ID, "first": first, "after": cursor(after), "direction": direction}
-		data, err := query[pullsData](ctx, s, "PullRequests", pullsQuery, vars, true)
+		vars := map[string]any{"repo": repo.ID, "first": first, "after": cursor(after), "direction": "DESC"}
+		data, err := query[pullsData](ctx, s, "PullRequests", pullsQuery, vars, true, &tolerated)
 		if err != nil {
 			return err
 		}
@@ -236,31 +240,32 @@ func (s *Source) pass(ctx context.Context, repo domain.ForgeRepo, direction stri
 			return errNoNode("repository", repo.Owner+"/"+repo.Name)
 		}
 		conn := data.Node.PullRequests
-		last := !conn.PageInfo.HasNextPage
 		var pulls []domain.PullRequest
 		for i := range conn.Nodes {
 			n := &conn.Nodes[i]
-			updated := n.UpdatedAt.UTC()
-			if direction == "DESC" && updated.Before(stop) {
-				last = true
-				break
+			if !stop.IsZero() && n.UpdatedAt.Before(stop) {
+				continue // older than the range, wherever GitHub's order put it
 			}
-			p, err := s.pull(ctx, repo, n)
+			p, err := s.pull(ctx, repo, n, &tolerated)
 			if err != nil {
 				return err
 			}
 			pulls = append(pulls, p)
-			if updated.After(newest) {
-				newest = updated
-			}
 		}
-		if direction == "ASC" || last {
-			watermark = newest
+		// The end of the list, or a whole page below the stop point.
+		last := !conn.PageInfo.HasNextPage || (!stop.IsZero() && len(pulls) == 0)
+		page := &domain.ForgePage{Repo: repo.ID, PullRequests: pulls}
+		if last {
+			page.Updated = start
 		}
-		if err := put(&domain.ForgePage{Repo: repo.ID, PullRequests: pulls, Updated: watermark}); err != nil {
+		if err := put(page); err != nil {
 			return err
 		}
 		if last {
+			if tolerated > 0 {
+				s.log.Info("GitHub could not resolve some accounts (deleted since); read as no account",
+					"repo", repo.Owner+"/"+repo.Name, "fields", tolerated)
+			}
 			return nil
 		}
 		if after, err = nextCursor("PullRequests", conn.PageInfo, after); err != nil {
@@ -269,9 +274,54 @@ func (s *Source) pass(ctx context.Context, repo domain.ForgeRepo, direction stri
 	}
 }
 
+// countQuery counts a repository's pull requests updated in a range with
+// GitHub's search, which, unlike the pull request list, filters by update
+// time (1 point). Asking for no node keeps it at the count.
+const countQuery = `query PullRequestCount($q: String!) {
+  rateLimit { cost remaining resetAt }
+  search(query: $q, type: ISSUE, first: 0) { issueCount }
+}`
+
+type countData struct {
+	RateLimit rateLimitJSON `json:"rateLimit"`
+	Search    struct {
+		IssueCount int `json:"issueCount"`
+	} `json:"search"`
+}
+
+func (d *countData) rate() rateLimitJSON { return d.RateLimit }
+
+// searchTime is how a time is written in a search qualifier.
+const searchTime = "2006-01-02T15:04:05Z"
+
+// CountPullRequests counts the pull requests of repo last updated at or
+// after from (from the first for a zero from) and before start less the
+// overlap: one updated in the overlap may have been read before that update,
+// and GitHub's clocks may disagree by a little, so it is left out rather than
+// counted as missing. GitHub's search leaves out pull requests it hides,
+// such as a spam account's (on cli/cli, 2026-10-15: 4,698 by search of
+// 4,730 listed), so the count is a lower bound.
+func (s *Source) CountPullRequests(ctx context.Context, repo domain.ForgeRepo, from, start time.Time) (int, error) {
+	if !ValidName(repo.Owner) || !ValidName(repo.Name) {
+		return 0, fmt.Errorf("github: cannot count the pull requests of %q/%q: not a valid repository name", repo.Owner, repo.Name)
+	}
+	to := start.Add(-overlap).UTC().Format(searchTime)
+	updated := "updated:<=" + to
+	if !from.IsZero() {
+		updated = "updated:" + from.UTC().Format(searchTime) + ".." + to
+	}
+	q := "repo:" + repo.Owner + "/" + repo.Name + " is:pr " + updated
+	data, err := query[countData](ctx, s, "PullRequestCount", countQuery, map[string]any{"q": q}, false, nil)
+	if err != nil {
+		return 0, err
+	}
+	return data.Search.IssueCount, nil
+}
+
 // pull translates one pull request, finishing its labels, reviews and
 // commits with follow-up queries when the page did not hold them all.
-func (s *Source) pull(ctx context.Context, repo domain.ForgeRepo, n *pullJSON) (domain.PullRequest, error) {
+// tolerated counts the fields GitHub could not resolve (query).
+func (s *Source) pull(ctx context.Context, repo domain.ForgeRepo, n *pullJSON, tolerated *int) (domain.PullRequest, error) {
 	p := domain.PullRequest{
 		ID:         n.ID,
 		Repo:       repo.ID,
@@ -305,7 +355,7 @@ func (s *Source) pull(ctx context.Context, repo domain.ForgeRepo, n *pullJSON) (
 			return p, err
 		}
 		data, err := query[labelsData](ctx, s, "PullRequestLabels", labelsQuery,
-			map[string]any{"pull": n.ID, "after": next}, false)
+			map[string]any{"pull": n.ID, "after": next}, false, tolerated)
 		if err != nil {
 			return p, err
 		}
@@ -332,7 +382,7 @@ func (s *Source) pull(ctx context.Context, repo domain.ForgeRepo, n *pullJSON) (
 			return p, err
 		}
 		data, err := query[reviewsData](ctx, s, "PullRequestReviews", reviewsQuery,
-			map[string]any{"pull": n.ID, "after": next}, false)
+			map[string]any{"pull": n.ID, "after": next}, false, tolerated)
 		if err != nil {
 			return p, err
 		}
@@ -358,7 +408,7 @@ func (s *Source) pull(ctx context.Context, repo domain.ForgeRepo, n *pullJSON) (
 			return p, err
 		}
 		data, err := query[commitsData](ctx, s, "PullRequestCommits", commitsQuery,
-			map[string]any{"pull": n.ID, "after": next}, false)
+			map[string]any{"pull": n.ID, "after": next}, false, tolerated)
 		if err != nil {
 			return p, err
 		}

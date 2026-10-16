@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -26,6 +27,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/IHaveASegway/stillhere/internal/app"
+	"github.com/IHaveASegway/stillhere/internal/collect"
 	"github.com/IHaveASegway/stillhere/internal/domain"
 	"github.com/IHaveASegway/stillhere/internal/fixture"
 	"github.com/IHaveASegway/stillhere/internal/gitcli"
@@ -33,6 +36,7 @@ import (
 	"github.com/IHaveASegway/stillhere/internal/metrics"
 	"github.com/IHaveASegway/stillhere/internal/policy"
 	"github.com/IHaveASegway/stillhere/internal/rank"
+	"github.com/IHaveASegway/stillhere/internal/report"
 	"github.com/IHaveASegway/stillhere/internal/sqlite"
 )
 
@@ -58,6 +62,10 @@ func TestGitHubSync(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The local clock moves only when the adapter waits, so every time it
+	// derives from GitHub's Date headers, a pass's start among them, is the
+	// recorded one.
+	clock := &fakeClock{}
 	var waits []time.Duration
 	src, err := github.New(ctx, github.Config{
 		Token:     plantedToken,
@@ -68,8 +76,11 @@ func TestGitHubSync(t *testing.T) {
 		Transport: api,
 		Sleep: func(_ context.Context, d time.Duration) error {
 			waits = append(waits, d)
+			clock.advance(d)
 			return nil
 		},
+		Clock:        clock.now,
+		ChangedPaths: git.AtLeast(2, 46),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -117,6 +128,16 @@ func TestGitHubSync(t *testing.T) {
 	equal(t, "mirror bare", inspect("rev-parse", "--is-bare-repository"), "true")
 	equal(t, "mirror remote.origin.url", inspect("config", "--get", "remote.origin.url"), widgetKey)
 	equal(t, "mirror remote.origin.fetch", inspect("config", "--get-all", "remote.origin.fetch"), "+refs/heads/*:refs/heads/*")
+	// #56: the mirror has a commit-graph, with version 2 changed-path
+	// filters where git writes them (2.46 and later), which scan's check
+	// finds; a scan of a user's clone without one prints a hint instead.
+	if _, err := os.Stat(filepath.Join(dir, "objects", "info", "commit-graph")); err != nil {
+		t.Fatalf("the mirror has no commit-graph: %v", err)
+	}
+	filters, err := collect.ChangedPathFilters(ctx, git, domain.Repo{Path: dir, Bare: true})
+	if err != nil || filters != git.AtLeast(2, 46) {
+		t.Fatalf("ChangedPathFilters(mirror) = %v, %v; want %v on git %s", filters, err, git.AtLeast(2, 46), git.Version())
+	}
 
 	// A later sync fetches with --prune and re-points HEAD: upstream drops
 	// feature, adds topic, and (as the API now says) makes topic the
@@ -198,42 +219,59 @@ func TestGitHubSync(t *testing.T) {
 			redirectErr, redirect.redirected.Load(), redirect.elsewhere.Load())
 	}
 
-	// The first pass: oldest update first, a watermark on every page,
-	// through a secondary rate limit, a nearly spent budget and a 502.
+	// The first pass: newest update first, down to a year before the sync,
+	// through a secondary rate limit, a nearly spent budget, a 502 and a
+	// field GitHub could not resolve (#99). Only the last page carries the
+	// watermark: the time the pass began on GitHub's clock (E3's Date), not
+	// a time read from a pull request (#101).
 	var pages []domain.ForgePage
-	collect := func(p *domain.ForgePage) error {
+	keep := func(p *domain.ForgePage) error {
 		pages = append(pages, *p)
 		return nil
 	}
-	if err := src.PullRequests(ctx, widget, time.Time{}, collect); err != nil {
+	if err := src.PullRequests(ctx, widget, ts("2025-10-01T12:00:01Z"), keep); err != nil {
 		t.Fatalf("PullRequests (first pass): %v", err)
 	}
 	first := firstPass()
 	equal(t, "first pass", pages, first)
+	if !strings.Contains(logs.String(), `msg="GitHub could not resolve some accounts (deleted since); read as no account" repo=acme/widget fields=1`) {
+		t.Errorf("the first pass did not log the field GitHub could not resolve:\n%s", logs.String())
+	}
 
-	// The second pass, from the last watermark: newest update first, down to
-	// the watermark less five minutes, so #10 (two minutes older) is read
-	// again and #9 stops the pass.
+	// The later pass, a week later, from the first pass's start: newest
+	// update first, down to it less five minutes. #9, older, sits before #10
+	// on the page, which the stop rule skips rather than takes for the end
+	// of the range, so #10, inside the overlap, is read again; the next page
+	// holds nothing that recent, which ends the pass.
+	clock.advance(7 * 24 * time.Hour)
 	since := pages[len(pages)-1].Updated
 	pages = nil
-	if err := src.PullRequests(ctx, widget, since, collect); err != nil {
+	if err := src.PullRequests(ctx, widget, since, keep); err != nil {
 		t.Fatalf("PullRequests (later pass): %v", err)
 	}
 	second := secondPass()
 	equal(t, "later pass", pages, second)
+
+	// GitHub's count of widget's pull requests settled before the later pass
+	// began, five minutes before its start: the completeness check's side.
+	count, err := src.CountPullRequests(ctx, widget, time.Time{}, second[len(second)-1].Updated)
+	if err != nil || count != 10 {
+		t.Fatalf("CountPullRequests = %d, %v; want 10", count, err)
+	}
 	api.done(t)
 
 	// The waits, all measured on GitHub's clock (the Date header): the reset
 	// a 200 announced in its headers, Retry-After, the reset the budget
-	// reported, a backoff after the 502, and at least a minute after a
-	// secondary limit in a 200.
+	// reported, at least a minute after a secondary limit in a 200, and a
+	// backoff after the 502. A rate limit holds every request until it is
+	// over, and the request that met it waits once.
 	if len(waits) != 5 ||
 		!within(waits[0], 10*time.Minute, 10*time.Minute+2*time.Second) ||
 		!within(waits[1], 60*time.Second, 61*time.Second) ||
 		!within(waits[2], 10*time.Minute, 10*time.Minute+2*time.Second) ||
-		!within(waits[3], time.Second, 2*time.Second) ||
-		!within(waits[4], time.Minute, 2*time.Minute) {
-		t.Fatalf("waits = %v; want [10m, 10m2s], [60s, 61s), [10m, 10m2s], [1s, 2s], [1m, 2m)", waits)
+		!within(waits[3], time.Minute, 2*time.Minute) ||
+		!within(waits[4], time.Second, 2*time.Second) {
+		t.Fatalf("waits = %v; want [10m, 10m2s], [60s, 61s), [10m, 10m2s], [1m, 2m), [1s, 2s]", waits)
 	}
 
 	// A token git's server refuses fails at once: no prompt, no mirror,
@@ -284,6 +322,180 @@ func TestGitHubSync(t *testing.T) {
 	t.Run("reviews_given@1", func(t *testing.T) {
 		reviewsGivenOracle(t, repos, append(first, second...), base)
 	})
+	t.Run("sync", syncScenario)
+}
+
+// syncScenario drives app.Sync through the adapter, the store and git, with
+// testdata/github/sync-exchanges.json as GitHub (README.md, "The sync
+// scenario"): a first sync that stops halfway moves no watermark, and its
+// rerun leaves no hole (#101); a check that finds GitHub counting more than
+// the replica holds is recorded, and a scan of the mirror says so; a
+// replica with a hole an earlier stillhere left is repaired by one sync; and
+// an archived repository's mirror moves out of scan's way (#110). Every
+// sync but the last names its repository with --repo (#111).
+func syncScenario(t *testing.T) {
+	t.Setenv("GH_CONFIG_DIR", t.TempDir())
+	ctx := t.Context()
+	server := newGitServer(t, plantedToken)
+	api := loadCassette(t, filepath.Join("..", "..", "testdata", "github", "sync-exchanges.json"))
+	var logs syncBuffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	git, err := gitcli.New(ctx, gitcli.Config{Logger: logger})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clock := &fakeClock{}
+	src, err := github.New(ctx, github.Config{
+		Token: plantedToken, Git: git, Logger: logger, GitURL: server.url, Transport: api,
+		Sleep:        func(_ context.Context, d time.Duration) error { clock.advance(d); return nil },
+		Clock:        clock.now,
+		ChangedPaths: git.AtLeast(2, 46),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	open := func() *sqlite.Store {
+		s, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "facts.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = s.Close() })
+		return s
+	}
+	root := filepath.Join(t.TempDir(), "mirrors")
+	widget := domain.ForgeRepo{ID: "R_widget", Key: server.url + "/acme/widget.git", Owner: "acme", Name: "widget", DefaultBranch: "main"}
+	run := func(store *sqlite.Store, now string, org string, repos ...string) (*app.SyncSummary, error) {
+		return app.Sync(ctx, app.Deps{Forge: src, ForgeStore: store, Store: store, Log: logger},
+			app.SyncRequest{Org: org, Repos: repos, Mirrors: root, Now: ts(now)})
+	}
+	mark := func(store *sqlite.Store) domain.ForgeWatermark {
+		t.Helper()
+		wm, err := store.ForgeWatermark(ctx, "R_widget")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return wm
+	}
+	stored := func(store *sqlite.Store) []int {
+		t.Helper()
+		f, err := store.LoadForge(ctx, time.Time{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var numbers []int
+		for _, p := range f.PullRequests {
+			numbers = append(numbers, p.Number)
+		}
+		return numbers
+	}
+
+	// Run 1: a first sync whose second page fails with an error that no
+	// retry fixes and no null explains (S1 to S3). The page it stored stays,
+	// and no watermark moves: the first sync did not finish.
+	a := open()
+	sum, err := run(a, "2026-10-09T00:00:00Z", "", "acme/widget")
+	if err == nil || !errors.Is(err, domain.ErrNoFacts) {
+		t.Fatalf("run 1: %v; want no repository synced", err)
+	}
+	equal(t, "run 1's summary", *sum, app.SyncSummary{Repos: 1, Failed: 1, Pulls: 2, Took: sum.Took})
+	equal(t, "run 1's watermark", mark(a), domain.ForgeWatermark{Repo: "R_widget", Pending: true})
+	equal(t, "run 1's pull requests", stored(a), []int{5, 8})
+
+	// Run 2, its rerun (S4 to S7): the whole window again, a watermark at
+	// the pass's start on GitHub's clock (S4's Date), complete from a year
+	// before the sync. GitHub counts one more pull request than the list
+	// held, which the replica records as missing.
+	sum, err = run(a, "2026-10-09T01:00:00Z", "", "acme/widget")
+	if err != nil {
+		t.Fatalf("run 2: %v", err)
+	}
+	equal(t, "run 2's summary", *sum, app.SyncSummary{Repos: 1, Synced: 1, Incomplete: 1, Pulls: 4, Took: sum.Took})
+	equal(t, "run 2's watermark", mark(a), domain.ForgeWatermark{Repo: "R_widget",
+		Updated: ts("2026-10-09T01:00:00Z"), From: ts("2025-10-09T01:00:00Z"), Synced: ts("2026-10-09T01:00:00Z"), Missing: 1})
+	equal(t, "run 2's pull requests", stored(a), []int{5, 8, 9, 10})
+
+	// A scan of the mirror reads that replica, and the pages that show its
+	// GitHub numbers say the data is incomplete (ADR 0013).
+	pol, err := policy.Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	model, err := app.Scan(ctx, app.Deps{Git: git, Store: a, ForgeStore: a, Policy: pol, Log: logger},
+		app.ScanRequest{Paths: []string{filepath.Join(root, "acme")}, Now: ts("2026-10-09T01:30:00Z")})
+	if err != nil {
+		t.Fatalf("scan of the mirror: %v", err)
+	}
+	var doc bytes.Buffer
+	if err := report.JSON(&doc, model); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(doc.String(), `"code": "forge-incomplete"`) &&
+		!strings.Contains(doc.String(), `"code":"forge-incomplete"`) {
+		t.Errorf("the scan of an incomplete replica carries no forge-incomplete caveat:\n%s", doc.String())
+	}
+
+	// Run 3, over a replica an earlier stillhere left with a hole (S8 to
+	// S14): its watermark is a time read from a pull request, #8's, and it
+	// holds #8 alone. The pass down to that watermark completes, the check
+	// counts 4 in the window against 1, and the same sync reads the whole
+	// window again: no hole, nothing missing, the watermark at the second
+	// pass's start (S11's Date).
+	b := open()
+	if err := b.PutForgeRepos(ctx, []domain.ForgeRepo{widget}); err != nil {
+		t.Fatal(err)
+	}
+	f, err := a.LoadForge(ctx, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr08 := f.PullRequests[slices.IndexFunc(f.PullRequests, func(p domain.PullRequest) bool { return p.Number == 8 })]
+	if err := b.PutForgePage(ctx, &domain.ForgePage{Repo: "R_widget", PullRequests: []domain.PullRequest{pr08},
+		Updated: pr08.Updated}); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.MarkForgeSynced(ctx, "R_widget", ts("2026-10-08T10:00:00Z")); err != nil {
+		t.Fatal(err)
+	}
+	sum, err = run(b, "2026-10-09T02:00:00Z", "", "acme/widget")
+	if err != nil {
+		t.Fatalf("run 3: %v", err)
+	}
+	equal(t, "run 3's summary", *sum, app.SyncSummary{Repos: 1, Synced: 1, Pulls: 5, Took: sum.Took})
+	equal(t, "run 3's watermark", mark(b), domain.ForgeWatermark{Repo: "R_widget",
+		Updated: ts("2026-10-09T02:00:03Z"), From: ts("2025-10-09T02:00:00Z"), Synced: ts("2026-10-09T02:00:00Z")})
+	equal(t, "run 3's pull requests", stored(b), []int{5, 8, 9, 10})
+
+	// Run 4: the organization now lists widget archived (S15). The sync
+	// leaves it out, and its mirror moves to .stale, where scan never
+	// looks; nothing is left to sync.
+	sum, err = run(a, "2026-10-09T03:00:00Z", "acme")
+	if err == nil || !errors.Is(err, domain.ErrNoFacts) {
+		t.Fatalf("run 4: %v; want nothing to sync", err)
+	}
+	equal(t, "run 4's summary", *sum, app.SyncSummary{Took: sum.Took})
+	equal(t, "mirrors of acme after run 4", mirrorsIn(t, filepath.Join(root, "acme")), []string(nil))
+	equal(t, "stale mirrors after run 4", mirrorsIn(t, filepath.Join(root, ".stale", "acme")), []string{"widget.git"})
+	api.done(t)
+	noSecret(t, "the sync scenario's logs", logs.String(), []string{plantedToken, "AUTHORIZATION"})
+}
+
+// fakeClock is a local clock that moves only when the test moves it, as
+// the adapter's Sleep does.
+type fakeClock struct {
+	mu sync.Mutex
+	t  time.Time
+}
+
+func (c *fakeClock) now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.t
+}
+
+func (c *fakeClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.t = c.t.Add(d)
 }
 
 // reviewsGivenOracle stores the pages the two passes returned in a real
@@ -353,14 +565,17 @@ func reviewsGivenOracle(t *testing.T, repos []domain.ForgeRepo, pages []domain.F
 
 	// The round trip: LoadForge returns each pull request as the last page
 	// that carried it said, every label, review and commit included, with
-	// each repository's watermark at its last page's.
+	// each repository's watermark at the start of its last completed pass,
+	// which only a pass's last page carries, and nothing pending.
 	latest := map[string]domain.PullRequest{}
 	marks := map[string]time.Time{}
 	for _, p := range pages {
 		for _, pr := range p.PullRequests {
 			latest[pr.ID] = pr
 		}
-		marks[p.Repo] = p.Updated
+		if !p.Updated.IsZero() {
+			marks[p.Repo] = p.Updated
+		}
 	}
 	var wantPulls []domain.PullRequest
 	for _, pr := range latest {
@@ -693,30 +908,33 @@ func firstPass() []domain.ForgePage {
 		Commits: []domain.ForgeCommit{commit(c08a, "bob@example.com", "bob")},
 	}
 	return []domain.ForgePage{
-		{Repo: "R_widget", PullRequests: []domain.PullRequest{pr03, pr07, pr01}, Updated: ts("2026-08-10T12:00:00Z")},
-		{Repo: "R_widget", PullRequests: []domain.PullRequest{pr06, pr02, pr04}, Updated: ts("2026-09-20T11:00:00Z")},
-		{Repo: "R_widget", PullRequests: []domain.PullRequest{pr09, pr05, pr10, pr08}, Updated: ts("2026-10-01T12:00:00Z")},
+		{Repo: "R_widget", PullRequests: []domain.PullRequest{pr08, pr10, pr05}},
+		{Repo: "R_widget", PullRequests: []domain.PullRequest{pr09, pr04, pr02}},
+		{Repo: "R_widget", PullRequests: []domain.PullRequest{pr06, pr01, pr07, pr03}, Updated: ts("2026-10-01T12:00:01Z")},
 	}
 }
 
 // secondPass is what the later pass hands put: #8 and #5 merged since the
-// first pass, #10 read again inside the overlap, and the watermark raised
-// to #8's update (README.md, "Later pass").
+// first pass and #10 read again inside the overlap, on a page whose #9 is
+// older than the stop point; then a page with nothing that recent, which
+// ends the pass and carries its start, E12's Date a week on (README.md,
+// "Later pass").
 func secondPass() []domain.ForgePage {
 	first := firstPass()
-	pr08 := first[2].PullRequests[3]
+	pr08 := first[0].PullRequests[0]
 	pr08.State, pr08.Updated, pr08.Closed, pr08.Merged = domain.PullMerged,
 		ts("2026-10-08T09:00:00Z"), ts("2026-10-08T09:00:00Z"), ts("2026-10-08T09:00:00Z")
 	pr08.MergeCommit = commit(f08, "bob@example.com", "bob")
 	pr08.Reviews = append(pr08.Reviews, review("PRR_08b", user("cara"), domain.ReviewCommented, "2026-10-07T16:00:00Z", 18, 1))
-	pr05 := first[2].PullRequests[1]
+	pr05 := first[0].PullRequests[2]
 	pr05.State, pr05.Updated, pr05.Closed, pr05.Merged = domain.PullMerged,
 		ts("2026-10-04T15:00:00Z"), ts("2026-10-04T15:00:00Z"), ts("2026-10-04T15:00:00Z")
 	pr05.MergeCommit = commit(f05, "erin@old.example", "erin")
 	pr05.Reviews = append(pr05.Reviews, review("PRR_05b", user("bob"), domain.ReviewCommented, "2026-10-03T09:00:00Z", 24, 1))
-	pr10 := first[2].PullRequests[2]
+	pr10 := first[0].PullRequests[1]
 	return []domain.ForgePage{
-		{Repo: "R_widget", PullRequests: []domain.PullRequest{pr08, pr05, pr10}, Updated: ts("2026-10-08T09:00:00Z")},
+		{Repo: "R_widget", PullRequests: []domain.PullRequest{pr08, pr05, pr10}},
+		{Repo: "R_widget", Updated: ts("2026-10-08T13:02:10Z")},
 	}
 }
 

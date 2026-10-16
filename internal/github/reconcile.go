@@ -41,10 +41,14 @@ var errTaken = errors.New("the path is taken by another directory")
 //     went stale (MirrorRestored). Mirror then points its origin at the new
 //     URL.
 //   - Under root/<owner>, for the owners of this listing, the mirror of a
-//     repository the listing no longer holds moves to root/.stale/<owner>
-//     (MirrorStale), and so does a second mirror of a listed repository
+//     repository the listing does not hold moves to root/.stale/<owner>
+//     (MirrorStale): one GitHub no longer lists, or one this sync leaves
+//     out, such as an archived repository without --include-archived
+//     (#110). So does a second mirror of a listed repository
 //     (MirrorDuplicate). Nothing is deleted: a repository that comes back,
-//     here or under another owner, gets its mirror back.
+//     here or under another owner, gets its mirror back. When owner is "",
+//     the listing is not an owner's whole one (sync --repo), and no mirror
+//     of an unlisted repository moves.
 //
 // Otherwise a renamed repository would be cloned again under its new name
 // and scanned twice, once under each name, since discovery keys
@@ -68,14 +72,16 @@ func (s *Source) ReconcileMirrors(ctx context.Context, owner string, listed []do
 		return nil, err
 	}
 	want := map[string]string{} // node id → the path its mirror belongs at
-	owners := map[string]bool{} // the owner directories this listing speaks for, lowercased
+	owners := map[string]bool{} // the owner directories this listing speaks for, lowercased; none for a partial one
 	if ValidName(owner) {
 		owners[strings.ToLower(owner)] = true
 	}
 	for _, r := range listed {
 		if ValidName(r.Owner) && ValidName(r.Name) && validID(r.ID) {
 			want[r.ID] = filepath.Join(root, r.Owner, r.Name+".git")
-			owners[strings.ToLower(r.Owner)] = true
+			if owner != "" {
+				owners[strings.ToLower(r.Owner)] = true
+			}
 		}
 	}
 	moves := planMoves(found, want, owners)

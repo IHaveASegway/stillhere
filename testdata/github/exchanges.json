@@ -4,7 +4,7 @@
     "operation": "Repos",
     "variables": {"owner": "acme", "after": null},
     "status": 200,
-    "headers": {"Date": "Thu, 01 Oct 2026 23:50:00 GMT", "X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1790899200"},
+    "headers": {"Date": "Thu, 01 Oct 2026 11:50:00 GMT", "X-RateLimit-Remaining": "0", "X-RateLimit-Reset": "1790856000"},
     "text": "{\"data\": null, \"errors\": [{\"type\": \"RATE_LIMITED\", \"message\": \"API rate limit exceeded for user ID 1.\"}]}"
   },
   {
@@ -12,7 +12,7 @@
     "operation": "Repos",
     "variables": {"owner": "acme", "after": null},
     "status": 200,
-    "headers": {"Date": "Fri, 02 Oct 2026 00:00:00 GMT"},
+    "headers": {"Date": "Thu, 01 Oct 2026 12:00:00 GMT"},
     "body": "repos-1.json"
   },
   {
@@ -20,87 +20,103 @@
     "operation": "Repos",
     "variables": {"owner": "acme", "after": "repos-page-2"},
     "status": 200,
-    "headers": {"Date": "Fri, 02 Oct 2026 00:00:01 GMT"},
+    "headers": {"Date": "Thu, 01 Oct 2026 12:00:01 GMT"},
     "body": "repos-2.json"
   },
   {
-    "name": "E4 first pass over widget, oldest update first, page 1",
+    "name": "E4 first pass over widget, newest update first, page 1",
     "operation": "PullRequests",
-    "variables": {"repo": "R_widget", "first": 50, "after": null, "direction": "ASC"},
+    "variables": {"repo": "R_widget", "first": 50, "after": null, "direction": "DESC"},
     "status": 200,
-    "headers": {"Date": "Fri, 02 Oct 2026 00:00:02 GMT"},
-    "body": "pulls-asc-1.json"
+    "headers": {"Date": "Thu, 01 Oct 2026 12:00:02 GMT"},
+    "body": "pulls-first-1.json"
   },
   {
     "name": "E5 page 2 meets a secondary rate limit with Retry-After",
     "operation": "PullRequests",
-    "variables": {"repo": "R_widget", "first": 50, "after": "pulls-asc-2", "direction": "ASC"},
+    "variables": {"repo": "R_widget", "first": 50, "after": "pulls-first-2", "direction": "DESC"},
     "status": 403,
-    "headers": {"Date": "Fri, 02 Oct 2026 00:00:03 GMT", "Retry-After": "60"},
+    "headers": {"Date": "Thu, 01 Oct 2026 12:00:03 GMT", "Retry-After": "60"},
     "body": "secondary-limit.json"
   },
   {
-    "name": "E6 page 2 again; other tools spent the hourly points, 40 are left",
+    "name": "E6 page 2 again; other tools spent the hourly points, 40 are left; PR 9 needs follow-ups",
     "operation": "PullRequests",
-    "variables": {"repo": "R_widget", "first": 50, "after": "pulls-asc-2", "direction": "ASC"},
+    "variables": {"repo": "R_widget", "first": 50, "after": "pulls-first-2", "direction": "DESC"},
     "status": 200,
-    "headers": {"Date": "Fri, 02 Oct 2026 00:50:00 GMT"},
-    "body": "pulls-asc-2.json"
+    "headers": {"Date": "Thu, 01 Oct 2026 12:50:00 GMT"},
+    "body": "pulls-first-2.json"
   },
   {
-    "name": "E7 page 3, after the reset, times out at GitHub's edge",
-    "operation": "PullRequests",
-    "variables": {"repo": "R_widget", "first": 50, "after": "pulls-asc-3", "direction": "ASC"},
-    "status": 502,
-    "headers": {"Date": "Fri, 02 Oct 2026 01:00:02 GMT", "Content-Type": "text/html"},
-    "text": "<html><body><h1>502 Bad Gateway</h1></body></html>"
-  },
-  {
-    "name": "E8 page 3 again, half the size; PR 9 needs follow-ups",
-    "operation": "PullRequests",
-    "variables": {"repo": "R_widget", "first": 25, "after": "pulls-asc-3", "direction": "ASC"},
-    "status": 200,
-    "headers": {"Date": "Fri, 02 Oct 2026 01:00:04 GMT"},
-    "body": "pulls-asc-3.json"
-  },
-  {
-    "name": "E9 the rest of PR 9's labels meets a secondary rate limit, which GitHub reports in a 200 without Retry-After",
+    "name": "E7 the rest of PR 9's labels, after the reset, meets a secondary rate limit, which GitHub reports in a 200 without Retry-After",
     "operation": "PullRequestLabels",
     "variables": {"pull": "PR_09", "after": "labels-09-2"},
     "status": 200,
-    "headers": {"Date": "Fri, 02 Oct 2026 01:00:05 GMT"},
+    "headers": {"Date": "Thu, 01 Oct 2026 13:00:02 GMT"},
     "text": "{\"data\": null, \"errors\": [{\"message\": \"You have exceeded a secondary rate limit. Please wait a few minutes before you try again.\"}]}"
   },
   {
-    "name": "E10 the rest of PR 9's labels, after the backoff",
+    "name": "E8 the rest of PR 9's labels, after the backoff",
     "operation": "PullRequestLabels",
     "variables": {"pull": "PR_09", "after": "labels-09-2"},
     "status": 200,
-    "headers": {"Date": "Fri, 02 Oct 2026 01:02:05 GMT"},
+    "headers": {"Date": "Thu, 01 Oct 2026 13:02:05 GMT"},
     "body": "labels-09.json"
   },
   {
-    "name": "E11 the rest of PR 9's reviews",
+    "name": "E9 the rest of PR 9's reviews",
     "operation": "PullRequestReviews",
     "variables": {"pull": "PR_09", "after": "reviews-09-2"},
     "status": 200,
-    "headers": {"Date": "Fri, 02 Oct 2026 01:02:06 GMT"},
+    "headers": {"Date": "Thu, 01 Oct 2026 13:02:06 GMT"},
     "body": "reviews-09.json"
   },
   {
-    "name": "E12 the rest of PR 9's commits",
+    "name": "E10 the rest of PR 9's commits",
     "operation": "PullRequestCommits",
     "variables": {"pull": "PR_09", "after": "commits-09-2"},
     "status": 200,
-    "headers": {"Date": "Fri, 02 Oct 2026 01:02:07 GMT"},
+    "headers": {"Date": "Thu, 01 Oct 2026 13:02:07 GMT"},
     "body": "commits-09.json"
   },
   {
-    "name": "E13 a week later: newest update first, down to the watermark less the overlap",
+    "name": "E11 page 3 times out at GitHub's edge",
+    "operation": "PullRequests",
+    "variables": {"repo": "R_widget", "first": 50, "after": "pulls-first-3", "direction": "DESC"},
+    "status": 502,
+    "headers": {"Date": "Thu, 01 Oct 2026 13:02:08 GMT", "Content-Type": "text/html"},
+    "text": "<html><body><h1>502 Bad Gateway</h1></body></html>"
+  },
+  {
+    "name": "E12 page 3 again, half the size, the end of the list; GitHub could not resolve PR 7's commit author's account (#99)",
+    "operation": "PullRequests",
+    "variables": {"repo": "R_widget", "first": 25, "after": "pulls-first-3", "direction": "DESC"},
+    "status": 200,
+    "headers": {"Date": "Thu, 01 Oct 2026 13:02:10 GMT"},
+    "body": "pulls-first-3.json"
+  },
+  {
+    "name": "E13 a week later: newest update first, down to the first pass's start less the overlap; PR 9, older, sits before PR 10",
     "operation": "PullRequests",
     "variables": {"repo": "R_widget", "first": 50, "after": null, "direction": "DESC"},
     "status": 200,
-    "headers": {"Date": "Fri, 09 Oct 2026 00:00:00 GMT"},
-    "body": "pulls-desc-1.json"
+    "headers": {"Date": "Thu, 08 Oct 2026 13:02:11 GMT"},
+    "body": "pulls-later-1.json"
+  },
+  {
+    "name": "E14 page 2: a whole page older than the stop point ends the pass",
+    "operation": "PullRequests",
+    "variables": {"repo": "R_widget", "first": 50, "after": "pulls-later-2", "direction": "DESC"},
+    "status": 200,
+    "headers": {"Date": "Thu, 08 Oct 2026 13:02:12 GMT"},
+    "body": "pulls-later-2.json"
+  },
+  {
+    "name": "E15 GitHub's count of widget's pull requests settled before the later pass began",
+    "operation": "PullRequestCount",
+    "variables": {"q": "repo:acme/widget is:pr updated:<=2026-10-08T12:57:10Z"},
+    "status": 200,
+    "headers": {"Date": "Thu, 08 Oct 2026 13:02:13 GMT"},
+    "text": "{\"data\": {\"rateLimit\": {\"cost\": 1, \"remaining\": 4993, \"resetAt\": \"2026-10-08T14:00:00Z\"}, \"search\": {\"issueCount\": 10}}}"
   }
 ]

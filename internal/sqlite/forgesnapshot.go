@@ -141,7 +141,7 @@ SELECT seq, id, key, owner, name, default_branch, archived, fork FROM forge_snap
 	if len(f.Repos) == 0 {
 		return nil, nil
 	}
-	if err := each(ctx, tx, `SELECT repo, updated, synced FROM forge_run_watermarks WHERE run_id = ? ORDER BY repo`,
+	if err := each(ctx, tx, `SELECT repo, `+forgeMarkSelect+` FROM forge_run_watermarks WHERE run_id = ? ORDER BY repo`,
 		args, func(rows *sql.Rows) error {
 			wm, err := forgeScanWatermark(rows)
 			f.Watermarks = append(f.Watermarks, wm)
