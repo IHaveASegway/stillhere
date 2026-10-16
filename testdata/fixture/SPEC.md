@@ -1,8 +1,8 @@
 # Fixture repository and oracles
 
-Status: carried over from the 2026-10-07 plan, change oracles and the sibling fixture added 2026-10-14, regression guards added 2026-10-14 (#13), the binary-file guard 2026-10-14 (#54), with a rename History does not collect, a vendored file and a later text change added by its review 2026-10-15, its text twins and the main fixture as it stood at an earlier `--now` added 2026-10-15 (#70), `landed@2`, knowledge under any path, `review_coverage@1` with a seventh pull request, the binary-changes caveat and the partial and shallow clones added 2026-10-15 (#108, #107, #64, #74), the week oracle moved to `landed@2` and explain traces and roleless paths added 2026-10-15 (#108, #109, PF-8), an agent's pull request, a replica's hole and a stale sync in the merge-methods guard and a week a shallow clone does not cover added 2026-10-15 by the review of #116 (#107, #101, #74), validate's per-change scores, size alone and verdicts and `label`'s whole rebase merge added 2026-10-16 by the review of #119 · the week, still-here and change oracles run as `go test` in `internal/app` (`TestWeekOracle`, `TestStillHereOracle`, `TestChangeOracles`, `TestDeterminism`, #13), web escaping in M3
+Status: carried over from the 2026-10-07 plan, change oracles and the sibling fixture added 2026-10-14, regression guards added 2026-10-14 (#13), the binary-file guard 2026-10-14 (#54), with a rename History does not collect, a vendored file and a later text change added by its review 2026-10-15, its text twins and the main fixture as it stood at an earlier `--now` added 2026-10-15 (#70), `landed@2`, knowledge under any path, `review_coverage@1` with a seventh pull request, the binary-changes caveat and the partial and shallow clones added 2026-10-15 (#108, #107, #64, #74), the week oracle moved to `landed@2` and explain traces and roleless paths added 2026-10-15 (#108, #109, PF-8), an agent's pull request, a replica's hole and a stale sync in the merge-methods guard and a week a shallow clone does not cover added 2026-10-15 by the review of #116 (#107, #101, #74), validate's per-change scores, size alone and verdicts and `label`'s whole rebase merge added 2026-10-16 by the review of #119, and the merge-back guard added 2026-10-16 (wave 10: copies, pull requests merged into another branch, `landings_365d` by `landed@2`'s credit), with changes made again on top of their twins, which are no copies, added by its review · the week, still-here and change oracles run as `go test` in `internal/app` (`TestWeekOracle`, `TestStillHereOracle`, `TestChangeOracles`, `TestDeterminism`, #13), web escaping in M3
 
-`internal/fixture` builds this repository (`fixture.Main`), the [sibling fixture](#sibling-fixture) (`fixture.Sibling`), the [regression guards](#regression-guards-testchangeoracles)' three repositories (`fixture.Backdated`, `fixture.MergedRevert`, `fixture.Binary`), the [merge-methods guard](#merge-methods-fixturemergemethods) (`fixture.MergeMethods`) and the [discovery fixture](#discovery-fixture-testdiscover)'s repositories in temporary directories for `go test`. Every number below is an oracle: a change that moves one fails CI. Each oracle exists so that one specific wrong implementation fails, and that implementation is named next to it.
+`internal/fixture` builds this repository (`fixture.Main`), the [sibling fixture](#sibling-fixture) (`fixture.Sibling`), the [regression guards](#regression-guards-testchangeoracles)' three repositories (`fixture.Backdated`, `fixture.MergedRevert`, `fixture.Binary`), the [merge-methods guard](#merge-methods-fixturemergemethods) (`fixture.MergeMethods`), the [merge-back guard](#merge-back-fixturemergeback) (`fixture.MergeBack`) and the [discovery fixture](#discovery-fixture-testdiscover)'s repositories in temporary directories for `go test`. Every number below is an oracle: a change that moves one fails CI. Each oracle exists so that one specific wrong implementation fails, and that implementation is named next to it.
 
 CI runs real git; porcelain output is never faked. The `GitRunner` port exists so git flags live in one place, not so tests can avoid running git.
 
@@ -690,7 +690,7 @@ Wrong implementations this catches:
 
 ## Regression guards (`TestChangeOracles`)
 
-Three small repositories hold history shapes that neither fixture may hold, because each would move its oracles: two that once broke the history collector (the review of #37), `fixture.Backdated(t)` and `fixture.MergedRevert(t)`, and one that broke `durable@1` (#54, and its text twin #70), `fixture.Binary(t)`. Each is its own repository, so a guard that fails names its own cause. A fourth, `fixture.MergeMethods(t)`, holds how GitHub's merge methods land pull requests (#38's review); it has a setup of its own, under the [reviews](#merge-methods-fixturemergemethods) it guards.
+Three small repositories hold history shapes that neither fixture may hold, because each would move its oracles: two that once broke the history collector (the review of #37), `fixture.Backdated(t)` and `fixture.MergedRevert(t)`, and one that broke `durable@1` (#54, and its text twin #70), `fixture.Binary(t)`. Each is its own repository, so a guard that fails names its own cause. A fourth, `fixture.MergeMethods(t)`, holds how GitHub's merge methods land pull requests (#38's review); it has a setup of its own, under the [reviews](#merge-methods-fixturemergemethods) it guards, and so has a fifth, `fixture.MergeBack(t)`, a maintenance branch merged back (wave 10), under the [same reviews](#merge-back-fixturemergeback).
 
 - **Setup.** Each is scanned alone with `--now 2026-10-07T00:00:00Z`, no mailmap and the packaged policy, so the windows are those of the [change oracles](#change-oracles-m1-testchangeoracles). Every commit is at 12:00:00Z on the stated day, with the same author and committer except the backdated guard's A2, which was authored and committed on different days by different people; no date is within a day of a window boundary. Where a row gives only a line count, the file holds lines `<name>_<i> = <i>` and the subject is `feat: add <file>`. Commit IDs are stable, as in the sibling, and are for debugging only.
 - **Derivation.** The values below were derived by hand from the History tables and [metrics.md](../../docs/metrics.md#change-facts-shared-by-durable1-and-simplifying1), then confirmed with plain git 2.50.1 through `gitcli.Runner` (`log --first-parent` with `--since` and with `--since-as-filter`, `rev-list M^1..M`, `log --no-walk --stdin --grep`, `blame -w -M`; for the binary guard, `log --numstat` and `log -p -U0 -w` with History's diff options). The commands and their output are in the pull requests for #13, #54 and #70 that added them.
@@ -1222,25 +1222,107 @@ No commit of the replica is sam's, rita's or tess's, so they are `@sam`, `@rita`
 | `b.py` | `@tess` (1: #3) | |
 | `c.py` | Rob (1: #4) | |
 
-`review_coverage@1` (#107), over the same landings, all in `[2026-07-09, 2026-10-07)`: B0 landed with no pull request, R1 and R2 are #1's, S1 #2's and S2 #3's, and each of those pull requests was approved before it merged, by someone other than its author. A1 is #4's, which an agent opened: its author is Rob, whom its commit credits, so it is a human landing, and Rob's approval is his own, so it is unreviewed: 4 / 6, with `via_pull_request` 5, `direct` 1, `approved_no_comment` 4, `bot_landings` 0, `after_sync` 0, `unmatched` 0 and `repos` 1, in scope `repo` and `all`.
+`review_coverage@1` (#107), over the same landings, all in `[2026-07-09, 2026-10-07)`, counts changes: B0 landed with no pull request; #1 is one change of two landings, R1 and R2; S1 is #2's and S2 #3's; and each of those pull requests was approved before it merged, by someone other than its author. A1 is #4's, which an agent opened: its author is Rob, whom its commit credits, so it is a human change, and Rob's approval is his own, so it is unreviewed: 3 / 5, with `via_pull_request` 4, `direct` 1, `approved_no_comment` 3, `bot_landings` 0, `after_sync` 0, `unmatched` 0 and `repos` 1, in scope `repo` and `all`.
 
 Two more replicas of the same repository, each scanned on its own:
 
-- **A replica with a hole** (#101): it lacks #3 and is otherwise the same. S2's subject, `feat: add b.py (#3)`, names a pull request the data lacks, so S2 is left out, `unmatched`, not counted as pushed directly: 3 / 5, `via_pull_request` 4, `direct` 1, `approved_no_comment` 3, `unmatched` 1.
-- **A clone fresher than its sync**: the replica holds #1 alone, with watermark 10-01 12:00, from a sync that started 10-01 18:00. S1, S2 and A1 landed after it, so whether they had a pull request is unknown, and they are left out, `after_sync`: 2 / 3, `via_pull_request` 2, `direct` 1, `approved_no_comment` 2, `after_sync` 3.
+- **A replica with a hole** (#101): it lacks #3 and is otherwise the same. S2's subject, `feat: add b.py (#3)`, names a pull request the data lacks, so S2 is left out, `unmatched`, not counted as pushed directly: 2 / 4, `via_pull_request` 3, `direct` 1, `approved_no_comment` 2, `unmatched` 1.
+- **A clone fresher than its sync**: the replica holds #1 alone, with watermark 10-01 12:00, from a sync that started 10-01 18:00. S1, S2 and A1 landed after it, so whether they had a pull request is unknown, and they are left out, `after_sync`: 1 / 2, `via_pull_request` 1, `direct` 1, `approved_no_comment` 1, `after_sync` 3.
 
 Wrong implementations this catches:
 
-- **The merge commit alone**, with no walk back: `one.py` has no reviewer, and R1 is direct, so `review_coverage@1` is 3 / 6.
-- **An agent's pull request taken for a bot's** (the pull request's login alone): A1 is a bot landing, 4 / 5 with `bot_landings` 1.
-- **The review of the person an agent worked for counted**: Rob's approval reviews A1, 5 / 6.
-- **A landing whose pull request the data lacks counted as pushed directly**: with the hole, S2 is direct, 3 / 6; synced before S1, S1, S2 and A1 are, 2 / 6.
+- **Landings counted, not changes** (before wave 10): #1 counts twice, 4 / 6.
+- **The merge commit alone**, with no walk back: `one.py` has no reviewer, and R1 is a direct change of its own, so `review_coverage@1` is 3 / 6.
+- **An agent's pull request taken for a bot's** (the pull request's login alone): A1 is a bot's change, 3 / 4 with `bot_landings` 1.
+- **The review of the person an agent worked for counted**: Rob's approval reviews A1, 4 / 5.
+- **A landing whose pull request the data lacks counted as pushed directly**: with the hole, S2 is direct, 2 / 5; synced before S1, S1, S2 and A1 are, 1 / 5.
 - **A walk that passes another pull request's merge commit** (#38's first version): #3 also lands as S1, so `@tess` reviews `a.py`.
 - (`who_knows@1`, whose reviewers leave out only the pull request's author, an app here, lists Rob as `c.py`'s reviewer: he does know the code.)
 
 `label` shows #1 whole (the panel's evidence, which read a rebase merge's newest landing alone, showed 130 of a 16-landing change's 894 lines): its landings are R2, then R1; its card lists both subjects, R1's `feat: add one.py` first, under "its commits, oldest first"; and its diff (`app.Diff` with `Earlier` R1) runs from B0, R1's parent, to R2 and holds `one.py` and `two.py`, where R2's diff alone holds `two.py`. `Diff` refuses an earlier landing that is not the first parent of the one before it, S1 named as R2's: a usage error that says so, so no other change's commit enters a change's diff.
 
 **Not covered.** A commit pushed straight to the branch, with no pull request, in the same second as a squash of several commits and just before it, is taken for that pull request's: nothing in the history or the replica tells the two apart. `who_knows@1`'s blind spots say so. GitHub's `Commit.associatedPullRequests`, read at sync time, would map every commit exactly (a follow-up).
+
+### Merge back (`fixture.MergeBack`)
+
+A maintenance branch merged back into the default branch brings three things no other fixture holds (wave 10): copies of changes main already has (cherry-picks of its fixes onto the branch), pull requests merged into the branch, and merges that bring nothing else. Its last rows make two changes again on top of their twins, which are no copies. `fixture.MergeBack(t)` builds a work tree named `merge-back` on branch `main`, with a branch `stable` made at its root. It is scanned alone, without a mailmap, with `--now 2026-10-07T00:00:00Z` and origin `https://git.example.test/acme/merge-back.git`, and a replica written by hand as above. Every commit is at 12:00:00Z on the stated day; `GitHub <noreply@github.com>` commits every squash and every merge of a pull request, as its merge button does; a cherry-pick keeps its original's author, date and message, and whoever picks it commits it. A file holds lines `<name>_<i> = <i>`. Rows B0 to M1 are in `durable@1`'s cohort, the rest in the 90-day window.
+
+| Row | Committed | Branch | Author (committer) | What |
+| --- | --- | --- | --- | --- |
+| B0 | 01-05 | main | Ann Maint `<ann@example.com>` | `lib.py` (10 lines), the root, pushed to `main`; `stable` starts here |
+| C1 | 01-12 | main | Bea Fix `<bea@example.com>` (GitHub) | `guard.py` (4 lines): #1's squash, `fix: add guard.py (#1)` |
+| K1 | 01-19 | stable | Bea (Cal Release `<cal@example.com>`) | C1 cherry-picked onto `stable`: the same patch, a copy |
+| S1 | 01-20 | stable | Dan Stable `<dan@example.com>` | `stable.py` (3 lines), pushed to `stable` |
+| M1 | 01-26 | main | Ann | `Merge branch 'stable'`, with no pull request: brings K1 and S1 |
+| C2 | 08-03 | main | Bea (GitHub) | `lib.py` cut to `lib_1` to `lib_7`: #9's squash, removing 3 lines |
+| K2 | 08-05 | stable | Bea (Cal) | C2 cherry-picked onto `stable`: a copy |
+| P2 | 08-10 | stable | Dan (GitHub) | `tidy.py` (2 lines): #2's squash into `stable` |
+| P3 | 08-11 | stable | Dan (GitHub) | `more.py` (2 lines): #3's squash into `stable` |
+| R1 | 08-12 | stable | Cal | `version.py` (1 line), `Release 1.0.1`, pushed to `stable` |
+| M2 | 08-17 | main | Ann (GitHub) | #4's merge commit, `Merge pull request #4 from acme/stable`: brings K2, P2, P3 and R1 |
+| P5 | 08-24 | stable | Dan (GitHub) | `five.py` (2 lines): #5's squash into `stable` |
+| M3 | 08-31 | main | Ann (GitHub) | #6's merge commit: brings P5 alone |
+| P7 | 09-07 | stable | Cal (GitHub) | `version.py` set to 1.0.2: #7's squash into `stable`, `Release 1.0.2 (#7)`, never merged back |
+| C7 | 09-08 | main | Cal | P7 cherry-picked onto `main`, with its subject |
+| C8 | 09-14 | main | Bea (GitHub) | `extra.py` (3 lines): #8's squash |
+| D1 | 09-16 | main | Ann | `extra.py` removed, `chore: drop extra.py`: no revert |
+| D2 | 09-21 | main | Bea | `extra.py` added back as C8 wrote it, `feat: add extra.py back`: C8's patch id |
+| D3 | 09-22 | main | Ann | `five.py` removed, `chore: drop five.py` |
+| F1 | 09-23 | again | Dan | `five.py` added back as P5 wrote it, on branch `again`, made at D3: P5's patch id |
+| M4 | 09-28 | main | Ann | `Merge branch 'again'`, with no pull request: brings F1 |
+
+K1 has C1's patch id and K2 C2's (`git patch-id --stable` over the own `-U0 -w` patch), and C1 and C2 landed before the merges that bring them, on the other side of the fork, so K1 and K2 are copies. Blame gives `guard.py`'s lines to C1: at M1 both parents hold them, and blame passes them to the first. D2 has C8's patch id and F1 P5's, but each descends from its twin (D2 through D1, F1 through D3 and M3): they make the change again after a removal, so neither is a copy, as `git cherry` would not call them one. D2 is a direct push; F1 is a commit a merge brought, so a rule that marked every such commit whose twin landed earlier would wrongly take it for one.
+
+The replica is forge repository `R_mergeback` (`acme/merge-back`), one page with watermark 09-14 12:00, which a sync that started 10-06 22:00 brought up to date. Each pull request merged at its merge commit's time; an approval is eve's, an hour before the merge, with no text and no inline comment.
+
+| # | Author | Base | Merge commit | Its commits | Reviews |
+| --- | --- | --- | --- | --- | --- |
+| 1 | bea | main | C1 | 1, not in the run | eve approved |
+| 2 | dan | stable | P2 | 1, not in the run | eve approved |
+| 3 | dan | stable | P3 | 1, not in the run | none |
+| 4 | ann | main | M2 | K2, P2, P3, R1 | none |
+| 5 | dan | stable | P5 | 1, not in the run | eve approved |
+| 6 | ann | main | M3 | P5 | none |
+| 7 | cal | stable | P7 | 1, not in the run | none |
+| 8 | bea | main | C8 | 1, not in the run | eve approved |
+| 9 | bea | main | C2 | 1, not in the run | eve approved |
+
+**`durable@1`**: Ann 7 / 10 (B0: C2 removed 3 of her lines), Bea 4 / 4 (C1; K1 is a copy and forms no cluster), Dan 3 / 3 (M1, S1 alone), one cluster each.
+
+**`simplifying@1`**: Ann 5 removed over 2 clusters (D1 and D3), Bea 3 over 3 (C2, C8 and D2 removing nothing; K2 in M2 is a copy), Cal 1 over 2 (R1 in M2, and C7, which replaces `version.py`'s line), Dan 0 over 3 (P2 and P3 in M2, P5 in M3, F1 in M4). No landing nets −20.
+
+**`landed@2` over 365 days** (`explain landed@2 --repo merge-back --days 365`): 12 landings (B0, C1, M1, C2, M2, M3, C7, C8, D1, D2, D3, M4), 14 commits credited, `copies` 2 (K1 in M1, K2 in M2), `merged` 4. Bea's are 4 landings, C1, C2, C8 and D2. `--days 400` is refused: the run's history covers 365 days, so a longer window's answer is unknown, not empty.
+
+**`surviving@1`**: `landings_365d` and `merged_365d` are Ann 3 and 4 (B0, D1, D3; M1 to M4 are her merges), Bea 4 and 0, Dan 4 and 0 (M1, M2, M3, M4), Cal 2 and 0 (M2, C7).
+
+**`review_coverage@1`**, over the changes of `[2026-07-09, 2026-10-07)`:
+
+| Change | Author | Outcome |
+| --- | --- | --- |
+| #9 (C2) | bea | reviewed |
+| #4 (M2) | ann | unreviewed: R1 is its own work (K2 is a copy, P2 and P3 are #2's and #3's) |
+| #2, into stable, brought by M2 | dan | reviewed |
+| #3, into stable, brought by M2 | dan | unreviewed |
+| #6 (M3) | | left out, `branch_merges`: it brought #5 and nothing else |
+| #5, into stable, brought by M3 | dan | reviewed |
+| C7, no pull request | | left out, `named_elsewhere`: its subject names #7, which merged into `stable` at P7, a commit `main` does not hold |
+| #8 (C8) | bea | reviewed |
+| D1, D2, D3, no pull request | ann, bea, ann | direct |
+| M4, no pull request | ann | direct: F1 is its own work, no copy |
+
+So 4 / 10, with `via_pull_request` 3, `via_other_branch` 3, `direct` 4, `approved_no_comment` 4, `branch_merges` 1, `named_elsewhere` 1, `copies` 0 and `repos` 1, in scope `repo` and `all`; `explain` lists the two unreviewed first, and no rendering of it says "pushed directly": a landing with no pull request in the GitHub data is not proof of a push.
+
+Wrong implementations this catches:
+
+- **No copies** (before wave 10): Bea's `durable@1` is 4 / 8 over 2 clusters, K1 scoring 0 / 4; her `simplifying@1` is 6 over 4; `landed@2` over 365 days credits her 6 landings and the year 16 commits; her `landings_365d` is 6.
+- **A copy by patch id alone, not git cherry's rule** (the PR's first draft): D2 and F1 are copies, so Bea's `simplifying@1` is 3 over 2 and Dan's 0 over 2, `landed@2` over 365 days credits 12 commits with `copies` 4, Bea's and Dan's `landings_365d` are 3, and D2 and M4 are left out of `review_coverage@1` as `copies`, 4 / 8.
+- **Only first-parent commits spared** (a copy is any commit a merge brought whose twin landed earlier): F1 is a copy, so Dan's `simplifying@1` is 0 over 2, `landed@2`'s `copies` is 3 and M4 is left out of `review_coverage@1`, 4 / 9.
+- **`landings_365d` with merges** (before wave 10): Ann's is 4, her merges counted as landings.
+- **Landings, not changes** (before wave 10): `review_coverage@1` is 2 / 4, the pull requests merged into `stable` unseen, M3 an unreviewed landing, and C7 `unmatched`, with the advice to sync again.
+- **A merge of only another branch's pull requests counted**: #6 is an unreviewed change, 4 / 11.
+- **A window past the history answered**: `explain landed@2 --days 400` prints the 365 days' landings, or none, as if the 35 days before them held nothing.
+
+`TestChangeOracles` asserts each value above.
 
 ## Discovery fixture (`TestDiscover`)
 

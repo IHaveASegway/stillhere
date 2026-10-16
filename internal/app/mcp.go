@@ -939,8 +939,7 @@ func Highlights(ctx context.Context, d Deps, r HighlightsRequest) (*HighlightsAn
 			}
 			tierHi = max(tierHi, ri.RankHi)
 			sub := report.SubjectOf(ri.Subject, s.who)
-			t.People = append(t.People, report.RankRow{Email: sub.Key, Name: sub.Name, NameWithheld: sub.NameWithheld,
-				RankLo: ri.RankLo, RankHi: ri.RankHi, Estimate: ri.Estimate, Lo: ri.Lo, Hi: ri.Hi, N: ri.N})
+			t.People = append(t.People, report.RankedRow(sub, ri))
 		}
 		if len(t.People) == 0 {
 			continue

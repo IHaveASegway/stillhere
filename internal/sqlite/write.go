@@ -190,13 +190,13 @@ func putRepoLists(ctx context.Context, tx *sql.Tx, id int64, f *domain.RepoFacts
 // putCommits writes the commits with their parents and co-authors.
 func putCommits(ctx context.Context, tx *sql.Tx, id int64, f *domain.RepoFacts) error {
 	commits := newInserter(ctx, tx, "commits", "repo_id", "seq", "sha", "author_name", "author_email",
-		"author_time", "commit_time", "subject")
+		"author_time", "commit_time", "subject", "patch_id")
 	parents := newInserter(ctx, tx, "commit_parents", "repo_id", "commit_seq", "seq", "sha")
 	coAuthors := newInserter(ctx, tx, "commit_coauthors", "repo_id", "commit_seq", "seq", "name", "email")
 	for i := range f.Commits {
 		c := &f.Commits[i]
 		commits.add(id, i, c.SHA, c.Author.Name, c.Author.Email, commits.time(c.AuthorTime),
-			commits.time(c.CommitTime), c.Subject)
+			commits.time(c.CommitTime), c.Subject, c.PatchID)
 		for j, p := range c.Parents {
 			parents.add(id, i, j, p)
 		}

@@ -297,34 +297,47 @@ type RepoRow struct {
 }
 
 // ReviewCoverage is review_coverage@1 about a repository, a group or the
-// whole run (#107): the share of its human-authored landings in the
-// window whose pull request someone other than its author reviewed before
-// it merged. It describes how a codebase's changes land, never a person.
+// whole run (#107): the share of its human-authored changes in the window
+// (a pull request with its landings, a pull request merged into another
+// branch that a merge brought, or a landing with none) whose pull request
+// someone other than its author reviewed before it merged. It describes
+// how a codebase's changes land, never a person.
 type ReviewCoverage struct {
 	Metric string   `json:"metric"`
 	Window Interval `json:"window"`
-	Num    float64  `json:"num"` // reviewed landings
-	Den    float64  `json:"den"` // human-authored landings
+	Num    float64  `json:"num"` // reviewed changes
+	Den    float64  `json:"den"` // human-authored changes
 	Value  float64  `json:"value"`
-	// ViaPullRequest counts the landings with a pull request; Den less it
-	// is Direct, landings with no pull request in the GitHub data the run
-	// read, which no review can cover: pushed directly, unless the data
-	// lacks their pull request.
+	// ViaPullRequest counts the pull requests merged into the default
+	// branch, ViaOtherBranch those merged into another branch that a merge
+	// brought, and Direct the landings with no pull request in the GitHub
+	// data the run read, which no review can cover: Den is their sum.
 	ViaPullRequest int `json:"via_pull_request"`
+	ViaOtherBranch int `json:"via_other_branch"`
 	Direct         int `json:"direct"`
-	// AfterSync and Unmatched count the human landings with no pull
-	// request that Den leaves out, since whether one had a review is
-	// unknown: those at or after the GitHub data's as-of (a clone fresher
-	// than the last sync), and those whose subject names a pull request,
-	// as GitHub's merges write it, that the data lacks (#101).
-	AfterSync int `json:"after_sync"`
-	Unmatched int `json:"unmatched"`
-	// ApprovedNoComment counts the reviewed landings whose only reviews
+	// AfterSync, Unmatched and NamedElsewhere count the human landings
+	// with no pull request that Den leaves out, since whether one had a
+	// review is unknown: those at or after the GitHub data's as-of (a clone
+	// fresher than the last sync), those whose subject names a pull
+	// request, as GitHub's merges write it, that the data lacks (#101),
+	// and those whose subject names one the data holds that did not land
+	// by its merge commit (merged into another branch, or the branch
+	// rewritten after the merge), which no sync changes.
+	AfterSync      int `json:"after_sync"`
+	Unmatched      int `json:"unmatched"`
+	NamedElsewhere int `json:"named_elsewhere"`
+	// ApprovedNoComment counts the reviewed changes whose only reviews
 	// were approvals with no text and no inline comment: rubber stamps
 	// count as reviews, so they are shown beside the share.
 	ApprovedNoComment int `json:"approved_no_comment"`
-	BotLandings       int `json:"bot_landings"` // a bot's landings, left out of Den
-	Repos             int `json:"repos"`        // the repositories with GitHub data it counts
+	BotLandings       int `json:"bot_landings"` // a bot's changes, left out of Den
+	// BranchMerges counts the merges of another branch that brought only
+	// its pull requests, counted on their own, and copies; Copies the
+	// changes made only of copies of what an earlier landing brought. Both
+	// are left out of Den: neither is work of its own.
+	BranchMerges int `json:"branch_merges"`
+	Copies       int `json:"copies"`
+	Repos        int `json:"repos"` // the repositories with GitHub data it counts
 }
 
 // Totals are the sizes of a scope. The counts of paths and landings are
@@ -363,7 +376,8 @@ type StillHereRow struct {
 	MajorityFiles     int            `json:"majority_files"`      // depth: files where the person holds at least half the lines
 	LinesByRole       map[string]int `json:"lines_by_role"`       // every role, prod included
 	Repos             int            `json:"repos"`               // breadth: repositories with surviving prod lines
-	Landings365d      int            `json:"landings_365d"`       // activity: landings credited in the last 365 days
+	Landings365d      int            `json:"landings_365d"`       // activity: landings in the last 365 days holding a commit of theirs, as landed@2 credits them
+	Merged365d        int            `json:"merged_365d"`         // the merge landings of those 365 days whose merge commit is theirs, apart
 }
 
 // WeekTable is what landed in the window: landed@2, who wrote what landed
@@ -411,6 +425,7 @@ type WeekTotal struct {
 	Landings       int  `json:"landings"`
 	Commits        int  `json:"commits"` // the non-merge commits they hold
 	Merged         int  `json:"merged"`  // the merge landings among them
+	Copies         int  `json:"copies"`  // commits whose change an earlier landing brought, credited to no one
 	LinesAdded     *int `json:"lines_added"`
 	ProdLinesAdded *int `json:"prod_lines_added"`
 	LinesUnknown   int  `json:"landings_lines_unknown"`
@@ -619,15 +634,19 @@ type RankTable struct {
 
 // RankRow is one person's estimate and, when eligible, rank interval.
 type RankRow struct {
-	Email        string  `json:"email"`
-	Name         string  `json:"name"`          // as StillHereRow's
-	NameWithheld bool    `json:"name_withheld"` // as StillHereRow's
-	RankLo       int     `json:"rank_lo"`       // 95% interval of the rank; 0 when not ranked
-	RankHi       int     `json:"rank_hi"`
-	Estimate     float64 `json:"estimate"`
-	Lo           float64 `json:"lo"` // 95% interval of the value; for bots, equal to Estimate
-	Hi           float64 `json:"hi"`
-	N            int     `json:"n"` // clusters: the person's changes the metric counted
+	Email        string `json:"email"`
+	Name         string `json:"name"`          // as StillHereRow's
+	NameWithheld bool   `json:"name_withheld"` // as StillHereRow's
+	// RankLo and RankHi are the 95% interval of the rank, and Lo and Hi
+	// of the value: null for a row that is not ranked, below the minimum
+	// or a bot's, which no bootstrap drew an interval for (never 0, which
+	// would read as one).
+	RankLo   *int     `json:"rank_lo"`
+	RankHi   *int     `json:"rank_hi"`
+	Estimate float64  `json:"estimate"`
+	Lo       *float64 `json:"lo"`
+	Hi       *float64 `json:"hi"`
+	N        int      `json:"n"` // clusters: the person's changes the metric counted
 	// Beside is the person's value of the table's Beside key; null when
 	// the table names none or the value has none.
 	Beside *float64 `json:"beside"`

@@ -21,8 +21,10 @@ func (survivingV1) Definition() Definition {
 		Question: "Whose lines are still on the default branch?",
 		Unit: "Non-blank prod lines at HEAD per person, per repository, group and all, credited to the blamed commit's " +
 			"author or, for an agent's commit, its first human co-author. A person has a value in a scope when they hold prod " +
-			"lines there. Detail per person: repos, majority_files, lines_<role> for each role with lines, landings_365d. Per " +
-			"repository and group (subject repo or group): prod_lines, prod_files, people, bot_share, ai_assisted_share.",
+			"lines there. Detail per person: repos, majority_files, lines_<role> for each role with lines, landings_365d (the " +
+			"landings in [now - 365d, now) landed@2 credits to them: holding a non-merge commit of theirs that is no copy) and " +
+			"merged_365d (the merge landings of that year whose landing commit is theirs, landed@2's merged). Per repository " +
+			"and group (subject repo or group): prod_lines, prod_files, people, bot_share, ai_assisted_share.",
 		Ranked:      false,
 		Subjects:    []string{domain.SubjectPerson, domain.SubjectRepo, domain.SubjectGroup},
 		Eligibility: "Not ranked: surviving lines reward tenure.",
@@ -49,17 +51,26 @@ func (m survivingV1) Compute(in *Input) ([]domain.MetricValue, error) { return c
 
 func (survivingV1) compute(v *view) ([]domain.MetricValue, error) {
 	year := v.window(yearDays, 0)
-	// landings_365d, through the landing map. It is activity, so every
-	// landing seen in the year counts, covered or not (repoView.covers).
+	// landings_365d and merged_365d, by landed@2's credit (landedV2Parts):
+	// who wrote what landed, so a person who merges is not credited with
+	// the merged branch, and the merges they made are counted apart, as
+	// landed@2's merged. It is activity, so every landing seen in the year
+	// counts, covered or not (repoView.covers).
 	landings := make(map[personKey]int)
+	merged := make(map[personKey]int)
 	for _, r := range v.repos {
 		for _, l := range r.landings {
-			if !year.Contains(l.time) {
+			if l.commit == nil || !year.Contains(l.time) {
 				continue
 			}
-			for _, email := range l.people() {
+			for _, p := range landedV2Parts(r, l).people {
 				for _, s := range r.scopes {
-					landings[personKey{s, email}]++
+					landings[personKey{s, p.email}]++
+				}
+			}
+			if l.commit.merge {
+				for _, s := range r.scopes {
+					merged[personKey{s, l.commit.credit}]++
 				}
 			}
 		}
@@ -119,6 +130,7 @@ func (survivingV1) compute(v *view) ([]domain.MetricValue, error) {
 			"repos":          float64(a.repos),
 			"majority_files": float64(a.majority),
 			"landings_365d":  float64(landings[k]),
+			"merged_365d":    float64(merged[k]),
 		}
 		for role, n := range a.roles {
 			detail["lines_"+string(role)] = float64(n)

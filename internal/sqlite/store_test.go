@@ -492,7 +492,7 @@ func sampleFacts(run domain.Run) *domain.FactSet {
 					{
 						SHA: sha('2'), Parents: []string{sha('1')}, Author: pia, AuthorTime: day(200),
 						CommitTime: day(200), CoAuthors: []domain.Person{pia, claude, ada},
-						Subject: "feat: Frank & Sons <script>",
+						Subject: "feat: Frank & Sons <script>", PatchID: sha('a'),
 					},
 					{
 						SHA: sha('3'), Parents: []string{sha('2'), sha('4')}, Author: bob, AuthorTime: day(100),

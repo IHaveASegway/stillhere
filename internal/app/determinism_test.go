@@ -106,6 +106,21 @@ func TestDeterminism(t *testing.T) {
 	}
 	sameBytes(t, "report's JSON after a rename and a later sync, and the scan's", render(t, withoutTimings(m)).json, a.json)
 
+	// A run a stillhere before wave 10's corrections in place stored holds
+	// review_coverage@1 counted by landing and surviving@1's landings_365d
+	// counted with merges. Its readers tell them by the Detail keys the
+	// corrected definitions always write, via_other_branch and merged_365d,
+	// and compute both again from the run's facts: its report is the
+	// scan's, so explain cannot print a stored share above a list of
+	// changes counted by another rule.
+	forgetDetail(t, first.db, first.run, domain.MetricID{Name: "review_coverage", Version: 1}, "via_other_branch")
+	forgetDetail(t, first.db, first.run, domain.MetricID{Name: "surviving", Version: 1}, "merged_365d")
+	if m, err = app.Report(t.Context(), first.read, app.ReportRequest{RunID: first.run}); err != nil {
+		t.Fatalf("app.Report of a run stored before wave 10's corrections: %v", err)
+	}
+	sameBytes(t, "report's JSON of a run whose review_coverage@1 and surviving@1 values lack via_other_branch and "+
+		"merged_365d, and the scan's", render(t, withoutTimings(m)).json, a.json)
+
 	// A run a stillhere older than landed@2 and review_coverage@1 stored
 	// holds no value of either. Its readers compute them from its facts,
 	// so its report is the scan's, what landed and review coverage
@@ -489,6 +504,27 @@ func checkForgeRun(t *testing.T, s *scanned) {
 		if table.Beside != "no_comment_share" || zed == nil || zed.Beside == nil || *zed.Beside != 1 {
 			t.Errorf("the reviews_given@1 table shows %q beside the count and zed's row %+v, want no_comment_share 1", table.Beside, zed)
 		}
+	}
+}
+
+// forgetDetail deletes the Detail key from every value of id in run in the
+// facts.db at db, as a stillhere before the key was written stored them.
+// It fails the test when no value held it, which would leave the case
+// checking nothing.
+func forgetDetail(t *testing.T, db string, run int64, id domain.MetricID, key string) {
+	t.Helper()
+	raw, err := sql.Open("sqlite", db+"?_busy_timeout=10000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = raw.Close() }()
+	res, err := raw.ExecContext(t.Context(), `DELETE FROM metric_details WHERE run_id = ? AND name = ? AND value_seq IN
+		(SELECT seq FROM metric_values WHERE run_id = ? AND metric = ? AND version = ?)`, run, key, run, id.Name, id.Version)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n, err := res.RowsAffected(); err != nil || n == 0 {
+		t.Fatalf("run %d holds no %s detail %s to forget (%v), so this case checks nothing", run, id, key, err)
 	}
 }
 

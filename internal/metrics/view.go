@@ -95,12 +95,20 @@ type repoView struct {
 
 // commitView is one commit of the history, with its credit and counts.
 type commitView struct {
-	credit   string // identity.Credit over its author and co-authors
-	ai       bool   // identity.AIAssisted
-	merge    bool   // more than one parent: excluded from both change metrics
-	ignored  bool   // listed in the ignore-revs file blame used
-	boundary bool   // a shallow clone's boundary (domain.Repo.Boundary): its parents are not in the clone
-	changes  []*domain.FileChange
+	sha      string
+	credit   string   // identity.Credit over its author and co-authors
+	ai       bool     // identity.AIAssisted
+	merge    bool     // more than one parent: excluded from both change metrics
+	ignored  bool     // listed in the ignore-revs file blame used
+	boundary bool     // a shallow clone's boundary (domain.Repo.Boundary): its parents are not in the clone
+	patchID  string   // domain.Commit.PatchID: "" for none
+	parents  []string // domain.Commit.Parents, which markCopies walks
+	// copy is true when a landing earlier than its own holds a commit with
+	// its patch id that is not its ancestor (markCopies): a cherry-pick or
+	// a backport that a merge brought onto the branch again, which no
+	// metric credits a second time.
+	copy    bool
+	changes []*domain.FileChange
 	// added and removed count non-blank lines on prod paths in the commit's
 	// own patch. traced is the part of added whose fate blame can tell, and
 	// surviving the non-blank lines blame attributes to the commit at HEAD
@@ -200,11 +208,14 @@ func newRepoView(f *domain.RepoFacts, who *identity.Directory) *repoView {
 	for i := range f.Commits {
 		c := &f.Commits[i]
 		r.commits[c.SHA] = &commitView{
+			sha:      c.SHA,
 			credit:   who.Credit(c.Author, c.CoAuthors),
 			ai:       who.AIAssisted(c),
 			merge:    len(c.Parents) > 1,
 			ignored:  ignored[strings.ToLower(c.SHA)],
 			boundary: f.Repo.Boundary(c),
+			patchID:  c.PatchID,
+			parents:  c.Parents,
 		}
 		if f.Repo.Boundary(c) && c.CommitTime.After(r.boundary) {
 			r.boundary = c.CommitTime
@@ -260,11 +271,143 @@ func newRepoView(f *domain.RepoFacts, who *identity.Directory) *repoView {
 		}
 		r.landings = append(r.landings, lv)
 	}
+	r.markCopies()
 
 	if r.lines {
 		r.indexLines(f, who, untraced)
 	}
 	return r
+}
+
+// markCopies marks each copy among the repository's commits
+// (docs/metrics.md#change-facts-shared-by-durable1-and-simplifying1): a
+// non-merge commit that a merge brought, whose patch id a commit of an
+// earlier landing has, by landing time, which is not its ancestor. That is
+// git cherry's rule, which compares the two sides of a fork: the change was
+// already on the default branch when the merge brought it, made again on
+// the other side of the fork. A cherry-pick of a fix onto a maintenance
+// branch that a merge brings back is the common case, and a rebased commit
+// that a stacked pull request lands again another. A commit that descends
+// from its twin made the change again on top of it: lines a cleanup
+// removed and a later change added back, the same lines added to a file in
+// another place (the -U0 patch id ignores where), or a change landed again
+// after a revert that does not say "This reverts commit". That is new work,
+// and its author is credited. A first-parent commit (a direct push, a
+// squash, a rebase merge's commit) descends from every earlier landing, so
+// it is never a copy, and only the commits a merge brought are walked
+// (descends). Two landings of one second are not earlier than each other,
+// so neither holds a copy of the other. A reverted landing (a revert names
+// a commit of its map, which scan runs read) is no original: the revert
+// took its change off the branch, so landing it again lands it anew, and
+// durable@1 scores that landing. Only the history the run collected is
+// compared: a copy whose original landed before it is credited as the
+// original would be.
+func (r *repoView) markCopies() {
+	type original struct {
+		at  time.Time // its landing's time
+		sha string
+		pos int // its landing's place on the first-parent chain (firstParentOrder), -1 when unknown
+	}
+	pos := r.firstParentOrder()
+	originals := make(map[string][]original) // patch id → the commits holding it, of landings no revert names
+	for _, l := range r.landings {
+		if l.reverted {
+			continue
+		}
+		at, ok := pos[l.sha]
+		if !ok {
+			at = -1
+		}
+		for _, c := range l.commits {
+			if c.patchID != "" && !c.merge {
+				originals[c.patchID] = append(originals[c.patchID], original{at: l.time, sha: c.sha, pos: at})
+			}
+		}
+	}
+	for _, l := range r.landings {
+		for _, c := range l.commits {
+			if c.patchID == "" || c.merge || c.sha == l.sha {
+				continue // a first-parent commit descends from every earlier landing
+			}
+			for _, o := range originals[c.patchID] {
+				if o.at.Before(l.time) && !r.descends(c, o.sha, o.pos, pos) {
+					c.copy = true
+					break
+				}
+			}
+		}
+	}
+}
+
+// firstParentOrder places each landing on the default branch's
+// first-parent chain, the oldest at 0: the landings are first-parent
+// commits, each the first parent of the next. It returns nil when they do
+// not form one chain, as when the history lacks a landing commit, or a
+// commit the window skipped by its date sits between two; descends then
+// walks without the places.
+func (r *repoView) firstParentOrder() map[string]int {
+	landed := make(map[string]bool, len(r.landings))
+	for _, l := range r.landings {
+		landed[l.sha] = true
+	}
+	next := make(map[string]string, len(r.landings)) // a landing's first parent → the landing
+	var oldest []string
+	for _, l := range r.landings {
+		switch {
+		case l.commit == nil:
+			return nil
+		case len(l.commit.parents) > 0 && landed[l.commit.parents[0]]:
+			next[l.commit.parents[0]] = l.sha
+		default:
+			oldest = append(oldest, l.sha)
+		}
+	}
+	if len(oldest) != 1 {
+		return nil
+	}
+	pos := make(map[string]int, len(r.landings))
+	for sha, i := oldest[0], 0; sha != ""; sha, i = next[sha], i+1 {
+		pos[sha] = i
+	}
+	if len(pos) != len(r.landings) {
+		return nil
+	}
+	return pos
+}
+
+// descends reports whether commit sha, of the landing at place at on the
+// first-parent chain (firstParentOrder's pos), is an ancestor of commit c,
+// within the history the run collected. The walk goes from c through its
+// parents and stops at a first-parent commit: every commit of a landing at
+// or before it on the chain is its ancestor, and no commit a later landing
+// brought is, so the place of sha's landing decides there. A walk from a
+// commit a maintenance branch carries so visits that branch's own commits,
+// not the default branch's history. Without places, it walks every
+// ancestor the history holds.
+func (r *repoView) descends(c *commitView, sha string, at int, pos map[string]int) bool {
+	seen := make(map[string]bool)
+	todo := slices.Clone(c.parents)
+	for len(todo) > 0 {
+		p := todo[len(todo)-1]
+		todo = todo[:len(todo)-1]
+		if p == sha {
+			return true
+		}
+		if seen[p] {
+			continue
+		}
+		seen[p] = true
+		if i, ok := pos[p]; ok && at >= 0 {
+			if i >= at {
+				return true
+			}
+			continue
+		}
+		if pc := r.commits[p]; pc != nil {
+			todo = append(todo, pc.parents...)
+		}
+	}
+	return false
 }
 
 // untracedIndex holds the lines whose survival blame cannot tell. Both
@@ -482,18 +625,6 @@ func inScope(s domain.Scope, key, group string) bool {
 	default:
 		return false
 	}
-}
-
-// people returns the distinct people credited with a commit in the
-// landing's map, merge commits included: who "has had" this landing.
-func (l *landingView) people() []string {
-	var out []string
-	for _, c := range l.commits {
-		if !slices.Contains(out, c.credit) {
-			out = append(out, c.credit)
-		}
-	}
-	return out
 }
 
 // sortedFiles returns the repository's prod files, sorted by path.

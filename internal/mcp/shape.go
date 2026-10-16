@@ -1076,6 +1076,11 @@ type explainOut struct {
 	Landings []report.ExplainLanding `json:"landings,omitempty"`
 	Commits  []report.ExplainCommit  `json:"commits,omitempty"`
 	Files    []report.ExplainFile    `json:"files,omitempty"`
+	// Coverage is what review_coverage@1's value about a repository, a
+	// group or the whole run is made of: each change of its window with
+	// its outcome, the unreviewed in Den first, paged as changes are.
+	// Absent for other metrics.
+	Coverage []report.CoverageChange `json:"coverage,omitempty"`
 	tail
 }
 
@@ -1157,6 +1162,20 @@ func (s *shaper) explainAnswer(e *report.Explain, allowSource bool) *explainOut 
 	for _, x := range files {
 		out.Files = append(out.Files, x)
 		n.key(x.RepoKey)
+	}
+	coverage, pg := paginate(e.Coverage, f, e.Provenance.RunID)
+	if pg.Total > 0 {
+		out.Page = pg
+	}
+	for _, c := range coverage {
+		if !allowSource {
+			c.Title = "" // a commit subject or a pull request's title is source: local output only
+		}
+		if !f.detailed {
+			c.Landing = shortSHA(c.Landing)
+		}
+		out.Coverage = append(out.Coverage, c) // the author's key leaves as an id, as every person subject's (privacy.go)
+		n.key(c.RepoKey)
 	}
 	out.head = head{Provenance: f.provenance(e.Provenance, n)}
 	out.Caveats = s.withheldAI(out.Caveats)

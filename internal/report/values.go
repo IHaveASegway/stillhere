@@ -132,6 +132,11 @@ const (
 	detailAfterSync         = "after_sync"
 	detailUnmatched         = "unmatched"
 	detailNoCommentShare    = "no_comment_share"
+	detailCopies            = "copies" // landed@2's totals and review_coverage@1's
+	detailViaOtherBranch    = "via_other_branch"
+	detailBranchMerges      = "branch_merges"
+	detailNamedElsewhere    = "named_elsewhere"
+	detailMerged365d        = "merged_365d" // surviving@1's, beside landings_365d
 )
 
 // rankBeside names, per ranked metric, the Detail key of a person's value

@@ -148,9 +148,14 @@ func (s *server) addTools(srv *sdk.Server) {
 		s.changes)
 	tool(s, srv, "explain", "The facts behind a number",
 		"The facts behind one number: a metric's values for a subject in every scope it was computed in, and for a ranked "+
-			"metric about a person, each change it counted with its contribution, so a number can be traced to its commits. "+
+			"metric about a person, each change it counted with its contribution, so a number can be traced to its commits; "+
+			"for review_coverage about a repository, a group or every repository, each change of its window with whether "+
+			"someone else reviewed it, or why it was left out (coverage, the unreviewed first); for landed, its landings, "+
+			"over days days when set. "+
 			"metric is an id such as durable@1, or a bare name for the latest version (metrics lists them). subject_kind is "+
-			"person (default), repo, group or area; for an area, subject is the repository and path its top-level directory. "+
+			"person (default), repo, group, area or all; for an area, subject is the repository and path its top-level "+
+			"directory; all is the whole run's own numbers, over every repository, with no subject (landed and "+
+			"review_coverage). "+
 			"A repository or a group may be passed as overview's scope_arg gives it (repo:NAME, group:NAME). "+
 			"A metric about a kind of subject it has no values about is refused with the calls that answer instead: the "+
 			"ranked metrics (durable, simplifying, reviews_given) are about people, and overview with rank gives a "+
@@ -161,8 +166,9 @@ func (s *server) addTools(srv *sdk.Server) {
 		schema([]string{"metric"},
 			`"metric": {"type": "string", "description": "A metric id such as durable@1, or a name such as durable for its latest version."}`,
 			`"subject": {"type": "string", "description": "Who or what the number is about: a person's name or id, a repository, or a group (a name, or overview's scope_arg); empty for the user the server runs for."}`,
-			`"subject_kind": {"type": "string", "enum": ["person", "repo", "group", "area"], "description": "What subject names; person when empty."}`,
+			`"subject_kind": {"type": "string", "enum": ["person", "repo", "group", "area", "all"], "description": "What subject names; person when empty; all for every repository, with no subject."}`,
 			`"path": {"type": "string", "description": "For subject_kind area: the repository's top-level directory, such as src."}`,
+			`"days": {"type": "integer", "minimum": 1, "maximum": 365, "description": "landed@1's and landed@2's window in days, for the values and the landings listed alike: 365 traces a still-here table's landings_365d. Default: the run's week. Other metrics read their own window. The run's history covers 365 days, and a longer window is refused: what landed before it is unknown."}`,
 			propFormat, propLimit, propCursor),
 		s.explain)
 	tool(s, srv, "highlights", "Highlights for recognition",
@@ -504,6 +510,7 @@ type explainIn struct {
 	Subject     string `json:"subject"`
 	SubjectKind string `json:"subject_kind"`
 	Path        string `json:"path"`
+	Days        int    `json:"days"`
 	common
 }
 
@@ -523,8 +530,13 @@ func (s *server) explain(ctx context.Context, in explainIn) *sdk.CallToolResult 
 		}
 		var subject domain.Subject
 		var caveat *report.Caveat
-		var who, area string // the person as the server names them (resolver.named), or the area, for a miss
-		if in.SubjectKind != "" && in.SubjectKind != domain.SubjectPerson && strings.TrimSpace(in.Subject) == "" {
+		var who string // the person as the server names them (resolver.named), for a miss
+		switch {
+		case in.SubjectKind == domain.SubjectAll && strings.TrimSpace(in.Subject) != "":
+			return nil, &domain.UsageError{Msg: "subject_kind all is every repository and takes no subject: leave subject " +
+				"empty, or pass subject_kind repo or group"}
+		case in.SubjectKind != "" && in.SubjectKind != domain.SubjectPerson && in.SubjectKind != domain.SubjectAll &&
+			strings.TrimSpace(in.Subject) == "":
 			return nil, &domain.UsageError{Msg: fmt.Sprintf(
 				"subject_kind %s needs subject: a repository's name for repo and area, a group's for group", in.SubjectKind)}
 		}
@@ -555,7 +567,6 @@ func (s *server) explain(ctx context.Context, in explainIn) *sdk.CallToolResult 
 						"path as one directory name, such as src, not %q; who_knows answers any path", in.Path)}
 				}
 				subject = domain.Subject{Kind: domain.SubjectArea, Key: rp.Key + ":" + dir + "/"}
-				area = fmt.Sprintf("%q %s/", rp.Name, dir)
 			} else if err := fewPeople(id, showsAI(c.names, report.Scope{Kind: domain.ScopeRepo, Key: rp.Key}),
 				fmt.Sprintf("repository %q", rp.Name)); err != nil {
 				return nil, err
@@ -571,21 +582,22 @@ func (s *server) explain(ctx context.Context, in explainIn) *sdk.CallToolResult 
 				fmt.Sprintf("group %q", sc.Key)); err != nil {
 				return nil, err
 			}
+		case domain.SubjectAll:
+			// The whole run's own numbers: ai_assisted@1 declares no such
+			// subject, so no AI-assisted share is reached this way.
+			subject = domain.Subject{Kind: domain.SubjectAll}
 		default:
-			return nil, &domain.UsageError{Msg: fmt.Sprintf("subject_kind %q: want person, repo, group or area", in.SubjectKind)}
+			return nil, &domain.UsageError{Msg: fmt.Sprintf("subject_kind %q: want person, repo, group, area or all", in.SubjectKind)}
 		}
 		d, err := c.deps(ctx)
 		if err != nil {
 			return nil, err
 		}
-		e, err := app.Explain(ctx, d, app.ExplainRequest{RunID: c.run(), Metric: id, Subject: subject})
+		e, err := app.Explain(ctx, d, app.ExplainRequest{RunID: c.run(), Metric: id, Subject: subject, Days: in.Days})
 		switch {
 		case errors.Is(err, domain.ErrNotFound) && who != "":
 			return nil, notFoundf("%q holds no value in run %d: none of their changes left a surviving prod line or "+
 				"landed in a window a metric reads.", who, c.run())
-		case errors.Is(err, domain.ErrNotFound) && area != "":
-			return nil, notFoundf("area %s holds no value in run %d: areas are top-level directories that hold surviving "+
-				"prod lines; who_knows answers any path.", area, c.run())
 		case err != nil:
 			return nil, err
 		}
@@ -770,12 +782,12 @@ func (toolCommands) Mailmap() string {
 }
 
 // Explain is explain with the subject kinds it takes among kinds: person,
-// repo, group and area.
+// repo, group, area and all.
 func (toolCommands) Explain(metric string, kinds []string) string {
 	var take []string
 	for _, k := range kinds {
 		switch k {
-		case domain.SubjectPerson, domain.SubjectRepo, domain.SubjectGroup, domain.SubjectArea:
+		case domain.SubjectPerson, domain.SubjectRepo, domain.SubjectGroup, domain.SubjectArea, domain.SubjectAll:
 			take = append(take, k)
 		}
 	}

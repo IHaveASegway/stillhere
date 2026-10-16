@@ -81,6 +81,7 @@ func NewExplain(in *ExplainInput) *Explain {
 	sortChanges(e.Changes)
 	if in.Trace != nil {
 		e.Landings, e.Commits, e.Files = traced(in.Facts, in.Trace, involved)
+		e.Coverage = coverageTraced(in.Facts, in.Trace, in.Who, involved)
 	}
 	repos := reposWith(in.Facts, involved)
 	e.Provenance = datedProvenance(in.Run, in.Facts, in.Forge, repos, []string{in.Metric.ID})
@@ -170,7 +171,8 @@ func traced(fs *domain.FactSet, t *domain.Trace, involved map[string]bool) ([]Ex
 	for _, l := range t.Landings {
 		r := of(l.Repo)
 		landings = append(landings, ExplainLanding{Repo: r.name, RepoKey: l.Repo, Landing: l.SHA, Time: l.Time, Merge: l.Merge,
-			Title: r.subjects[l.SHA], Commits: l.Commits, LinesAdded: known(l.Lines), ProdLinesAdded: known(l.ProdLines)})
+			Title: r.subjects[l.SHA], Commits: l.Commits, Copies: l.Copies, LinesAdded: known(l.Lines),
+			ProdLinesAdded: known(l.ProdLines)})
 	}
 	slices.SortFunc(landings, func(a, b ExplainLanding) int {
 		return cmp.Or(cmp.Compare(a.Repo, b.Repo), cmp.Compare(a.RepoKey, b.RepoKey), a.Time.Compare(b.Time),
@@ -187,6 +189,68 @@ func traced(fs *domain.FactSet, t *domain.Trace, involved map[string]bool) ([]Ex
 		files = append(files, ExplainFile{Repo: of(f.Repo).name, RepoKey: f.Repo, Path: f.Path, Lines: f.Lines, Of: f.Of})
 	}
 	return landings, commits, files
+}
+
+// coverageTraced maps review_coverage@1's changes (domain.Trace.Changes)
+// onto the answer's list, each with its repository's name, its author as
+// every page names a person, and its title: the pull request's for one, so
+// a pull request merged into another branch is not shown under the merge
+// that brought it, else its landing commit's subject.
+func coverageTraced(fs *domain.FactSet, t *domain.Trace, who People, involved map[string]bool) []CoverageChange {
+	if len(t.Changes) == 0 {
+		return nil
+	}
+	names := map[string]string{}    // Repo.Key → name
+	subjects := map[string]string{} // commit SHA → subject, every repository's
+	for i := range fs.Repos {
+		rf := &fs.Repos[i]
+		names[rf.Repo.Key] = rf.Repo.Name
+		for _, c := range rf.Commits {
+			subjects[c.SHA] = c.Subject
+		}
+	}
+	type pullKey struct {
+		repo   string
+		number int
+	}
+	titles := map[pullKey]string{}
+	if fs.Forge != nil {
+		join := fs.Forge.Join
+		if join == nil {
+			join = domain.ForgeJoin(fs.Repos, fs.Forge.Repos)
+		}
+		for _, p := range fs.Forge.PullRequests {
+			for _, key := range join[p.Repo] {
+				if _, ok := titles[pullKey{key, p.Number}]; !ok {
+					titles[pullKey{key, p.Number}] = p.Title
+				}
+			}
+		}
+	}
+	out := make([]CoverageChange, 0, len(t.Changes))
+	for _, c := range t.Changes {
+		involved[c.Repo] = true
+		cc := CoverageChange{Repo: names[c.Repo], RepoKey: c.Repo, Landing: c.Landing, Time: c.Time, Base: c.Base,
+			OtherBranch: c.Via, Title: subjects[c.Landing], Outcome: c.Outcome, Reviewers: c.Reviewers,
+			ApprovedOnly: c.ApprovedOnly}
+		if c.Pull > 0 {
+			n := c.Pull
+			cc.Pull = &n
+			if title, ok := titles[pullKey{c.Repo, n}]; ok {
+				cc.Title = title
+			}
+		}
+		if c.Named > 0 {
+			n := c.Named
+			cc.Named = &n
+		}
+		if c.Author != "" {
+			s := SubjectOf(domain.Subject{Kind: domain.SubjectPerson, Key: c.Author}, who)
+			cc.Author = &s
+		}
+		out = append(out, cc)
+	}
+	return out
 }
 
 // explainEmpty is the no-values caveat of an explanation that holds no
@@ -491,11 +555,12 @@ func NewMe(in *MeInput) *Me {
 		}
 		metrics[rs.Metric.ID] = true
 		forgeScope(in.Facts, involved, in.Forge, rs.Metric.ID, rs.Scope)
+		row := RankedRow(Subject{}, *mine)
 		m.Ranks = append(m.Ranks, MeRank{
 			Metric: rs.Metric.ID, Scope: scopeOf(rs.Scope), Window: intervalOf(rs.Window),
 			Percent: rs.Percent, MinN: rs.MinN, Eligible: mine.Eligible,
-			RankLo: mine.RankLo, RankHi: mine.RankHi, Of: of,
-			Estimate: mine.Estimate, Lo: mine.Lo, Hi: mine.Hi, N: mine.N,
+			RankLo: row.RankLo, RankHi: row.RankHi, Of: of,
+			Estimate: mine.Estimate, Lo: row.Lo, Hi: row.Hi, N: mine.N,
 		})
 	}
 	slices.SortFunc(m.Ranks, func(a, b MeRank) int {

@@ -3,6 +3,7 @@ package report
 import (
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
@@ -66,14 +67,25 @@ func windowText(w Interval) string {
 }
 
 // subject names what an answer is about: a person as the page names them
-// (printer.person), anything else by its kind and key.
-func (p *printer) subject(s Subject, esc func(string) string) string {
-	if s.Kind == domain.SubjectPerson {
+// (printer.person); a repository, a group or the whole run as scopeText
+// names a scope, a repository by its name where the provenance pairs it
+// with its key (pv); an area as its directory and repository; anything
+// else by its kind and key.
+func (p *printer) subject(s Subject, esc func(string) string, pv Provenance) string {
+	switch s.Kind {
+	case domain.SubjectPerson:
 		name := p.person(s.Key, s.Name, s.NameWithheld, esc)
 		if s.Bot {
 			name += " (bot)"
 		}
 		return name
+	case domain.SubjectRepo, domain.SubjectGroup, domain.SubjectAll:
+		// A scope's own subject has the scope's kind and key.
+		return scopeText(Scope{Kind: s.Kind, Key: s.Key}, esc, pv)
+	case domain.SubjectArea:
+		if i := strings.LastIndex(s.Key, ":"); i > 0 {
+			return "area " + esc(s.Key[i+1:]) + " of " + scopeText(Scope{Kind: domain.ScopeRepo, Key: s.Key[:i]}, esc, pv)
+		}
 	}
 	return s.Kind + " " + esc(s.Key)
 }
@@ -81,7 +93,7 @@ func (p *printer) subject(s Subject, esc func(string) string) string {
 // Explain.
 
 func (e *Explain) writeText(p *printer) {
-	p.wrapped("", "  ", "explain "+clean(e.Metric.ID)+" · "+p.subject(e.Subject, clean)+" · "+provenanceText(e.Provenance))
+	p.wrapped("", "  ", "explain "+clean(e.Metric.ID)+" · "+p.subject(e.Subject, clean, e.Provenance)+" · "+provenanceText(e.Provenance))
 	if e.Metric.Question != "" {
 		p.wrapped("  ", "  ", clean(e.Metric.Question))
 	}
@@ -130,12 +142,15 @@ func (e *Explain) writeText(p *printer) {
 			p.line("    " + s)
 		}
 	}
-	for _, t := range e.traceTables(p, clean, clean) {
+	for _, t := range e.traceTables(p, clean, clean, true) {
 		p.blank()
 		p.line("  " + t.title)
 		p.textTable("    ", t.cols, t.rows)
 		if t.more != "" {
 			p.line("    " + t.more)
+		}
+		for _, l := range t.legend {
+			p.wrapped("    ", "      ", l)
 		}
 	}
 	textDefinition(p, e.Metric)
@@ -145,27 +160,83 @@ func (e *Explain) writeText(p *printer) {
 // traceTable is one list of what a value is made of (#109), laid out for
 // text or Markdown.
 type traceTable struct {
-	title string
-	cols  []column
-	rows  [][]string
-	more  string // counts the rows left out
+	title  string
+	cols   []column
+	rows   [][]string
+	legend []string // text only: what each short code in the rows means, one line each
+	more   string   // counts the rows left out
 }
 
 // traceTables lays out an explanation's landings, commits and files: the
 // first pageRows of each, and a count of the rest. esc prints untrusted
-// text, code a SHA or a path.
-func (e *Explain) traceTables(p *printer, esc, code func(string) string) []traceTable {
+// text, code a SHA or a path. In text (brief), whose tables share 100
+// columns, review_coverage@1's changes carry a short code for their
+// outcome, explained under the table, the day each landed without its
+// time, a base branch cut to coverageBase runes, and a repository column
+// only when they span several: the change, its day and its outcome are
+// never cut, so the author and the title give way; Markdown has the room
+// for the full sentence.
+func (e *Explain) traceTables(p *printer, esc, code func(string) string, brief bool) []traceTable {
 	var out []traceTable
 	if n := len(e.Landings); n > 0 {
+		copies := slices.ContainsFunc(e.Landings, func(l ExplainLanding) bool { return l.Copies > 0 })
 		t := traceTable{title: fmt.Sprintf("The %s behind it, by repository and time", plural(n, "landing", "landings")),
-			cols: []column{{head: "landing"}, {head: "repo"}, {head: "landed (UTC)"}, {head: "commits", right: true},
-				{head: "lines added", right: true}, {head: "prod lines added", right: true}, {head: "title"}}}
+			cols: []column{{head: "landing"}, {head: "repo"}, {head: "landed (UTC)"}, {head: "commits", right: true}}}
+		if copies {
+			t.cols = append(t.cols, column{head: "copies", right: true})
+		}
+		t.cols = append(t.cols, column{head: "lines added", right: true}, column{head: "prod lines added", right: true},
+			column{head: "title"})
 		list, hidden := shown(p, e.Landings, pageRows)
 		for _, l := range list {
-			t.rows = append(t.rows, []string{code(short(l.Landing)), esc(l.Repo), day(l.Time), grouped(l.Commits),
-				knownCount(l.LinesAdded), knownCount(l.ProdLinesAdded), esc(l.Title)})
+			row := []string{code(short(l.Landing)), esc(l.Repo), day(l.Time), grouped(l.Commits)}
+			if copies {
+				row = append(row, grouped(l.Copies))
+			}
+			t.rows = append(t.rows, append(row, knownCount(l.LinesAdded), knownCount(l.ProdLinesAdded), esc(l.Title)))
 		}
 		t.more = moreText(hidden, "landing", "landings")
+		if copies {
+			t.more = strings.TrimPrefix(t.more+" · copies: commits whose change an earlier landing brought, credited to no one", " · ")
+		}
+		out = append(out, t)
+	}
+	if n := len(e.Coverage); n > 0 {
+		repos := !brief || slices.ContainsFunc(e.Coverage, func(c CoverageChange) bool { return c.RepoKey != e.Coverage[0].RepoKey })
+		t := traceTable{title: fmt.Sprintf("The %s in its window, those no one else reviewed first", plural(n, "change", "changes")),
+			cols: []column{{head: "change", keep: true}}}
+		if repos {
+			t.cols = append(t.cols, column{head: "repo"})
+		}
+		t.cols = append(t.cols, column{head: "landed (UTC)", keep: brief}, column{head: "author"},
+			column{head: "outcome", keep: brief}, column{head: "title"})
+		list, hidden := shown(p, e.Coverage, pageRows)
+		legend := map[string]bool{}
+		for _, c := range list {
+			author := ""
+			if c.Author != nil {
+				author = p.person(c.Author.Key, c.Author.Name, c.Author.NameWithheld, esc)
+			}
+			outcome := coverageOutcomeText(c)
+			if brief {
+				var key, meaning string
+				outcome, key, meaning = coverageOutcomeCode(c)
+				if !legend[key] {
+					legend[key] = true
+					t.legend = append(t.legend, meaning)
+				}
+			}
+			change, landed := coverageChangeText(c, 0), day(c.Time)
+			if brief {
+				change, landed = coverageChangeText(c, coverageBase), date(c.Time)
+			}
+			row := []string{code(change)}
+			if repos {
+				row = append(row, esc(c.Repo))
+			}
+			t.rows = append(t.rows, append(row, landed, author, esc(outcome), esc(c.Title)))
+		}
+		t.more = moreText(hidden, "change", "changes")
 		out = append(out, t)
 	}
 	if n := len(e.Commits); n > 0 {
@@ -197,6 +268,112 @@ func (e *Explain) traceTables(p *printer, esc, code func(string) string) []trace
 	return out
 }
 
+// coverageBase is the most runes of a base branch's name a text list of
+// review_coverage@1's changes prints, so a long topic branch's name does
+// not take the width of the columns beside it.
+const coverageBase = 16
+
+// coverageChangeText names a change of review_coverage@1's list: its pull
+// request, with the branch it merged into ("#3780 into stable"), cut to
+// base runes when base is above 0, else its landing.
+func coverageChangeText(c CoverageChange, base int) string {
+	if c.Pull == nil {
+		return short(c.Landing)
+	}
+	s := "#" + strconv.Itoa(*c.Pull)
+	if c.OtherBranch {
+		b := c.Base
+		if base > 0 {
+			b = truncate(b, base)
+		}
+		s += " into " + b
+	}
+	return s
+}
+
+// coverageOutcomeText says what review_coverage@1 made of a change: in Den,
+// reviewed or not, or left out, and why. A change with no pull request in
+// the GitHub data is never said to be pushed directly: the data may lack
+// its pull request, or it merged from a private fork, as a security
+// advisory's does (report-json.md).
+func coverageOutcomeText(c CoverageChange) string {
+	named := ""
+	if c.Named != nil {
+		named = "#" + strconv.Itoa(*c.Named)
+	}
+	switch c.Outcome {
+	case "reviewed":
+		s := "reviewed by " + plural(c.Reviewers, "other", "others")
+		if c.ApprovedOnly {
+			s += ", approval only"
+		}
+		return s
+	case "unreviewed":
+		return "no review by anyone else"
+	case "direct":
+		return "no pull request in the GitHub data"
+	case "bot":
+		return "left out: a bot's"
+	case "branch_merge":
+		return "left out: merged another branch's pull requests, counted on their own"
+	case "copies":
+		return "left out: copies of changes counted when they first landed"
+	case "after_sync":
+		return "left out: landed after the last sync"
+	case "unmatched":
+		return "left out: names " + named + ", which the GitHub data lacks (sync github again)"
+	case "named_elsewhere":
+		return "left out: names " + named + ", which did not land by its merge commit (merged into another branch, " +
+			"or the branch rewritten)"
+	}
+	return c.Outcome
+}
+
+// coverageOutcomeCode is coverageOutcomeText's short form for a text
+// table, where the full sentences would be cut to the same few characters
+// (unmatched and named_elsewhere both to "left out: names …"): the code a
+// row prints, the key of its legend line, and that line, which says what
+// the code means, so a reader can tell what a sync could change
+// (unmatched) from what no sync changes (named_elsewhere).
+func coverageOutcomeCode(c CoverageChange) (code, key, meaning string) {
+	named := "#?"
+	if c.Named != nil {
+		named = "#" + strconv.Itoa(*c.Named)
+	}
+	switch c.Outcome {
+	case "reviewed":
+		if c.ApprovedOnly {
+			return "approved by " + strconv.Itoa(c.Reviewers), "approved",
+				"approved by N: reviewed before its merge only by approvals with no text and no inline comment, from N people other than its author"
+		}
+		return "reviewed by " + strconv.Itoa(c.Reviewers), c.Outcome,
+			"reviewed by N: N people other than its author reviewed it before it merged"
+	case "unreviewed":
+		return "not reviewed", c.Outcome, "not reviewed: no one other than its author reviewed its pull request before it merged"
+	case "direct":
+		return "no PR in data", c.Outcome,
+			"no PR in data: no pull request in the GitHub data the run read landed it, which is not proof of a direct push"
+	case "bot":
+		return "left out: bot", c.Outcome, "left out: bot: a bot's change, which review coverage does not count"
+	case "branch_merge":
+		return "left out: merge", c.Outcome,
+			"left out: merge: a merge that brought only another branch's pull requests, each counted on its own"
+	case "copies":
+		return "left out: copies", c.Outcome, "left out: copies: copies of changes counted when they first landed"
+	case "after_sync":
+		return "left out: after sync", c.Outcome,
+			"left out: after sync: landed after the last sync began, so its pull request may not be synced yet"
+	case "unmatched":
+		return "left out: " + named + " missing", c.Outcome,
+			"left out: #N missing: names pull request #N, which the GitHub data lacks: sync github again"
+	case "named_elsewhere":
+		return "left out: " + named + " elsewhere", c.Outcome,
+			"left out: #N elsewhere: names pull request #N, which merged into another branch, or under a merge commit the " +
+				"branch no longer holds: no sync changes it"
+	}
+	return c.Outcome, c.Outcome, c.Outcome + ": " + coverageOutcomeText(c)
+}
+
 func textDefinition(p *printer, d MetricInfo) {
 	var lines [][2]string
 	for _, f := range [][2]string{{"unit", d.Unit}, {"eligibility", d.Eligibility}, {"blind spots", d.BlindSpots},
@@ -215,7 +392,7 @@ func textDefinition(p *printer, d MetricInfo) {
 }
 
 func (e *Explain) writeMarkdown(p *printer) {
-	p.line("# explain " + mdID(e.Metric.ID) + " · " + p.subject(e.Subject, mdText))
+	p.line("# explain " + mdID(e.Metric.ID) + " · " + p.subject(e.Subject, mdText, e.Provenance))
 	p.blank()
 	p.line("- " + provenanceText(e.Provenance))
 	if e.Metric.Question != "" {
@@ -255,7 +432,7 @@ func (e *Explain) writeMarkdown(p *printer) {
 		}
 		p.mdTable(cols, rows)
 	}
-	for _, t := range e.traceTables(p, mdText, mdCode) {
+	for _, t := range e.traceTables(p, mdText, mdCode, false) {
 		p.blank()
 		p.line("## " + t.title)
 		p.blank()
@@ -466,8 +643,8 @@ func meRankText(r MeRank) (rank, estimate string) {
 	if !r.Eligible {
 		return "—", fmt.Sprintf("listed, not ranked: %s, below %d", plural(r.N, "change", "changes"), r.MinN)
 	}
-	return rankText(r.RankLo, r.RankHi) + " of " + grouped(r.Of),
-		estimateText(r.Estimate, r.Percent) + " (" + intervalText(r.Lo, r.Hi, r.Percent) + ")"
+	return rankText(*r.RankLo, *r.RankHi) + " of " + grouped(r.Of),
+		estimateText(r.Estimate, r.Percent) + " (" + intervalText(*r.Lo, *r.Hi, r.Percent) + ")"
 }
 
 // meIntro says what a person's own page holds, and that their AI-assisted
@@ -501,7 +678,7 @@ func metricHeading(id string, esc func(string) string) string {
 }
 
 func (m *Me) writeText(p *printer) {
-	p.wrapped("", "  ", "me · "+p.subject(m.Person, clean)+" · "+provenanceText(m.Provenance))
+	p.wrapped("", "  ", "me · "+p.subject(m.Person, clean, m.Provenance)+" · "+provenanceText(m.Provenance))
 	p.wrapped("  ", "  ", meIntro)
 	if len(m.Values) == 0 {
 		p.blank()
@@ -536,7 +713,7 @@ func (m *Me) writeText(p *printer) {
 }
 
 func (m *Me) writeMarkdown(p *printer) {
-	p.line("# " + p.subject(m.Person, mdText))
+	p.line("# " + p.subject(m.Person, mdText, m.Provenance))
 	p.blank()
 	p.line("- " + provenanceText(m.Provenance))
 	p.line("- " + strings.ToUpper(meIntro[:1]) + meIntro[1:] + ".")

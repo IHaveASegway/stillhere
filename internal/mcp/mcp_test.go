@@ -220,7 +220,7 @@ func TestMCPTools(t *testing.T) {
 			t.Fatalf("platform durable ranks %+v, want one table with one ranked person", ranks.Ranks)
 		}
 		lena := ranks.Ranks[0].Ranked[0]
-		if lena.Name != "Lena Lead" || lena.RankLo != 1 || lena.RankHi != 1 || lena.N != 10 || !near(lena.Estimate, 26.0/30) {
+		if lena.Name != "Lena Lead" || lena.RankLo == nil || *lena.RankLo != 1 || *lena.RankHi != 1 || lena.N != 10 || !near(lena.Estimate, 26.0/30) {
 			t.Errorf("platform durable@1 rank %+v, want Lena Lead 1-1, 26/30, n 10", lena)
 		}
 		if lena.Email != pseudonym("lena@example.com") {
@@ -267,7 +267,7 @@ func TestMCPTools(t *testing.T) {
 				durable = &p.Ranks[i]
 			}
 		}
-		if durable == nil || !durable.Eligible || durable.RankLo != 1 || durable.RankHi != 1 || durable.N != 10 ||
+		if durable == nil || !durable.Eligible || durable.RankLo == nil || *durable.RankLo != 1 || *durable.RankHi != 1 || durable.N != 10 ||
 			!near(durable.Estimate, 26.0/30) {
 			t.Errorf("Lena's durable@1 rank %+v, want eligible at 1-1, 26/30, n 10", durable)
 		}
@@ -505,6 +505,32 @@ func TestMCPTools(t *testing.T) {
 			strings.Contains(text, "stillhere metrics") {
 			t.Errorf("explain(durable@2) was refused with %q, want the metrics tool named, not the command", text)
 		}
+		// Wave 10's dead ends: days on a metric with a window of its own is
+		// refused in words that name no command-line flag; a window past the
+		// 365 days the run's history covers is refused by the schema, not
+		// answered as if nothing landed then; an area that holds nothing
+		// points to who_knows; and the whole run's own numbers (subject_kind
+		// all) are explained like a repository's.
+		if text := refused(t, "explain", map[string]any{"metric": "knowledge_loss", "subject": "fixture", "subject_kind": "repo",
+			"days": 30}); !strings.Contains(text, "a window in days is landed@1's and landed@2's alone") || strings.Contains(text, "--") {
+			t.Errorf("explain(knowledge_loss, days 30) was refused with %q, want the window explained and no flag named", text)
+		}
+		if text := refused(t, "explain", map[string]any{"metric": "landed", "subject": "Bob Builder", "days": 400}); !strings.Contains(text, "days") ||
+			!strings.Contains(text, "365") {
+			t.Errorf("explain(landed, Bob, days 400) was refused with %q, want days and its maximum, 365, named", text)
+		}
+		if text := refused(t, "explain", map[string]any{"metric": "knowledge_loss", "subject": "fixture", "subject_kind": "area",
+			"path": "nosuchdir"}); !strings.Contains(text, "who_knows(path, repo) answers any path") || !strings.Contains(text, `"fixture"`) ||
+			strings.Contains(text, "stillhere") || strings.Contains(text, "git.example") {
+			t.Errorf("explain(knowledge_loss, area fixture:nosuchdir) was refused with %q, want the repository by name and who_knows", text)
+		}
+		var all explainOut
+		decode(t, ask(t, "explain", map[string]any{"metric": "landed", "subject_kind": "all"}), &all)
+		if len(all.Values) == 0 || all.Subject.Kind != domain.SubjectAll || len(all.Landings) == 0 {
+			t.Errorf("explain(landed, all) gave subject %+v, %d values and %d landings, want the whole run's totals and their landings",
+				all.Subject, len(all.Values), len(all.Landings))
+		}
+		refused(t, "explain", map[string]any{"metric": "landed", "subject": "fixture", "subject_kind": "all"})
 	})
 
 	t.Run("highlights", func(t *testing.T) {
@@ -1390,7 +1416,7 @@ func TestMCPTools(t *testing.T) {
 		decode(t, ask(t, "highlights", map[string]any{"period": "quarter"}), &h)
 		i := slices.IndexFunc(h.TopTier, func(tt app.TopTier) bool { return tt.Metric == "simplifying@1" })
 		if i < 0 || h.TopTier[i].Of != 2 || h.TopTier[i].PeopleTotal != 1 || len(h.TopTier[i].People) != 1 ||
-			h.TopTier[i].People[0].Name != "Ann Apart" || h.TopTier[i].People[0].RankHi != 1 {
+			h.TopTier[i].People[0].Name != "Ann Apart" || h.TopTier[i].People[0].RankHi == nil || *h.TopTier[i].People[0].RankHi != 1 {
 			t.Errorf("highlights' simplifying@1 tiers %+v, want Ann Apart named, 1-1 of 2", h.TopTier)
 		}
 		if hasCaveat(h.Caveats, "no-standout", "simplifying@1") {

@@ -52,7 +52,10 @@ repository or a group read their rank tables (`overview(scope, rank)`), while
 and areas, and the AI-assisted share and review coverage about repositories and
 groups; `who_knows` is computed per path and never explained: call
 `who_knows(path, repo)`. Asking about a kind a metric has no value about is
-refused with the calls that answer instead.
+refused with the calls that answer instead. A still-here row's
+`landings_365d` counts the landings `landed` credits to the person (who wrote
+it, merges apart in `merged_365d`): `explain(metric: "landed", subject: P,
+days: 365)` lists them.
 
 ## Reading an answer
 
@@ -215,14 +218,22 @@ gives it.
    repository rows and each card of step 3 carry `review_coverage`
    (`review_coverage@1`, `null` without GitHub data, which is not 0): say how
    much of what landed in 90 days someone other than its author reviewed,
-   with its detail: landings by pull request, reviewed, approved without a
-   comment, and `direct`, landings with no pull request in the GitHub data
-   (not "pushed directly": the data may lack theirs); `after_sync` and
-   `unmatched` landings are left out because whether they were reviewed is
-   unknown. `explain(metric: "review_coverage", subject: G, subject_kind:
-   "group")` gives every scope's value. Set it beside `reviews_given`'s
-   table: one person giving most reviews, or merging most landings, is a
-   gate, which no ownership number shows.
+   with its detail: changes by pull request, those merged into another
+   branch (`via_other_branch`: a maintenance branch's pull requests, which a
+   merge brought), reviewed, approved without a comment, and `direct`,
+   landings with no pull request in the GitHub data (not "pushed directly":
+   the data may lack theirs); `after_sync`, `unmatched` and `named_elsewhere`
+   landings are left out because whether they were reviewed is unknown, and
+   `branch_merges` (merges that only brought another branch's pull requests)
+   and `copies` because they hold no work of their own. Only `unmatched`
+   means a sync may help. `explain(metric: "review_coverage", subject: R,
+   subject_kind: "repo")` (or a group, or `subject_kind: "all"` with no
+   subject for every repository) lists every change of the window,
+   `coverage`, the unreviewed first: name the pull requests no one else
+   reviewed, rather than a bare share. `coverage` holds no merger, and the
+   metric is never about a person, so do not name who merged them. Set it beside
+   `reviews_given`'s table: one person giving most reviews, or merging most
+   landings, is a gate, which no ownership number shows.
 7. **Identities.** `identity_candidates(scope: G, limit: 100)`, following
    `cursor`: addresses that may be one person, most confident first. Unmerged
    identities split one person's numbers and make knowledge loss look larger.

@@ -51,7 +51,8 @@ type HistoryFacts struct {
 	FirstCommit time.Time
 	// Commits holds the landing commits and every commit a landing brought
 	// in, sorted by SHA. Co-authors are canonicalised with git
-	// check-mailmap in both modes.
+	// check-mailmap, and each commit with a patch of its own carries its
+	// patch id, in both modes.
 	Commits []domain.Commit
 	// Landings are the first-parent commits of Head whose committer time
 	// is in the window, sorted by SHA, each with its landing map
@@ -107,7 +108,9 @@ type HistoryFacts struct {
 //     from one rev-list --parents walk for all landings rather than one
 //     process per merge, and none when no landing is a merge;
 //   - the commits merge landings brought in, with their numstat, from one
-//     git log --no-walk --stdin.
+//     git log --no-walk --stdin;
+//   - in a clone with blobs, every non-merge commit's patch id, from the
+//     own patch piped into git patch-id --stable (readPatchIDs).
 //
 // HistoryScan adds:
 //
@@ -206,6 +209,12 @@ func (h *historyRun) run(ctx context.Context) error {
 	}
 	if err := h.readBroughtIn(ctx); err != nil {
 		return err
+	}
+	if h.lines {
+		// Both modes: landed@2, which week prints, credits a copy once.
+		if err := h.readPatchIDs(ctx); err != nil {
+			return err
+		}
 	}
 	if h.scan {
 		if h.lines {

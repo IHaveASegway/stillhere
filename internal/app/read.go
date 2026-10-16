@@ -112,7 +112,7 @@ func load(ctx context.Context, d Deps, runID int64) (*stored, error) {
 	// After the run's GitHub data: it links forge logins to the run's people.
 	s.who = identity.New(s.facts, p)
 	s.candidates = sync.OnceValue(func() []identity.Candidate { return identity.Candidates(s.facts, s.who).Candidates })
-	computed, err := s.computeUnstored()
+	computed, corrected, err := s.computeUnstored()
 	if err != nil {
 		return nil, err
 	}
@@ -120,7 +120,45 @@ func load(ctx context.Context, d Deps, runID int64) (*stored, error) {
 		d.Log.Info("a stillhere older than these metrics stored the run, so it holds no value of them: they were "+
 			"computed from its facts as it was read", "run", run.ID, "metrics", strings.Join(computed, ", "))
 	}
+	if len(corrected) > 0 {
+		d.Log.Info("a stillhere before these metrics' corrections stored the run: their values were computed again "+
+			"from its facts, by the corrected definitions", "run", run.ID, "metrics", strings.Join(corrected, ", "))
+	}
 	return s, nil
+}
+
+// correctedShapes names each correction in place, before the first release
+// (docs/metrics.md: "before the first release, so the version stays N"),
+// that a stored value shows by its data: the Detail key every value of the
+// metric about a subject of that kind ("" for any) has carried since. A
+// value without it was stored by a stillhere before the correction, by
+// the old definition, so the run's readers compute the metric again from
+// its facts (computeUnstored), as they compute one the run holds no value
+// of; otherwise a page would show the old value beside what the new rule
+// lists, as explain's review_coverage@1 share above its changes. An old
+// run is told by its data, not by a version (docs/spec/codebase.md#run-model).
+var correctedShapes = []struct {
+	metric domain.MetricID
+	kind   string // the subject kind whose values carry key; "" for every kind
+	key    string
+}{
+	// wave 10: changes, not landings, which explain lists (reviewCoverageItems)
+	{domain.MetricID{Name: "review_coverage", Version: 1}, "", "via_other_branch"},
+	// wave 10: landings_365d by landed@2's credit, the merges a person made apart
+	{domain.MetricID{Name: "surviving", Version: 1}, domain.SubjectPerson, "merged_365d"},
+}
+
+// storedBeforeCorrection reports whether v lacks the Detail key a
+// correction of its metric added (correctedShapes).
+func storedBeforeCorrection(v domain.MetricValue) bool {
+	for _, c := range correctedShapes {
+		if v.Metric == c.metric && (c.kind == "" || v.Subject.Kind == c.kind) {
+			if _, ok := v.Detail[c.key]; !ok {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // withForge returns a stored run's facts with the GitHub data the run kept
@@ -164,43 +202,55 @@ func withForge(ctx context.Context, d Deps, run domain.Run, fs *domain.FactSet) 
 // the ids it computed. Such a metric is newer than the stillhere that
 // stored the run, as landed@2 and review_coverage@1 are for a run stored
 // before #108 and #107, whose report would otherwise print "nothing landed"
-// over a run full of landings. The old run is told by its data, not by a
-// version: a metric's function over the same inputs gives what a scan by
-// this binary stores, as rankAll bootstraps a rank table the run did not
-// store (docs/spec/codebase.md#run-model), so the answer is the same every
-// time it is read. A metric that reads GitHub data is not computed for a
-// run that read none, whose value is absent by definition, and one that
-// produced no value when it was stored is computed again, to nothing.
-func (s *stored) computeUnstored() ([]string, error) {
+// over a run full of landings. It does the same for a metric whose stored
+// values a correction in place made old (storedBeforeCorrection): it drops
+// them, computes the metric again, and returns its id in corrected. The
+// old run is told by its data, not by a version: a metric's function over
+// the same inputs gives what a scan by this binary stores, as rankAll
+// bootstraps a rank table the run did not store
+// (docs/spec/codebase.md#run-model), so the answer is the same every time
+// it is read. A metric that reads GitHub data is not computed for a run
+// that read none, whose value is absent by definition (an old value of it
+// then stands, with no list beside it), and one that produced no value
+// when it was stored is computed again, to nothing.
+func (s *stored) computeUnstored() (computed, corrected []string, err error) {
 	held := map[domain.MetricID]bool{}
+	stale := map[domain.MetricID]bool{}
 	for _, v := range s.values {
 		held[v.Metric] = true
+		if storedBeforeCorrection(v) {
+			stale[v.Metric] = true
+		}
 	}
-	var ids []string
 	var added []domain.MetricValue
 	for _, m := range metrics.All() {
 		def := m.Definition()
-		if held[def.ID] || len(def.Subjects) == 0 || (def.Forge && s.facts.Forge == nil) {
+		if (held[def.ID] && !stale[def.ID]) || len(def.Subjects) == 0 || (def.Forge && s.facts.Forge == nil) {
+			delete(stale, def.ID)
 			continue
 		}
 		values, err := m.Compute(s.input())
 		if err != nil {
-			return nil, fmt.Errorf("computing %s over run %d's facts: %w", def.ID, s.run.ID, err)
+			return nil, nil, fmt.Errorf("computing %s over run %d's facts: %w", def.ID, s.run.ID, err)
 		}
-		if len(values) > 0 {
-			ids = append(ids, def.ID.String())
-			added = append(added, values...)
+		switch {
+		case stale[def.ID]:
+			corrected = append(corrected, def.ID.String())
+		case len(values) > 0:
+			computed = append(computed, def.ID.String())
 		}
+		added = append(added, values...)
 	}
-	if len(added) > 0 {
+	if len(added) > 0 || len(stale) > 0 {
 		// A copy, and in the store's order, metric by metric: a store may
 		// hand every reader the same slice (the MCP server caches it).
-		s.values = append(slices.Clone(s.values), added...)
+		s.values = slices.DeleteFunc(slices.Clone(s.values), func(v domain.MetricValue) bool { return stale[v.Metric] })
+		s.values = append(s.values, added...)
 		slices.SortStableFunc(s.values, func(a, b domain.MetricValue) int {
 			return cmp.Or(cmp.Compare(a.Metric.Name, b.Metric.Name), cmp.Compare(a.Metric.Version, b.Metric.Version))
 		})
 	}
-	return ids, nil
+	return computed, corrected, nil
 }
 
 // canonicalKeys upcasts the person keys of a run stored before #69, whose
@@ -423,29 +473,57 @@ func Explain(ctx context.Context, d Deps, r ExplainRequest) (*report.Explain, er
 		return nil, &domain.UsageError{Msg: fmt.Sprintf(
 			"%s about a person is shown only on their own page (ADR 0007): %s", def.ID, d.commands().OwnPage())}
 	}
-	if r.Person != "" {
-		r.Subject = domain.Subject{Kind: domain.SubjectPerson}
-		if report.OwnPageOnly(def.ID) {
-			return nil, &domain.UsageError{Msg: fmt.Sprintf(
-				"%s about a person is shown only on their own page (ADR 0007): %s", def.ID, d.commands().OwnPage())}
+	named := 0
+	for kind, name := range map[string]string{domain.SubjectPerson: r.Person, domain.SubjectRepo: r.Repo,
+		domain.SubjectGroup: r.Group, domain.SubjectArea: r.Area} {
+		if strings.TrimSpace(name) != "" {
+			r.Subject = domain.Subject{Kind: kind}
+			named++
 		}
+	}
+	if r.AllRepos {
+		r.Subject = domain.Subject{Kind: domain.SubjectAll}
+		named++
+	}
+	if named > 1 {
+		return nil, &domain.UsageError{Msg: "explain answers about one subject: a person, a repository, a group, an area " +
+			"or every repository"}
+	}
+	if r.Person != "" && report.OwnPageOnly(def.ID) {
+		return nil, &domain.UsageError{Msg: fmt.Sprintf(
+			"%s about a person is shown only on their own page (ADR 0007): %s", def.ID, d.commands().OwnPage())}
 	}
 	if !slices.Contains(def.Subjects, r.Subject.Kind) {
 		// No run holds an answer, so none is read.
 		return nil, explainKindError(d.commands(), def, r.Subject.Kind)
 	}
+	if err := explainDays(def, r.Days); err != nil {
+		return nil, err
+	}
 	s, err := load(ctx, d, r.RunID)
 	if err != nil {
 		return nil, err
 	}
+	if err := explainHistory(def, r.Days, historyOf(s.facts)); err != nil {
+		return nil, err
+	}
 	var matched *report.Caveat
-	if r.Person != "" {
+	switch {
+	case r.Person != "":
 		// The reader named the person as a page names them (PF-7).
 		p, caveat, err := s.findPerson(r.Person, d.commands())
 		if err != nil {
 			return nil, err
 		}
 		r.Subject.Key, matched = p.Key, caveat
+	case r.Repo != "", r.Group != "", r.Area != "":
+		if r.Subject, err = s.findSubject(r); err != nil {
+			return nil, err
+		}
+	}
+	in := s.input()
+	if r.Days > 0 {
+		in.Days = r.Days
 	}
 	var values []domain.MetricValue
 	known := false
@@ -454,14 +532,25 @@ func Explain(ctx context.Context, d Deps, r ExplainRequest) (*report.Explain, er
 			continue
 		}
 		known = true
-		if v.Metric == def.ID {
+		if v.Metric == def.ID && in.Days == s.policy.Week.Days {
 			values = append(values, v)
 		}
 	}
+	if known && in.Days != s.policy.Week.Days {
+		// A window the scan did not store, computed from the run's facts
+		// as a scan computes the stored one.
+		computed, err := m.Compute(in)
+		if err != nil {
+			return nil, fmt.Errorf("explaining %s over %d days: %w", def.ID, in.Days, err)
+		}
+		for _, v := range computed {
+			if v.Subject == r.Subject {
+				values = append(values, v)
+			}
+		}
+	}
 	if !known {
-		return nil, fmt.Errorf("%s %s has no values in run %d (a person is named by their canonical email, after .mailmap, "+
-			"or by @login when the run links no email to that GitHub login): %w",
-			r.Subject.Kind, r.Subject.Key, s.run.ID, domain.ErrNotFound)
+		return nil, s.explainMissing(r.Subject, d.commands())
 	}
 	clusters := map[string][]rank.Cluster{}
 	var window domain.Window // the metric's window, which says why an empty answer is empty (#92)
@@ -470,7 +559,6 @@ func Explain(ctx context.Context, d Deps, r ExplainRequest) (*report.Explain, er
 		// A bot's clusters are listed too (#75): its values are in the
 		// report's bot tables. The metric keeps them apart from the people
 		// it ranks (RankInput.Bots).
-		in := s.input()
 		for _, rf := range s.facts.Repos {
 			if rf.Status != domain.RepoStatusOK {
 				continue
@@ -489,9 +577,11 @@ func Explain(ctx context.Context, d Deps, r ExplainRequest) (*report.Explain, er
 			}
 		}
 	}
-	if tm, ok := m.(metrics.Traced); ok && r.Subject.Kind == domain.SubjectPerson {
-		// What a value that is not ranked is made of (#109).
-		t, err := tm.Trace(s.input(), r.Subject.Key)
+	if tm, ok := m.(metrics.Traced); ok {
+		// What a value that is not ranked is made of (#109): a person's,
+		// or a repository's, a group's or the run's own (review_coverage@1's
+		// changes, landed@2's landings).
+		t, err := tm.Trace(in, r.Subject)
 		if err != nil {
 			return nil, fmt.Errorf("explaining %s: %w", def.ID, err)
 		}
@@ -506,6 +596,96 @@ func Explain(ctx context.Context, d Deps, r ExplainRequest) (*report.Explain, er
 		e.Caveats = append(e.Caveats, *matched)
 	}
 	return e, nil
+}
+
+// explainDays refuses a window of days for a metric whose window is not
+// the week's, or one outside the policy's bounds: landed@1 and landed@2
+// read [now - days, now), so explain can trace them over any span the
+// run's history holds (the 365 days of a still-here table's
+// landings_365d; explainHistory), while every other metric's window is
+// its definition's. The words name no flag: the command line's --days and
+// the MCP server's days argument both reach it.
+func explainDays(def metrics.Definition, days int) error {
+	switch {
+	case days == 0:
+		return nil
+	case def.ID.Name != "landed":
+		return &domain.UsageError{Msg: fmt.Sprintf("%s reads a window of its own definition; a window in days is "+
+			"landed@1's and landed@2's alone", def.ID)}
+	case days < 1 || days > policy.MaxWeekDays:
+		return &domain.UsageError{Msg: fmt.Sprintf("a window of %d days: want 1 to %d", days, policy.MaxWeekDays)}
+	}
+	return nil
+}
+
+// explainHistory refuses a window of days longer than the history the run
+// read (h, the 365 days of a scan, a week run's own days): what landed
+// before it is unknown, not none, so an answer over the window would read
+// that span as one in which nothing landed, the "unknown" metrics.md says a
+// page must tell from "nothing landed".
+func explainHistory(def metrics.Definition, days int, h domain.Window) error {
+	held := int(h.Until.Sub(h.Since) / (24 * time.Hour))
+	if days <= held {
+		return nil
+	}
+	return &domain.UsageError{Msg: fmt.Sprintf("%s over %d days: the run's history covers %d days (%s to %s), so what "+
+		"landed before it is unknown, not none; ask for %d days or fewer", def.ID, days, held,
+		h.Since.UTC().Format(time.DateOnly), h.Until.UTC().Format(time.DateOnly), held)}
+}
+
+// explainMissing is the error for a subject the run holds no value about
+// (domain.ErrNotFound), worded for its kind: a person is named by their
+// canonical email or @login; an area is a top-level directory with
+// surviving prod lines, named by the repository's name as the report
+// prints it, where who-knows, in the reader's words (cmds), answers any
+// path.
+func (s *stored) explainMissing(sub domain.Subject, cmds report.Commands) error {
+	switch sub.Kind {
+	case domain.SubjectArea:
+		if i := strings.LastIndex(sub.Key, ":"); i > 0 {
+			name := sub.Key[:i]
+			if n, err := runNames(s); err == nil {
+				name = cmp.Or(ScopeName(n, domain.Scope{Kind: domain.ScopeRepo, Key: name}), name)
+			}
+			return fmt.Errorf("area %s of %q holds no value in run %d: an area is a top-level directory that holds "+
+				"surviving prod lines; %s answers any path: %w", sub.Key[i+1:], name, s.run.ID, cmds.WhoKnows(), domain.ErrNotFound)
+		}
+	case domain.SubjectPerson:
+		return fmt.Errorf("%s %s has no values in run %d (a person is named by their canonical email, after .mailmap, "+
+			"or by @login when the run links no email to that GitHub login): %w",
+			sub.Kind, sub.Key, s.run.ID, domain.ErrNotFound)
+	}
+	return fmt.Errorf("%s %s has no values in run %d: %w", sub.Kind, sub.Key, s.run.ID, domain.ErrNotFound)
+}
+
+// findSubject resolves a reader's --repo, --group or --area (r) in the
+// stored run (FindScopes): a repository's or a group's own numbers, or an
+// area, REPO:DIR, a top-level directory of a repository, as a scan stores
+// knowledge_loss@1 and knowledge_concentration@1 for it.
+func (s *stored) findSubject(r ExplainRequest) (domain.Subject, error) {
+	n, err := runNames(s)
+	if err != nil {
+		return domain.Subject{}, err
+	}
+	switch {
+	case r.Group != "":
+		sc, err := findScope(n, domain.ScopeGroup, r.Group, "--group")
+		return domain.Subject{Kind: domain.SubjectGroup, Key: sc.Key}, err
+	case r.Repo != "":
+		sc, err := findScope(n, domain.ScopeRepo, r.Repo, "--repo")
+		return domain.Subject{Kind: domain.SubjectRepo, Key: sc.Key}, err
+	}
+	i := strings.LastIndex(r.Area, ":")
+	dir := ""
+	if i > 0 {
+		dir = strings.Trim(strings.TrimSpace(r.Area[i+1:]), "/")
+	}
+	if i <= 0 || dir == "" || strings.Contains(dir, "/") {
+		return domain.Subject{}, &domain.UsageError{Msg: fmt.Sprintf("--area %q: pass REPO:DIR, a repository as the report "+
+			"names it and one of its top-level directories, such as click:src; who-knows answers any path", r.Area)}
+	}
+	sc, err := findScope(n, domain.ScopeRepo, r.Area[:i], "--area")
+	return domain.Subject{Kind: domain.SubjectArea, Key: sc.Key + ":" + dir + "/"}, err
 }
 
 // findPerson resolves a reader's name for a person in the stored run

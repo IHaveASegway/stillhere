@@ -103,35 +103,179 @@ func Changes(in *Input) ([]Change, error) {
 	x := v.reviews()
 	var out []Change
 	for _, r := range v.repos {
-		taken := make(map[string]bool, len(r.landings))
-		pulls, _ := x.landings(r)
-		for _, pl := range pulls {
-			c := Change{Repo: r.key, Pull: &Pull{ID: pl.pull.ID, Repo: names[pl.pull.Repo], Number: pl.pull.Number, Title: pl.pull.Title}}
-			var mine []*landingView
-			for _, l := range pl.landings {
-				if !taken[l.sha] {
-					taken[l.sha] = true
-					c.add(r, l)
-					mine = append(mine, l)
-				}
+		for _, cv := range x.changes(r) {
+			if cv.via != nil {
+				// A pull request merged into another branch has no landing
+				// of its own: its merge's landing is a change already.
+				continue
 			}
-			if len(mine) > 0 {
-				c.Bot = v.botLandings(mine...)
-				out = append(out, c)
+			c := Change{Repo: r.key, Bot: v.botLandings(cv.landings...)}
+			if p := cv.pull; p != nil {
+				c.Pull = &Pull{ID: p.ID, Repo: names[p.Repo], Number: p.Number, Title: p.Title}
 			}
-		}
-		for _, l := range r.landings {
-			if !taken[l.sha] {
-				c := Change{Repo: r.key, Bot: v.botLandings(l)}
+			for _, l := range cv.landings {
 				c.add(r, l)
-				out = append(out, c)
 			}
+			out = append(out, c)
 		}
 	}
 	slices.SortFunc(out, func(a, b Change) int {
 		return cmp.Or(cmp.Compare(a.Repo, b.Repo), a.Time.Compare(b.Time), cmp.Compare(a.Landings[0], b.Landings[0]))
 	})
 	return out, nil
+}
+
+// changeView is one change of a repository, as the one grouping makes it
+// (reviewsIndex.changes): what Changes lists, and what review_coverage@1
+// counts.
+type changeView struct {
+	// landings are the change's own landings, its pull request's merge
+	// commit's first, as Change.Landings; nil for a pull request merged
+	// into another branch, which has none.
+	landings []*landingView
+	// via is, for a pull request merged into another branch, the merge
+	// landing whose map holds its merge commit: how its change reached the
+	// default branch, and when. nil for any other change.
+	via  *landingView
+	pull *domain.PullRequest // nil for a landing no pull request of the GitHub data landed
+	// commits are the non-merge commits the change brought: its landings'
+	// maps' less those of the pull requests merged into another branch
+	// that its landings brought (brought), or, for such a pull request,
+	// its own in its via landing's map: its merge commit, or a squash's or
+	// a rebase's last commit, and its own commits a merge commit keeps.
+	commits []*commitView
+	// brought are the pull requests merged into another branch whose merge
+	// commits its landings' maps hold, each a change of its own.
+	brought []*changeView
+}
+
+// time is when the change reached the default branch: its first
+// landing's committer time, or its via landing's.
+func (c *changeView) time() time.Time {
+	if c.via != nil {
+		return c.via.time
+	}
+	return c.landings[0].time
+}
+
+// landing is the landing a change is named by: its first, or its via
+// landing.
+func (c *changeView) landing() *landingView {
+	if c.via != nil {
+		return c.via
+	}
+	return c.landings[0]
+}
+
+// own returns the change's own work: its commits that are no copy of an
+// earlier landing's (markCopies), so a merge that only brought the pull
+// requests of another branch, each counted on its own, or only copies,
+// has none.
+func (c *changeView) own() []*commitView {
+	var out []*commitView
+	for _, k := range c.commits {
+		if !k.copy {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// changes returns repository r's changes, in the one grouping every reader
+// of changes shares (docs/metrics.md#units): each merged pull request of
+// the GitHub data that landed on the default branch, with its landings as
+// landings finds them; each landing that none landed; and each pull
+// request merged into another branch (a maintenance branch, a release
+// branch, a long-lived feature branch) whose merge commit a merge landing's
+// map holds, so it reached the default branch when that branch was merged
+// into it. Every landing is in exactly one change that has landings, and
+// every commit of a landing's map in one change's commits at most. Without
+// GitHub data for r (or with x nil), every landing is a change of its own.
+//
+// A pull request merged into another branch claims, in its via landing's
+// map, its merge commit and those of its own commits (PullRequest.Commits)
+// the map holds, which a merge commit keeps; a squash's and a rebase's
+// own commits are not on any branch, and of a rebase only the last commit
+// is claimed, as for a rebase merge GitHub committed in several seconds on
+// the default branch (#67). Pull requests claim in the order the GitHub
+// data lists them, so one that holds another's commits takes none of them
+// twice.
+func (x *reviewsIndex) changes(r *repoView) []*changeView {
+	pulls, known := x.landings(r)
+	var out []*changeView
+	taken := make(map[string]bool, len(r.landings))
+	for _, pl := range pulls {
+		c := &changeView{pull: pl.pull}
+		for _, l := range pl.landings {
+			if !taken[l.sha] {
+				taken[l.sha] = true
+				c.landings = append(c.landings, l)
+			}
+		}
+		if len(c.landings) > 0 {
+			out = append(out, c)
+		}
+	}
+	for _, l := range r.landings {
+		if !taken[l.sha] {
+			out = append(out, &changeView{landings: []*landingView{l}})
+		}
+	}
+	// The merged pull requests that landed no landing, by merge commit, in
+	// the GitHub data's order.
+	other := map[string]int{}
+	var otherPulls []*domain.PullRequest
+	if known {
+		for _, p := range x.merged[r.key] {
+			if _, dup := other[p.MergeCommit.SHA]; !dup && !taken[p.MergeCommit.SHA] {
+				other[p.MergeCommit.SHA] = len(otherPulls)
+				otherPulls = append(otherPulls, p)
+			}
+		}
+	}
+	n := len(out)
+	for _, c := range out[:n] {
+		claimed := map[*commitView]bool{}
+		for _, l := range c.landings {
+			if len(otherPulls) > 0 && l.commit != nil && l.commit.merge {
+				inMap := make(map[string]*commitView, len(l.commits))
+				var found []int // indexes into otherPulls of the pull requests whose merge commit l's map holds
+				for _, k := range l.commits {
+					inMap[k.sha] = k
+					if i, ok := other[k.sha]; ok && k != l.commit {
+						found = append(found, i)
+					}
+				}
+				slices.Sort(found)
+				for _, i := range found {
+					p := otherPulls[i]
+					b := &changeView{via: l, pull: p}
+					mine := []*commitView{inMap[p.MergeCommit.SHA]}
+					for _, pc := range p.Commits {
+						if m := inMap[pc.SHA]; m != nil && pc.SHA != p.MergeCommit.SHA {
+							mine = append(mine, m)
+						}
+					}
+					for _, m := range mine {
+						if !claimed[m] {
+							claimed[m] = true
+							if !m.merge {
+								b.commits = append(b.commits, m)
+							}
+						}
+					}
+					c.brought = append(c.brought, b)
+					out = append(out, b)
+				}
+			}
+			for _, k := range l.commits {
+				if !k.merge && !claimed[k] {
+					c.commits = append(c.commits, k)
+				}
+			}
+		}
+	}
+	return out
 }
 
 // add puts landing l of repository r into c: its SHA, its time when it is
@@ -164,21 +308,32 @@ func (c *Change) add(r *repoView, l *landingView) {
 // agent opened for a person is the person's. With no commit it can read,
 // it is not a bot's.
 func (v *view) botLandings(landings ...*landingView) bool {
-	human, known := false, false
+	var credited []*commitView
 	for _, l := range landings {
 		brought := false
 		for _, k := range l.commits {
 			if !k.merge {
-				brought, known = true, true
-				human = human || !v.who.Bot(k.credit)
+				brought = true
+				credited = append(credited, k)
 			}
 		}
 		if !brought && l.commit != nil {
-			known = true
-			human = human || !v.who.Bot(l.commit.credit)
+			credited = append(credited, l.commit)
 		}
 	}
-	return known && !human
+	return v.botCommits(credited)
+}
+
+// botCommits is the rule botLandings applies to the commits it reads: every
+// one is credited to a bot, and there is one. review_coverage@1 applies it
+// to a change's own commits (changeView.own).
+func (v *view) botCommits(commits []*commitView) bool {
+	for _, k := range commits {
+		if !v.who.Bot(k.credit) {
+			return false
+		}
+	}
+	return len(commits) > 0
 }
 
 // Scorer is one ranked metric's measure of a change, which is how

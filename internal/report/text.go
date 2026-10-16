@@ -306,22 +306,35 @@ func shareLine(loss, ai, bots *Share) string {
 	return strings.Join(parts, " · ")
 }
 
-// coverageText is "review coverage 61.5% (24 of 39 human landings, 90 days)
+// coverageText is "review coverage 61.5% (24 of 39 human changes, 90 days)
 // · 12 pull requests merged without another's review · 3 landings with no
 // pull request in the GitHub data · 4 reviewed only by an approval with no
-// comment", with the landings it left out, after the last sync or naming a
-// pull request the data lacks, and, for a section
-// over more repositories than have GitHub data, "· over 3 of 5
-// repositories, those with GitHub data" (#107).
+// comment", with the pull requests merged into another branch that a merge
+// brought, the changes it left out (merges of another branch's pull
+// requests, copies, landings after the last sync or naming a pull request
+// the data lacks or holds elsewhere), and, for a section over more
+// repositories than have GitHub data, "· over 3 of 5 repositories, those
+// with GitHub data" (#107).
 func coverageText(c *ReviewCoverage, repos int) string {
 	s := fmt.Sprintf("review coverage %s (%s of %s, %s)", percent(c.Value), number(c.Num),
-		plural(count(c.Den), "human landing", "human landings"), plural(windowDays(c.Window), "day", "days"))
+		plural(count(c.Den), "human change", "human changes"), plural(windowDays(c.Window), "day", "days"))
 	parts := []string{s}
-	if n := c.ViaPullRequest - count(c.Num); n > 0 {
+	if n := c.ViaPullRequest + c.ViaOtherBranch - count(c.Num); n > 0 {
 		parts = append(parts, plural(n, "pull request", "pull requests")+" merged without another's review")
+	}
+	if c.ViaOtherBranch > 0 {
+		parts = append(parts, plural(c.ViaOtherBranch, "pull request", "pull requests")+
+			" merged into another branch, which a merge brought")
 	}
 	if c.Direct > 0 {
 		parts = append(parts, plural(c.Direct, "landing", "landings")+" with no pull request in the GitHub data")
+	}
+	if c.BranchMerges > 0 {
+		parts = append(parts, plural(c.BranchMerges, "merge", "merges")+
+			" of another branch's pull requests, counted on their own, left out")
+	}
+	if c.Copies > 0 {
+		parts = append(parts, plural(c.Copies, "change", "changes")+" made only of copies of earlier ones, left out")
 	}
 	if c.AfterSync > 0 {
 		parts = append(parts, plural(c.AfterSync, "landing", "landings")+" since the last sync, left out")
@@ -329,6 +342,10 @@ func coverageText(c *ReviewCoverage, repos int) string {
 	if c.Unmatched > 0 {
 		parts = append(parts, plural(c.Unmatched, "landing", "landings")+
 			" naming a pull request the GitHub data lacks, left out (sync github again)")
+	}
+	if c.NamedElsewhere > 0 {
+		parts = append(parts, plural(c.NamedElsewhere, "landing", "landings")+
+			" naming a pull request merged into another branch or under a commit the branch no longer holds, left out")
 	}
 	if c.ApprovedNoComment > 0 {
 		parts = append(parts, grouped(c.ApprovedNoComment)+" reviewed only by an approval with no comment")
@@ -551,6 +568,9 @@ func weekTotalText(t *WeekTotal) string {
 	if t.Merged > 0 {
 		parts = append(parts, plural(t.Merged, "merge", "merges"))
 	}
+	if t.Copies > 0 {
+		parts = append(parts, plural(t.Copies, "copy", "copies")+" of earlier landings' commits, credited to no one")
+	}
 	if t.LinesAdded != nil {
 		s := grouped(*t.LinesAdded) + " lines added"
 		if t.ProdLinesAdded != nil {
@@ -662,8 +682,14 @@ func rankRows(p *printer, t *RankTable, esc func(string) string, md bool) ([]col
 	var notes []string
 	ranked, hidden := shown(p, t.Ranked, pageRows)
 	for _, r := range ranked {
-		rows = append(rows, append([]string{rankText(r.RankLo, r.RankHi), name(r), estimateText(r.Estimate, t.Percent),
-			intervalText(r.Lo, r.Hi, t.Percent), grouped(r.N)}, beside(r)...))
+		rank := rankText(*r.RankLo, *r.RankHi)
+		if len(t.Ranked) == 1 {
+			// One eligible person was compared with no one: a "1" alone
+			// would read as first of a field.
+			rank = "1 of 1"
+		}
+		rows = append(rows, append([]string{rank, name(r), estimateText(r.Estimate, t.Percent),
+			intervalText(*r.Lo, *r.Hi, t.Percent), grouped(r.N)}, beside(r)...))
 	}
 	if hidden > 0 {
 		notes = append(notes, moreText(hidden, "person ranked", "people ranked"))
@@ -705,13 +731,39 @@ func rankForgeAsOf(t *RankTable) string {
 
 // rankFooter explains how to read a rank table, as product.md shows it;
 // the rows marked "—" only where the page lists the people below the
-// minimum, which it otherwise counts (rankRows).
+// minimum, which it otherwise counts (rankRows). It says that people whose
+// rank intervals overlap are not ordered only where two of its ranked
+// people's do: a footer that stated it beside rank intervals that do not
+// overlap read as a rule the table broke (value intervals can overlap
+// while rank intervals do not, docs/metrics.md#ranking-rules). A table of
+// one ranked person says that no one was compared.
 func rankFooter(p *printer, t *RankTable) string {
-	s := "intervals are 95% · ranks overlap when intervals do · bots are never ranked"
+	parts := []string{"intervals are 95%"}
+	switch {
+	case len(t.Ranked) == 1:
+		parts = append(parts, fmt.Sprintf("one person has %d changes or more, so no one is compared", t.MinN))
+	case ranksOverlap(t.Ranked):
+		parts = append(parts, "people whose rank intervals overlap are not ordered")
+	}
+	parts = append(parts, "bots are never ranked")
+	s := strings.Join(parts, " · ")
 	if p.all && len(t.BelowMin) > 0 {
 		s = fmt.Sprintf("— is listed, not ranked: fewer than %d changes · ", t.MinN) + s
 	}
 	return s
+}
+
+// ranksOverlap reports whether two ranked rows' rank intervals share a
+// place.
+func ranksOverlap(rows []RankRow) bool {
+	for i := range rows {
+		for j := i + 1; j < len(rows); j++ {
+			if max(*rows[i].RankLo, *rows[j].RankLo) <= min(*rows[i].RankHi, *rows[j].RankHi) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // metricName is the column head for a metric: "durable" for durable@1.

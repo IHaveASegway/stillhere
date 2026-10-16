@@ -156,7 +156,7 @@ func mainChangeOracles(t *testing.T) {
 		_, err := app.Explain(t.Context(), s.read, app.ExplainRequest{RunID: s.run,
 			Metric: domain.MetricID{Name: "knowledge_loss", Version: 1}, Subject: person("ada@example.com")})
 		const refusal = "knowledge_loss@1 holds no value about a person: its values are about repositories, areas and groups. " +
-			"Ask instead: 'stillhere report'."
+			"Ask instead: 'stillhere explain knowledge_loss@1 --repo NAME' (or --group NAME, --area REPO:DIR); 'stillhere report'."
 		var usage *domain.UsageError
 		if !errors.As(err, &usage) || usage.Msg != refusal {
 			t.Errorf("explain(knowledge_loss, Ada) gave %v, want the usage error %q", err, refusal)

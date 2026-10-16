@@ -30,11 +30,15 @@ type cluster struct {
 }
 
 // counts reports whether a commit counts in the change metrics: neither a
-// merge commit itself (v1 has no combined diff) nor a commit the
-// repository's ignore-revs file lists. Revert landings are excluded a level
-// up, landing by landing.
+// merge commit itself (v1 has no combined diff), nor a commit the
+// repository's ignore-revs file lists, nor a copy of a change an earlier
+// landing brought (markCopies), which its original already counts: blame
+// gives the copy's lines to the original, so durable@1 would score it 0,
+// and simplifying@1 would count its removal twice. So a landing made only
+// of copies forms no cluster. Revert landings are excluded a level up,
+// landing by landing.
 func (c *commitView) counts() bool {
-	return !c.merge && !c.ignored
+	return !c.merge && !c.ignored && !c.copy
 }
 
 // changeClusters returns the clusters of the landings in w, in repository,

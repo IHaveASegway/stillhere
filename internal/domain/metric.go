@@ -129,30 +129,54 @@ type RankInterval struct {
 	Eligible       bool
 }
 
-// Trace is what one person's value of a metric that is not ranked is made
-// of (#109), so every number reaches the commits behind it: the landings
-// landed@1 and landed@2 count, the blamed commits whose lines surviving@1
-// sums, the files majority_owner@1 counts. A ranked metric's are its
-// clusters instead (metrics.Ranked). Each list is in the order a page
-// prints it.
+// Trace is what one value of a metric that is not ranked is made of (#109),
+// so every number reaches the commits behind it: about a person, the
+// landings landed@1 and landed@2 count, the blamed commits whose lines
+// surviving@1 sums, the files majority_owner@1 counts; about a repository,
+// a group or the whole run, the landings landed@2's totals count and the
+// changes review_coverage@1 counts. A ranked metric's are its clusters
+// instead (metrics.Ranked). Each list is in the order a page prints it.
 type Trace struct {
 	Window   Window          // the window the value reads; zero for a value at HEAD
 	Landings []TracedLanding // by repository, then time
 	Commits  []TracedCommit  // the most surviving lines first
 	Files    []TracedFile    // the most of the person's lines first
+	Changes  []TracedChange  // by repository, the unreviewed in Den first, then by time
 }
 
-// TracedLanding is one landing a landed value counts for the person.
+// TracedLanding is one landing a landed value counts for the person, or in
+// a scope's totals.
 type TracedLanding struct {
 	Repo    string // Repo.Key
 	SHA     string
 	Time    time.Time // committer time
 	Merge   bool
-	Commits int // the person's commits in it that the value counts: landed@2's non-merge ones, landed@1's landing commit
+	Commits int // the commits in it that the value counts: landed@2's non-merge ones that are no copy, landed@1's landing commit
+	Copies  int // landed@2's: the copies it brought, credited to no one (a scope's totals; 0 for a person's)
 	// Lines and ProdLines are the lines those commits added, numstat
 	// insertions on paths with a role and the prod subset; -1 when the
 	// history counted no numstat (a partial clone).
 	Lines, ProdLines int
+}
+
+// TracedChange is one change review_coverage@1 read in its window: a pull
+// request, a pull request merged into another branch that a merge brought,
+// or a landing no pull request landed, with what the metric made of it.
+type TracedChange struct {
+	Repo    string    // Repo.Key
+	Landing string    // its landing: its pull request's merge commit's, or the merge that brought it from another branch
+	Time    time.Time // when it reached the default branch
+	Pull    int       // its pull request's number; 0 for none
+	Base    string    // the branch its pull request merged into; "" for none
+	Via     bool      // a pull request merged into another branch, which the merge Landing brought
+	// Outcome is reviewed, unreviewed or direct (in Den), or why it was
+	// left out: bot, branch_merge, copies, after_sync, unmatched,
+	// named_elsewhere (docs/metrics.md#review_coverage1)
+	Outcome      string
+	Author       string // its author's person key, as Den reads it; "" when it was left out before
+	Reviewers    int    // the people other than its author who reviewed it before it merged
+	ApprovedOnly bool   // reviewed, and only by approvals with no text and no inline comment
+	Named        int    // the pull request its subject names, for unmatched and named_elsewhere; else 0
 }
 
 // TracedCommit is one blamed commit whose prod lines at HEAD surviving@1

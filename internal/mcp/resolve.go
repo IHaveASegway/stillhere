@@ -10,7 +10,6 @@ import (
 	"github.com/IHaveASegway/stillhere/internal/app"
 	"github.com/IHaveASegway/stillhere/internal/domain"
 	"github.com/IHaveASegway/stillhere/internal/identity"
-	"github.com/IHaveASegway/stillhere/internal/redact"
 	"github.com/IHaveASegway/stillhere/internal/report"
 )
 
@@ -139,40 +138,11 @@ func kindQuery(kind, query string) string {
 }
 
 // scopes finds the scopes a non-empty scope argument names, as scope reads
-// it: the one finder, which repo, a group subject (groupQuery), scopeArg
-// and the run hint (call.elsewhere) all go through, so an answer's
-// scope_arg resolves wherever an argument names a scope.
-func (r *resolver) scopes(query string) []domain.Scope {
-	q := strings.TrimSpace(query)
-	kind := ""
-	if k, rest, ok := strings.Cut(q, ":"); ok && (strings.EqualFold(k, "group") || strings.EqualFold(k, "repo")) {
-		kind, q = strings.ToLower(k), strings.TrimSpace(rest)
-	}
-	var found []domain.Scope
-	if kind != domain.ScopeRepo {
-		for _, g := range r.names.Groups {
-			if strings.EqualFold(g.Name, q) {
-				found = append(found, domain.Scope{Kind: domain.ScopeGroup, Key: g.Name})
-			}
-		}
-	}
-	if kind != domain.ScopeGroup {
-		for _, rp := range r.repos(q) {
-			found = append(found, domain.Scope{Kind: domain.ScopeRepo, Key: rp.Key})
-		}
-	}
-	if len(found) > 1 {
-		// Names compare without case, but one spelt exactly as asked wins,
-		// so "API" and "api" can each be named.
-		exact := slices.DeleteFunc(slices.Clone(found), func(sc domain.Scope) bool {
-			return sc.Key != q && r.scopeName(sc) != q
-		})
-		if len(exact) == 1 {
-			found = exact
-		}
-	}
-	return found
-}
+// it: the one finder (app.FindScopes, which the command line's explain
+// resolves --repo and --group by too), which repo, a group subject
+// (groupQuery), scopeArg and the run hint (call.elsewhere) all go through,
+// so an answer's scope_arg resolves wherever an argument names a scope.
+func (r *resolver) scopes(query string) []domain.Scope { return app.FindScopes(r.names, query) }
 
 // repo resolves one repository by name or key, with the finder scope
 // resolves by (scopes), limited to repositories, so the two cannot match
@@ -193,33 +163,6 @@ func (r *resolver) repo(query string) (app.NamedRepo, error) {
 	return app.NamedRepo{}, &domain.UsageError{Msg: fmt.Sprintf(
 		"%q names %d repositories of run %d: %s. Pass one of those.",
 		query, len(found), r.names.Run.ID, r.choices(found))}
-}
-
-// repos finds the repositories a name or key names: a key, the scrubbed
-// form of a remote pasted with its credentials, a name, or GROUP/NAME.
-func (r *resolver) repos(q string) []app.NamedRepo {
-	var found []app.NamedRepo
-	scrubbed := redact.URL(q)
-	for _, rp := range r.names.Repos {
-		if rp.Key == q || rp.Key == scrubbed {
-			return []app.NamedRepo{rp}
-		}
-	}
-	for _, rp := range r.names.Repos {
-		if strings.EqualFold(rp.Name, q) {
-			found = append(found, rp)
-		}
-	}
-	if len(found) == 0 {
-		if group, name, ok := strings.Cut(q, "/"); ok {
-			for _, rp := range r.names.Repos {
-				if rp.Group != "" && strings.EqualFold(rp.Group, group) && strings.EqualFold(rp.Name, name) {
-					found = append(found, rp)
-				}
-			}
-		}
-	}
-	return found
 }
 
 // within finds the repository an absolute path is inside, at the path the
@@ -337,17 +280,5 @@ func quoteAll(names []string) string {
 }
 
 // scopeName is the name an answer gives a scope: the group's, the
-// repository's, or "" for the whole run.
-func (r *resolver) scopeName(sc domain.Scope) string {
-	switch sc.Kind {
-	case domain.ScopeGroup:
-		return sc.Key
-	case domain.ScopeRepo:
-		for _, rp := range r.names.Repos {
-			if rp.Key == sc.Key {
-				return rp.Name
-			}
-		}
-	}
-	return ""
-}
+// repository's, or "" for the whole run (app.ScopeName).
+func (r *resolver) scopeName(sc domain.Scope) string { return app.ScopeName(r.names, sc) }

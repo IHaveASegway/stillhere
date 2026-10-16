@@ -92,10 +92,15 @@ type Explain struct {
 	// Landings, Commits and Files are what a person's value of a metric
 	// that is not ranked is made of (#109): the landings landed@1 and
 	// landed@2 count, the blamed commits whose lines surviving@1 sums, the
-	// files majority_owner@1 counts; empty for every other metric.
+	// files majority_owner@1 counts; about a repository, a group or the
+	// whole run, Landings are those landed@2's totals count. Coverage is
+	// what review_coverage@1's value about one is made of: every change of
+	// its window with the outcome the metric gave it. Each is empty for
+	// every other metric.
 	Landings []ExplainLanding `json:"landings"` // by repository, then time
 	Commits  []ExplainCommit  `json:"commits"`  // the most surviving lines first
 	Files    []ExplainFile    `json:"files"`    // the most of the person's lines first
+	Coverage []CoverageChange `json:"coverage"` // by repository, the unreviewed in Den first, then by time
 	Caveats  []Caveat         `json:"caveats"`
 
 	addrs []string // the run's addresses (#90); never encoded
@@ -111,11 +116,40 @@ type ExplainLanding struct {
 	Time    time.Time `json:"time"`    // committer time
 	Merge   bool      `json:"merge"`
 	Title   string    `json:"title"` // the landing commit's subject: local output only, never sent to an AI
-	// Commits are the person's commits in it that the value counts:
-	// landed@2's non-merge commits, landed@1's landing commit.
-	Commits        int  `json:"commits"`
+	// Commits are the commits in it that the value counts: landed@2's
+	// non-merge commits that are no copy (the person's, or every one for a
+	// scope's totals), landed@1's landing commit.
+	Commits int `json:"commits"`
+	// Copies are, in a scope's totals, the copies of earlier landings'
+	// changes it brought, which landed@2 credits to no one; 0 for a
+	// person's.
+	Copies         int  `json:"copies"`
 	LinesAdded     *int `json:"lines_added"`      // what those commits added on paths with a role; null when unknown (#74)
 	ProdLinesAdded *int `json:"prod_lines_added"` // the prod subset
+}
+
+// CoverageChange is one change review_coverage@1 read in its window, with
+// what it made of it (domain.TracedChange).
+type CoverageChange struct {
+	Repo    string    `json:"repo"` // name
+	RepoKey string    `json:"repo_key"`
+	Landing string    `json:"landing"`      // full SHA: its pull request's merge commit's landing, or the merge that brought it from another branch
+	Time    time.Time `json:"time"`         // when it reached the default branch
+	Pull    *int      `json:"pull_request"` // its number; null for a landing no pull request landed
+	Base    string    `json:"base"`         // the branch its pull request merged into; "" for none
+	// OtherBranch is true for a pull request merged into another branch,
+	// which Landing, a merge, brought to the default branch
+	// (review_coverage@1's via_other_branch).
+	OtherBranch bool   `json:"other_branch"`
+	Title       string `json:"title"` // its pull request's title, else its landing commit's subject: local output only
+	// Outcome is reviewed, unreviewed or direct, which Den counts, or why
+	// it was left out: bot, branch_merge, copies, after_sync, unmatched or
+	// named_elsewhere.
+	Outcome      string   `json:"outcome"`
+	Author       *Subject `json:"author"`        // the person Den counts it for; null when it was left out first
+	Reviewers    int      `json:"reviewers"`     // people other than its author who reviewed it before it merged
+	ApprovedOnly bool     `json:"approved_only"` // reviewed, and only by approvals with no text and no inline comment
+	Named        *int     `json:"named"`         // the pull request its subject names (unmatched, named_elsewhere); else null
 }
 
 // ExplainCommit is one blamed commit whose prod lines at HEAD surviving@1
@@ -232,12 +266,12 @@ type MeRank struct {
 	Percent  bool     `json:"percent"`
 	MinN     int      `json:"min_n"`
 	Eligible bool     `json:"eligible"`
-	RankLo   int      `json:"rank_lo"` // 0 when not eligible
-	RankHi   int      `json:"rank_hi"`
+	RankLo   *int     `json:"rank_lo"` // null when not eligible: no interval was drawn, as for RankRow
+	RankHi   *int     `json:"rank_hi"`
 	Of       int      `json:"of"` // eligible people in the table
 	Estimate float64  `json:"estimate"`
-	Lo       float64  `json:"lo"`
-	Hi       float64  `json:"hi"`
+	Lo       *float64 `json:"lo"`
+	Hi       *float64 `json:"hi"`
 	N        int      `json:"n"`
 }
 

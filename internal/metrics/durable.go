@@ -37,8 +37,10 @@ func (durableV1) Definition() Definition {
 			"(the history's change, blame's filename), and lines whose survival blame cannot tell are in neither, matched by that " +
 			"path: those of a change git took for binary (its added lines are unknown), wherever HEAD holds them, and those of a " +
 			"file whose blame failed, or of a path the history renamed into one. A cluster is one person's counted commits in " +
-			"one landing and needs at least one added line in the ratio. Merge commits, ignore-revs commits and revert landings " +
-			"are excluded; a reverted landing stays and scores what blame gives it. Detail: reverted_landings.",
+			"one landing and needs at least one added line in the ratio. Merge commits, ignore-revs commits, copies (a commit " +
+			"a merge brought whose patch id a commit of an earlier landing has, which is not its ancestor, as git cherry " +
+			"compares: its original is scored) and revert landings are excluded; a " +
+			"reverted landing stays and scores what blame gives it. Detail: reverted_landings.",
 		Ratio:       true,
 		Ranked:      true,
 		Subjects:    []string{domain.SubjectPerson},
@@ -51,7 +53,8 @@ func (durableV1) Definition() Definition {
 			"original author. A prod file later moved to a path blame does not read, such as a denied one under vendor/, keeps " +
 			"its lines in added and none in surviving, so its author looks as if they kept nothing. Changes younger than 90 days " +
 			"are not scored. Lines blamed to a merge commit (conflict resolutions) are left out in v1. A change git takes for " +
-			"binary scores none of its lines.",
+			"binary scores none of its lines. A backport whose diff was adapted, merged back from a maintenance branch, is no copy: " +
+			"blame gives its lines to the original, so it scores about 0.",
 		Gaming: "Writing in stable, low-traffic code and avoiding risky areas. Load-bearing (M5) is the counterweight.",
 		Oracle: "testdata/fixture/SPEC.md#change-oracles-m1-testchangeoracles (main fixture and sibling) and " +
 			"testdata/fixture/SPEC.md#binary-files-fixturebinary (binary files, and text files moved across roles)",

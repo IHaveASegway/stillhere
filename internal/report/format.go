@@ -113,6 +113,7 @@ func (p *printer) wrapped(first, rest, text string) {
 type column struct {
 	head  string
 	right bool // numbers: right-aligned, so magnitudes line up
+	keep  bool // a short code or key the reader matches, such as an outcome: never cut, as numbers are not
 }
 
 // minCell is the narrowest a text column is cut to.
@@ -124,9 +125,9 @@ const minCell = 8
 // the table is wider than maxWidth, the widest left-aligned column (names,
 // titles, details) loses one character of width, never going below
 // minCell: the cut falls on the text with most to spare and evens out
-// across several wide columns, and cut cells end in "…". Numbers are never
-// cut. Only a table whose text columns are all at minCell can still be too
-// wide. Cells must already be clean.
+// across several wide columns, and cut cells end in "…". Numbers and the
+// columns marked keep are never cut. Only a table whose other text columns
+// are all at minCell can still be too wide. Cells must already be clean.
 func (p *printer) textTable(indent string, cols []column, rows [][]string) {
 	widths := make([]int, len(cols))
 	for i, c := range cols {
@@ -144,7 +145,7 @@ func (p *printer) textTable(indent string, cols []column, rows [][]string) {
 	for over := total - maxWidth; over > 0; over-- {
 		cut := -1
 		for i, c := range cols {
-			if !c.right && widths[i] > minCell && (cut < 0 || widths[i] > widths[cut]) {
+			if !c.right && !c.keep && widths[i] > minCell && (cut < 0 || widths[i] > widths[cut]) {
 				cut = i
 			}
 		}

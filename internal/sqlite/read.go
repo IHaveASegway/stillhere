@@ -346,14 +346,14 @@ func (l *loader) paths() error {
 
 func (l *loader) commits() error {
 	return l.each("commits", `
-		SELECT repo_id, seq, sha, author_name, author_email, author_time, commit_time, subject
+		SELECT repo_id, seq, sha, author_name, author_email, author_time, commit_time, subject, patch_id
 		FROM commits WHERE `+ofRun+` ORDER BY repo_id, seq`,
 		func(rows *sql.Rows) error {
 			var repo, seq int64
 			var c domain.Commit
 			var authored, committed sql.NullString
 			if err := rows.Scan(&repo, &seq, &c.SHA, &c.Author.Name, &c.Author.Email, &authored, &committed,
-				&c.Subject); err != nil {
+				&c.Subject, &c.PatchID); err != nil {
 				return err
 			}
 			var err error
