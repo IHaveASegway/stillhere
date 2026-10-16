@@ -523,7 +523,26 @@ func WhoKnows(ctx context.Context, d Deps, r WhoKnowsRequest) (*report.WhoKnows,
 	if c, ok := whoKnowsNoPath(s.facts, prefix, repo, run.ID); ok {
 		w.Caveats = append(w.Caveats, c)
 	}
+	whoKnowsArea(w, s.values, prefix)
 	return w, nil
+}
+
+// whoKnowsArea gives each repository of a who-knows answer the path's
+// knowledge loss and concentration, when the path is a top-level
+// directory: a scan stores both metrics for those areas (report.Areas reads
+// them), and computes them for no deeper path.
+func whoKnowsArea(w *report.WhoKnows, values []domain.MetricValue, prefix string) {
+	if prefix == "" || strings.Contains(prefix, "/") {
+		return
+	}
+	for i := range w.Repos {
+		for _, a := range report.Areas(values, w.Repos[i].Key) {
+			if a.Path == prefix+"/" {
+				w.Repos[i].Area = &a
+				break
+			}
+		}
+	}
 }
 
 // whoKnowsNoPathNames is how many repositories that hold the path a

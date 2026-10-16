@@ -285,17 +285,45 @@ func (r *resolver) scope(query string) (domain.Scope, error) {
 		return domain.Scope{}, &miss{query: query, msg: fmt.Sprintf("%q is no group or repository of run %d. %s",
 			query, r.names.Run.ID, r.listScopes())}
 	}
-	var parts []string
-	for _, sc := range found {
-		parts = append(parts, fmt.Sprintf("%s, passed as %q", r.describeScope(sc), r.scopeArg(sc)))
-	}
 	return domain.Scope{}, &domain.UsageError{Msg: fmt.Sprintf(
 		"%q names %d scopes of run %d: %s. Pass one of those; overview's index gives each scope's scope_arg.",
-		query, len(found), r.names.Run.ID, strings.Join(parts, "; "))}
+		query, len(found), r.names.Run.ID, r.choices(found))}
+}
+
+// choices lists the scopes one argument found, so that an agent can pick
+// one: each described, with the scope_arg that names it alone.
+func (r *resolver) choices(found []domain.Scope) string {
+	parts := make([]string, len(found))
+	for i, sc := range found {
+		parts[i] = fmt.Sprintf("%s, passed as %q", r.describeScope(sc), r.scopeArg(sc))
+	}
+	return strings.Join(parts, "; ")
+}
+
+// repoQuery is a repository argument (who_knows.repo, diff.repo, explain's
+// subject for repo and area) as scopes reads it: a name, a key, GROUP/NAME,
+// or a repository's scope_arg, repo:NAME, never a group.
+func repoQuery(query string) string { return kindQuery(domain.ScopeRepo, query) }
+
+// groupQuery is a group argument (explain's subject for subject_kind group)
+// as scopes reads it: a name, or a group's scope_arg, group:NAME, as
+// overview gives it.
+func groupQuery(query string) string { return kindQuery(domain.ScopeGroup, query) }
+
+// kindQuery prefixes an argument with the one kind of scope it may name,
+// once: a prefix the agent passed, in any case, is not doubled.
+func kindQuery(kind, query string) string {
+	q := strings.TrimSpace(query)
+	if k, rest, ok := strings.Cut(q, ":"); ok && strings.EqualFold(k, kind) {
+		q = strings.TrimSpace(rest)
+	}
+	return kind + ":" + q
 }
 
 // scopes finds the scopes a non-empty scope argument names, as scope reads
-// it.
+// it: the one finder, which repo, a group subject (groupQuery), scopeArg
+// and the run hint (call.elsewhere) all go through, so an answer's
+// scope_arg resolves wherever an argument names a scope.
 func (r *resolver) scopes(query string) []domain.Scope {
 	q := strings.TrimSpace(query)
 	kind := ""
@@ -328,33 +356,25 @@ func (r *resolver) scopes(query string) []domain.Scope {
 	return found
 }
 
-// repo resolves one repository by name or key, as scope does.
+// repo resolves one repository by name or key, with the finder scope
+// resolves by (scopes), limited to repositories, so the two cannot match
+// differently.
 func (r *resolver) repo(query string) (app.NamedRepo, error) {
-	q := strings.TrimSpace(query)
-	if k, rest, ok := strings.Cut(q, ":"); ok && strings.EqualFold(k, "repo") {
-		q = strings.TrimSpace(rest)
-	}
-	found := r.repos(q)
-	if len(found) > 1 {
-		exact := slices.DeleteFunc(slices.Clone(found), func(rp app.NamedRepo) bool { return rp.Key != q && rp.Name != q })
-		if len(exact) == 1 {
-			found = exact
-		}
-	}
+	found := r.scopes(repoQuery(query))
 	switch len(found) {
 	case 1:
-		return found[0], nil
+		for _, rp := range r.names.Repos {
+			if rp.Key == found[0].Key {
+				return rp, nil
+			}
+		}
 	case 0:
 		return app.NamedRepo{}, &miss{query: query, repo: true, msg: fmt.Sprintf("%q is no repository of run %d. %s",
 			query, r.names.Run.ID, r.listScopes())}
 	}
-	var parts []string
-	for _, rp := range found {
-		parts = append(parts, r.describeRepo(rp.Key))
-	}
 	return app.NamedRepo{}, &domain.UsageError{Msg: fmt.Sprintf(
-		"%q names %d repositories of run %d: %s. Pass GROUP/NAME or the key.",
-		query, len(found), r.names.Run.ID, strings.Join(parts, "; "))}
+		"%q names %d repositories of run %d: %s. Pass one of those.",
+		query, len(found), r.names.Run.ID, r.choices(found))}
 }
 
 // repos finds the repositories a name or key names: a key, the scrubbed

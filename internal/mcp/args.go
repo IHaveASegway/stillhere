@@ -29,12 +29,14 @@ import (
 // so the two checks cannot drift apart unnoticed.
 
 // argSchema is a tool's input schema as schema writes it: the keywords the
-// check enforces, and no other.
+// check enforces, and no other. check refuses every argument the schema
+// does not name, so a schema must say so itself: an object whose
+// additionalProperties is false (parseArgSchema).
 type argSchema struct {
 	Type                 string             `json:"type"`
 	Properties           map[string]argProp `json:"properties"`
 	Required             []string           `json:"required"`
-	AdditionalProperties bool               `json:"additionalProperties"`
+	AdditionalProperties *bool              `json:"additionalProperties"`
 }
 
 // argProp is one argument's schema.
@@ -62,6 +64,11 @@ func parseArgSchema(tool string, raw json.RawMessage) argSchema {
 	var a argSchema
 	if err := dec.Decode(&a); err != nil {
 		panic(fmt.Sprintf("mcp: %s's input schema uses what the argument check does not enforce: %v", tool, err))
+	}
+	if a.Type != "object" || a.AdditionalProperties == nil || *a.AdditionalProperties {
+		// The check takes the arguments as one object and refuses any it
+		// does not name, which the SDK would then accept.
+		panic(fmt.Sprintf("mcp: %s's input schema must be an object whose additionalProperties is false, as the argument check reads it", tool))
 	}
 	for name, p := range a.Properties {
 		if p.Type != "string" && p.Type != "integer" {

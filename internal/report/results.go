@@ -103,6 +103,12 @@ type WhoKnowsRepo struct {
 	// not list.
 	RecentReviewers []Knower `json:"recent_reviewers"`
 	Bots            []Knower `json:"bots"` // listed apart, never mixed into the lists above
+	// Area is the path's knowledge_loss@1 and knowledge_concentration@1 as
+	// one row of Areas, the one mapping of them (#106): the stored values of
+	// a path that is a top-level directory, the areas a scan stores; nil
+	// for any other path, and where the run holds no value for the
+	// directory (no line a person holds there, or no line facts).
+	Area *Area `json:"area"`
 }
 
 // Knower is one person's knowledge of a path. Email is a reviewer's

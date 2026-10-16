@@ -122,7 +122,9 @@ func (s *server) addTools(srv *sdk.Server) {
 	tool(s, srv, "who_knows", "Who knows this code",
 		"Who knows the code under a path, per repository: majority owners (people credited with at least half of a file's "+
 			"surviving lines), the top five authors of surviving prod lines, recent landers and recent reviewers (the last 90 "+
-			"days; reviewers only in repositories whose GitHub data the run read, an empty list elsewhere) and bots apart. "+
+			"days; reviewers only in repositories whose GitHub data the run read, an empty list elsewhere) and bots apart; "+
+			"for a top-level directory, also its area: knowledge loss, people gone quiet and concentration, as overview's "+
+			"areas give them (null for a deeper path). "+
 			"A routing answer for who to ask or who should review, not a rank. path is repo-relative, any prefix down to one "+
 			"file, or absolute inside a clone the scan read; repo narrows it to one repository, and without it every "+
 			"repository with code under the path is listed, paged."+untrusted,
@@ -149,14 +151,16 @@ func (s *server) addTools(srv *sdk.Server) {
 			"metric about a person, each change it counted with its contribution, so a number can be traced to its commits. "+
 			"metric is an id such as durable@1, or a bare name for the latest version (metrics lists them). subject_kind is "+
 			"person (default), repo, group or area; for an area, subject is the repository and path its top-level directory. "+
+			"A repository or a group may be passed as overview's scope_arg gives it (repo:NAME, group:NAME). "+
 			"A metric about a kind of subject it has no values about is refused with the calls that answer instead: the "+
 			"ranked metrics (durable, simplifying, reviews_given) are about people, and overview with rank gives a "+
 			"repository's or a group's table of them; who_knows is computed per path by the who_knows tool, never stored. "+
-			"ai_assisted about a person is refused: a person's own share is on their own page (person, empty name). Changes "+
-			"are paged; commit subjects only with --allow-source."+untrusted,
+			"ai_assisted about a person is refused: a person's own share is on their own page (person, empty name); about a "+
+			"repository or a group it is the share alone, without the comparisons of AI-assisted landings with the rest, "+
+			"which can be one or two people's. Changes are paged; commit subjects only with --allow-source."+untrusted,
 		schema([]string{"metric"},
 			`"metric": {"type": "string", "description": "A metric id such as durable@1, or a name such as durable for its latest version."}`,
-			`"subject": {"type": "string", "description": "Who or what the number is about: a person's name or id, a repository, or a group; empty for the user the server runs for."}`,
+			`"subject": {"type": "string", "description": "Who or what the number is about: a person's name or id, a repository, or a group (a name, or overview's scope_arg); empty for the user the server runs for."}`,
 			`"subject_kind": {"type": "string", "enum": ["person", "repo", "group", "area"], "description": "What subject names; person when empty."}`,
 			`"path": {"type": "string", "description": "For subject_kind area: the repository's top-level directory, such as src."}`,
 			propFormat, propLimit, propCursor),
@@ -557,7 +561,8 @@ func (s *server) explain(ctx context.Context, in explainIn) *sdk.CallToolResult 
 				return nil, err
 			}
 		case domain.SubjectGroup:
-			sc, err := c.scope(ctx, "group:"+in.Subject)
+			// A group's name, or its scope_arg as overview gives it.
+			sc, err := c.scope(ctx, groupQuery(in.Subject))
 			if err != nil {
 				return nil, err
 			}

@@ -281,20 +281,28 @@ func showsAI(names *app.Names, sc report.Scope) bool {
 
 // The overview tool.
 
+// areasOut is a repository's top-level directories with their knowledge
+// numbers, largest first (report.Areas, #106): Areas the first rows of
+// them and AreasTotal their count. Both are null for a repository without
+// line facts (a shallow or partial clone, whose caveat and line_facts say
+// why), whose areas are unknown rather than none (MET-4: no value, never
+// 0).
+type areasOut struct {
+	Areas      *[]report.Area `json:"areas"`
+	AreasTotal *int           `json:"areas_total"`
+}
+
 type overviewOut struct {
 	head
 	Scope     scopeOut       `json:"scope"`
 	Run       runOut         `json:"run"`
 	Overviews []overviewItem `json:"overviews"`
 	Repos     any            `json:"repos"` // concise: []repoSummary; detailed: []repoOut
-	// Areas holds, for one repository only, its top-level directories with
-	// their knowledge numbers, largest first (report.Areas, #106), the
-	// first rows of them; AreasTotal counts them all. Both are absent for
-	// any other scope.
-	Areas      []report.Area    `json:"areas,omitzero"`
-	AreasTotal *int             `json:"areas_total,omitzero"`
-	Ranks      []rankTableOut   `json:"ranks"`
-	Warnings   []report.Warning `json:"warnings"`
+	// areasOut is one repository's areas; nil, and so absent, for any
+	// other scope.
+	*areasOut
+	Ranks    []rankTableOut   `json:"ranks"`
+	Warnings []report.Warning `json:"warnings"`
 	// WarningsTotal counts the run's warnings, of which warnings holds the
 	// first rows.
 	WarningsTotal int `json:"warnings_total"`
@@ -371,6 +379,9 @@ type shaper struct {
 	names      *app.Names
 	w          *withholder // the egress filter the answer will pass; nil when emails may leave
 	aiWithheld []string    // the scopes whose AI-assisted share was withheld
+	// aiDetailWithheld: a shown AI-assisted share left without its detail
+	// (withholdAI)
+	aiDetailWithheld bool
 }
 
 // share returns a scope's AI-assisted share as it may leave: nil, its num
@@ -598,12 +609,16 @@ func (s *shaper) overviewAnswer(a *app.OverviewAnswer, sc scopeOut) *overviewOut
 		}
 	case domain.ScopeRepo:
 		repos = a.Repos
-		var total int
-		out.Areas, total = cut(a.Areas, f.rows)
-		if out.Areas == nil {
-			out.Areas = []report.Area{} // a repository without line facts has none: [], not absent
+		out.areasOut = &areasOut{}
+		if len(repos) == 1 && repos[0].LineFacts {
+			// Measured: [] when no top-level directory holds a line people
+			// hold, as the fixture's prod lines all sit at its root.
+			rows, total := cut(a.Areas, f.rows)
+			if rows == nil {
+				rows = []report.Area{}
+			}
+			out.Areas, out.AreasTotal = &rows, &total
 		}
-		out.AreasTotal = &total
 	default:
 		var pg *page
 		repos, pg = paginate(a.Repos, f, a.Run.ID)
@@ -725,9 +740,16 @@ func (s *shaper) values(vs []report.Value, repos bool, n named) ([]valueOut, int
 // repository or a group) leaves only when that share does: otherwise the
 // value leaves without the copy. explain refuses a withheld share before it
 // reads any; this keeps every answer that lists values on the same
-// decision, whichever metric carries the share. A shown share leaves
-// without its cohort comparisons (report.AICohortIn, #87), which can be one
-// or two people's however many the share covers.
+// decision, whichever metric carries the share.
+//
+// A share that leaves carries its value, num and den alone, never its
+// detail (#87): ai_assisted@1's detail is its cohort comparisons
+// (durable_ai and durable_other, their _n counts, reverted_ai and
+// reverted_other), which count narrower populations than the share and can
+// be one or two people's however many the share covers. The rule keeps
+// none of the detail rather than delete the keys known today, so a key a
+// later version adds stays on the machine too (fail closed, an allow list
+// of nothing), and the answer says what it held back.
 func (s *shaper) withholdAI(vs []report.Value) []report.Value {
 	var out []report.Value
 	for _, v := range vs {
@@ -736,7 +758,10 @@ func (s *shaper) withholdAI(vs []report.Value) []report.Value {
 		shown := scopeShare && showsAI(s.names, v.Scope)
 		_, copied := v.Detail[key]
 		switch {
-		case whole && v.Subject.Kind == domain.SubjectPerson, whole && shown:
+		case whole && (v.Subject.Kind == domain.SubjectPerson || shown):
+			if len(v.Detail) > 0 {
+				v.Detail, s.aiDetailWithheld = map[string]float64{}, true
+			}
 		case whole:
 			s.aiWithheld = append(s.aiWithheld, scopeName(v.Scope, s.repoName(v.Scope.Key)))
 			continue
@@ -744,12 +769,6 @@ func (s *shaper) withholdAI(vs []report.Value) []report.Value {
 			v.Detail = maps.Clone(v.Detail)
 			delete(v.Detail, key)
 			s.aiWithheld = append(s.aiWithheld, scopeName(v.Scope, s.repoName(v.Scope.Key)))
-		}
-		if cohorts := report.AICohortIn(v); slices.ContainsFunc(cohorts, func(k string) bool { _, ok := v.Detail[k]; return ok }) {
-			v.Detail = maps.Clone(v.Detail)
-			for _, k := range cohorts {
-				delete(v.Detail, k)
-			}
 		}
 		out = append(out, v)
 	}
@@ -769,13 +788,21 @@ func (s *shaper) repoName(key string) string {
 	return key
 }
 
-// withheldAI adds the caveat of the AI-assisted shares the answer withheld,
-// if any, to its caveats.
+// withheldAI adds to an answer's caveats what it withheld of the
+// AI-assisted shares: the shares themselves (ai-few-people), and the detail
+// of those it shows (ai-detail-withheld), so an agent reads a hole as held
+// back rather than as no data.
 func (s *shaper) withheldAI(caveats []report.Caveat) []report.Caveat {
-	if len(s.aiWithheld) == 0 {
-		return caveats
+	if len(s.aiWithheld) > 0 {
+		caveats = append(slices.Clip(caveats), aiCaveat(s.aiWithheld))
 	}
-	return append(slices.Clip(caveats), aiCaveat(s.aiWithheld))
+	if s.aiDetailWithheld {
+		caveats = append(slices.Clip(caveats), report.Caveat{Code: "ai-detail-withheld", Message: "An AI-assisted share " +
+			"leaves this server without its detail: how AI-assisted landings held up against the rest (ai_assisted@1's " +
+			"cohort comparisons) counts narrower populations than the share, changes 90 to 365 days old and reverted " +
+			"landings, which can be one or two people's however many the share covers. The share itself is shown."})
+	}
+	return caveats
 }
 
 // sameNumbers reports whether two values of one metric say the same.

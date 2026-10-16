@@ -309,7 +309,10 @@ const detailAIAssistedShare = "ai_assisted_share"
 // so a reader that must withhold one (the MCP server, by the run's decision
 // app.AIShares) withholds every copy of it; a metric that copies the share
 // under another key must be added here. The key is named whether or not
-// the value's Detail holds it.
+// the value's Detail holds it. A whole share's own Detail (ai_assisted@1's
+// cohort comparisons, docs/metrics.md#ai_assisted1) is no copy of a share,
+// but it can be one or two people's, so the MCP server sends a share it
+// shows without any of it (#87).
 func AIShareIn(v Value) (whole bool, key string) {
 	id, err := domain.ParseMetricID(v.Metric)
 	switch {
@@ -374,27 +377,6 @@ func Areas(values []domain.MetricValue, repo string) []Area {
 		return cmp.Or(cmp.Compare(y.Lines, x.Lines), cmp.Compare(gone(y), gone(x)), cmp.Compare(x.Path, y.Path))
 	})
 	return out
-}
-
-// detailAICohorts are ai_assisted@1's cohort comparisons about a repository
-// or a group (docs/metrics.md#ai_assisted1): durable@1 over the tagged and
-// the untagged landings' clusters, their counts, and the reverted landings
-// among each.
-var detailAICohorts = []string{"durable_ai", "durable_other", "durable_ai_n", "durable_other_n", "reverted_ai", "reverted_other"}
-
-// AICohortIn names the Detail keys in which a value carries ai_assisted's
-// cohort comparisons, whether or not its Detail holds them; nil for a value
-// of another metric. They count narrower populations than the share they
-// sit beside (clusters of changes 90 to 365 days old; reverted landings),
-// which can be one or two people's even when the share covers more, and
-// they add up over the scopes as the share does. So the MCP server sends
-// none of them (#87, ADR 0007's amendment), while the local pages keep
-// them; this is the one place that names them.
-func AICohortIn(v Value) []string {
-	if id, err := domain.ParseMetricID(v.Metric); err == nil && OwnPageOnly(id) {
-		return detailAICohorts
-	}
-	return nil
 }
 
 func isBot(who People, email string) bool {

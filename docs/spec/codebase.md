@@ -490,6 +490,9 @@ type Discovery struct {
 	                            // or a repo (named or a group's member) git cannot read or whose default branch has no commit; each Message one line, scrubbed, and cut
 	                            // where it quotes git; app reports each as a run-level path-failed warning and marks the run partial (see Errors and logging)
 }
+// LacksObjects (RB-8): err is git failing because a partial clone lacks an object the command needs, which analysis never fetches
+// (GIT_NO_LAZY_FETCH: "lazy fetching disabled", "could not fetch <oid> from promisor remote"); a use case decides by it, never by git's text
+func LacksObjects(err error) bool
 // SnapshotAt (#70): the commit a run reads repo at, the repository as it stood at now (run model): one
 // rev-list --first-parent --timestamp of repo.Head, read down from the head to the first commit whose committer
 // time is before now, as Window.Contains compares, and on to the chain's end to count Below
@@ -744,19 +747,21 @@ type ForgeSync struct {                    // a watermark as the run read it
 func OwnPageOnly(metric domain.MetricID) bool // a person's values only their own page shows: ai_assisted (ADR 0007); explain refuses them
 func AIShareIn(v Value) (whole bool, key string) // #68: where a value holds an AI-assisted share: whole for ai_assisted's own values, key
                                                  // "ai_assisted_share" for surviving's copy of its scope's share; the one place, so a reader that withholds a share
-                                                 // (the MCP server, by app.AIShares) withholds every copy of it
-func AICohortIn(v Value) []string // #87: the Detail keys of ai_assisted's cohort comparisons (durable_ai, durable_other, their _n, reverted_ai,
-                                  // reverted_other), which the MCP server never sends: they can be one or two people's; nil for another metric
+                                                 // (the MCP server, by app.AIShares) withholds every copy of it. #87: a whole share's own Detail, ai_assisted's
+                                                 // cohort comparisons, can be one or two people's, so the MCP server sends a share it shows with no Detail at all
+                                                 // (fail closed: a key a later version adds stays local too)
 type Area struct { Path string; Lines int; KnowledgeLoss *Share; People, PeopleInactive *int; Concentration *Concentration; ProdFiles *int }
 func Areas(values []domain.MetricValue, repo string) []Area // #106: one repository's area values of knowledge_loss@1 and knowledge_concentration@1,
                                   // a row per top-level directory, largest first (lines, then lines gone quiet, then path): the one mapping of them,
-                                  // which MCP's overview of a repository reads and a page that lists areas should read too
+                                  // which MCP's overview of a repository and app.WhoKnows, for a path that is a top-level directory (WhoKnowsRepo.Area),
+                                  // read, and a page that lists areas should read too
 type RankSet struct { Metric MetricInfo; Scope domain.Scope; Window domain.Window; Percent bool; MinN int; Intervals []domain.RankInterval } // bots left out; Percent: metrics.Definition.Ratio
 func Build(in *Input) *Model
 // The read commands' answers live here too, so the renderers and the MCP server share one shape.
 // Each has Provenance (run id, as-of, policy, HEAD SHAs, metric@version, when the GitHub data was synced) and Caveats:
 type Explain struct { Provenance Provenance; Metric MetricInfo; Subject Subject; Values []Value; Changes []Change; Caveats []Caveat }
-type WhoKnows struct { Provenance Provenance; Path, Repo string; Repos []WhoKnowsRepo; Caveats []Caveat } // owners, top authors, recent landers and reviewers (#38), bots
+type WhoKnows struct { Provenance Provenance; Path, Repo string; Repos []WhoKnowsRepo; Caveats []Caveat } // owners, top authors, recent landers and reviewers (#38), bots;
+                                                                                                        // Area (#106): the path's row of Areas when it is a top-level directory, else nil
 type Me struct { Provenance Provenance; Person Subject; Values []Value; Ranks []MeRank; Metrics []MetricInfo; Caveats []Caveat }
 // #66: Metrics are the definitions of the page's metrics (NewMe keeps them from MeInput.Metrics); text and Markdown print a value
 // as a share exactly when its metric's Ratio says so, as explain prints by its Metric's, so a share of den 1 is "100.0% (1 of 1)"
@@ -927,8 +932,9 @@ type DiffRequest struct { RunID int64; Repo, Change, Path string; MaxBytes int }
 // ChangesAnswer, HighlightsAnswer and DiffAnswer, and their Change, ChangePerson, Contribution, TopTier,
 // HighlightChange and DiffFile, carry their JSON names: what no report shows, in the shape docs/spec/mcp.md gives.
 // TopTier: Of eligible people, PeopleTotal whose 95% rank interval reaches first place, People them by name unless
-// they are more than a third of Of and someone else could take a place one of theirs reaches (no one stands out: a
-// no-standout caveat); a tier whose intervals lie above everyone else's is named in a table of any size (MC-16).
+// they are more than a third of Of and do not stand apart (no one stands out: a no-standout caveat). A tier stands apart
+// when someone is outside it and the best place anyone outside can take lies below the worst place any of the tier
+// reaches, so it is named in a table of any size (MC-16); a tier of everyone never stands apart.
 func RunNames(ctx context.Context, d Deps, r NamesRequest) (*Names, error)
 func StoredRuns(ctx context.Context, d Deps) ([]StoredRun, error) // MC-17: every stored scan run by its scopes, newest first (FactStore.Runs): which
                                                                   // run holds a scope the served run lacks; reads no facts
@@ -1106,4 +1112,4 @@ Tests sit at stable boundaries, so a refactor does not rewrite them (Kent Beck, 
 | `TestStoreRoundTrip` | `sqlite` | `LoadFacts(PutRepoFacts(x)) == x`, a zero loading as +0; `Run(id)` returns the run as begun and finished, policy source included, and `Runs` the run with the groups and repositories `LoadFacts` gives, and no run of another kind (MC-17); `RunWatermarks` returns the last `PutRunWatermarks` of the run, names and joins included, and a watermark that joins nothing is refused; `RunForge` returns the last `PutRunForge` of the run with its watermarks and its join (#38), and a pull request of a repository not the run's is refused; readers never see a running or failed run (`ErrNotFound`, `RunWatermarks` and `RunForge` included) |
 | `TestStoreLifecycle` | `sqlite` | `Open` creates a missing directory 0700 and files 0600, in WAL mode; it refuses another program's SQLite file, a file that is not SQLite and a newer facts database with a `UsageError`, without waiting for a held lock and leaving the file byte for byte, and a file or directory it cannot write with one that names it (#71); `OpenExisting` creates no directory or file for a missing path, refuses it with a `UsageError` that names it, refuses what `Open` refuses, reads what a writer wrote without deleting a run left running, and migrates an empty file (#71); first opens racing in separate processes all succeed; a run left running is deleted once its store has written nothing for a day, and not before; retention and `LatestRun` match a model of the run-model rule across gaps, year-long pauses, ties and backfills, and no table with a `run_id` keeps a row of a deleted run, the GitHub data a run kept included (#38) |
 | `TestGitHubSync` | `github` | recorded responses ([testdata/github](../../testdata/github/README.md)) become the expected repositories and pull request pages, through rate limits (a 403 with Retry-After, a nearly spent budget, and a spent budget and a secondary limit that GitHub reports inside a 200), a 502 and nested follow-ups; a mirror clones and fetches from a local git server that takes only the token, follows a rename by node id, moves to `.stale` and back, and never follows a redirect to another host; the token is in no fact, mirror file, log or error; the pages the passes return, stored through `sqlite.Open` and `PutForgePage`, come back from `LoadForge` as the last page that carried each pull request said, reviews in submission order, and from a `since` between the passes only the pull requests updated at or after it; `reviews_given@1` over what `LoadForge` returns matches its oracle in scope `all`, the group and the repository, another organization's repository and a failed one counting nowhere (M2) |
-| `TestMCPTools` | `mcp` | each tool through the SDK's in-memory client (M4); and AI-assisted shares that add up, against the local report's: no answer, alone or less another, gives back a withheld share, a group's, a repository's or with `--scope all` the whole run's, nor surviving@1's copy of it (`ai_assisted_share`), nor a shown share's cohort comparisons (#87), and one person's three unmerged addresses count as one (#68); and the agent's dead ends of the dogfood (wave 9): `identity_candidates` paged, stdin's end drained, `changes(person: "")` the `--me` person, the index's `scope_arg`, a scope only an earlier run holds named with that run, a repository's areas, a top tier set apart by its intervals in a table of two, arguments the schema refuses refused with what to pass, an id with no method answered, and `diff` of a shallow clone's boundary and of a partial clone refused with why ([mcp.md](mcp.md#the-test)) |
+| `TestMCPTools` | `mcp` | each tool through the SDK's in-memory client (M4); and AI-assisted shares that add up, against the local report's: no answer, alone or less another, gives back a withheld share, a group's, a repository's or with `--scope all` the whole run's, nor surviving@1's copy of it (`ai_assisted_share`), nor the detail of a shown share, its cohort comparisons, which the stored value holds (#87), and one person's three unmerged addresses count as one (#68); and the agent's dead ends of the dogfood (wave 9): `identity_candidates` paged, stdin's end drained, `changes(person: "")` the `--me` person, the index's `scope_arg`, a group's as `explain`'s subject too, a scope only an earlier run holds named with that run, and a bare name it holds twice with both `scope_arg`s, a repository's areas (`null` without line facts) and `who_knows` of a top-level directory carrying its row, a top tier set apart by its intervals in a table of two, arguments the schema refuses refused with what to pass, an id with no method answered, and `diff` of a shallow clone's boundary and of a partial clone refused with why, and of a moved partial clone not blamed on its contents ([mcp.md](mcp.md#the-test)) |

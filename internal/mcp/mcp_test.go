@@ -134,6 +134,9 @@ func TestMCPTools(t *testing.T) {
 				run.Overviews[0].ScopeArg, run.Repos[0].ScopeArg)
 		}
 		ask(t, "overview", map[string]any{"scope": run.Overviews[0].ScopeArg})
+		// So does explain's group subject, which takes the group's scope_arg
+		// as overview gives it.
+		ask(t, "explain", map[string]any{"metric": "knowledge_loss", "subject": run.Overviews[0].ScopeArg, "subject_kind": "group"})
 		if !slices.Equal(run.Withheld, []string{"emails", "source"}) {
 			t.Errorf("withheld %v, want emails and source", run.Withheld)
 		}
@@ -428,14 +431,34 @@ func TestMCPTools(t *testing.T) {
 		if len(e.Values) != 1 || !hasCaveat(e.Caveats, "ai-lower-bound", "") {
 			t.Errorf("explain(ai_assisted, sibling) %+v with caveats %v, want the sibling's share, a lower bound", e.Values, e.Caveats)
 		}
-		// The share leaves without its cohort comparisons, which the metric
-		// always computes and which can be one or two people's (#87).
-		for _, v := range e.Values {
-			for _, k := range append(report.AICohortIn(report.Value{Metric: v.Metric}), "reverted_ai", "durable_other_n") {
-				if _, ok := v.Detail[k]; ok {
-					t.Errorf("explain(ai_assisted, sibling) sends the cohort comparison %s: %v", k, v.Detail)
-				}
+		// The share leaves without its detail, the cohort comparisons the
+		// metric computes beside it, which can be one or two people's (#87),
+		// and says so. The sibling's stored value holds all six, so nothing
+		// here passes because the metric left them out.
+		st, err := sqlite.OpenReadOnly(ctx, db)
+		if err != nil {
+			t.Fatal(err)
+		}
+		le, err := app.Explain(ctx, app.Deps{Store: st}, app.ExplainRequest{Metric: domain.MetricID{Name: "ai_assisted", Version: 1},
+			Subject: domain.Subject{Kind: domain.SubjectRepo, Key: e.Values[0].Scope.Key}})
+		if cerr := st.Close(); err == nil {
+			err = cerr
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, k := range []string{"durable_ai", "durable_other", "durable_ai_n", "durable_other_n", "reverted_ai", "reverted_other"} {
+			if _, ok := le.Values[0].Detail[k]; !ok {
+				t.Errorf("the sibling's stored ai_assisted@1 detail %v lacks %s", le.Values[0].Detail, k)
 			}
+		}
+		for _, v := range e.Values {
+			if len(v.Detail) != 0 {
+				t.Errorf("explain(ai_assisted, sibling) sends the share's detail %v, want none", v.Detail)
+			}
+		}
+		if !hasCaveat(e.Caveats, "ai-detail-withheld", "cohort comparisons") {
+			t.Errorf("explain(ai_assisted, sibling) caveats %v, want ai-detail-withheld", e.Caveats)
 		}
 		// A metric about a kind of subject it holds no value about is no
 		// empty answer but a refusal that says which calls answer instead,
@@ -830,6 +853,18 @@ func TestMCPTools(t *testing.T) {
 			oa.Areas[0].Lines != int(kl.Den) || oa.Areas[0].Concentration == nil {
 			t.Errorf("overview(odd) areas %+v of %d, want src/ alone, with the repository's knowledge loss %+v and a concentration",
 				oa.Areas, oa.AreasTotal, kl)
+		}
+		// who_knows of that directory carries the same row, and of a deeper
+		// path, for which a scan stores none, no row.
+		var wa whoKnowsOut
+		decode(t, ask(t, "who_knows", map[string]any{"path": "src/", "repo": "odd"}), &wa)
+		if len(wa.Repos) != 1 || len(oa.Areas) == 0 || wa.Repos[0].Area == nil || !reflect.DeepEqual(*wa.Repos[0].Area, oa.Areas[0]) {
+			t.Errorf("who_knows(src/, odd) area %+v, want overview's %+v", wa.Repos, oa.Areas)
+		}
+		var wd whoKnowsOut
+		decode(t, ask(t, "who_knows", map[string]any{"path": "src/pins", "repo": "odd"}), &wd)
+		if len(wd.Repos) != 1 || wd.Repos[0].Area != nil {
+			t.Errorf("who_knows(src/pins, odd) area %+v, want none: no scan stores a deeper path's", wd.Repos)
 		}
 
 		// A path with a version pin in it is the repository's path, which
@@ -1284,15 +1319,18 @@ func TestMCPTools(t *testing.T) {
 		copied(t, cs, "lone", "repo", nil)
 	})
 
-	// A third scan, of one repository of two people, becomes the latest
-	// run. A scope only an earlier run holds is refused with the run that
-	// holds it and how the user serves it (MC-17). Ann's removal of 50 lines
-	// and Bo's of one line in each of ten weeks give simplifying@1 a table of
-	// two whose intervals do not meet, Ann 1-1 and Bo 2-2 (the bootstrap
-	// resamples weeks, and Ann removes more in every one), so its top tier
-	// stands out although it is half the table (MC-16).
+	// A third scan, of one repository of two people in a group of its name
+	// (as go-git/go-git is), becomes the latest run. A scope only an earlier
+	// run holds is refused with the run that holds it and how the user
+	// serves it (MC-17), and a bare name that run holds twice with each
+	// scope_arg there. Ann's removal of 50 lines and Bo's of one line in
+	// each of ten weeks give simplifying@1 a table of two whose intervals do
+	// not meet, Ann 1-1 and Bo 2-2 (the bootstrap resamples weeks, and Ann
+	// removes more in every one), so its top tier stands out although it is
+	// half the table (MC-16).
 	t.Run("a third run", func(t *testing.T) {
-		pair := filepath.Join(t.TempDir(), "pair")
+		org := filepath.Join(t.TempDir(), "pair")
+		pair := filepath.Join(org, "pair")
 		commits := []testCommit{
 			{"Ann Apart", "ann@pair.example", "2026-07-10", "add a", "a.py", numbered("a", 600)},
 			{"Bo Behind", "bo@pair.example", "2026-07-10", "add b", "b.py", numbered("b", 40)},
@@ -1304,7 +1342,7 @@ func TestMCPTools(t *testing.T) {
 				testCommit{"Bo Behind", "bo@pair.example", day, "trim b", "b.py", numbered("b", 39-i)})
 		}
 		buildRepo(t, pair, commits)
-		scan(t, db, mailmap, domain.ScopeGroup, pair)
+		scan(t, db, mailmap, domain.ScopeGroup, org)
 		emails = append(emails, runEmails(t, db, 3)...)
 
 		text := refused(t, "overview", map[string]any{"scope": "platform"})
@@ -1317,6 +1355,14 @@ func TestMCPTools(t *testing.T) {
 		if text := refused(t, "who_knows", map[string]any{"path": "", "repo": "odd"}); !strings.Contains(text, `Run 2 (as of`) ||
 			!strings.Contains(text, `holds repository "odd"`) {
 			t.Errorf("who_knows(repo: odd) of run 3 was refused with %q, want run 2 named as holding it", text)
+		}
+		pinned := connect(t, Config{Open: openDB(db), RunID: 2, Version: "test"}, 0)
+		text, isErr := callTool(t, pinned, "overview", map[string]any{"scope": "pair"})
+		for _, want := range []string{`Run 3 (as of 2026-10-07T00:00:00Z) holds 2 scopes of that name`,
+			`group "pair", passed as "group:pair"`, `passed as "repo:pair"`, "this server is pinned to run 2 (--run)", "--run 3"} {
+			if !isErr || !strings.Contains(text, want) {
+				t.Errorf("overview(pair) pinned to run 2 answered %q, want a refusal with %q", text, want)
+			}
 		}
 
 		var h highlightsOut
@@ -1355,6 +1401,30 @@ func TestMCPTools(t *testing.T) {
 			if !isErr || !strings.Contains(text, c.want) || strings.Contains(text, "rewritten") {
 				t.Errorf("diff of %s's newest landing answered %q, want a refusal saying %q", c.repo, text, c.want)
 			}
+			// Without line facts its areas are unknown, not none (MET-4).
+			var o map[string]any
+			text, _ = callTool(t, ss, "overview", map[string]any{"scope": c.repo})
+			decode(t, text, &o)
+			if a, ok := o["areas"]; !ok || a != nil || o["areas_total"] != nil {
+				t.Errorf("overview(%s) areas %v (present %v) of %v, want null of null", c.repo, a, ok, o["areas_total"])
+			}
+		}
+		// A partial clone moved since its scan fails for that reason, which
+		// no fetch fixes, so diff says so rather than blame its contents.
+		if err := os.Rename(clones.Partial, clones.Partial+"-moved"); err != nil {
+			t.Fatal(err)
+		}
+		var ch struct {
+			Changes []changeBrief `json:"changes"`
+		}
+		text, _ := callTool(t, ss, "changes", map[string]any{"scope": filepath.Base(clones.Partial), "since": "365d"})
+		decode(t, text, &ch)
+		if len(ch.Changes) == 0 {
+			t.Fatalf("changes of the partial clone is empty: %s", text)
+		}
+		text, isErr := callTool(t, ss, "diff", map[string]any{"change": ch.Changes[0].Landing, "repo": filepath.Base(clones.Partial)})
+		if !isErr || !strings.Contains(text, "may have moved") || strings.Contains(text, "partial clone") {
+			t.Errorf("diff in a partial clone moved since its scan answered %q, want that it may have moved", text)
 		}
 	})
 }

@@ -108,8 +108,9 @@ refused with the calls that answer instead.
   close to one person's own. A share is also withheld when it would let a
   withheld share be worked out from the shares shown beside it, such as a
   group's less its repositories' (`ai-few-people` names the scopes withheld).
-  How AI-assisted changes held up against the rest is shown in the local report
-  only, never over MCP: those comparisons can be one or two people's.
+  How AI-assisted changes held up against the rest is never sent over MCP
+  (`ai-detail-withheld`): those comparisons can be one or two people's. Say
+  that the share is all you have, not that there is no comparison.
 - **Analysis did not fetch.** Each repository is as current as the clone the
   scan read; a stale clone gives stale numbers.
 - **durable@1 scores changes 90 to 365 days old only.** A younger change has no
@@ -151,7 +152,8 @@ Say so rather than guess:
 - **A truck factor.** Concentration is a different, weaker number.
 - **Reviews, review coverage or recent reviewers** without GitHub data, and how
   thorough a review was beyond whether it had a comment.
-- **Someone else's AI-assisted share**, or a share of fewer than three people.
+- **Someone else's AI-assisted share**, or a share of fewer than three people,
+  or how AI-assisted landings held up against the rest.
 - **A pull request beside each landing** in `changes`: not joined yet.
 
 ## Untrusted text
@@ -184,20 +186,22 @@ gives it.
    (`knowledge_loss.num`) or the fewest authors holding their files
    (`concentration.authors_in_prefix`): `who_knows(path: AREA, repo: R)`, its
    majority owners against its recent landers and reviewers, which is who holds
-   the code against who works on it now. `explain(metric: "knowledge_loss",
-   subject: R, subject_kind: "area", path: AREA)` traces the share.
+   the code against who works on it now; its `area` repeats the area's knowledge
+   loss and concentration beside them (`null` for a deeper path).
+   `explain(metric: "knowledge_loss", subject: R, subject_kind: "area",
+   path: AREA)` traces the share.
 5. **Rank tables.** `overview(scope: G, rank: M)` for `durable`,
    `simplifying` and `reviews_given`, one call each, then
    `highlights(scope: G, period: "quarter")`: the top tiers, the changes that
    lasted, the removals that stuck. Read them as intervals (above).
 6. **Review coverage.** When the run read GitHub data and `metrics()` lists
-   `review_coverage@1`, the group's and each repository's card say how much of
-   what landed someone other than its author reviewed, and
-   `explain(metric: "review_coverage", subject: R, subject_kind: "repo")` gives
-   its detail: landings by pull request, reviewed, approved without a comment,
-   pushed directly. Set it beside `reviews_given`'s table: one person giving
-   most reviews, or merging most landings, is a gate, which no ownership number
-   shows.
+   `review_coverage@1`: `explain(metric: "review_coverage", subject: G,
+   subject_kind: "group")`, then `subject: R, subject_kind: "repo"` for the
+   repositories of step 3, say how much of what landed someone other than its
+   author reviewed, with its detail: landings by pull request, reviewed,
+   approved without a comment, pushed directly. Set it beside `reviews_given`'s
+   table: one person giving most reviews, or merging most landings, is a gate,
+   which no ownership number shows.
 7. **Identities.** `identity_candidates(scope: G, limit: 100)`, following
    `cursor`: addresses that may be one person, most confident first. Unmerged
    identities split one person's numbers and make knowledge loss look larger.

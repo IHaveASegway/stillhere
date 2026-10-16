@@ -278,8 +278,11 @@ func (c *call) repo(ctx context.Context, query string) (app.NamedRepo, error) {
 // miss) the newest other stored run that holds it, and how the user serves
 // that run (MC-17): without --run the server reads the latest scan, so a
 // quick scan of one repository hides a platform scanned before it, and only
-// the user can point the server back at it. Any other error, and a miss no
-// stored run holds, is returned as it is.
+// the user can point the server back at it. Where that run holds several
+// scopes of the name, as go-git/go-git holds a group and a repository, the
+// hint lists each with the scope_arg that names it there: the served run's
+// index cannot give it, so the agent has only the name the user typed. Any
+// other error, and a miss no stored run holds, is returned as it is.
 func (c *call) elsewhere(ctx context.Context, err error) error {
 	var m *miss
 	if !errors.As(err, &m) {
@@ -298,26 +301,26 @@ func (c *call) elsewhere(ctx context.Context, err error) error {
 	if c.s.cfg.RunID != 0 {
 		served = fmt.Sprintf("this server is pinned to run %d (--run)", c.run())
 	}
+	query := m.query
+	if m.repo {
+		query = repoQuery(m.query)
+	}
 	for _, sr := range runs {
 		if sr.Run.ID == c.run() {
 			continue
 		}
 		other := &resolver{names: &app.Names{Run: sr.Run, Groups: sr.Groups, Repos: sr.Repos}}
+		found := other.scopes(query)
 		var held string
-		if m.repo {
-			rp, e := other.repo(m.query)
-			if e != nil {
-				continue
-			}
-			held = other.describeRepo(rp.Key)
-		} else {
-			found := other.scopes(m.query)
-			if len(found) != 1 {
-				continue
-			}
+		switch len(found) {
+		case 0:
+			continue
+		case 1:
 			held = other.describeScope(found[0])
+		default:
+			held = fmt.Sprintf("%d scopes of that name: %s", len(found), other.choices(found))
 		}
-		return &domain.UsageError{Msg: fmt.Sprintf("%s Run %d (as of %s) holds %s, but %s. The user can restart "+
+		return &domain.UsageError{Msg: fmt.Sprintf("%s Run %d (as of %s) holds %s. But %s: the user can restart "+
 			"stillhere mcp with --run %d to read that run, or scan it again.",
 			m.msg, sr.Run.ID, sr.Run.Now.UTC().Format(time.RFC3339), held, served, sr.Run.ID)}
 	}

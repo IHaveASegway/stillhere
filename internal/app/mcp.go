@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/IHaveASegway/stillhere/internal/collect"
 	"github.com/IHaveASegway/stillhere/internal/domain"
 	"github.com/IHaveASegway/stillhere/internal/metrics"
 	"github.com/IHaveASegway/stillhere/internal/rank"
@@ -843,10 +844,11 @@ type TopTier struct {
 	// reaches first place.
 	PeopleTotal int `json:"people_total"`
 	// People lists them by name, unless they are more than a third of Of
-	// and someone else's interval reaches a place one of theirs reaches:
-	// then no one stands out, People is empty and a caveat says so. A tier
-	// whose intervals lie above everyone else's stands out in a table of
-	// any size, such as one person at 1-1 of two.
+	// and do not stand apart: then no one stands out, People is empty and
+	// a caveat says so. A tier stands apart when someone is outside it and
+	// the best place anyone outside can take lies below the worst place any
+	// of the tier reaches, so it is named in a table of any size, such as
+	// one person at 1-1 of two; a tier of everyone never stands apart.
 	People []report.RankRow `json:"people"`
 }
 
@@ -936,11 +938,12 @@ func Highlights(ctx context.Context, d Deps, r HighlightsRequest) (*HighlightsAn
 			continue
 		}
 		t.PeopleTotal = len(t.People)
-		// The tier stands apart when no one else could take a place its
-		// people's intervals reach: then the intervals order it above the
-		// rest, however small the table (MC-16: 1-1 against 2-2 of two).
-		// Each interval is the person's own, so the check reads both sides
-		// rather than trust them to agree.
+		// The tier stands apart when someone is outside it and no one
+		// outside could take a place its people's intervals reach: then
+		// the intervals order it above the rest, however small the table
+		// (MC-16: 1-1 against 2-2 of two). A tier of everyone (restLo 0)
+		// is above no one. Each interval is the person's own, so the check
+		// reads both sides rather than trust them to agree.
 		apart := restLo > tierHi
 		if mcpTierShare*t.PeopleTotal > t.Of && !apart {
 			// When most of the table could be first, listing them would
@@ -1164,7 +1167,7 @@ func Diff(ctx context.Context, d Deps, r DiffRequest) (*DiffAnswer, error) {
 		switch {
 		case mcpGitTimedOut(ctx, err):
 			return nil, mcpDiffTooSlow(l, rf)
-		case rf.Repo.Partial:
+		case rf.Repo.Partial && collect.LacksObjects(err):
 			return nil, mcpDiffPartial(l, rf)
 		}
 		return nil, fmt.Errorf("git could not read landing %s in %q, which run %d scanned: the clone may have moved or "+
@@ -1232,7 +1235,7 @@ func Diff(ctx context.Context, d Deps, r DiffRequest) (*DiffAnswer, error) {
 		case err == nil, errors.Is(err, errMCPPatchFull):
 		case mcpGitTimedOut(ctx, err):
 			return nil, mcpDiffTooSlow(l, rf)
-		case rf.Repo.Partial:
+		case rf.Repo.Partial && collect.LacksObjects(err):
 			return nil, mcpDiffPartial(l, rf)
 		default:
 			return nil, fmt.Errorf("git could not diff landing %s in %q: %w", mcpShort(l.SHA), rf.Repo.Name, err)
@@ -1269,12 +1272,19 @@ func mcpDiffTooSlow(l domain.Landing, rf *domain.RepoFacts) error {
 }
 
 // mcpDiffPartial is the error of a diff git could not read in a partial
-// clone (RB-8): its file contents were never fetched, and analysis fetches
-// nothing, so no rescan helps until the clone has them.
+// clone because the clone lacks the contents (RB-8, collect.LacksObjects):
+// they were never fetched, and analysis fetches nothing, so no rescan helps
+// until the clone has them. A refetch alone does not: git fetch --refetch
+// applies the clone's partialclonefilter again, and the clone stays a
+// promisor, which discovery reads as partial (verified on git 2.50.1: 1,804
+// objects missing before and after; none but one after the filter was
+// unset, and a scan blamed the clone once promisor was unset too).
 func mcpDiffPartial(l domain.Landing, rf *domain.RepoFacts) error {
 	return &domain.UsageError{Msg: fmt.Sprintf("git could not read landing %s in %q, a partial clone (made with --filter): "+
 		"the clone lacks the file contents the diff needs, and stillhere never fetches. The diff works once the user "+
-		"fetches them (git fetch --refetch, without a filter) or clones the repository whole.", mcpShort(l.SHA), rf.Repo.Name)}
+		"clones the repository whole (git clone without --filter) and scans that clone; in this clone, git config "+
+		"--unset remote.origin.partialclonefilter, then git fetch --refetch origin, then git config --unset "+
+		"remote.origin.promisor does the same, and a scan then also gives it line facts.", mcpShort(l.SHA), rf.Repo.Name)}
 }
 
 // mcpFindLanding finds the landing a change id names: one of the run's
