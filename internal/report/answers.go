@@ -312,12 +312,22 @@ func (p *printer) knowers(ks []Knower, esc func(string) string, what func(Knower
 }
 
 // pathTotals is "37 surviving prod lines in 12 prod files, 10 with a
-// majority owner", or, for a path with no prod line, "16,679 surviving
-// test lines in 38 test files (no prod line), 30 with a majority owner".
+// majority owner", with what it leaves out where other roles hold lines
+// too, "· not counted: 2,649 doc lines in 37 files"; or, for a path with no
+// prod line, "16,679 surviving test lines in 38 test files (no prod line),
+// 30 with a majority owner".
 func pathTotals(r WhoKnowsRepo) string {
 	if len(r.Roles) == 0 || slices.Equal(r.Roles, []string{string(domain.RoleProd)}) {
-		return fmt.Sprintf("%s surviving prod lines in %s, %d with a majority owner",
+		s := fmt.Sprintf("%s surviving prod lines in %s, %d with a majority owner",
 			grouped(r.Lines), plural(r.ProdFiles, "prod file", "prod files"), r.FilesWithMajority)
+		var left []string
+		for _, u := range r.Uncounted {
+			left = append(left, fmt.Sprintf("%s %s lines in %s", grouped(u.Lines), u.Role, plural(u.Files, "file", "files")))
+		}
+		if len(left) > 0 {
+			s += " · not counted: " + strings.Join(left, ", ")
+		}
+		return s
 	}
 	roles := joinNames(r.Roles)
 	return fmt.Sprintf("%s surviving %s lines in %s (no prod line), %d with a majority owner",

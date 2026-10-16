@@ -266,6 +266,7 @@ func NewWhoKnows(in *WhoKnowsInput) *WhoKnows {
 				r.Lines, r.ProdFiles = count(v.Value), count(v.Detail[detailProdFiles])
 				r.FilesWithMajority = count(v.Detail[detailFilesWithMajority])
 				r.Roles, r.Files = countedRoles(v.Detail)
+				r.Uncounted = uncountedRoles(v.Detail)
 				break
 			}
 		}
@@ -347,6 +348,9 @@ func NewWhoKnows(in *WhoKnowsInput) *WhoKnows {
 		w.Caveats = append(w.Caveats, c)
 	}
 	if c, ok := whoKnowsOtherRoles(in.Path, w.Repos); ok {
+		w.Caveats = append(w.Caveats, c)
+	}
+	if c, ok := whoKnowsUncounted(in.Path, w.Repos); ok {
 		w.Caveats = append(w.Caveats, c)
 	}
 	// Two people the answer lists under one name may be one person whose
@@ -454,7 +458,7 @@ func countedRoles(d map[string]float64) ([]string, int) {
 	var roles []string
 	files := 0
 	for k, n := range d {
-		if role, ok := strings.CutSuffix(k, detailFilesSuffix); ok && k != detailProdFiles && n > 0 {
+		if role, ok := strings.CutSuffix(k, detailFilesSuffix); ok && k != detailProdFiles && !strings.HasPrefix(k, detailUncounted) && n > 0 {
 			roles = append(roles, role)
 			files += count(n)
 		}
@@ -464,6 +468,68 @@ func countedRoles(d map[string]float64) ([]string, int) {
 	}
 	slices.Sort(roles)
 	return roles, files
+}
+
+// uncountedRoles reads the lines of other roles a who_knows@1 path value
+// that counts prod lines leaves out (uncounted_<role>_lines and _files), by
+// role; nil for none.
+func uncountedRoles(d map[string]float64) []RoleLines {
+	var out []RoleLines
+	for k, n := range d {
+		rest, ok := strings.CutPrefix(k, detailUncounted)
+		if role, lines := strings.CutSuffix(rest, "_lines"); ok && lines && n > 0 {
+			out = append(out, RoleLines{Role: role, Lines: count(n), Files: count(d[detailUncounted+role+detailFilesSuffix])})
+		}
+	}
+	slices.SortFunc(out, func(a, b RoleLines) int { return cmp.Compare(a.Role, b.Role) })
+	return out
+}
+
+// whoKnowsUncounted is the uncounted-roles caveat of a who-knows answer
+// whose path holds more lines of roles other than prod and test than the
+// prod lines it counts in some repository: most of what is there is docs,
+// build files or data whose people the answer does not list, which a
+// reader of "53 surviving prod lines" under docs/ would not guess (wave
+// 10's review: werkzeug's docs/ holds 2,691 doc and iac lines beside
+// docs/conf.py's 53). Test lines do not count toward it: tests sit beside
+// the code they test, as Go's _test.go files do, and are mostly its own
+// people's, so a package that holds twice as many test lines as code
+// (cli/cli's pkg/cmd/pr) is answered for its code without a caveat. Every
+// answer's totals still say what it left out.
+func whoKnowsUncounted(prefix string, repos []WhoKnowsRepo) (Caveat, bool) {
+	var names, parts []string
+	for _, r := range repos {
+		left := 0
+		for _, u := range r.Uncounted {
+			if u.Role != string(domain.RoleTest) {
+				left += u.Lines
+			}
+		}
+		if left <= r.Lines {
+			continue
+		}
+		names = append(names, r.Repo)
+		var roles []string
+		for _, u := range r.Uncounted {
+			roles = append(roles, fmt.Sprintf("%s %s lines in %s", grouped(u.Lines), u.Role, plural(u.Files, "file", "files")))
+		}
+		parts = append(parts, fmt.Sprintf("%s beside %s prod lines in %s", joinNames(roles), grouped(r.Lines), r.Repo))
+	}
+	if len(names) == 0 {
+		return Caveat{}, false
+	}
+	where := "This path holds"
+	if prefix == "" {
+		where = "The repository holds"
+	}
+	return Caveat{
+		Code: codeUncountedRoles,
+		Message: fmt.Sprintf("%s more lines of docs, build files or data than prod lines (%s), and %s counts prod lines "+
+			"wherever a path holds any: the people listed know its product code, not the rest, whose own authors the answer "+
+			"leaves out. A path under it that holds no prod file is answered for its own lines.",
+			where, strings.Join(parts, "; "), MetricWhoKnows),
+		Repos: slices.Compact(slices.Sorted(slices.Values(names))),
+	}, true
 }
 
 // whoKnowsMissing is the no-values caveat of a who-knows answer: some

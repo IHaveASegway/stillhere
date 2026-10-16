@@ -194,6 +194,10 @@ func identityForge(t *testing.T, table string) {
 	if got, want := describeCandidates(id.Candidates), describeWant([]identityCandidate{identAdaForge, identGinaHank}, reviewRepo.Key); got != want {
 		t.Errorf("%s, same-forge-account: candidates\n%s\nwant\n%s", table, got, want)
 	}
+	// Gina → Hank is a guess, last and counted apart, in JSON too (wave 10).
+	if id.Guesses != 1 {
+		t.Errorf("%s, same-forge-account: guesses %d, want 1, Gina → Hank", table, id.Guesses)
+	}
 	var out bytes.Buffer
 	if err := report.Mailmap(&out, id); err != nil {
 		t.Fatal(err)
@@ -405,10 +409,29 @@ medium guess=false commented=true rules=same-name,same-local-part name="Pat Doe"
 	}
 	// The link names its account only where the login gives no address
 	// away: alice is alice@x.example's local part, so it is withheld.
-	if alice := id.Candidates[0]; len(alice.Links) != 1 || alice.Links[0].Login != "" || alice.Addresses[0].NamesDiffer ||
-		!alice.Addresses[1].NamesDiffer {
-		t.Errorf("%s: Alice's link %+v and addresses %+v, want the login withheld and the second address's names differing",
-			table, alice.Links, alice.Addresses)
+	if alice := id.Candidates[0]; len(alice.Links) != 1 || alice.Links[0].Login != "" || !alice.Links[0].LoginWithheld ||
+		alice.Addresses[0].NamesDiffer || alice.Addresses[0].Names != nil || !alice.Addresses[1].NamesDiffer ||
+		!slices.Equal(alice.Addresses[1].Names, []string{"Alice Ng", "Bob Roe"}) || alice.Addresses[1].NamesWithheld != 0 {
+		t.Errorf("%s: Alice's link %+v and addresses %+v, want the login withheld and said to be, and the second address's "+
+			"names differing, Alice Ng and Bob Roe", table, alice.Links, alice.Addresses)
+	}
+	// The evidence names what it asks the reviewer to check, and why the
+	// login is not printed (wave 10's review); the mailmap form, made of
+	// the addresses, prints the login; no candidate here is a guess.
+	text := strings.Join(strings.Fields(string(render(t, id).text)), " ")
+	var mm bytes.Buffer
+	if err := report.Mailmap(&mm, id); err != nil {
+		t.Fatal(err)
+	}
+	mailmap := strings.Join(strings.Fields(mm.String()), " ")
+	for _, want := range []string{"address 2 is written with several names: Alice Ng and Bob Roe",
+		"one account, whose login is withheld as the local part of an address"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("%s: the text answer has no %q:\n%s", table, want, text)
+		}
+	}
+	if !strings.Contains(mailmap, "one account, @alice") || id.Guesses != 0 {
+		t.Errorf("%s: guesses %d, mailmap form:\n%s\nwant no guess and @alice in the evidence", table, id.Guesses, mailmap)
 	}
 	if got := checkMailmap(t, two, "Pat Doe <pat@new.example> <pat@old.example>\n", "<pat@old.example>"); got != "Pat Doe <pat@new.example>" {
 		t.Errorf("%s: git check-mailmap <pat@old.example> in two with Pat's line = %q, want Pat Doe <pat@new.example>", table, got)

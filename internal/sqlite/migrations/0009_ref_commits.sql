@@ -12,8 +12,12 @@
 -- keeps who wrote each and when: no parents, no subject, no diff. They are
 -- facts of the run like its commits, read back by every reader, so a
 -- stored run's knowledge loss stays a function of what it read. A run
--- stored before this migration has none: its readers count the activity
--- it kept, landings and reviews, as before.
+-- stored before this migration has none, and its knowledge_loss@1 values
+-- were computed under the earlier rule (landings and reviews), which its
+-- pages' per-query activity no longer follows: its readers compute its
+-- knowledge values again from its facts (app's computeCorrected, told by
+-- the going_quiet detail those values lack), counting its pull requests
+-- but no other ref's commit, and log that a new scan counts those.
 --
 -- Size: one row per commit, about 230 bytes with its indexes; cli/cli's mirror holds 473
 -- such commits in a year, encode/httpx's clone 18.

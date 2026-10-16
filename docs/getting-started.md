@@ -1,6 +1,6 @@
 # Getting started in five minutes
 
-Status: 2026-10-15 · a first session on your own repository, every step with the output it gives · the commands are in [the README](../README.md#getting-started-in-five-minutes), the shapes in [spec/report-json.md](spec/report-json.md)
+Status: 2026-10-15, samples regenerated 2026-10-16 (wave 10) · a first session on your own repository, every step with the output it gives · the commands are in [the README](../README.md#getting-started-in-five-minutes), the shapes in [spec/report-json.md](spec/report-json.md)
 
 This walks through one repository, from nothing to ranks, people to ask and an agent that can read it all. The output below is real: [cli/cli](https://github.com/cli/cli), GitHub's command line (602 landings in a year, 93,000 lines of production code), scanned at `--now 2026-10-15` with GitHub data synced, then abbreviated (`…`). People's names, and the ids that stand in for them, are replaced by placeholders (Person A, Person B, …, `p-…`), as they would be in anything you share; bots keep theirs. Steps 6 and 7, which rank people, use placeholders of their own (Person P, Q, R) and placeholder commits (`<sha>`, `<a commit subject>`), so no rank on this page can be joined to a name in another step or to a commit you could look up. Run the same commands in a clone of your own.
 
@@ -9,12 +9,12 @@ stillhere reads only what is already cloned, and only `sync github` touches the 
 ## 1. Install
 
 ```sh
-go install github.com/IHaveASegway/stillhere/cmd/stillhere@latest
+go install github.com/IHaveASegway/stillhere/cmd/stillhere@main
 command -v stillhere            # prints its path when the Go bin directory is on your PATH
 stillhere version
 ```
 
-git 2.45 or newer must be on your `PATH`. [Install](../README.md#install) has the other ways.
+git 2.45 or newer must be on your `PATH`. `@main` is the newest commit; `@latest` can lag it by hours through the Go module proxy. [Install](../README.md#install) has the other ways.
 
 ## 2. What landed this week
 
@@ -59,12 +59,15 @@ Repository cli · trunk @ ff67d76 · ok
   age 2,567 days (first commit 2019-10-04 UTC) · 1,495 files at HEAD, 530 prod paths · 93,356
   surviving prod lines in 530 prod files · 468 people, 4 bots · landings: 17 in the window, 602 in
   the history
-  made of: Person E 9,840 (10.5%), Person F 9,838 (10.5%), Person A 8,138 (8.7%), Person G 7,977
-    (8.5%), Person H 7,750 (8.3%)
-  knowledge loss 61.8% (57,553 of 93,196 human-held lines) · AI-assisted 33.6% (202 of 602 landings)
+  made of: Person E 9,840 (10.5%, active 2026-10-14), Person F 9,838 (10.5%, no activity in
+    365 days), Person A 8,138 (8.7%, active 2026-10-14), Person G 7,977 (8.5%, no activity in
+    365 days), Person H 7,750 (8.3%, active 2026-10-14)
+  knowledge loss 59.6% (55,538 of 93,196 human-held lines) · AI-assisted 33.6% (202 of 602 landings)
   · bot share 0.2% (160 of 93,356 lines)
-  review coverage 78.5% (102 of 130 human landings, 90 days) · 19 pull requests merged without
-    another's review · 9 landings with no pull request in the GitHub data · 35 landings naming a
+  going quiet within 30 days: Person K 475 lines (quiet in 3 days), (name withheld 1) 28 lines
+    (quiet in 6 days), Person L 3 lines (quiet in 9 days), …
+  review coverage 78.6% (103 of 131 human landings, 90 days) · 19 pull requests merged without
+    another's review · 9 landings with no pull request in the GitHub data · 11 landings naming a
     pull request the GitHub data lacks, left out (sync github again) · 55 reviewed only by an
     approval with no comment
   majority-owner concentration: 6 authors (0 bots) hold the majority in half of the 384 files with a
@@ -72,28 +75,28 @@ Repository cli · trunk @ ff67d76 · ok
 
   Areas: top-level directories, by the prod lines people hold there
     area        lines  knowledge loss  people gone quiet  authors
-    pkg/       71,898           65.9%         387 of 421        8
-    internal/  13,240           37.3%           79 of 97        3
+    pkg/       71,898           63.2%         382 of 421        8
+    internal/  13,240           36.8%           77 of 97        3
     api/        5,905           63.1%           67 of 72        1
     …
     3 more areas (--all lists them)
   …
   Still here at ff67d76: surviving non-blank lines (1,046 files blamed)
-    person       prod lines  majority files  landings 365d  other roles
-    Person E          9,840              38            179  doc 270 · iac 5 · test 20,738
-    Person F          9,838              44              0  doc 129 · iac 389 · test 12,…
+    person                  prod lines  majority files  landings 365d  last active   other roles
+    Person E                     9,840              38            179  2026-10-14    doc 270 · iac …
+    Person F                     9,838              44              0  none in 365d  doc 129 · iac …
     …
-    459 more people (--all lists them)
+    458 more people (--all lists them)
 ```
 
 How to read it:
 
 - **made of** and **still here** are surviving lines: what blame still credits to each person at HEAD. They reward tenure, so they describe the code, not the people.
-- **knowledge loss** is the share of people's surviving lines held by people with no activity in 180 days: no landing, no review, no pull request opened or pushed to, and no commit on any branch or tag of the clone. 61.8% says most of this code was written by people who have gone quiet here (not necessarily left). The **areas** say where: `pkg/` holds most of it. Activity is the whole run's, so a repository scanned alone can read higher than in its organization's scan: someone active in a sibling repository looks gone here. Each person in **made of** and **still here** shows when they were last active, and "quiet in N days" when they are within 30 days of the line; a `going-quiet` caveat says what knowledge loss becomes once they cross it.
-- **review coverage** needs GitHub data (step 8). Without it the line is absent, not 0. It is the share of human landings whose pull request someone other than its author reviewed before it merged. "With no pull request in the GitHub data" is what the data says, not proof of a direct push: here those 9 are security fixes merged from private forks. A landing after the last sync, or whose subject names a pull request (`Merge pull request #N`, `… (#N)`) the data lacks, is left out rather than counted as unreviewed, and the line says how many. Here 35 are, because this replica has a hole (an interrupted first sync): syncing again fills it.
+- **knowledge loss** is the share of people's surviving lines held by people with no activity in 180 days: no landing, no review, no pull request opened or pushed to, and no commit on any branch or tag of the clone. 59.6% says most of this code was written by people who have gone quiet here (not necessarily left). The **areas** say where: `pkg/` holds most of it. Activity is the whole run's, so a repository scanned alone can read higher than in its organization's scan: someone active in a sibling repository looks gone here. Each person in **made of** and **still here** shows when they were last active, and "quiet in N days" when they are within 30 days of the line (`quiet in 3d` in a table, which never cuts it); **going quiet within 30 days** names them, the soonest first, and a `going-quiet` caveat says what knowledge loss becomes once they cross it.
+- **review coverage** needs GitHub data (step 8). Without it the line is absent, not 0. It is the share of human landings whose pull request someone other than its author reviewed before it merged. "With no pull request in the GitHub data" is what the data says, not proof of a direct push: here those 9 are security fixes merged from private forks. A landing after the last sync, or whose subject names a pull request (`Merge pull request #N`, `… (#N)`) the data lacks, is left out rather than counted as unreviewed, and the line says how many. Here 11 are, because this replica has a hole (an interrupted first sync): syncing again fills it.
 - **concentration** is how few people hold the majority of half the files that have a majority owner. It is not a truck factor.
 - **AI-assisted** counts landings with an agent's commit or co-author trailer: a lower bound, since editor completions leave no trace.
-- Each table prints its first 10 rows; `--all` prints every row, and `--format json` or `--format md` the same report for tools or for pasting.
+- Each table prints its first 10 rows, and a narrow terminal cuts its other roles before a name; `--all` prints every row, and `--format json` or `--format md` the same report for tools or for pasting.
 - Read **What could make this wrong** first: here it says the clone has 5 newer landings than `--now`, that the repository has no `.git-blame-ignore-revs`, and that 42 names belong to more than one email.
 
 ## 4. Merge one person's addresses
@@ -107,18 +110,23 @@ stillhere identities --format mailmap >> ~/cli.mailmap
 
 ```text
 identities · every repository · run 7 · as of 2026-10-15 UTC
-  558 addresses of people in 1 repository, 6 bots and agents left out, … · 82 candidates
+  557 addresses of people in 1 repository, 7 bots and agents left out, … · 58 candidates, and 34
+  hand-off guesses (--all lists them)
 
-1. Person J · high confidence · same-name, same-local-part
-   1. GitHub noreply · Person J · 11 commits · 2022-04-14 → 2023-09-05 · cli
-   2. other domain · Person J · 7 commits · 2022-04-25 → 2025-09-18 · cli · canonical
+1. (name withheld) · high confidence · same-name, same-forge-account
+   1. GitHub noreply · (name withheld) · 14 commits · 2022-04-27 → 2023-10-23 · cli
+   2. other domain · (name withheld) · 2 commits · 2022-05-06 → 2022-05-09 · cli · canonical
+   both addresses carry one display name, withheld because it gives an address away
+   GitHub attributes the commits of both addresses to one account, whose login is withheld as the
+     local part of an address: GitHub's own link, the attribution its contributor pages show, which
+     no display name makes
 …
 ```
 
 Read the file: the high-confidence lines are written, every other candidate is commented out, and stillhere applies none of them. Hand-off guesses (one address stopping as another starts in the same files) are listed last and counted apart in the headline; on an open-source repository most of them link unrelated people, so the text form lists them only with `--all`. A candidate GitHub links to one account is high even when an address carries two names, and says so: a name change looks exactly like a mailbox two people share, so check those before you apply them. Keep it outside the repository, which may have a `.mailmap` of its own that git applies too, and append to it (`>>`) rather than write over it: once a scan applies a line, the suggestions leave it out, so a file written anew would lose it. Scan again with it:
 
 ```sh
-stillhere --mailmap ~/cli.mailmap scan .             # here: 468 people become 465
+stillhere --mailmap ~/cli.mailmap scan .             # here: 468 people become 427
 ```
 
 ## 5. Who knows a path
@@ -128,18 +136,24 @@ stillhere who-knows pkg/cmd/pr
 ```
 
 ```text
-Repository cli · 9,983 surviving prod lines in 40 prod files, 21 with a majority owner
-  knowledge loss   75.3% (7,512 of 9,979 human-held lines) · 120 of 126 people gone quiet
+Repository cli · 9,983 surviving prod lines in 40 prod files, 21 with a majority owner · not
+  counted: 3,116 iac lines in 37 files, 18,478 test lines in 30 files
+  knowledge loss   74.4% (7,422 of 9,979 human-held lines) · 119 of 126 people gone quiet
   concentration    4 authors (0 bots) hold the majority in half of the 21 files with a majority
                    owner (not a truck factor)
-  majority owners  Person F (4 files) · Person G (4 files) · Person F (2 files) · Person A (2 files) · …
-                   · 1 more person (--all lists them)
-  top authors      Person F 1,557 · Person G 1,374 · Person F 1,132 · Person E 1,031 · Person A 979
-  recent landers   Person E (8 landings) · (name withheld 3) (5 landings) · Person A (3 landings) · …
-  recent reviewers Person H (24 pull requests) · Person E (3 pull requests) · Person A (3 pull requests) · …
+  majority owners  Person F (4 files, no activity in 365 days) · Person G (4 files, no
+                   activity in 365 days) · Person F (2 files, no activity in 365 days) ·
+                   Person A (2 files, active 2026-10-14) · … · 1 more person (--all lists them)
+  top authors      Person F 1,557 (no activity in 365 days) · Person G 1,374 (no activity in
+                   365 days) · Person F 1,132 (no activity in 365 days) · Person E 1,031
+                   (active 2026-10-14) · Person A 979 (active 2026-10-14)
+  recent landers   Person E (8 landings) · (name withheld 3) (5 landings) · Person A (3
+                   landings) · …
+  recent reviewers Person H (24 pull requests) · Person E (3 pull requests) · Person M (3 pull
+                   requests) · …
 ```
 
-It is a routing answer, not a rank: who holds the code (owners, authors) against who works on it now (landers, reviewers). Here three quarters of `pkg/cmd/pr` is held by people gone quiet, and the people landing and reviewing it are others: the ones to ask, and the ones to pair with the owners while they can. Person F appearing twice is one person on two addresses (step 4), and `(name withheld 3)` someone whose display name would give an address away. `PATH` is relative to the repository's root, down to one file; `--repo` takes the repository's name as a card heads it, `OWNER/NAME` or its remote URL. Each owner and author also shows when they were last active (`active 2026-10-02`, `quiet in 12 days`, `quiet since 2025-12-10`), so you can tell a holder you can still ask from one who has gone. A path with no prod line, such as `tests` or `docs`, is answered for its own test or doc lines, and says so; a path with no role at all, such as `go.mod`, says why and what would make it count instead of "nobody".
+It is a routing answer, not a rank: who holds the code (owners, authors) against who works on it now (landers, reviewers). Here three quarters of `pkg/cmd/pr` is held by people gone quiet, and the people landing and reviewing it are others: the ones to ask, and the ones to pair with the owners while they can. Person F appearing twice is one person on two addresses (step 4), and `(name withheld 3)` someone whose display name would give an address away. `PATH` is relative to the repository's root, down to one file; `--repo` takes the repository's name as a card heads it, `OWNER/NAME` or its remote URL. Each owner and author also shows when they were last active (`active 2026-10-14`, `quiet in 12 days`, `no activity in 365 days`), so you can tell a holder you can still ask from one who has gone: the first three of `pkg/cmd/pr`'s top authors have not been active here in a year. The first line says what the answer leaves out, here the package's test and fixture lines. A path with no prod line, such as `tests` or `docs`, is answered for its own test or doc lines, and says so; a path with no role at all, such as `go.mod`, says why and what would make it count instead of "nobody".
 
 ## 6. Ranks, and why so few people have one
 

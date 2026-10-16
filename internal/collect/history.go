@@ -74,7 +74,9 @@ type HistoryFacts struct {
 	// commit and its revert names a commit of its own map.
 	Reverts []domain.Revert
 	// Warnings holds shallow-window when a shallow clone's history ends
-	// inside what the window needs, sorted by Code, then Message.
+	// inside what the window needs, and other-refs-unread (WarnOtherRefs)
+	// when a scan could not read the other refs' commits, sorted by Code,
+	// then Message.
 	Warnings []domain.Warning
 	// Aliases are the emails git's mailmap rewrote in the commits
 	// collected, their authors' (%ae beside %aE) and their trailers' (git
@@ -226,7 +228,15 @@ func (h *historyRun) run(ctx context.Context) error {
 			return err
 		}
 		if err := h.readRefCommits(ctx); err != nil {
-			return err
+			if ctx.Err() != nil {
+				return err
+			}
+			// Activity off the default branch is one input of one metric,
+			// so a ref git cannot walk costs that input, with a warning,
+			// not the repository's every fact (wave 10's review: one
+			// broken remote-tracking ref failed the whole scan).
+			clear(h.refs)
+			h.warn(WarnOtherRefs, otherRefsMessage(err))
 		}
 	}
 	if h.scan || h.repo.Shallow {
@@ -411,8 +421,14 @@ func (h *historyRun) readBroughtIn(ctx context.Context) error {
 // committer time hides none after it, then Window.Contains), so no commit
 // made at or after --now is read: a run stays a function of its inputs. A
 // commit's own times are kept; knowledge_loss@1 decides which one counts.
+//
+// A ref whose object the clone lacks (a remote-tracking branch left
+// pointing at a pruned commit, a ref file written by hand) is skipped
+// (--ignore-missing), as git skips it for every other command that lists
+// refs; any other failure is the caller's to downgrade to a warning
+// (WarnOtherRefs), so the repository keeps every other fact.
 func (h *historyRun) readRefCommits(ctx context.Context) error {
-	args := []string{"log", "--branches", "--remotes", "--tags", "--not", h.repo.Head}
+	args := []string{"log", "--ignore-missing", "--branches", "--remotes", "--tags", "--not", h.repo.Head}
 	args = append(args, h.windowArgs()...)
 	args = append(args, "-z", "--no-color", "--encoding=UTF-8", "--pretty=format:"+historyLogFormat, "--")
 	err := h.git.Stream(ctx, domain.GitCmd{Dir: h.repo.Path, Args: args}, func(r io.Reader) error {
@@ -505,6 +521,27 @@ func (h *historyRun) readRoots(ctx context.Context) error {
 			h.cut[0][:12]))
 	}
 	return nil
+}
+
+// WarnOtherRefs is the repository warning of a scan whose history could not
+// read the commits on the clone's other refs: knowledge_loss@1 then counts
+// none of them, and every other fact stands.
+const WarnOtherRefs = "other-refs-unread"
+
+// otherRefsMessage is WarnOtherRefs' message for err: what is missing and
+// how git ended, with no ref name or git message in it, as the history's
+// warnings carry SHAs and dates only.
+func otherRefsMessage(err error) string {
+	how := "failed"
+	var ge *domain.GitError
+	switch {
+	case errors.As(err, &ge) && ge.Exit > 0:
+		how = fmt.Sprintf("exited %d", ge.Exit)
+	case errors.As(err, &ge):
+		how = "did not finish"
+	}
+	return "The commits on the clone's other branches and tags could not be read (git log " + how + "), so knowledge " +
+		"loss counts no commit off the default branch here, while pull requests still count; every other fact stands."
 }
 
 // warn records a repository warning. Messages carry SHAs and dates only.

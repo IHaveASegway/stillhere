@@ -19,13 +19,15 @@ import (
 //   - its name as every page heads its card ("werkzeug"), without case;
 //   - GROUP/NAME, the group as the run named it;
 //   - its origin, as a remote URL in any form (https, ssh, scp-like, with
-//     or without ".git") or as OWNER/NAME, compared as domain.RemoteRepo
-//     reads a remote: what a user copies from GitHub.
+//     or without ".git"), as HOST/OWNER/NAME, the URL without its scheme,
+//     or as OWNER/NAME, compared as domain.RemoteRepo reads a remote: what
+//     a user copies from GitHub's address bar or clone box.
 //
-// None is an empty list; two or more are for the caller to refuse,
-// listing them.
+// A trailing slash is ignored, as a shell's completion of a directory
+// leaves one. None is an empty list; two or more are for the caller to
+// refuse, listing them.
 func MatchRepos(repos []NamedRepo, query string) []NamedRepo {
-	q := strings.TrimSpace(query)
+	q := strings.TrimRight(strings.TrimSpace(query), "/")
 	if q == "" {
 		return nil
 	}
@@ -56,15 +58,21 @@ func MatchRepos(repos []NamedRepo, query string) []NamedRepo {
 		}
 	}
 	want, remote := domain.RemoteRepo(scrubbed)
-	ownerName := ""
-	if !remote && slash && !strings.Contains(name, "/") {
-		ownerName = "/" + strings.ToLower(strings.TrimSuffix(q, ".git"))
+	ownerName, hostForm := "", ""
+	if !remote && slash {
+		bare := strings.ToLower(strings.TrimSuffix(q, ".git"))
+		switch strings.Count(bare, "/") {
+		case 1:
+			ownerName = "/" + bare
+		case 2:
+			hostForm = bare // host/owner/name, as RemoteRepo gives a remote
+		}
 	}
 	for _, rp := range repos {
 		have, ok := domain.RemoteRepo(rp.Key)
 		switch {
 		case !ok:
-		case remote && have == want, ownerName != "" && strings.HasSuffix(have, ownerName):
+		case remote && have == want, ownerName != "" && strings.HasSuffix(have, ownerName), hostForm != "" && have == hostForm:
 			found = append(found, rp)
 		}
 	}

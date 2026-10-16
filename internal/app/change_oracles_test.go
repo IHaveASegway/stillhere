@@ -251,6 +251,17 @@ func mainChangeOracles(t *testing.T) {
 		if !slices.ContainsFunc(w.Caveats, func(c report.Caveat) bool { return c.Code == "other-roles" }) {
 			t.Errorf("SPEC who_knows@1 (main fixture), tests: caveats %+v, want other-roles: the answer counts test lines", w.Caveats)
 		}
+		// A path with prod lines says which other roles' lines it leaves out
+		// (wave 10's review: docs/ of werkzeug answered for docs/conf.py
+		// alone): the root's 6 test lines in tests/test_service.py, fewer
+		// than its prod lines, so no uncounted-roles caveat.
+		w = s.whoKnows(t, "")
+		if len(w.Repos) != 1 || !slices.Equal(w.Repos[0].Uncounted, []report.RoleLines{{Role: "test", Lines: 6, Files: 1}}) ||
+			slices.ContainsFunc(w.Caveats, func(c report.Caveat) bool { return c.Code == "uncounted-roles" }) ||
+			!strings.Contains(strings.Join(strings.Fields(string(render(t, w).text)), " "), "· not counted: 6 test lines in 1 file") {
+			t.Errorf("SPEC who_knows@1 (main fixture), the root: uncounted %+v, caveats %+v; want 6 test lines in 1 file left out, "+
+				"said in its totals, and no uncounted-roles caveat", w.Repos, w.Caveats)
+		}
 		// --repo takes the name a card heads the repository with, as the MCP
 		// server's repo does (app.MatchRepos); a name the run lacks is refused
 		// with the names it holds (wave 10).
@@ -280,18 +291,22 @@ func mainChangeOracles(t *testing.T) {
 			"the run knows each path relative to its repository's root, such as src or src/pay.go.", r.Name, s.run, "fixture/service.py")
 		// Each reason the policy left a path out says what would count it
 		// (wave 10): a role does nothing for a denied path, since a deny
-		// wins over every role.
+		// wins over every role, and the attributes turned off un-deny one a
+		// pattern matches too; and the run's packaged policy is in no file
+		// until it is written out.
 		noRole := func(path, why, fix string) string {
 			return fmt.Sprintf("%q is in 1 repository, but no path there has a role (1 path %s), and who_knows@1 counts only "+
 				"paths with one: this answer is empty because the policy leaves the path out, not because nobody knows it. "+
-				"'stillhere policy' prints the roles and the deny list; at the next scan, %s.", path, why, fix)
+				"'stillhere policy' prints the roles and the deny list; the run used the packaged policy, so write it out to "+
+				"change it, 'stillhere policy > stillhere.toml'; at the next scan, %s.", path, why, fix)
 		}
 		for _, c := range []struct{ path, caveat string }{
 			{"fixture/service.py", noPath},
 			{"notes.csv", noRole("notes.csv", "unclassified", "an unclassified path counts once stillhere.toml gives it a role")},
 			{"vendor/new.py", noRole("vendor/new.py", "denied", "a denied path counts only once nothing denies it, since a deny "+
 				"wins over every role: a pattern of the run's deny list matches it, so remove that pattern from stillhere.toml's "+
-				"[paths] deny")},
+				"[paths] deny, or set -linguist-vendored -linguist-generated for it in .gitattributes, which un-denies a path "+
+				"whatever the deny list says")},
 			{"gen_out.py", noRole("gen_out.py", "generated", "a path whose first lines say it is generated counts once "+
 				".gitattributes sets linguist-generated=false for it")},
 			{"app.py", ""},
@@ -437,6 +452,13 @@ func mainChangeOracles(t *testing.T) {
 		}) {
 			t.Errorf("SPEC explain traces, Ada by the id of ada@other.example: subject %s, caveats %+v; want Ada and an "+
 				"alias-id caveat naming her id", e.Subject.Key, e.Caveats)
+		}
+		// The address itself names no one, people being keyed by their
+		// canonical address, and the refusal says whose it is (wave 10's
+		// review).
+		if _, err = explain("majority_owner@1", "ada@other.example"); err == nil ||
+			!strings.Contains(err.Error(), "maps to another canonical address") || !strings.Contains(err.Error(), `"Ada Example" (id `) {
+			t.Errorf("SPEC explain traces, Ada by ada@other.example: %v; want a refusal naming Ada", err)
 		}
 		// A value of the right kind the person has none of says why (#92):
 		// Gina's changes are January's, older than landed@2's week.

@@ -113,7 +113,7 @@ stillhere --mailmap ~/acme.mailmap scan ~/src/acme           # the merges take e
 
 Run `identities` again after the first `sync github`: GitHub's links arrive with it and make most of the high-confidence lines. Hand-off guesses are listed last, and in text only with `--all`.
 
-Knowledge loss counts someone as gone quiet after 180 days without a landing, a review, a pull request opened or pushed to, or a commit on any branch or tag of the clone, across every repository of the scan, so a repository scanned alone can read higher than in its organization's scan. Every page shows each holder's last activity, and a `going-quiet` caveat warns when people holding lines are within 30 days of the line.
+Knowledge loss counts someone as gone quiet after 180 days without a landing, a review, a pull request opened or pushed to, or a commit on any branch or tag of the clone, across every repository of the scan, so a repository scanned alone can read higher than in its organization's scan. Every page shows each holder's last activity, and a card names the people holding lines who are within 30 days of the line ("going quiet within 30 days"), with a `going-quiet` caveat that says what knowledge loss becomes once they cross it.
 
 In Docker, mount the repositories and run as the user who owns them, because git refuses to read a repository that belongs to someone else ("dubious ownership"):
 

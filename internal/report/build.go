@@ -291,6 +291,7 @@ func (b *builder) card(rf *domain.RepoFacts, still *StillHere) RepoCard {
 	}
 	if c.KnowledgeLoss = b.share(MetricKnowledgeLoss, scope, nil); c.KnowledgeLoss != nil {
 		used = append(used, MetricKnowledgeLoss)
+		quietHolders(c.KnowledgeLoss, still)
 	}
 	if c.AIAssisted = b.share(MetricAIAssisted, scope, nil); c.AIAssisted != nil {
 		used = append(used, MetricAIAssisted)
@@ -356,6 +357,7 @@ func (b *builder) overview(scope domain.Scope, members []*domain.RepoFacts) Over
 	}
 	if o.KnowledgeLoss = b.share(MetricKnowledgeLoss, scope, members); o.KnowledgeLoss != nil {
 		used = append(used, MetricKnowledgeLoss)
+		quietHolders(o.KnowledgeLoss, o.People)
 	}
 	if o.AIAssisted = b.share(MetricAIAssisted, scope, members); o.AIAssisted != nil {
 		used = append(used, MetricAIAssisted)
@@ -677,6 +679,31 @@ func (b *builder) share(metric string, scope domain.Scope, members []*domain.Rep
 		s.IfMerged = sum
 	}
 	return &s
+}
+
+// quietHolders names the people knowledge_loss@1's going_quiet counts in a
+// section (loss.GoingQuiet.Holders): its still-here rows, which hold the
+// scope's surviving prod lines person by person, whose last activity is
+// within 30 days of the line (StillHereRow.GoingQuiet, from the run's
+// activity, metrics.LastActivity, which the metric's detail reads too). It
+// selects rows; it counts nothing the metric did not. Nothing without
+// rows or a going-quiet share.
+func quietHolders(loss *Share, still *StillHere) {
+	if loss == nil || loss.GoingQuiet == nil || still == nil {
+		return
+	}
+	out := []QuietHolder{}
+	for _, r := range still.Humans {
+		if !r.GoingQuiet || r.ProdNonblankLines == 0 || r.LastActive == nil || r.QuietInDays == nil {
+			continue
+		}
+		out = append(out, QuietHolder{Email: r.Email, Name: r.Name, NameWithheld: r.NameWithheld,
+			Lines: r.ProdNonblankLines, LastActive: *r.LastActive, LastActivity: r.LastActivity, QuietInDays: *r.QuietInDays})
+	}
+	slices.SortFunc(out, func(a, b QuietHolder) int {
+		return cmp.Or(cmp.Compare(a.QuietInDays, b.QuietInDays), cmp.Compare(b.Lines, a.Lines), cmp.Compare(a.Email, b.Email))
+	})
+	loss.GoingQuiet.Holders = &out
 }
 
 // population reads what surviving@1 says about a scope's code as a whole:

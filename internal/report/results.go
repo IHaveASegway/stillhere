@@ -148,11 +148,15 @@ type WhoKnowsRepo struct {
 	// under a path that holds no surviving prod line, the other roles that
 	// hold some there (who_knows@1: a tests/ or docs/ directory is answered
 	// for its own lines), sorted; Files is how many files of those roles.
-	Roles          []string `json:"roles"`
-	Files          int      `json:"files"`
-	MajorityOwners []Knower `json:"majority_owners"` // hold at least half the lines of a file under the path
-	TopAuthors     []Knower `json:"top_authors"`     // up to five, by prod lines under the path, then email
-	RecentLanders  []Knower `json:"recent_landers"`  // credited with a change under the path in the last 90 days
+	Roles []string `json:"roles"`
+	Files int      `json:"files"`
+	// Uncounted is, where the answer counts prod lines, the lines of each
+	// other role the path holds too, which it leaves out (who_knows@1's
+	// uncounted_<role>_lines and _files), by role; [] when there are none.
+	Uncounted      []RoleLines `json:"uncounted"`
+	MajorityOwners []Knower    `json:"majority_owners"` // hold at least half the lines of a file under the path
+	TopAuthors     []Knower    `json:"top_authors"`     // up to five, by prod lines under the path, then email
+	RecentLanders  []Knower    `json:"recent_landers"`  // credited with a change under the path in the last 90 days
 	// RecentReviewers reviewed, in the last 90 days, a merged pull request
 	// that changed the path, by the GitHub data the run read: [] also when
 	// the run has none for the repository, which provenance.forge then does
@@ -168,6 +172,13 @@ type WhoKnowsRepo struct {
 	People         *int           `json:"people"`          // humans holding prod lines under the path
 	PeopleInactive *int           `json:"people_inactive"` // of them, those gone quiet
 	Concentration  *Concentration `json:"concentration"`
+}
+
+// RoleLines is a role's surviving lines and the files that hold them.
+type RoleLines struct {
+	Role  string `json:"role"`
+	Lines int    `json:"lines"`
+	Files int    `json:"files"`
 }
 
 // Knower is one person's knowledge of a path. Email is a reviewer's

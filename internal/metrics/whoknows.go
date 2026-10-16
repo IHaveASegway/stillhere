@@ -29,7 +29,9 @@ func (whoKnowsV1) Definition() Definition {
 			"so a test or doc directory is answered for its own lines rather than as nobody's. Per repository: one value about " +
 			"the path (subject repo for the whole repository, else area \"<repo key>:<file>\" or \"<repo key>:<dir>/\") whose " +
 			"Value is its counted lines, with Detail prod_files, files_with_majority and, when other roles are counted, " +
-			"<role>_files for each; and one value per person listed, whose Value is their counted " +
+			"<role>_files for each, or, when prod lines are counted and other roles hold lines there too, " +
+			"uncounted_<role>_lines and uncounted_<role>_files for each, the lines the answer leaves out; and one value per " +
+			"person listed, whose Value is their counted " +
 			"lines under the path, with Detail majority_files (files under the path they hold at least half of), recent_landings " +
 			"(landings in [now - 90d, now) in which a non-merge commit credited to them changed non-blank lines on a path with a " +
 			"role under the path, ignore-revs commits excluded), top_author (1 to 5, by counted lines then email, when they are " +
@@ -158,6 +160,17 @@ func whoKnows(v *view, reviews *reviewsIndex, r *repoView, prefix string, w doma
 	tally(prod)
 	prodFiles := files
 	byRole := map[domain.Role]int{} // the other roles' files counted, when the path holds no prod line
+	// The other roles' lines and files a path with prod lines leaves out,
+	// which the path value names (uncounted_<role>_lines and _files), so an
+	// answer of a docs/ that holds one prod file says it counted 53 lines of
+	// its 2,744 (wave 10's review: werkzeug's docs/conf.py).
+	uncounted := map[domain.Role][2]int{}
+	if lines > 0 {
+		for _, f := range r.roleFiles(under) {
+			u := uncounted[r.role[f.path]]
+			uncounted[r.role[f.path]] = [2]int{u[0] + f.total, u[1] + 1}
+		}
+	}
 	if lines == 0 {
 		// No surviving prod line under the path: its tests, docs or build
 		// files are what is known there, so the answer counts their lines,
@@ -237,6 +250,10 @@ func whoKnows(v *view, reviews *reviewsIndex, r *repoView, prefix string, w doma
 	}
 	for role, n := range byRole {
 		pathDetail[string(role)+"_files"] = float64(n)
+	}
+	for role, u := range uncounted {
+		pathDetail["uncounted_"+string(role)+"_lines"] = float64(u[0])
+		pathDetail["uncounted_"+string(role)+"_files"] = float64(u[1])
 	}
 	out := []domain.MetricValue{count(whoKnowsID, scope, pathSubject(r, prefix), w, lines, 0, pathDetail)}
 	for email, p := range people {

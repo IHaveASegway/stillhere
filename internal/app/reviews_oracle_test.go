@@ -701,13 +701,27 @@ func reviewActivity(t *testing.T) {
 	// pull request: nobody holding a line has gone quiet. Gina's activity is
 	// 170 days old, so her 2 lines go quiet within 30 days.
 	checkShare(t, table+", knowledge_loss@1", r.Card.KnowledgeLoss, 0, 34)
-	if q := r.Card.KnowledgeLoss.GoingQuiet; q == nil || *q != (report.ShareGoingQuiet{People: 1, Lines: 2, Num: 2, Value: 2.0 / 34}) {
-		t.Errorf("%s: going_quiet %+v, want 1 person, 2 lines, 2 / 34", table, q)
+	// The card names who goes quiet (wave 10's review: a count alone sent
+	// the reader to rows a page cuts), and its caveat says where.
+	gina := report.QuietHolder{Email: "gina@example.com", Name: "Gina Split", Lines: 2,
+		LastActive: reviewAt(time.April, 20, 12), LastActivity: domain.ActivityCommit, QuietInDays: 10}
+	if q := r.Card.KnowledgeLoss.GoingQuiet; q == nil || q.People != 1 || q.Lines != 2 || q.Num != 2 || q.Value != 2.0/34 ||
+		q.Holders == nil || !slices.Equal(*q.Holders, []report.QuietHolder{gina}) {
+		t.Errorf("%s: going_quiet %+v, want 1 person, 2 lines, 2 / 34, Gina's holding them", table, q)
 	}
 	if !slices.ContainsFunc(r.Card.Caveats, func(c report.Caveat) bool {
-		return c.Code == "going-quiet" && strings.Contains(c.Message, "1 person who holds 2 lines here goes quiet within 30 days")
+		return c.Code == "going-quiet" && strings.Contains(c.Message, "1 person who holds 2 lines here goes quiet within 30 days") &&
+			strings.Contains(c.Message, "would then be 5.9% (2 of 34), up from 0.0% (0). They are listed with the knowledge loss")
 	}) {
 		t.Errorf("%s: the card's caveats %+v, want a going-quiet caveat", table, r.Card.Caveats)
+	}
+	// Text prints the days left whole, in the still-here table and in the
+	// card's list (wave 10's review: a table cut "quiet in 24d" to "qu…").
+	text := string(render(t, s.model).text)
+	for _, want := range []string{"going quiet within 30 days: Gina Split 2 lines (quiet in 10 days)", "  quiet in 10d"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("%s: the text report has no %q:\n%s", table, want, text)
+		}
 	}
 	type active struct {
 		at    string
@@ -727,6 +741,15 @@ func reviewActivity(t *testing.T) {
 	} {
 		if got[email] != want {
 			t.Errorf("%s: %s last active %+v, want %+v", table, email, got[email], want)
+		}
+	}
+	// --repo takes the repository as a browser's address bar or a shell's
+	// completion gives it too: the URL without its scheme, a trailing slash
+	// (wave 10's review).
+	for _, arg := range []string{"git.example.test/acme/fixture", "acme/fixture/", "https://git.example.test/acme/fixture/"} {
+		if w, err := app.WhoKnows(t.Context(), s.read, app.WhoKnowsRequest{RunID: s.run, Path: "split.py", Repo: arg}); err != nil ||
+			w.Repo != reviewRepo.Key {
+			t.Errorf("%s: who-knows split.py --repo %s: %v; want the repository", table, arg, err)
 		}
 	}
 	// The run keeps the other refs' commits made before --now: not the tag's,

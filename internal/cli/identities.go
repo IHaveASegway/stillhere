@@ -72,6 +72,9 @@ where their lines stay commented out, hold every candidate.`,
 	}
 	cmd.Flags().StringVar(&format, "format", formatText, "output format: mailmap (suggested .mailmap lines), text, md or json")
 	addRunFlag(cmd, &run)
-	e.addAllFlag(cmd)
+	// identities prints every candidate but the guesses, so its --all is
+	// not the other commands' first-10-rows cut (wave 10's review).
+	cmd.Flags().BoolVar(&e.all, "all", false,
+		"also list the hand-off guesses in text and Markdown (JSON and the mailmap form always hold them)")
 	return cmd
 }

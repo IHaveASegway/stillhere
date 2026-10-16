@@ -150,9 +150,11 @@ func Rules() []RuleDefinition {
 			Risk: "GitHub links a commit by its author email, so a mailbox several people commit as, verified by one " +
 				"of them, links to that person, as GitHub's own pages do, and its lines are written as lines: check a " +
 				"candidate whose addresses carry different names before applying it. A noreply address whose login was renamed " +
-				"and later taken by someone else counts as the new holder's. Only commits of pull requests count: an " +
-				"address seen only in direct pushes, or only in pull requests older than the run's GitHub data, " +
-				"links nothing, and one person's two accounts (a work and a personal one) stay two.",
+				"and later taken by someone else counts as the new holder's. An address links through its pull requests' " +
+				"commits, the links a sync kept of older pull requests, or the account GitHub gives its newest commit on the " +
+				"default branch, which a sync's links pass asked about, so one seen only in direct pushes links too; an " +
+				"address GitHub attributes to no account (not verified when that commit was made, or an account deleted " +
+				"since) links nothing, and one person's two accounts (a work and a personal one) stay two.",
 		},
 		{
 			Rule: RuleHandOff,
@@ -229,6 +231,13 @@ type Address struct {
 	// mailbox several people commit as, which only the same-forge-account
 	// rule links (wave 10): the evidence says so, so a reader checks it.
 	NamesDiffer bool
+	// Names are, when NamesDiffer, the author names its commits carry,
+	// sorted, less those a page withholds (Directory.Withheld's rule: a
+	// name that gives an address of the run away), which NamesWithheld
+	// counts: what a reader asked to check the address is one person's
+	// checks (wave 10's review). nil otherwise.
+	Names         []string
+	NamesWithheld int
 }
 
 // Alias is an email git's mailmap rewrote to an address in the facts
@@ -458,6 +467,9 @@ func candCollect(fs *domain.FactSet, who *Directory) ([]*candAddress, int) {
 		// A GitHub noreply address is one account's by construction, so
 		// names that differ on it are a person's name changing.
 		a.shared = !a.noreply && (a.role || !candOwnNamesAgree(a, who.accounts[a.Email]))
+		if a.shared && !a.role {
+			a.Names, a.NamesWithheld = candShownNames(a.names, who)
+		}
 		for r := range a.repos {
 			a.Repos = append(a.Repos, r)
 		}
@@ -1077,6 +1089,25 @@ func candNamesAgree(addrs []*candAddress, idx []int) bool {
 		}
 	}
 	return true
+}
+
+// candShownNames is the author names an address's commits carry, sorted,
+// less those that give an address of the run away (Directory.withholds),
+// which it counts: the names a page may print beside the address.
+func candShownNames(names map[string]bool, who *Directory) ([]string, int) {
+	var out []string
+	withheld := 0
+	for name := range names {
+		switch {
+		case strings.TrimSpace(name) == "":
+		case who.withholds(name):
+			withheld++
+		default:
+			out = append(out, name)
+		}
+	}
+	slices.Sort(out)
+	return out, withheld
 }
 
 // candOwnNamesAgree reports whether the names an address's commits carry

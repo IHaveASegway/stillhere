@@ -120,6 +120,20 @@ func TestDeterminism(t *testing.T) {
 	sameBytes(t, "report's JSON of a run that holds no landed@2 or review_coverage@1 value, and the scan's", old.json, a.json)
 	sameBytes(t, "report's text of a run that holds no landed@2 or review_coverage@1 value, and the scan's", old.text, a.text)
 
+	// A run a stillhere before wave 10 stored holds knowledge_loss@1 values
+	// without going_quiet, computed under the activity rule since corrected,
+	// beside which a page would show each holder's last activity by the
+	// corrected rule. Its readers compute both knowledge metrics again from
+	// its facts (metrics.Corrected), so its report is the scan's, not a card
+	// that contradicts itself (wave 10's review).
+	staleKnowledge(t, first.db, first.run)
+	if m, err = app.Report(t.Context(), first.read, app.ReportRequest{RunID: first.run}); err != nil {
+		t.Fatalf("app.Report of a run stored before wave 10: %v", err)
+	}
+	old = render(t, withoutTimings(m))
+	sameBytes(t, "report's JSON of a run whose knowledge values predate wave 10, and the scan's", old.json, a.json)
+	sameBytes(t, "report's text of a run whose knowledge values predate wave 10, and the scan's", old.text, a.text)
+
 	t.Run("names that give an address away", displayNames)
 	t.Run("a token planted in a PATH", func(t *testing.T) {
 		// The review of #42 found a token typed in a PATH in facts.db and in
@@ -488,6 +502,34 @@ func checkForgeRun(t *testing.T, s *scanned) {
 		}
 		if table.Beside != "no_comment_share" || zed == nil || zed.Beside == nil || *zed.Beside != 1 {
 			t.Errorf("the reviews_given@1 table shows %q beside the count and zed's row %+v, want no_comment_share 1", table.Beside, zed)
+		}
+	}
+}
+
+// staleKnowledge makes run's knowledge values in the facts.db at db what a
+// stillhere before wave 10 stored: knowledge_loss@1 without its going_quiet
+// detail, every line counted as gone, and knowledge_concentration@1 one
+// author more, values the old activity and identity rules could give. It
+// fails the test when the run holds no knowledge_loss@1 value.
+func staleKnowledge(t *testing.T, db string, run int64) {
+	t.Helper()
+	raw, err := sql.Open("sqlite", db+"?_busy_timeout=10000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = raw.Close() }()
+	for _, q := range []string{
+		`DELETE FROM metric_details WHERE run_id = ?1 AND name IN ('going_quiet_num', 'going_quiet_people') AND value_seq IN
+			(SELECT seq FROM metric_values WHERE run_id = ?1 AND metric = 'knowledge_loss')`,
+		`UPDATE metric_values SET num = den, value = 1 WHERE run_id = ?1 AND metric = 'knowledge_loss'`,
+		`UPDATE metric_values SET num = num + 1, value = value + 1 WHERE run_id = ?1 AND metric = 'knowledge_concentration'`,
+	} {
+		res, err := raw.ExecContext(t.Context(), q, run)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n, err := res.RowsAffected(); err != nil || n == 0 {
+			t.Fatalf("%s changed %d rows (%v): the run holds no knowledge value to make stale, so this case checks nothing", q, n, err)
 		}
 	}
 }

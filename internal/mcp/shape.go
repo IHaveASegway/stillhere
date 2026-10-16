@@ -171,10 +171,10 @@ type page struct {
 	Limit      int     `json:"limit"`
 	Total      int     `json:"total"`
 	NextCursor *string `json:"next_cursor"` // pass it as cursor for the next page; null on the last
-	// Note says why Limit is below the limit the agent asked for: the most
-	// a page holds, or the size every answer is cut to; absent when the
-	// page holds what was asked (round 2: identity_candidates(limit: 100)
-	// answered 25 a page without saying why).
+	// Note says why Limit is below the limit the agent asked for: the size
+	// every answer is cut to; absent when the page holds what was asked
+	// (round 2: identity_candidates(limit: 100) answered 25 a page without
+	// saying why).
 	Note string `json:"note,omitzero"`
 }
 
@@ -182,11 +182,10 @@ type page struct {
 func paginate[T any](items []T, f format, run int64) ([]T, *page) {
 	p := &page{Offset: min(f.offset, len(items)), Limit: f.limit, Total: len(items)}
 	if f.asked > f.limit {
-		why := "the answer is cut to fit the size every answer is held to"
-		if f.limit == maxLimit {
-			why = fmt.Sprintf("a page holds at most %d", maxLimit)
-		}
-		p.Note = fmt.Sprintf("limit %d, not the %d asked: %s; next_cursor gives the rest, a page at a time", f.limit, f.asked, why)
+		// The schema refuses a limit above maxLimit before a call gets
+		// here, so the only cut below the limit asked is the budget's.
+		p.Note = fmt.Sprintf("limit %d, not the %d asked: the answer is cut to fit the size every answer is held to; "+
+			"next_cursor gives the rest, a page at a time", f.limit, f.asked)
 	}
 	end := min(p.Offset+f.limit, len(items))
 	if end < len(items) {
@@ -233,6 +232,21 @@ func cut[T any](items []T, n int) ([]T, int) {
 		return items[:n], len(items)
 	}
 	return items, len(items)
+}
+
+// quietCut is a knowledge-loss share as an answer sends it: its going-quiet
+// people (report.ShareGoingQuiet.Holders, the soonest first) cut to n, a
+// list's rows, in a copy, since the report's model is shared; going_quiet's
+// people counts them all.
+func quietCut(sh *report.Share, n int) *report.Share {
+	if sh == nil || sh.GoingQuiet == nil || sh.GoingQuiet.Holders == nil || n <= 0 || len(*sh.GoingQuiet.Holders) <= n {
+		return sh
+	}
+	c, q := *sh, *sh.GoingQuiet
+	holders := (*q.Holders)[:n]
+	q.Holders = &holders
+	c.GoingQuiet = &q
+	return &c
 }
 
 // shortSHA is how a concise answer names a commit: 12 hex digits, which
@@ -430,7 +444,7 @@ func (s *shaper) overview(o report.Overview, n named) overviewItem {
 	item := overviewItem{
 		Scope: o.Scope, ScopeArg: s.scopeArg(o.Scope), Totals: o.Totals,
 		People: stillHereOf(o.People, f.rows), Week: weekOf(o.Week, f.rows),
-		Concentration: o.Concentration, KnowledgeLoss: o.KnowledgeLoss, BotShare: o.BotShare,
+		Concentration: o.Concentration, KnowledgeLoss: quietCut(o.KnowledgeLoss, f.rows), BotShare: o.BotShare,
 		AIAssisted:     s.share(o.AIAssisted, o.Scope, scopeName(o.Scope, "")),
 		ReviewCoverage: o.ReviewCoverage,
 	}
@@ -489,7 +503,7 @@ func (s *shaper) summary(r report.Repo) repoSummary {
 		Name: r.Name, Key: r.Key, Group: r.Group, ScopeArg: s.scopeArg(report.Scope{Kind: domain.ScopeRepo, Key: r.Key}),
 		Status: r.Status, Error: r.Error, LineFacts: r.LineFacts,
 		Size: c.Size, People: c.People, Bots: c.Bots,
-		KnowledgeLoss: c.KnowledgeLoss, AIAssisted: s.share(c.AIAssisted, sc, scopeName(sc, r.Name)), BotShare: c.BotShare,
+		KnowledgeLoss: quietCut(c.KnowledgeLoss, s.f.rows), AIAssisted: s.share(c.AIAssisted, sc, scopeName(sc, r.Name)), BotShare: c.BotShare,
 		ReviewCoverage: c.ReviewCoverage, Landings: c.Landings,
 	}
 	if c.Age != nil {
@@ -1346,6 +1360,9 @@ type identitiesOut struct {
 	Shared     int          `json:"shared"`
 	Oversized  int          `json:"oversized"`
 	Candidates any          `json:"candidates"` // concise: []identityBrief; detailed: []identityDetail
+	// Guesses is how many candidates of the whole list (page.total) are
+	// hand-off guesses, which come last (report.Identities.Guesses).
+	Guesses int `json:"guesses"`
 	// Rules is every rule's definition, how it links and how it can be
 	// wrong: bounded by the rules, not the run.
 	Rules []report.IdentityRule `json:"rules"`
@@ -1382,7 +1399,7 @@ type identityAddress struct {
 func (s *shaper) identitiesAnswer(ids *report.Identities) *identitiesOut {
 	f := s.f
 	out := &identitiesOut{Scope: ids.Scope, Addresses: ids.Addresses, Bots: ids.Bots, Shared: ids.Shared,
-		Oversized: ids.Oversized, Rules: ids.Rules, tail: tail{Caveats: ids.Caveats}}
+		Oversized: ids.Oversized, Guesses: ids.Guesses, Rules: ids.Rules, tail: tail{Caveats: ids.Caveats}}
 	cands, pg := paginate(ids.Candidates, f, ids.Provenance.RunID)
 	out.Page = pg
 	n := newNamed()

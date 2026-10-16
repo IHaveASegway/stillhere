@@ -51,9 +51,10 @@ const (
 	detailRecentLandings    = "recent_landings"
 	detailTopAuthor         = "top_author" // a top author's place, 1 to 5
 	detailProdFiles         = "prod_files"
-	detailFilesSuffix       = "_files"    // who_knows@1 about a path: <role>_files for each other role counted under a path with no prod line
-	detailPeople            = "people"    // surviving@1 about a repository or group: humans with surviving prod lines; knowledge_loss@1: humans holding lines
-	detailBotShare          = "bot_share" // surviving@1 about a repository or group: bot-held lines over prod lines
+	detailFilesSuffix       = "_files"     // who_knows@1 about a path: <role>_files for each other role counted under a path with no prod line
+	detailUncounted         = "uncounted_" // who_knows@1 about a path with prod lines: uncounted_<role>_lines and uncounted_<role>_files, what it leaves out
+	detailPeople            = "people"     // surviving@1 about a repository or group: humans with surviving prod lines; knowledge_loss@1: humans holding lines
+	detailBotShare          = "bot_share"  // surviving@1 about a repository or group: bot-held lines over prod lines
 	// knowledge_loss@1 and knowledge_concentration@1 (#104), present when
 	// identity candidates hold lines in the area: how many, the high ones,
 	// and the value with them merged (the high ones, every one).

@@ -352,17 +352,17 @@ Wrong implementations this catches:
 - **Crediting the merger, or patching with `log --first-parent -p`.** Bob replaces Cara as the recent lander of `side.py`: with `--first-parent`, git gives row 8 its first-parent diff, which adds `side.py` and `side_week.py` as Bob's.
 - **Commit time instead of landing time.** `side.py` has no recent lander, because `e08df80` was written in February.
 
-Paths that hold no one's knowledge say why (#71, PF-8):
+Paths that hold no one's knowledge say why (#71, PF-8), and, the run's policy being the packaged one, which no file holds, each policy caveat says to write it out first, `stillhere policy > stillhere.toml` (wave 10's review):
 
 | Path | Answer | Why |
 | --- | --- | --- |
 | `fixture/service.py` | missing, a `no-values` caveat: the run knows each path relative to its repository's root | a filesystem path, which names nothing in the repository |
 | `notes.csv` | empty, a `no-values` caveat: `"notes.csv" is in 1 repository, but no path there has a role (1 path unclassified)` | `notes.csv` has no role, and `who_knows@1` counts only paths with one |
-| `vendor/new.py` | empty, a `no-values` caveat: `(1 path denied)`, and that a denied path counts only once nothing denies it, a pattern of the run's deny list matching it (wave 10) | a role does nothing for a denied path: a deny wins over every role |
+| `vendor/new.py` | empty, a `no-values` caveat: `(1 path denied)`, and that a denied path counts only once nothing denies it, a pattern of the run's deny list matching it, which removing it or `-linguist-vendored -linguist-generated` in `.gitattributes` undoes (wave 10) | a role does nothing for a denied path: a deny wins over every role |
 | `gen_out.py` | empty, a `no-values` caveat: `(1 path generated)`, and that `linguist-generated=false` in `.gitattributes` counts it (wave 10) | the header sniff skipped it |
 | `app.py` | a real "nobody" | renamed to `service.py` on 2026-01-05: a path the history knows, with role `prod`, no surviving line and no landing in 90 days |
 
-A path whose files have roles, but no `prod` one, is answered for its own lines (wave 10), with an `other-roles` caveat: `tests` holds `tests/test_service.py`'s 6 `test` lines, Ada's 2 (her init) and Ivy's 4 (row 15), so its majority owner is Ivy (4 of 6), its top authors Ivy 4 and Ada 2, its recent lander Ivy, and its `roles` `["test"]`.
+A path whose files have roles, but no `prod` one, is answered for its own lines (wave 10), with an `other-roles` caveat: `tests` holds `tests/test_service.py`'s 6 `test` lines, Ada's 2 (her init) and Ivy's 4 (row 15), so its majority owner is Ivy (4 of 6), its top authors Ivy 4 and Ada 2, its recent lander Ivy, and its `roles` `["test"]`. A path with `prod` lines says which others it leaves out: the root's `uncounted` is those 6 `test` lines in 1 file, which its totals print (`· not counted: 6 test lines in 1 file`), and since they are fewer than its 37 prod lines, it has no `uncounted-roles` caveat.
 
 - **Test and doc paths counted for their prod lines** (`main` before wave 10): `tests` has 0 surviving lines, no owner and no author, only Ivy as a recent lander; a path no one landed lately, such as encode/httpx's `tests`, answered "nobody".
 - **A role suggested for a denied path** (`main` before wave 10): `vendor/new.py`'s caveat says a role in `stillhere.toml` makes it count, which it does not.
@@ -380,6 +380,7 @@ A path whose files have roles, but no `prod` one, is answered for its own lines 
 | `surviving@1`, `ada@example.com` | 3 commits, most lines first: `init` 7 (`service.py`'s beta and alpha blocks, 4, through `-M`, and `new_name.py`'s `x`, `y` and `z`, 3, through Erin's rename), `add gamma_added_later` 2 (her second address, mailmapped), `add ada_week.py` 1: her 10 lines |
 | `majority_owner@1`, Ada's id (`p-` and 10 hex digits of the SHA-256 of `ada@example.com`) | `service.py` 6 of 8, `new_name.py` 3 of 4, `ada_week.py` 1 of 1 |
 | `majority_owner@1`, the id of `ada@other.example`, which the mailmap folds into `ada@example.com` (an id an answer gave before the `.mailmap` line) | Ada, the same files, with an `alias-id` caveat naming her id in the run (wave 10) |
+| `majority_owner@1`, the address `ada@other.example` itself | refused, people being keyed by their canonical address, naming whose it is: `"Ada Example" (id …)` (wave 10's review) |
 | `landed@2`, "Gina Split" | no value, and a `no-values` caveat naming the week, `2026-09-30 → 2026-10-07 UTC`: her commits landed in January (#92) |
 | `landed@2`, "Cara Deb" | not found, suggesting "Cara Dev" |
 
@@ -1142,7 +1143,7 @@ The replica holds one pull request, #8, Hank's (login `hank`), open, created 202
 | Gina | 2026-04-20 12:00, a commit on `old-work` | 10 | going quiet: within 30 days of the line |
 | Hank | 2026-09-20 12:00, a pull request: #8's commit, his own, which the clone holds | 163 | |
 
-So nobody holding a line has gone quiet: `knowledge_loss@1` 0 / 34, `people_inactive` 0, and `going_quiet` 1 person, 2 lines (Gina's), 2 / 34 once she crosses, with a `going-quiet` caveat on the card. The run keeps two commits of other refs, `release-1`'s and `old-work`'s: the tag's was made after `--now`.
+So nobody holding a line has gone quiet: `knowledge_loss@1` 0 / 34, `people_inactive` 0, and `going_quiet` 1 person, 2 lines (Gina's), 2 / 34 once she crosses, with a `going-quiet` caveat on the card ("would then be 5.9% (2 of 34), up from 0.0% (0)") and its `holders` naming Gina, 2 lines, quiet in 10 days, which the text card prints as `going quiet within 30 days: Gina Split 2 lines (quiet in 10 days)` and her still-here row as `quiet in 10d`, whole (wave 10's review). The run keeps two commits of other refs, `release-1`'s and `old-work`'s: the tag's was made after `--now`. `who-knows split.py --repo` finds the repository by `git.example.test/acme/fixture` (a URL without its scheme), `acme/fixture/` and `https://git.example.test/acme/fixture/` (a trailing slash).
 
 Wrong implementations this catches:
 
@@ -1152,6 +1153,8 @@ Wrong implementations this catches:
 - **A pull request's creation alone.** #8 was opened before the window: Hank is quiet, 2/34.
 - **No `--now` bound on other refs.** The tag's commit makes Gina's last activity 10-08, after `--now`, and no one goes quiet.
 - **The committer time where the author's counts.** The same here (author and committer are one); the definition reads the author's, which a rebase by someone else keeps.
+- **A count without names** (the lane before its review): the card says 1 person goes quiet, and no page says who: `holders` is `null`.
+- **A text table that cuts the flag** (the lane before its review): a still-here row prints `2026-04-20 · qu…`, its days left lost to the 100 columns.
 
 ### A later sync changes nothing in the stored run
 

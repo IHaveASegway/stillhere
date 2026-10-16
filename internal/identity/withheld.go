@@ -70,7 +70,15 @@ func (d *Directory) Withheld(email string) bool {
 	if LoginKey(email) {
 		return false
 	}
-	name := strings.TrimSpace(d.Name(email))
+	return d.withholds(d.Name(email))
+}
+
+// withholds reports whether a name gives an address of the run away: it
+// holds an @, or is, ignoring case, a local part of a person's address
+// (localForms). Withheld asks it of a display name, and the identities
+// answer of each name an address's commits carry (Address.Names).
+func (d *Directory) withholds(name string) bool {
+	name = strings.TrimSpace(name)
 	return name != "" && (strings.ContainsRune(name, '@') || d.locals[fold(name)])
 }
 

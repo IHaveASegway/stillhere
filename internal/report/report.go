@@ -488,6 +488,28 @@ type ShareGoingQuiet struct {
 	Lines  float64 `json:"lines"`  // the lines they hold here
 	Num    float64 `json:"num"`    // Num once they have gone quiet: Num + Lines
 	Value  float64 `json:"value"`  // Num / Den
+	// Holders names those people, the soonest to go quiet first, then the
+	// most lines, then email: the section's still-here rows whose last
+	// activity is within 30 days of the line, so a page says who, not only
+	// how many (round 2: the people going quiet hold few lines, so a table's
+	// first rows never showed them). null for a share no section's rows
+	// back, an area's or a who-knows path's, and when the page cannot tell
+	// anyone's activity (a pointer, as IdentityCandidate.Mailmap is: JSON
+	// writes a nil list as [], which would read as "no one").
+	Holders *[]QuietHolder `json:"holders"`
+}
+
+// QuietHolder is one person of ShareGoingQuiet.Holders: who, the surviving
+// prod lines they hold in the section's scope, and when they were last
+// active, by knowledge_loss@1's rule (metrics.LastActivity).
+type QuietHolder struct {
+	Email        string    `json:"email"`
+	Name         string    `json:"name"`          // as StillHereRow's
+	NameWithheld bool      `json:"name_withheld"` // as StillHereRow's
+	Lines        int       `json:"lines"`
+	LastActive   time.Time `json:"last_active"`
+	LastActivity string    `json:"last_activity"`
+	QuietInDays  int       `json:"quiet_in_days"` // whole days left before 180 days have passed since LastActive
 }
 
 // ShareIfMerged is knowledge_loss@1 with the run's identity candidates

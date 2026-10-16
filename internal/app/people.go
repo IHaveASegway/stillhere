@@ -103,6 +103,17 @@ func FindPerson(n *Names, query string, q PersonQuery) (NamedPerson, *report.Cav
 				}
 			}
 		}
+		// An address git's mailmap folds into another person's names no one
+		// here: people are keyed by their canonical address, which --me and
+		// a person's own page compare exactly. Say whose it is, by the id or
+		// name the reader can pass, rather than "no one's" (wave 10's review).
+		for _, p := range n.People {
+			if slices.Contains(p.aliases, lower) {
+				return NamedPerson{}, nil, &personMiss{fmt.Sprintf("%q is an address git's mailmap maps to another canonical "+
+					"address in run %d, and people are keyed by their canonical one: pass the id or the name of %s.",
+					lower, run, listPeople([]NamedPerson{p}, q))}
+			}
+		}
 		return NamedPerson{}, nil, &personMiss{fmt.Sprintf("%q is no one's email or GitHub login in run %d: people are "+
 			"keyed by their canonical email, after .mailmap, and a login names whoever the run's GitHub data links it to. "+
 			"Pass a display name instead.", lower, run)}

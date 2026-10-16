@@ -19,7 +19,7 @@ value: never use it for performance or pay decisions, and say so if asked to.
 | Where in this repository has knowledge gone quiet, or rests with few people? | `overview(scope: R)`: its `areas`, the top-level directories with their knowledge loss, concentration and lines, largest first |
 | Who ranks where on a metric, in this platform or repository? | `overview(scope, rank: "durable")`: one ranked metric's table per call (`durable`, `simplifying` or `reviews_given`); `metrics()` lists the ranked ones |
 | Who should I ask about, or who should review, this path? | `who_knows(path, repo)`: majority owners, top authors, recent landers and recent reviewers, each with when they were last active; an absolute path inside a scanned clone works, and so does a test or docs directory, answered for its own lines (`roles`) |
-| Who is about to go quiet? Will knowledge loss jump? | `overview(scope: R)`: each person's `last_active` and `quiet_in_days`, and `knowledge_loss.going_quiet`, the share once those within 30 days have gone quiet |
+| Who is about to go quiet? Will knowledge loss jump? | `overview(scope: R)` or `overview(scope: G)`: `knowledge_loss.going_quiet`, its `holders` (who, their lines, `quiet_in_days`, the soonest first) and the share once they have gone quiet; a table's rows rarely show them, since they hold few lines |
 | What did a person's changes do? Where do they rank? | `person(name)`; an empty name is the user, whose answer alone holds their own AI-assisted share |
 | What landed this week, or since a date? What did X ship? | `changes(scope, since, person)`; leave `person` out for everyone, pass it empty for the user |
 | Why is this number what it is? Which changes produced it? | `explain(metric, subject, subject_kind)`, then `metrics(metric)` for its definition |
@@ -187,7 +187,8 @@ gives it.
    made of, concentration and knowledge loss, the AI-assisted and bot shares,
    what landed in the week, and one row per repository. Note its caveats,
    `unmerged-identities` first, then `going-quiet`: people about to cross
-   the 180-day line, and the share once they have.
+   the 180-day line, named in `knowledge_loss.going_quiet.holders`, and the
+   share once they have.
 3. **Its repositories.** For the two or three that hold most of the prod lines,
    and any the user named: `overview(scope: R)`, with `R` its `scope_arg`: the
    card and tables whole, and its `areas`, largest first.
@@ -220,7 +221,9 @@ gives it.
    table: one person giving most reviews, or merging most landings, is a
    gate, which no ownership number shows.
 7. **Identities.** `identity_candidates(scope: G, limit: 100)`, following
-   `cursor`: addresses that may be one person, most confident first. Unmerged
+   `cursor`: addresses that may be one person, most confident first, the
+   hand-off guesses last (`guesses` counts them: the first `page.total` less
+   `guesses` are the candidates a user's terminal lists). Unmerged
    identities split one person's numbers and make knowledge loss look larger.
    When a knowledge number carries `unmerged-identities`, say it may be
    overstated, and when the answer also gives the number with the
@@ -231,7 +234,8 @@ gives it.
    whose addresses there hold no surviving line. A high one (GitHub
    attributes both addresses to one account, `same-forge-account`) is near
    certain, but say so when an address `names_differ`: a name change, or a
-   mailbox several people share, which only the user can tell apart; a medium or low one needs the user's word, except its addresses
+   mailbox several people share, which only the user can tell apart (its
+   `names` are the names it is written with); a medium or low one needs the user's word, except its addresses
    marked `high`, whose lines are as sure. Knowledge loss and concentration
    count each address apart, so state them as a range: their `if_merged` (and
    the `unmerged-identities` caveat, present when merging moves a number)

@@ -13,6 +13,10 @@ type knowledgeLossV1 struct{}
 
 var knowledgeLossID = domain.MetricID{Name: "knowledge_loss", Version: 1}
 
+// detailGoingQuietNum is knowledge_loss@1's Detail of the lines whose people
+// go quiet within 30 days, which every value has since wave 10 (Corrected).
+const detailGoingQuietNum = "going_quiet_num"
+
 // Definition returns knowledge_loss@1's catalog entry.
 func (knowledgeLossV1) Definition() Definition {
 	return Definition{
@@ -87,6 +91,33 @@ func (knowledgeLossV1) compute(v *view) ([]domain.MetricValue, error) {
 		add(domain.Scope{Kind: domain.ScopeGroup, Key: name}, groupSubject(name), files)
 	}
 	return sorted(out), nil
+}
+
+// Corrected returns the metrics whose values among values, a stored run's,
+// a stillhere computed before a correction this one made to their
+// definitions in place (before the first release a definition is
+// corrected keeping its version: docs/metrics.md's changelogs), so a reader
+// computes them again from the run's facts rather than show them beside
+// what it computes per query by the corrected rules. A run is told by its
+// data, never by a version: knowledge_loss@1's values carry going_quiet
+// since activity off the default branch was added (wave 10), so one
+// without it was stored under the earlier activity rule, landings and
+// reviews only, which per-query last activity and PathKnowledge no longer
+// follow; knowledge_concentration@1 comes with it, since that wave also
+// made GitHub's link high for an address whose names differ, which moves
+// both metrics' identity detail. None for a run that holds no
+// knowledge_loss@1 value, whose readers show none.
+func Corrected(values []domain.MetricValue) []domain.MetricID {
+	for _, v := range values {
+		if v.Metric != knowledgeLossID {
+			continue
+		}
+		if _, ok := v.Detail[detailGoingQuietNum]; !ok {
+			return []domain.MetricID{knowledgeConcentrationID, knowledgeLossID}
+		}
+		return nil
+	}
+	return nil
 }
 
 // knowledgeActive returns the people knowledge_loss@1 counts as active in
@@ -176,7 +207,7 @@ func knowledgeLoss(v *view, active map[string]bool, last map[string]domain.Activ
 	detail := map[string]float64{
 		"people":             float64(people),
 		"people_inactive":    float64(inactive),
-		"going_quiet_num":    float64(quietLines),
+		detailGoingQuietNum:  float64(quietLines),
 		"going_quiet_people": float64(quietPeople),
 	}
 	v.lossIfMerged(detail, active, files) // #104: identities.go

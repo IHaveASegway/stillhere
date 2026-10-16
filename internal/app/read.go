@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/IHaveASegway/stillhere/internal/classify"
 	"github.com/IHaveASegway/stillhere/internal/domain"
 	"github.com/IHaveASegway/stillhere/internal/identity"
 	"github.com/IHaveASegway/stillhere/internal/metrics"
@@ -120,7 +121,58 @@ func load(ctx context.Context, d Deps, runID int64) (*stored, error) {
 		d.Log.Info("a stillhere older than these metrics stored the run, so it holds no value of them: they were "+
 			"computed from its facts as it was read", "run", run.ID, "metrics", strings.Join(computed, ", "))
 	}
+	recomputed, err := s.computeCorrected()
+	if err != nil {
+		return nil, err
+	}
+	if len(recomputed) > 0 {
+		d.Log.Warn("the run was stored before stillhere counted activity off the default branch: its knowledge loss "+
+			"and concentration were computed again from its facts, which hold no commit of another branch, so those "+
+			"count for no one: scan again", "run", run.ID, "metrics", strings.Join(recomputed, ", "))
+	}
 	return s, nil
+}
+
+// computeCorrected computes again, over the run's own facts, policy and
+// GitHub data, the values of each metric metrics.Corrected says a stillhere
+// stored before a correction made in place, and puts them where the stored
+// ones were; it returns the ids it computed. Without it a run stored before
+// wave 10 showed a card that contradicted itself: its stored knowledge loss
+// counted landings and reviews only (encode/httpx, 100%), beside each
+// holder's last activity and who-knows' knowledge, which a reader computes
+// per query by the corrected rule (29.8%). The run's facts are what it
+// read, so the values are what this binary stores for those inputs, as
+// computeUnstored's are; only the commits of other refs, which such a run
+// never kept, are missing, and the log says to scan again. The old run is
+// told by its data (metrics.Corrected), not by a version.
+func (s *stored) computeCorrected() ([]string, error) {
+	ids := metrics.Corrected(s.values)
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	redo := map[domain.MetricID]bool{}
+	var names []string
+	var added []domain.MetricValue
+	for _, id := range ids {
+		m, err := metrics.Lookup(id.String())
+		if err != nil {
+			return nil, err
+		}
+		values, err := m.Compute(s.input())
+		if err != nil {
+			return nil, fmt.Errorf("computing %s over run %d's facts: %w", id, s.run.ID, err)
+		}
+		redo[id], names, added = true, append(names, id.String()), append(added, values...)
+	}
+	// A new slice, in the store's order: a store may hand every reader the
+	// same one (the MCP server caches it).
+	values := slices.DeleteFunc(slices.Clone(s.values), func(v domain.MetricValue) bool { return redo[v.Metric] })
+	values = append(values, added...)
+	s.values = values
+	slices.SortStableFunc(s.values, func(a, b domain.MetricValue) int {
+		return cmp.Or(cmp.Compare(a.Metric.Name, b.Metric.Name), cmp.Compare(a.Metric.Version, b.Metric.Version))
+	})
+	return names, nil
 }
 
 // withForge returns a stored run's facts with the GitHub data the run kept
@@ -669,12 +721,19 @@ func WhoKnows(ctx context.Context, d Deps, r WhoKnowsRequest) (*report.WhoKnows,
 // them (domain.PathClass.Skip), and says for each reason what would make
 // the path count, since each takes a different change: a role for an
 // unclassified path; for a denied one, a role does nothing (a deny wins
-// over every role, spec/classification.md), so the deny pattern of the
-// run's policy that matches it (policy.Paths.Denies) is to be removed,
-// or, when none of the run's patterns matches, the linguist-vendored or
-// linguist-generated attribute that denied it is to be turned off; for a
-// generated header, linguist-generated turned off; for one too big, a
-// larger [blame] max_bytes.
+// over every role, spec/classification.md), so either the deny pattern of
+// the run's policy that matches it (policy.Paths.Denies) is to be removed,
+// or both linguist attributes are to be turned off for it in
+// .gitattributes, which un-denies a path whatever pattern matches it, and
+// is the one change when no pattern matches, since an attribute denied it;
+// for a generated header, linguist-generated turned off; for one too big, a
+// larger [blame] max_bytes, but only where the path's name would give it a
+// role (classify.Role): a .png too big has none either way, so a larger
+// limit alone changes nothing (wave 10's review). The run's policy says
+// where those changes go: under the packaged one, which no file holds, the
+// advice starts with 'stillhere policy > stillhere.toml'. The pattern
+// itself is not named: the run stores which skip a path got, not which
+// rule gave it (the classify lane's rule source, 'stillhere paths', says).
 func whoKnowsNoRole(fs *domain.FactSet, p *policy.Policy, prefix, repo string, listed int) (report.Caveat, bool) {
 	if prefix == "" || listed > 0 {
 		return report.Caveat{}, false
@@ -682,6 +741,7 @@ func whoKnowsNoRole(fs *domain.FactSet, p *policy.Policy, prefix, repo string, l
 	holding := 0
 	reasons := map[domain.Skip]int{}
 	byPattern, byAttribute := 0, 0 // denied paths, by the run's deny list and by a linguist attribute
+	bigNamed := 0                  // paths too big that a role would count, which a larger [blame] max_bytes counts
 	for i := range fs.Repos {
 		rf := &fs.Repos[i]
 		if rf.Status != domain.RepoStatusOK || (repo != "" && rf.Repo.Key != repo) {
@@ -697,12 +757,13 @@ func whoKnowsNoRole(fs *domain.FactSet, p *policy.Policy, prefix, repo string, l
 			}
 			found = true
 			reasons[pc.Skip]++
-			if pc.Skip == domain.SkipDeniedPath {
-				if p != nil && p.Paths.Denies(pc.Path) {
-					byPattern++
-				} else {
-					byAttribute++
-				}
+			switch {
+			case pc.Skip == domain.SkipDeniedPath && p != nil && p.Paths.Denies(pc.Path):
+				byPattern++
+			case pc.Skip == domain.SkipDeniedPath:
+				byAttribute++
+			case pc.Skip == domain.SkipTooBig && p != nil && classify.Role(p, pc.Path) != "":
+				bigNamed++
 			}
 		}
 		if found {
@@ -724,20 +785,26 @@ func whoKnowsNoRole(fs *domain.FactSet, p *policy.Policy, prefix, repo string, l
 		why = append(why, count(n, "unclassified"))
 		fix = append(fix, "an unclassified path counts once stillhere.toml gives it a role")
 	}
+	// Both attributes off un-deny a path whatever pattern matches it
+	// (classification.md, .gitattributes): one off while the other is on
+	// leaves it denied.
+	const undeny = "-linguist-vendored -linguist-generated for it in .gitattributes, which un-denies a path whatever " +
+		"the deny list says"
 	if n := reasons[domain.SkipDeniedPath]; n > 0 {
 		why = append(why, count(n, "denied"))
 		switch {
 		case byPattern > 0 && byAttribute > 0:
 			fix = append(fix, "a denied path counts only once nothing denies it, since a deny wins over every role: "+
-				"the run's deny list denies some (remove the pattern from stillhere.toml's [paths] deny), and a "+
-				"linguist-vendored or linguist-generated attribute in .gitattributes the others (set it to false)")
+				"a pattern of the run's deny list denies some, so remove it from stillhere.toml's [paths] deny, and a "+
+				"linguist-vendored or linguist-generated attribute the others; or set "+undeny)
 		case byPattern > 0:
 			fix = append(fix, "a denied path counts only once nothing denies it, since a deny wins over every role: "+
-				"a pattern of the run's deny list matches it, so remove that pattern from stillhere.toml's [paths] deny")
+				"a pattern of the run's deny list matches it, so remove that pattern from stillhere.toml's [paths] deny, "+
+				"or set "+undeny)
 		default:
 			fix = append(fix, "a denied path counts only once nothing denies it, since a deny wins over every role: "+
 				"no pattern of the run's deny list matches it, so a linguist-vendored or linguist-generated attribute "+
-				"in .gitattributes does; set it to false for the path")
+				"in .gitattributes does; set "+undeny)
 		}
 	}
 	if n := reasons[domain.SkipGeneratedHeader]; n > 0 {
@@ -747,16 +814,32 @@ func whoKnowsNoRole(fs *domain.FactSet, p *policy.Policy, prefix, repo string, l
 	}
 	if n := reasons[domain.SkipTooBig]; n > 0 {
 		why = append(why, count(n, "too big"))
-		fix = append(fix, "a path too big to blame counts once stillhere.toml's [blame] max_bytes is larger than it")
+		switch bigNamed {
+		case n:
+			fix = append(fix, "a path too big to blame counts once stillhere.toml's [blame] max_bytes is larger than it")
+		case 0:
+			fix = append(fix, "a path too big to blame would have no role either, its name matching no role rule, so it "+
+				"counts only once stillhere.toml gives it a role and its [blame] max_bytes is larger than it")
+		default:
+			fix = append(fix, "a path too big to blame counts once stillhere.toml's [blame] max_bytes is larger than it, "+
+				"and one whose name matches no role rule only once it gives that one a role too")
+		}
 	}
 	where := "1 repository"
 	if holding > 1 {
 		where = fmt.Sprintf("%d repositories", holding)
 	}
+	policyFile := "'stillhere policy' prints the roles and the deny list"
+	if p != nil && p.Packaged() {
+		// No file holds the packaged policy, so there is nothing to edit
+		// until one is written out (wave 10's review).
+		policyFile = "'stillhere policy' prints the roles and the deny list; the run used the packaged policy, so write " +
+			"it out to change it, 'stillhere policy > stillhere.toml'"
+	}
 	return report.NoValuesCaveat(fmt.Sprintf("%q is in %s, but no path there has a role (%s), and %s counts only "+
 		"paths with one: this answer is empty because the policy leaves the path out, not because nobody knows it. "+
-		"'stillhere policy' prints the roles and the deny list; at the next scan, %s.",
-		prefix, where, strings.Join(why, ", "), report.MetricWhoKnows, strings.Join(fix, "; "))), true
+		"%s; at the next scan, %s.",
+		prefix, where, strings.Join(why, ", "), report.MetricWhoKnows, policyFile, strings.Join(fix, "; "))), true
 }
 
 // whoKnowsNoPathNames is how many repositories that hold the path a
