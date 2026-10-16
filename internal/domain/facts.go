@@ -101,11 +101,13 @@ type Commit struct {
 	Subject    string   // local only; never sent to an AI
 	// PatchID is git patch-id --stable of the commit's own -U0 -w patch
 	// against its first parent: what a cherry-pick or a backport keeps, so
-	// a commit with the patch of one an earlier landing holds is a copy
-	// (docs/metrics.md#change-facts-shared-by-durable1-and-simplifying1).
+	// a commit a merge brought with the patch of one an earlier landing
+	// holds, which is not its ancestor, is a copy (docs/metrics.md#units).
 	// "" for a merge, a shallow clone's boundary, a commit whose patch is
-	// empty (whitespace only, or a mode change) and a partial clone's, and
-	// in a run stored before it was collected.
+	// empty (whitespace only, under -w) and a partial clone's, and in a run
+	// stored before it was collected. A mode change or a rename alone has
+	// one, so the same mode change or rename of one path, made twice, gives
+	// two commits one id.
 	PatchID string
 }
 

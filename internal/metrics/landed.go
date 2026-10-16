@@ -110,9 +110,11 @@ func (landedV2) Definition() Definition {
 		Question: "Who wrote what landed in the window?",
 		Unit: "Landings per person, per repository, group and all, in [now - days, now): the landings that hold a non-merge " +
 			"commit credited (identity.Credit) to the person, a landing's own commit included, so a merged branch counts for " +
-			"its authors. A copy, a commit whose patch id (git patch-id --stable) a commit of an earlier landing in the " +
-			"history has, such as a cherry-pick a maintenance branch brings back, is credited to no one: its change was " +
-			"credited when it first landed. Detail: commits (their credited non-merge commits), lines_added and " +
+			"its authors. A copy, a commit a merge brought whose patch id (git patch-id --stable) a commit of an earlier " +
+			"landing in the history has, which is not its ancestor (git cherry's rule), such as a cherry-pick a maintenance " +
+			"branch brings back, is credited to no one: its change was credited when it first landed. A commit that makes " +
+			"the same change again on top of it, as a direct push always does, is new work. Detail: commits (their credited " +
+			"non-merge commits), lines_added and " +
 			"prod_lines_added (those commits' own numstat insertions on paths with a role, and the prod subset), merged " +
 			"(merge landings whose landing commit is credited to them; a merge's own diff is credited to no one), and " +
 			"landings_lines_unknown (landings whose lines are unknown, a partial clone's, which the lines leave out; the " +

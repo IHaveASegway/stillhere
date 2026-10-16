@@ -38,7 +38,8 @@ func (durableV1) Definition() Definition {
 			"path: those of a change git took for binary (its added lines are unknown), wherever HEAD holds them, and those of a " +
 			"file whose blame failed, or of a path the history renamed into one. A cluster is one person's counted commits in " +
 			"one landing and needs at least one added line in the ratio. Merge commits, ignore-revs commits, copies (a commit " +
-			"whose patch id a commit of an earlier landing has: its original is scored) and revert landings are excluded; a " +
+			"a merge brought whose patch id a commit of an earlier landing has, which is not its ancestor, as git cherry " +
+			"compares: its original is scored) and revert landings are excluded; a " +
 			"reverted landing stays and scores what blame gives it. Detail: reverted_landings.",
 		Ratio:       true,
 		Ranked:      true,

@@ -63,10 +63,10 @@ Repository cli · trunk @ ff67d76 · ok
     (8.5%), Person H 7,750 (8.3%)
   knowledge loss 61.8% (57,553 of 93,196 human-held lines) · AI-assisted 33.6% (202 of 602 landings)
   · bot share 0.2% (160 of 93,356 lines)
-  review coverage 78.5% (102 of 130 human changes, 90 days) · 19 pull requests merged without
-    another's review · 9 landings with no pull request in the GitHub data · 35 landings naming a
-    pull request the GitHub data lacks, left out (sync github again) · 55 reviewed only by an
-    approval with no comment
+  review coverage 78.8% (104 of 132 human changes, 90 days) · 19 pull requests merged without
+    another's review · 1 pull request merged into another branch, which a merge brought · 9 landings
+    with no pull request in the GitHub data · 11 landings naming a pull request the GitHub data
+    lacks, left out (sync github again) · 54 reviewed only by an approval with no comment
   majority-owner concentration: 6 authors (0 bots) hold the majority in half of the 384 files with a
   majority owner (not a truck factor)
 
@@ -80,7 +80,7 @@ Repository cli · trunk @ ff67d76 · ok
   …
   Still here at ff67d76: surviving non-blank lines (1,046 files blamed)
     person       prod lines  majority files  landings 365d  other roles
-    Person E          9,840              38            179  doc 270 · iac 5 · test 20,738
+    Person E          9,840              38             95  doc 270 · iac 5 · test 20,738
     Person F          9,838              44              0  doc 129 · iac 389 · test 12,…
     …
     459 more people (--all lists them)
@@ -90,7 +90,7 @@ How to read it:
 
 - **made of** and **still here** are surviving lines: what blame still credits to each person at HEAD. They reward tenure, so they describe the code, not the people.
 - **knowledge loss** is the share of people's surviving lines held by people with no landing and no review in 180 days. 61.8% says most of this code was written by people who have gone quiet here (not necessarily left). The **areas** say where: `pkg/` holds most of it.
-- **review coverage** needs GitHub data (step 8). Without it the line is absent, not 0. It is the share of human changes whose pull request someone other than its author reviewed before it merged. A change is a pull request (a rebase merge's landings together), a pull request merged into another branch, such as `stable`, which a merge brought, or a landing with no pull request. "With no pull request in the GitHub data" is what the data says, not proof of a direct push: here those 9 are security fixes merged from private forks. A landing after the last sync, or whose subject names a pull request (`Merge pull request #N`, `… (#N)`) the data lacks, is left out rather than counted as unreviewed, and the line says how many. Here 35 are, because this replica has a hole (an interrupted first sync): syncing again fills it. One naming a pull request the data holds, merged into another branch, is left out too, and no sync changes it. A merge that only brought another branch's pull requests, each counted on its own, is no change. `stillhere explain review_coverage --repo cli` lists every change with whether someone else reviewed it, the unreviewed first.
+- **review coverage** needs GitHub data (step 8). Without it the line is absent, not 0. It is the share of human changes whose pull request someone other than its author reviewed before it merged. A change is a pull request (a rebase merge's landings together), a pull request merged into another branch, such as `stable`, which a merge brought, or a landing with no pull request. "With no pull request in the GitHub data" is what the data says, not proof of a direct push: here those 9 are security fixes merged from private forks. A landing after the last sync, or whose subject names a pull request (`Merge pull request #N`, `… (#N)`) the data lacks, is left out rather than counted as unreviewed, and the line says how many. Here 11 are, because this replica has a hole (an interrupted first sync): syncing again fills it. One naming a pull request the data holds, merged into another branch, is left out too, and no sync changes it. A merge that only brought another branch's pull requests, each counted on its own, is no change. `stillhere explain review_coverage --repo cli` lists every change with whether someone else reviewed it, the unreviewed first.
 - **landings 365d** counts the landings that hold a commit of the person's, as the week table credits them: who wrote what landed, not who merged it, and a cherry-pick a maintenance branch brings back counts once. `stillhere explain landed --person "Person E" --days 365` lists them; the merges a person made are `merged_365d` in `--format json`.
 - **concentration** is how few people hold the majority of half the files that have a majority owner. It is not a truck factor.
 - **AI-assisted** counts landings with an agent's commit or co-author trailer: a lower bound, since editor completions leave no trace.
@@ -205,10 +205,11 @@ explain durable@1 · Person P · run 7 · as of 2026-10-15 UTC · policy <hash>
 ```sh
 stillhere explain review_coverage --repo cli      # every change of the 90 days: reviewed, not, or left out and why
 stillhere explain landed --repo cli --days 365    # the year's landings, with the copies each brought
-stillhere explain knowledge_loss --area cli:pkg   # a top-level directory's knowledge loss
+stillhere explain knowledge_loss --area cli:pkg   # a top-level directory's knowledge loss and its detail
+stillhere explain review_coverage --all-repos     # every repository's changes, for a run in no group
 ```
 
-`--repo` takes a repository as the report names it (or its key, or `GROUP/NAME`), `--group` a group's name, `--area` a repository and one of its top-level directories. `stillhere me --email you@example.com` is your own page: every value and rank the run holds about you.
+`--repo` takes a repository as the report names it (or its key, or `GROUP/NAME`), `--group` a group's name, `--area` a repository and one of its top-level directories, and `--all-repos` the whole run's own numbers. `explain` lists no lines behind knowledge loss yet ([#129](https://github.com/IHaveASegway/stillhere/issues/129)): `stillhere who-knows pkg` lists who holds the most of them and who landed or reviewed there in the last 90 days. `--days` reaches back as far as the history the run read, 365 days for a scan, and no further: what landed before it is unknown, not none. `stillhere me --email you@example.com` is your own page: every value and rank the run holds about you.
 
 ## 8. Reviews (optional, needs GitHub)
 

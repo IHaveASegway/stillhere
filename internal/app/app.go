@@ -134,12 +134,18 @@ type ExplainRequest struct {
 	// way, as the reports print them (FindScopes): a repository by name,
 	// key or GROUP/NAME; a group by name; an area as REPO:DIR, a
 	// repository and one of its top-level directories. The command line
-	// sends one of Person, Repo, Group and Area.
+	// sends one of Person, Repo, Group, Area and AllRepos.
 	Repo, Group, Area string
+	// AllRepos names the whole run's own numbers, over every repository
+	// (domain.SubjectAll): landed@2's totals and review_coverage@1, which a
+	// run of repositories named alone, in no group, holds only there.
+	AllRepos bool
 	// Days is landed@1's and landed@2's window in days, for the values
 	// and the landings listed alike, such as 365 for the year a still-here
 	// table's landings_365d counts; 0: the run's policy's [week] days. Any
-	// other metric's window is its definition's, so Days is refused there.
+	// other metric's window is its definition's, so Days is refused there,
+	// and so is a window longer than the history the run read, whose
+	// answer is unknown, not empty.
 	Days int
 }
 

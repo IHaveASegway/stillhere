@@ -1,6 +1,7 @@
 package app_test
 
 import (
+	"bytes"
 	"database/sql"
 	"errors"
 	"math"
@@ -276,7 +277,9 @@ var reviewMergeBackRepo = domain.ForgeRepo{ID: "R_mergeback", Key: "https://git.
 // metric credits a second time, and pull requests merged into it, which
 // review_coverage@1 counts as changes of their own, while a merge that
 // brought nothing else is no change, and a cherry-pick onto main naming a
-// pull request merged into stable is left out without sync advice.
+// pull request merged into stable is left out without sync advice. A
+// change made again on top of its twin, pushed to main or on a branch a
+// merge brought, is no copy (git cherry's rule).
 func reviewMergeBack(t *testing.T) {
 	repo := fixture.MergeBack(t)
 	setOrigin(t, repo, reviewMergeBackRepo.Key)
@@ -302,26 +305,33 @@ func reviewMergeBack(t *testing.T) {
 		"bea@example.com": {"2026-01-12T12:00:00Z": {4, 4}},  // C1
 		"dan@example.com": {"2026-01-26T12:00:00Z": {3, 3}},  // M1, S1 alone
 	})
+	// D2 and F1 have C8's and P5's patch ids, and descend from them: no
+	// copies, so each is a cluster of its own.
 	checkSimplifying(t, s, r.Key, table+", simplifying@1", map[string]simplifyingRow{
-		"bea@example.com": {"Bea Fix", 3, 0, 2, false, false},
+		"ann@example.com": {"Ann Maint", 5, 0, 2, false, false},
+		"bea@example.com": {"Bea Fix", 3, 0, 3, false, false},
 		"cal@example.com": {"Cal Release", 1, 0, 2, false, false},
-		"dan@example.com": {"Dan Stable", 0, 0, 2, false, false},
+		"dan@example.com": {"Dan Stable", 0, 0, 3, false, false},
 	}, map[string]map[string]cluster{
-		"bea@example.com": {"2026-08-03T12:00:00Z": {3, 0}, "2026-09-14T12:00:00Z": {}}, // C2 and C8; K2 in M2 is a copy
+		"ann@example.com": {"2026-09-16T12:00:00Z": {3, 0}, "2026-09-22T12:00:00Z": {2, 0}}, // D1, D3
+		"bea@example.com": {"2026-08-03T12:00:00Z": {3, 0}, "2026-09-14T12:00:00Z": {}, // C2 and C8; K2 in M2 is a copy
+			"2026-09-21T12:00:00Z": {}}, // D2, C8's file added back
 		"cal@example.com": {"2026-08-17T12:00:00Z": {}, "2026-09-08T12:00:00Z": {1, 0}}, // R1 in M2, C7
-		"dan@example.com": {"2026-08-17T12:00:00Z": {}, "2026-08-31T12:00:00Z": {}},     // P2 and P3 in M2, P5 in M3
+		"dan@example.com": {"2026-08-17T12:00:00Z": {}, "2026-08-31T12:00:00Z": {}, // P2 and P3 in M2, P5 in M3
+			"2026-09-28T12:00:00Z": {}}, // F1 in M4, P5's file added back
 	})
 
-	// landed@2 over the year, as explain --days 365 reads it: the eight
-	// landings, ten commits credited, the two copies credited to no one.
+	// landed@2 over the year, as explain --days 365 reads it: the twelve
+	// landings, fourteen commits credited, the two copies credited to no
+	// one; D2 and F1 credited to their authors.
 	year, err := app.Explain(t.Context(), s.read, app.ExplainRequest{RunID: s.run, Metric: landedV2,
 		Subject: domain.Subject{Kind: domain.SubjectRepo, Key: r.Key}, Days: 365})
 	if err != nil {
 		t.Fatalf("app.Explain(landed@2, repo, 365 days): %v", err)
 	}
 	if v, ok := repoValue(t, table+", landed@2 over 365 days", year, r.Key); ok &&
-		(v.Value != 8 || v.Detail["commits"] != 10 || v.Detail["copies"] != 2 || v.Detail["merged"] != 3) {
-		t.Errorf("%s: landed@2 over 365 days is %s, want 8 landings, commits 10, copies 2, merged 3", table, describe(v))
+		(v.Value != 12 || v.Detail["commits"] != 14 || v.Detail["copies"] != 2 || v.Detail["merged"] != 4) {
+		t.Errorf("%s: landed@2 over 365 days is %s, want 12 landings, commits 14, copies 2, merged 4", table, describe(v))
 	}
 	copies := map[string]int{}
 	for _, l := range year.Landings {
@@ -336,8 +346,14 @@ func reviewMergeBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("app.Explain(landed@2, Bea Fix, 365 days): %v", err)
 	}
-	if got := len(bea.Landings); got != 3 {
-		t.Errorf("%s: explain landed@2 --person 'Bea Fix' --days 365 lists %d landings, want 3: C1, C2 and C8", table, got)
+	if got := len(bea.Landings); got != 4 {
+		t.Errorf("%s: explain landed@2 --person 'Bea Fix' --days 365 lists %d landings, want 4: C1, C2, C8 and D2", table, got)
+	}
+	// A window longer than the history the run read is refused, not
+	// answered with nothing (an unknown read as a zero).
+	_, err = app.Explain(t.Context(), s.read, app.ExplainRequest{RunID: s.run, Metric: landedV2, Person: "Bea Fix", Days: 400})
+	if usage := (*domain.UsageError)(nil); !errors.As(err, &usage) || !strings.Contains(usage.Msg, "the run's history covers 365 days") {
+		t.Errorf("%s: explain landed@2 --days 400 gives %v, want a usage error saying the run's history covers 365 days", table, err)
 	}
 
 	// surviving@1's landings_365d follows landed@2's credit, merges apart.
@@ -346,13 +362,15 @@ func reviewMergeBack(t *testing.T) {
 		held[h.Email] = [2]int{h.Landings365d, h.Merged365d}
 	}
 	sameRows(t, table+", landings_365d and merged_365d", held, map[string][2]int{
-		"ann@example.com": {1, 3}, "bea@example.com": {3, 0}, "dan@example.com": {3, 0}, "cal@example.com": {2, 0},
+		"ann@example.com": {3, 4}, "bea@example.com": {4, 0}, "dan@example.com": {4, 0}, "cal@example.com": {2, 0},
 	})
 
 	// review_coverage@1 counts changes: #9, #4 (R1 is its own work; K2 a
-	// copy, #2 and #3 their own changes), #2, #3, #5 and #8; M3, #6, brought
-	// #5 alone, and C7 names #7, merged into stable.
-	want := reviewCoverageRow{Num: 4, Den: 6, Via: 3, ViaOther: 3, ApprovedOnly: 4, BranchMerges: 1, Elsewhere: 1, Repos: 1}
+	// copy, #2 and #3 their own changes), #2, #3, #5 and #8, and D1, D2, D3
+	// and M4 (F1 its own work) with no pull request; M3, #6, brought #5
+	// alone, and C7 names #7, merged into stable.
+	want := reviewCoverageRow{Num: 4, Den: 10, Via: 3, ViaOther: 3, Direct: 4, ApprovedOnly: 4, BranchMerges: 1, Elsewhere: 1,
+		Repos: 1}
 	reviewCheckCoverage(t, table+", review_coverage@1", s, map[string]reviewCoverageRow{"repo:" + r.Key: want},
 		map[string]reviewCoverageRow{"all:": want})
 	e := s.explain(t, domain.MetricID{Name: "review_coverage", Version: 1}, domain.Subject{Kind: domain.SubjectRepo, Key: r.Key})
@@ -367,9 +385,32 @@ func reviewMergeBack(t *testing.T) {
 	sameRows(t, table+", explain review_coverage@1 --repo", outcomes, map[string]string{
 		"#9": "reviewed", "#4": "unreviewed", "#2": "reviewed", "#3": "unreviewed", "#5": "reviewed",
 		"#6": "branch_merge", shortSHA(row(time.September, 8)): "named_elsewhere", "#8": "reviewed",
+		shortSHA(row(time.September, 16)): "direct", shortSHA(row(time.September, 21)): "direct",
+		shortSHA(row(time.September, 22)): "direct", shortSHA(row(time.September, 28)): "direct",
 	})
 	if len(e.Coverage) > 0 && e.Coverage[0].Outcome != "unreviewed" {
 		t.Errorf("%s: explain lists %s first, want the changes no one else reviewed first", table, e.Coverage[0].Outcome)
+	}
+	// A change with no pull request in the GitHub data is not proof of a
+	// push (report-json.md), so no rendering says "pushed directly"; and
+	// text, whose columns share 100 characters, prints each outcome whole,
+	// as a code its legend explains, so a pull request merged elsewhere,
+	// which no sync changes, reads apart from one the data lacks.
+	out := render(t, e)
+	for name, b := range map[string][]byte{"text": out.text, "Markdown": out.markdown, "JSON": out.json} {
+		if bytes.Contains(b, []byte("pushed directly")) {
+			t.Errorf("%s: explain review_coverage@1 in %s says \"pushed directly\" of a change with no pull request in the data", table, name)
+		}
+	}
+	var all bytes.Buffer
+	if err := report.Text(&all, e, report.AllRows()); err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"left out: #7 elsewhere", "no PR in data", "not reviewed", "approved by 1",
+		"left out: merge", "left out: #N elsewhere: names pull request #N, which merged into another branch"} {
+		if !bytes.Contains(all.Bytes(), []byte(want)) {
+			t.Errorf("%s: explain review_coverage@1's text with --all lacks %q:\n%s", table, want, all.Bytes())
+		}
 	}
 }
 

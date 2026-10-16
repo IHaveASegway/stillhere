@@ -13,10 +13,11 @@ func (e *env) explainCommand() *cobra.Command {
 	var (
 		run                       int64
 		person, repo, group, area string
+		allRepos                  bool
 		days                      int
 	)
 	cmd := &cobra.Command{
-		Use:   "explain METRIC (--person WHO | --repo NAME | --group NAME | --area REPO:DIR)",
+		Use:   "explain METRIC (--person WHO | --repo NAME | --group NAME | --area REPO:DIR | --all-repos) [--days N]",
 		Short: "Trace a value of a metric to the changes behind it",
 		Long: `explain shows the facts behind one subject's value of one metric in a stored
 run, by default the latest complete or partial scan: the changes a ranked
@@ -34,15 +35,20 @@ The subject is one of:
                      people of one name are refused, listed with their ids
   --repo NAME        a repository's own numbers, named as the report names
                      it, by its key, or as GROUP/NAME (review_coverage@1,
-                     landed@2, knowledge_loss@1, knowledge_concentration@1)
-  --group NAME       a group's own numbers
+                     landed@2, surviving@1, ai_assisted@1, knowledge_loss@1,
+                     knowledge_concentration@1)
+  --group NAME       a group's own numbers (the same metrics)
   --area REPO:DIR    a top-level directory of a repository, such as
                      click:src (knowledge_loss@1, knowledge_concentration@1;
                      who-knows answers any path)
+  --all-repos        the whole run's own numbers, over every repository
+                     (review_coverage@1, landed@2): the only ones a run of
+                     repositories named alone, in no group, holds
 
 --days N sets landed@1's and landed@2's window, for the values and the
 landings listed alike: --days 365 traces a still-here table's
-"landings 365d".`,
+"landings 365d". It is at most the history the run read, 365 days for a
+scan: what landed before it is unknown, not none.`,
 		Args: usageArgs(cobra.ExactArgs(1)),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id, err := domain.ParseMetricID(args[0])
@@ -58,17 +64,20 @@ landings listed alike: --days 365 traces a still-here table's
 					named++
 				}
 			}
+			if allRepos {
+				named++
+			}
 			switch {
 			case named == 0:
-				return usagef("explain needs a subject: --person WHO, --repo NAME, --group NAME or --area REPO:DIR "+
-					"(see '%s --help')", cmd.CommandPath())
+				return usagef("explain needs a subject: --person WHO, --repo NAME, --group NAME, --area REPO:DIR or "+
+					"--all-repos (see '%s --help')", cmd.CommandPath())
 			case named > 1:
-				return usagef("explain answers about one subject: pass one of --person, --repo, --group and --area")
+				return usagef("explain answers about one subject: pass one of --person, --repo, --group, --area and --all-repos")
 			case cmd.Flags().Changed("days") && days < 1:
 				return usagef("--days %d: want at least 1", days)
 			}
 			req := app.ExplainRequest{RunID: run, Metric: id, Person: person, Repo: repo, Group: group, Area: area,
-				Days: days}
+				AllRepos: allRepos, Days: days}
 			return e.with(cmd.Context(), need{store: true}, func(d app.Deps) error {
 				return e.printAnswer(app.Explain(cmd.Context(), d, req))
 			})
@@ -78,7 +87,9 @@ landings listed alike: --days 365 traces a still-here table's
 	cmd.Flags().StringVar(&repo, "repo", "", "a repository's own numbers: its name, key, or GROUP/NAME")
 	cmd.Flags().StringVar(&group, "group", "", "a group's own numbers: its name")
 	cmd.Flags().StringVar(&area, "area", "", "a top-level directory of a repository: REPO:DIR")
-	cmd.Flags().IntVar(&days, "days", 0, "landed@1's and landed@2's window in days (default: the run's policy's [week] days)")
+	cmd.Flags().BoolVar(&allRepos, "all-repos", false, "the whole run's own numbers, over every repository")
+	cmd.Flags().IntVar(&days, "days", 0, "landed@1's and landed@2's window in days, at most the run's history "+
+		"(default: the run's policy's [week] days)")
 	addRunFlag(cmd, &run)
 	e.addAllFlag(cmd)
 	return cmd

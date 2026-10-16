@@ -268,7 +268,10 @@ func (reviewCoverageV1) compute(v *view) ([]domain.MetricValue, error) {
 // repository, a group or the whole run (#109's promise, for a value about
 // code): every change of the window in the scope's repositories with GitHub
 // data, with its outcome, those in Den first, the unreviewed ones before
-// the reviewed. A person has no value of it, so their trace is empty.
+// the reviewed, across repositories (then by repository and time), so the
+// first page of a group's list is its unreviewed changes, whichever
+// repository holds them. A person has no value of it, so their trace is
+// empty.
 func (reviewCoverageV1) Trace(in *Input, subject domain.Subject) (domain.Trace, error) {
 	v, err := newView(in, nil)
 	if err != nil {
@@ -296,7 +299,7 @@ func (reviewCoverageV1) Trace(in *Input, subject domain.Subject) (domain.Trace, 
 		}
 	}
 	slices.SortFunc(t.Changes, func(a, b domain.TracedChange) int {
-		return cmp.Or(cmp.Compare(a.Repo, b.Repo), cmp.Compare(coverageOrder(a.Outcome), coverageOrder(b.Outcome)),
+		return cmp.Or(cmp.Compare(coverageOrder(a.Outcome), coverageOrder(b.Outcome)), cmp.Compare(a.Repo, b.Repo),
 			a.Time.Compare(b.Time), cmp.Compare(a.Landing, b.Landing), cmp.Compare(a.Pull, b.Pull))
 	})
 	return t, nil

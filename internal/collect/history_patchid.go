@@ -19,8 +19,9 @@ import (
 // that carries cherry-picks of fixes already on the default branch, merged
 // back into it, brings each of those changes onto the default branch a
 // second time; the metrics read the patch ids to see that
-// (docs/metrics.md#change-facts-shared-by-durable1-and-simplifying1). git
-// cherry and git log --cherry-mark compare commits the same way.
+// (docs/metrics.md#units), by git cherry's rule: a commit is a copy of one
+// on the other side of a fork, never of its own ancestor. The id is not git
+// cherry's, though.
 //
 // The fingerprint is git patch-id --stable over the own-patch query
 // (ownPatchArgs): the -U0 -w patch that readPatches counts lines in. With
@@ -46,8 +47,9 @@ import (
 // reads. Its header is the commit's SHA alone (%H), the line patch-id
 // takes for the start of a commit; no message is printed, so no line of
 // one can be taken for it. A commit whose patch is empty, a whitespace-only
-// change under -w or a mode change alone, gets no id from patch-id, and
-// keeps "".
+// change under -w, gets no id from patch-id, and keeps "". A mode change
+// or a rename alone prints a diff header, which patch-id hashes, so it
+// gets an id (verified on 2.50.1).
 func (h *historyRun) readPatchIDs(ctx context.Context) error {
 	want := h.ownPatchCommits()
 	if len(want) == 0 {

@@ -217,9 +217,11 @@ gives it.
    `branch_merges` (merges that only brought another branch's pull requests)
    and `copies` because they hold no work of their own. Only `unmatched`
    means a sync may help. `explain(metric: "review_coverage", subject: R,
-   subject_kind: "repo")` (or a group) lists every change of the window,
+   subject_kind: "repo")` (or a group, or `subject_kind: "all"` with no
+   subject for every repository) lists every change of the window,
    `coverage`, the unreviewed first: name the pull requests no one else
-   reviewed and who merged them, rather than a bare share. Set it beside
+   reviewed, rather than a bare share. `coverage` holds no merger, and the
+   metric is never about a person, so do not name who merged them. Set it beside
    `reviews_given`'s table: one person giving most reviews, or merging most
    landings, is a gate, which no ownership number shows.
 7. **Identities.** `identity_candidates(scope: G, limit: 100)`, following

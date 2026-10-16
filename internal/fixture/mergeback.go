@@ -14,7 +14,9 @@ import (
 // merges bring changes that are copies of earlier landings' (copies by
 // patch id), pull requests merged into another branch, and a merge whose
 // every commit is one of those; and a cherry-pick onto main names a pull
-// request merged into stable. None of the other fixtures holds a merge-back,
+// request merged into stable. Last, two changes are made again on top of
+// their twins, one pushed to main and one on a branch merged into it, which
+// are no copies: git cherry's rule. None of the other fixtures holds a merge-back,
 // and adding one would move their oracles, so the guard is a repository of
 // its own, as the regression guards in guards.go are.
 
@@ -25,8 +27,9 @@ const mergeBackName = "merge-back"
 // temporary directory and returns its absolute path: a work tree named
 // "merge-back", on branch main, whose branch stable carries cherry-picks of
 // two of main's fixes, a push of its own and three pull requests' squashes,
-// and is merged into main three times. It stops the test with t.Fatal if
-// the build fails.
+// and is merged into main three times, and whose branch again adds back a
+// file main removed, merged once. It stops the test with t.Fatal if the
+// build fails.
 func MergeBack(t testing.TB) string {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), mergeBackName)
@@ -135,4 +138,27 @@ func mergeBackHistory(b *builder) {
 	b.rowAs(noon(2026, time.September, 14), bea, noon(2026, time.September, 14), github) // C8: #8's squash on main
 	b.write("extra.py", numbered("extra", 3))
 	b.commit("feat: add extra.py (#8)")
+
+	// Changes made again on top of their twins, which are no copies: each
+	// descends from the commit whose patch id it has.
+	b.row(noon(2026, time.September, 16), ann) // D1: pushed to main, removes C8's file, no revert
+	b.git("rm", "--quiet", "--", "extra.py")
+	b.commit("chore: drop extra.py")
+
+	b.row(noon(2026, time.September, 21), bea) // D2: pushed to main, adds C8's file back, C8's patch id
+	b.write("extra.py", numbered("extra", 3))
+	b.commit("feat: add extra.py back")
+
+	b.row(noon(2026, time.September, 22), ann) // D3: pushed to main, removes P5's file
+	b.git("rm", "--quiet", "--", "five.py")
+	b.commit("chore: drop five.py")
+
+	b.git("switch", "--quiet", "--create", "again")
+	b.row(noon(2026, time.September, 23), dan) // F1: on branch again, made at D3, adds P5's file back, P5's patch id
+	b.write("five.py", numbered("five", 2))
+	b.commit("fix: add five.py back")
+
+	b.git("switch", "--quiet", "main")
+	b.row(noon(2026, time.September, 28), ann) // M4: again merged into main, no pull request: brings F1
+	b.git("merge", "--quiet", "--no-ff", "--no-edit", "--message", "Merge branch 'again'", "again")
 }

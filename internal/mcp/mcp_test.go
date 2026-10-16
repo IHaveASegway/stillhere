@@ -498,6 +498,32 @@ func TestMCPTools(t *testing.T) {
 			strings.Contains(text, "stillhere metrics") {
 			t.Errorf("explain(durable@2) was refused with %q, want the metrics tool named, not the command", text)
 		}
+		// Wave 10's dead ends: days on a metric with a window of its own is
+		// refused in words that name no command-line flag; a window past the
+		// 365 days the run's history covers is refused by the schema, not
+		// answered as if nothing landed then; an area that holds nothing
+		// points to who_knows; and the whole run's own numbers (subject_kind
+		// all) are explained like a repository's.
+		if text := refused(t, "explain", map[string]any{"metric": "knowledge_loss", "subject": "fixture", "subject_kind": "repo",
+			"days": 30}); !strings.Contains(text, "a window in days is landed@1's and landed@2's alone") || strings.Contains(text, "--") {
+			t.Errorf("explain(knowledge_loss, days 30) was refused with %q, want the window explained and no flag named", text)
+		}
+		if text := refused(t, "explain", map[string]any{"metric": "landed", "subject": "Bob Builder", "days": 400}); !strings.Contains(text, "days") ||
+			!strings.Contains(text, "365") {
+			t.Errorf("explain(landed, Bob, days 400) was refused with %q, want days and its maximum, 365, named", text)
+		}
+		if text := refused(t, "explain", map[string]any{"metric": "knowledge_loss", "subject": "fixture", "subject_kind": "area",
+			"path": "nosuchdir"}); !strings.Contains(text, "who_knows(path, repo) answers any path") || !strings.Contains(text, `"fixture"`) ||
+			strings.Contains(text, "stillhere") || strings.Contains(text, "git.example") {
+			t.Errorf("explain(knowledge_loss, area fixture:nosuchdir) was refused with %q, want the repository by name and who_knows", text)
+		}
+		var all explainOut
+		decode(t, ask(t, "explain", map[string]any{"metric": "landed", "subject_kind": "all"}), &all)
+		if len(all.Values) == 0 || all.Subject.Kind != domain.SubjectAll || len(all.Landings) == 0 {
+			t.Errorf("explain(landed, all) gave subject %+v, %d values and %d landings, want the whole run's totals and their landings",
+				all.Subject, len(all.Values), len(all.Landings))
+		}
+		refused(t, "explain", map[string]any{"metric": "landed", "subject": "fixture", "subject_kind": "all"})
 	})
 
 	t.Run("highlights", func(t *testing.T) {

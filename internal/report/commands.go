@@ -65,12 +65,13 @@ func (CLI) Report() string { return "'stillhere report'" }
 func (CLI) Ranks(metric string) string { return "'stillhere report --rank " + metric + "'" }
 
 // Explain is the explain command about the kinds among kinds it takes a
-// flag for (wave 10): a person, a repository, a group or an area; "" for
-// none, the whole run's own numbers, which the report shows.
+// flag for (wave 10): a person, a repository, a group, an area or every
+// repository, the whole run's own numbers; "" for none.
 func (CLI) Explain(metric string, kinds []string) string {
 	var flags []string
 	for _, k := range []struct{ kind, flag string }{{domain.SubjectPerson, "--person WHO"},
-		{domain.SubjectRepo, "--repo NAME"}, {domain.SubjectGroup, "--group NAME"}, {domain.SubjectArea, "--area REPO:DIR"}} {
+		{domain.SubjectRepo, "--repo NAME"}, {domain.SubjectGroup, "--group NAME"}, {domain.SubjectArea, "--area REPO:DIR"},
+		{domain.SubjectAll, "--all-repos"}} {
 		if slices.Contains(kinds, k.kind) {
 			flags = append(flags, k.flag)
 		}
