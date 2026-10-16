@@ -16,7 +16,6 @@ import (
 	"github.com/IHaveASegway/stillhere/internal/domain"
 	"github.com/IHaveASegway/stillhere/internal/fixture"
 	"github.com/IHaveASegway/stillhere/internal/gitcli"
-	"github.com/IHaveASegway/stillhere/internal/metrics"
 	"github.com/IHaveASegway/stillhere/internal/rank"
 	"github.com/IHaveASegway/stillhere/internal/report"
 	"github.com/IHaveASegway/stillhere/internal/sqlite"
@@ -684,6 +683,14 @@ func reviewScores(t *testing.T, table string, v *report.Validation, commits map[
 	if c := byChange[row(time.October, 6, 15)]; c.Label != "noise" || c.Pull != nil || c.Added+c.Removed == 0 {
 		t.Errorf("%s: --scores row 11 is %+v, want noise, no pull request, its lines", table, c)
 	}
+	// Size alone, derived by hand from the numstat of each labelled
+	// change's landings on paths with a role, blank lines included (SPEC's
+	// validate section): durable@1's meaningful rows 1 (10) and 5 (2)
+	// against routine rows 3 (4) and 7 (5) win 2 of 4 pairs;
+	// simplifying@1's #3 (9) and #4 (2) against #6 (1), row 13 (3) and row
+	// 14 (1) win 5 of 6; reviews_given@1's #3 and #4 both beat #6 (1). Each
+	// metric's n is under 50, so its verdict cannot tell yet.
+	sizeAlone := map[string]float64{durable.String(): 0.5, simplifying.String(): 5.0 / 6, reviewsGiven.String(): 1}
 	for _, a := range v.Metrics {
 		var pos, neg, sizePos, sizeNeg []float64
 		for _, c := range v.Scores {
@@ -703,25 +710,46 @@ func reviewScores(t *testing.T, table string, v *report.Validation, commits map[
 				a.Metric, deref(a.AUC), deref(a.SizeAUC), deref(a.SizeLo), deref(a.SizeHi), len(pos), len(neg),
 				rank.AUC(pos, neg), rank.AUC(sizePos, sizeNeg))
 		}
+		if want, ok := sizeAlone[a.Metric]; !ok || a.SizeAUC == nil || math.Abs(*a.SizeAUC-want) > 1e-12 {
+			t.Errorf("%s: %s's size alone is %v, want %v, derived by hand", table, a.Metric, deref(a.SizeAUC), want)
+		}
+		if a.SizeDiffLo == nil || a.SizeDiffHi == nil || *a.SizeDiffLo > *a.AUC-*a.SizeAUC || *a.SizeDiffHi < *a.AUC-*a.SizeAUC ||
+			a.Verdict != rank.VerdictTooFew {
+			t.Errorf("%s: %s's paired interval of AUC less size alone is %v–%v around %v, verdict %q; want one that holds the difference, and %q",
+				table, a.Metric, deref(a.SizeDiffLo), deref(a.SizeDiffHi), *a.AUC-*a.SizeAUC, a.Verdict, rank.VerdictTooFew)
+		}
 	}
 
-	// One reference, two places: the definition's note, which every
-	// validity caveat prints, and metrics.md's Validity line.
-	doc, err := os.ReadFile(filepath.Join("..", "..", "docs", "metrics.md"))
-	if err != nil {
-		t.Fatal(err)
+	// One reference, the places that print it: each ranked metric's
+	// validity note (report.ValidityNote of its definition), which every
+	// validity caveat says, its Validity line in docs/metrics.md, and
+	// report-json.md's example of a rank table's caveat, durable@1's.
+	readDoc := func(path ...string) string {
+		t.Helper()
+		b, err := os.ReadFile(filepath.Join(append([]string{"..", ".."}, path...)...))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
 	}
-	for _, m := range metrics.All() {
-		def := m.Definition()
-		if _, ranked := m.(metrics.Ranked); !ranked {
+	doc, jsonDoc := readDoc("docs", "metrics.md"), readDoc("docs", "spec", "report-json.md")
+	for _, mi := range app.Metrics().Metrics {
+		if !mi.Ranked {
 			continue
 		}
-		_, ref, ok := strings.Cut(def.Validity, "Reference (model panel")
-		section, _, _ := strings.Cut(sectionAfter(string(doc), "\n### "+def.ID.String()), "\n### ")
+		if mi.Reference == nil {
+			t.Errorf("%s: %s has no reference result", table, mi.ID)
+			continue
+		}
+		ref := "Reference (" + mi.Reference.Source + "): " + mi.Reference.Result + ". " + mi.Reference.About
+		section, _, _ := strings.Cut(sectionAfter(doc, "\n### "+mi.ID), "\n### ")
 		_, line, _ := strings.Cut(section, "- **Validity**:")
 		line, _, _ = strings.Cut(line, "\n")
-		if !ok || !strings.Contains(line, "Reference (model panel"+ref) {
-			t.Errorf("%s: docs/metrics.md's Validity line of %s does not hold its definition's reference %q", table, def.ID, ref)
+		if !strings.Contains(line, ref) {
+			t.Errorf("%s: docs/metrics.md's Validity line of %s does not hold its definition's reference %q", table, mi.ID, ref)
+		}
+		if note := report.ValidityNote(mi); mi.ID == durable.String() && !strings.Contains(jsonDoc, `"message": "Validity: `+note+`"`) {
+			t.Errorf("%s: report-json.md's example rank table does not carry durable@1's validity note %q", table, note)
 		}
 	}
 }

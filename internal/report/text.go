@@ -143,8 +143,12 @@ func repoSummary(m *Model, esc func(string) string) string {
 // Standing reports whether a caveat is one the top of a report already
 // states for every section: nested sections leave it out of text and
 // Markdown, and MCP's repository summaries out of their codes, while JSON
-// keeps it so each section reads on its own.
-func (c Caveat) Standing() bool { return c.Code == codeNotFetched || c.Code == codeAILowerBound }
+// keeps it so each section reads on its own. A rank table's validity note
+// is one: the report's caveats hold every rank table's (runCaveats), and
+// no other nested section carries one.
+func (c Caveat) Standing() bool {
+	return c.Code == codeNotFetched || c.Code == codeAILowerBound || c.Code == codeValidity
+}
 
 func textCaveats(p *printer, indent, title string, cs []Caveat, nested bool) {
 	var shown []Caveat

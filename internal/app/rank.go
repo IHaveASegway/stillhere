@@ -179,11 +179,16 @@ func rankAll(in *metrics.Input, ms []rankedMetric, scopes []domain.Scope, stored
 	return sets, all, nil
 }
 
-// metricInfo is a metric's published definition as reports print it.
+// metricInfo is a metric's published definition as reports print it, its
+// reference result as the verdict its numbers give.
 func metricInfo(def metrics.Definition) report.MetricInfo {
-	return report.MetricInfo{
+	mi := report.MetricInfo{
 		ID: def.ID.String(), Question: def.Question, Unit: def.Unit, Ranked: def.Ranked, Forge: def.Forge, Ratio: def.Ratio,
 		Eligibility: def.Eligibility, BlindSpots: def.BlindSpots, Gaming: def.Gaming,
 		Oracle: def.Oracle, Validity: def.Validity,
 	}
+	if r := def.Reference; r != nil {
+		mi.Reference = report.NewReference(r.Source, r.About, r.Separation)
+	}
+	return mi
 }

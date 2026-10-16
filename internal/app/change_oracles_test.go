@@ -923,6 +923,24 @@ func checkRankTable(t *testing.T, table string, m *report.Model, metric domain.M
 		}
 	}
 	sameRows(t, table+", rank table", got, want)
+
+	// The table's validity note is in its JSON, so the table reads on its
+	// own, and in the report's caveats, which text says once for every
+	// table rather than under each.
+	if !slices.ContainsFunc(rt.Caveats, func(c report.Caveat) bool {
+		return c.Code == "validity" && strings.Contains(c.Message, "Reference (model panel")
+	}) || !slices.ContainsFunc(m.Caveats, func(c report.Caveat) bool {
+		return c.Code == "validity" && strings.Contains(c.Message, metric.String())
+	}) {
+		t.Errorf("%s: the rank table carries %v and the report %v, want %s's validity note in both", table, rt.Caveats, m.Caveats, metric)
+	}
+	var text bytes.Buffer
+	if err := report.Text(&text, m); err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(text.String(), "- Validity"); n != 1 {
+		t.Errorf("%s: the report's text says the ranked metrics' validity %d times, want once, at its top", table, n)
+	}
 }
 
 // repoValue returns e's one value in the scope of repository key.

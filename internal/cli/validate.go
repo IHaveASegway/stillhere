@@ -28,17 +28,22 @@ counts once: each labeller's last row for it, and over several labellers the
 label most of them gave; --labeller NAME scores one labeller's labels alone.
 Beside each AUC, "size alone" is the AUC of change size (lines added and
 removed) over the same changes: a metric that does not beat it says no more
-than that big changes matter.
+than that big changes matter. Under the table, each metric's verdict says what
+its numbers mean, in a Validity line's words (docs/metrics.md#validity-checks):
+whether it separates meaningful from routine changes, and whether it beats
+change size, by a paired comparison of the two AUCs on the same changes.
 
-The bar is an AUC of at least 0.7 on at least 50 scored labels. Labels that
-clear it are evidence about the code they judge; the beta mark on stillhere's
-ranks changes only when a metric's published Validity line does.
+The bar is an AUC of at least 0.7 on at least 50 scored labels; it asks nothing
+of change size, which the verdict answers. Labels that clear it are evidence
+about the code they judge; the beta mark on stillhere's ranks changes only when
+a metric's published Validity line does.
 
 --scores writes each labelled change's label, size and score by each ranked
 metric as a CSV on stdout (the answer goes to stderr), or adds them to the JSON
 with --format json: the numbers each AUC is computed from, so the AUC can be
 recomputed, or set against the change's size on exactly the changes each
-metric scored. Keep the file where the labels are: it judges the same work.
+metric scored. Keep the file where the labels are, outside your repositories:
+it judges the same work.
 
 'stillhere label' makes the file. The labels judge colleagues' work, so it is
 kept beside the facts database ($STILLHERE_HOME/labels.csv), outside every

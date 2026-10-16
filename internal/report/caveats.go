@@ -288,7 +288,14 @@ func (b *builder) runCaveats(m *Model) []Caveat {
 	if aiShown(m) {
 		out = append(out, aiLowerBound())
 	}
-	return out
+	// The rank tables' validity, once for the report, which text and
+	// Markdown print instead of a note under each table (three
+	// metrics' tables in four scopes printed twelve).
+	var ranked []MetricInfo
+	for _, rs := range b.in.Ranks {
+		ranked = append(ranked, rs.Metric)
+	}
+	return append(out, ValidityCaveats(ranked...)...)
 }
 
 func aiShown(m *Model) bool {

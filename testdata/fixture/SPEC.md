@@ -1,6 +1,6 @@
 # Fixture repository and oracles
 
-Status: carried over from the 2026-10-07 plan, change oracles and the sibling fixture added 2026-10-14, regression guards added 2026-10-14 (#13), the binary-file guard 2026-10-14 (#54), with a rename History does not collect, a vendored file and a later text change added by its review 2026-10-15, its text twins and the main fixture as it stood at an earlier `--now` added 2026-10-15 (#70), `landed@2`, knowledge under any path, `review_coverage@1` with a seventh pull request, the binary-changes caveat and the partial and shallow clones added 2026-10-15 (#108, #107, #64, #74), the week oracle moved to `landed@2` and explain traces and roleless paths added 2026-10-15 (#108, #109, PF-8), an agent's pull request, a replica's hole and a stale sync in the merge-methods guard and a week a shallow clone does not cover added 2026-10-15 by the review of #116 (#107, #101, #74) · the week, still-here and change oracles run as `go test` in `internal/app` (`TestWeekOracle`, `TestStillHereOracle`, `TestChangeOracles`, `TestDeterminism`, #13), web escaping in M3
+Status: carried over from the 2026-10-07 plan, change oracles and the sibling fixture added 2026-10-14, regression guards added 2026-10-14 (#13), the binary-file guard 2026-10-14 (#54), with a rename History does not collect, a vendored file and a later text change added by its review 2026-10-15, its text twins and the main fixture as it stood at an earlier `--now` added 2026-10-15 (#70), `landed@2`, knowledge under any path, `review_coverage@1` with a seventh pull request, the binary-changes caveat and the partial and shallow clones added 2026-10-15 (#108, #107, #64, #74), the week oracle moved to `landed@2` and explain traces and roleless paths added 2026-10-15 (#108, #109, PF-8), an agent's pull request, a replica's hole and a stale sync in the merge-methods guard and a week a shallow clone does not cover added 2026-10-15 by the review of #116 (#107, #101, #74), validate's per-change scores, size alone and verdicts and `label`'s whole rebase merge added 2026-10-16 by the review of #119 · the week, still-here and change oracles run as `go test` in `internal/app` (`TestWeekOracle`, `TestStillHereOracle`, `TestChangeOracles`, `TestDeterminism`, #13), web escaping in M3
 
 `internal/fixture` builds this repository (`fixture.Main`), the [sibling fixture](#sibling-fixture) (`fixture.Sibling`), the [regression guards](#regression-guards-testchangeoracles)' three repositories (`fixture.Backdated`, `fixture.MergedRevert`, `fixture.Binary`), the [merge-methods guard](#merge-methods-fixturemergemethods) (`fixture.MergeMethods`) and the [discovery fixture](#discovery-fixture-testdiscover)'s repositories in temporary directories for `go test`. Every number below is an oracle: a change that moves one fails CI. Each oracle exists so that one specific wrong implementation fails, and that implementation is named next to it.
 
@@ -1153,25 +1153,25 @@ Without the replica, the main fixture has no `review_coverage@1` value: its cove
 
 ### validate over the same replica
 
-`stillhere validate` (#77) scores each ranked metric's measure of a labelled change at the metric's own grain ([metrics.md](../../docs/metrics.md#validity-checks)): `durable@1` and `simplifying@1` by the change's landings' clusters, `reviews_given@1` by its pull request: the people other than its author, bots aside, who reviewed it at any time before `Now`, for a change that landed in `[2026-07-09, 2026-10-07)`. A pull request no one else reviewed scores 0; a landing no pull request of the replica landed is not scored, nor is a change that landed outside the window, whenever its reviews were. A change counts once: each labeller's last row for it, and over several labellers the label most of them gave. Derived by hand from the replica above and [Change facts per landing](#change-facts-per-landing-main-fixture):
+`stillhere validate` (#77) scores each ranked metric's measure of a labelled change at the metric's own grain ([metrics.md](../../docs/metrics.md#validity-checks)): `durable@1` and `simplifying@1` by the change's landings' clusters, `reviews_given@1` by its pull request: the people other than its author, bots aside, who reviewed it at any time before `Now`, for a change that landed in `[2026-07-09, 2026-10-07)`. A pull request no one else reviewed scores 0; a landing no pull request of the replica landed is not scored, nor is a change that landed outside the window, whenever its reviews were. A change counts once: each labeller's last row for it, and over several labellers the label most of them gave. A change's size is the numstat lines, blank ones included, of its landings' own diffs (a merge's first-parent diff) on paths that received a role, added plus removed (`metrics.Change`), which `validate`'s "size alone" ranks. Derived by hand from the replica above, the [History](#history) and [Change facts per landing](#change-facts-per-landing-main-fixture):
 
-| Labels row (labeller lead) | Change | Label | `durable@1` | `simplifying@1` | `reviews_given@1` |
-| --- | --- | --- | --- | --- | --- |
-| `#3` | row 8 (#3, Bob's merge) | meaningful | not scored (outside the cohort) | 0 (Cara's commits remove nothing) | 1 (bob) |
-| `pr:4` | row 9 (#4) | meaningful | not scored | 0 | 3 (frank on 06-15, before the window, which selects the change and not its reviews; cara; `@zoe`. The copilot reviewer is a bot, bob the author) |
-| `acme/fixture#6` | row 12 (#6) | routine | not scored | 0 | 1 (`@zoe`) |
-| row 13's SHA | row 13, Frank's, no pull request | routine | not scored | 0 | not scored: no pull request |
-| row 14's first 7 digits | row 14, Ada's, no pull request | routine | not scored | 0 | not scored: no pull request |
-| row 11's SHA | row 11, Dana's | noise | in no AUC | | |
-| row 1's SHA | row 1, Ada's init | meaningful | 7 / 7 = 1 | not scored | not scored |
-| row 3's SHA | row 3, Bob's move | routine | 0 / 2 = 0 | not scored | not scored |
-| `#1` | row 5 (#1, Gina's) | meaningful | 2 / 2 = 1 | not scored | not scored: merged 01-06, before the window, although hank reviewed it |
-| row 7's SHA | row 7, Bob's | routine | 5 / 5 = 1 | not scored | not scored |
-| `#9` | no pull request 9 | meaningful | unmatched | | |
-| row 16's SHA | row 16 | skip | no label | | |
-| row 8's SHA | row 8 again | meaningful | the same change as `#3`: counted once | | |
+| Labels row (labeller lead) | Change | Label | Size | `durable@1` | `simplifying@1` | `reviews_given@1` |
+| --- | --- | --- | --- | --- | --- | --- |
+| `#3` | row 8 (#3, Bob's merge) | meaningful | 9 (`side.py` 2, `side_week.py` 7) | not scored (outside the cohort) | 0 (Cara's commits remove nothing) | 1 (bob) |
+| `pr:4` | row 9 (#4) | meaningful | 2 | not scored | 0 | 3 (frank on 06-15, before the window, which selects the change and not its reviews; cara; `@zoe`. The copilot reviewer is a bot, bob the author) |
+| `acme/fixture#6` | row 12 (#6) | routine | 1 (the rename adds `w = 4`) | not scored | 0 | 1 (`@zoe`) |
+| row 13's SHA | row 13, Frank's, no pull request | routine | 3 (the blank counts) | not scored | 0 | not scored: no pull request |
+| row 14's first 7 digits | row 14, Ada's, no pull request | routine | 1 | not scored | 0 | not scored: no pull request |
+| row 11's SHA | row 11, Dana's | noise | 1 (`vendor/new.py` is denied) | in no AUC | 0, in no AUC: `--scores` gives it | |
+| row 1's SHA | row 1, Ada's init | meaningful | 10 (`app.py` 5 with its blank, `tests/test_service.py` 2, `old_name.py` 3; the 23 denied lines have no role) | 7 / 7 = 1 | not scored | not scored |
+| row 3's SHA | row 3, Bob's move | routine | 4 (2 added, 2 removed) | 0 / 2 = 0 | not scored | not scored |
+| `#1` | row 5 (#1, Gina's) | meaningful | 2 | 2 / 2 = 1 | not scored | not scored: merged 01-06, before the window, although hank reviewed it |
+| row 7's SHA | row 7, Bob's | routine | 5 | 5 / 5 = 1 | not scored | not scored |
+| `#9` | no pull request 9 | meaningful | | unmatched | | |
+| row 16's SHA | row 16 | skip | | no label | | |
+| row 8's SHA | row 8 again | meaningful | | the same change as `#3`: counted once | | |
 
-So the file holds 12 labelled rows from 1 labeller, 1 unmatched, labelling 10 changes (4 meaningful, 5 routine, 1 noise), and: `reviews_given@1` AUC 0.75 over 2 meaningful (1, 3) and 1 routine (1), with an `unscored-labels` caveat, since it scored 3 of the 5 changes labelled meaningful or routine in its window; `durable@1` AUC 0.75 over 2 and 2 (1 and 1 against 0 and 1: 1 + 0.5 + 1 + 0.5 of 4); `simplifying@1` AUC 0.5 over 2 and 3, every one 0; a `repeated-labels` caveat for row 8's second row. Each is beta (fewer than 50 labels), and each interval holds its AUC. With a second labeller's `#3,meaningful` and `acme/fixture#6,meaningful` added, the file labels 9 changes from 2 labellers: they agree on #3 and tie on #6, which is left out (`several-labellers`); `--labeller lead` keeps the lead's 10, with `reviews_given@1` n 3 again, and says the second's 2 rows were left out. A file whose only lines are `# 3,meaningful` and `#pr 4,routine` holds 2 comments and no label: a usage error that counts them, since only `#` followed by digits names a pull request.
+So the file holds 12 labelled rows from 1 labeller, 1 unmatched, labelling 10 changes (4 meaningful, 5 routine, 1 noise), and: `reviews_given@1` AUC 0.75 over 2 meaningful (1, 3) and 1 routine (1), with an `unscored-labels` caveat, since it scored 3 of the 5 changes labelled meaningful or routine in its window; `durable@1` AUC 0.75 over 2 and 2 (1 and 1 against 0 and 1: 1 + 0.5 + 1 + 0.5 of 4); `simplifying@1` AUC 0.5 over 2 and 3, every one 0; a `repeated-labels` caveat for row 8's second row. Each is beta (fewer than 50 labels), and each interval holds its AUC. Size alone, over each metric's own changes: `durable@1` 0.5 (10 and 2 against 4 and 5: 2 of 4 pairs), `simplifying@1` 5/6 = 0.833 (9 and 2 against 1, 3 and 1: 5 of 6) and `reviews_given@1` 1 (9 and 2 against 1); each paired interval of the AUC less size alone holds the difference, and each verdict is "cannot tell yet", n being under 50. `--scores` gives the 10 labelled changes, noise included, with their sizes and each metric's measure or null as the table says; each AUC and each size alone recompute from them. With a second labeller's `#3,meaningful` and `acme/fixture#6,meaningful` added, the file labels 9 changes from 2 labellers: they agree on #3 and tie on #6, which is left out (`several-labellers`); `--labeller lead` keeps the lead's 10, with `reviews_given@1` n 3 again, and says the second's 2 rows were left out. A file whose only lines are `# 3,meaningful` and `#pr 4,routine` holds 2 comments and no label: a usage error that counts them, since only `#` followed by digits names a pull request.
 
 Wrong implementations this catches:
 
@@ -1179,6 +1179,8 @@ Wrong implementations this catches:
 - **A direct push scored 0** (#77's first fix). Rows 13 and 14 score 0, as a pull request no one reviewed would, so a sync that missed pull requests turns their reviews into 0: `reviews_given@1` AUC 0.92 over 2 against 3, and no `unscored-labels` caveat.
 - **The change's window not checked.** #1 scores 1 (hank), and `reviews_given@1` counts 3 meaningful.
 - **Rows counted, not changes.** Row 8 counts twice: 11 changes, and `simplifying@1` has 3 meaningful.
+- **Size alone over every labelled change**, not the metric's own: 9, 2, 10 and 2 against 1, 3, 1, 4 and 5, 0.7 for each metric.
+- **Size from the change facts' non-blank `prod` lines**, not the numstat on paths with a role: row 1 is 7 and row 13 is 2, and `simplifying@1`'s size alone is 11/12 = 0.917 (row 13's 2 ties #4's).
 
 Not covered: #4's 3 against 2 (reviews counted in the window only) moves no AUC here, since every other pull request scores 1; the measure is stated in [metrics.md](../../docs/metrics.md#reviews_given1-m2).
 - **`#950` read as a comment** (KB-19). The four pull request rows vanish, and the comment file gives "no labelled changes" with no count.
@@ -1235,6 +1237,8 @@ Wrong implementations this catches:
 - **A landing whose pull request the data lacks counted as pushed directly**: with the hole, S2 is direct, 3 / 6; synced before S1, S1, S2 and A1 are, 2 / 6.
 - **A walk that passes another pull request's merge commit** (#38's first version): #3 also lands as S1, so `@tess` reviews `a.py`.
 - (`who_knows@1`, whose reviewers leave out only the pull request's author, an app here, lists Rob as `c.py`'s reviewer: he does know the code.)
+
+`label` shows #1 whole (the panel's evidence, which read a rebase merge's newest landing alone, showed 130 of a 16-landing change's 894 lines): its landings are R2, then R1; its card lists both subjects, R1's `feat: add one.py` first, under "its commits, oldest first"; and its diff (`app.Diff` with `Earlier` R1) runs from B0, R1's parent, to R2 and holds `one.py` and `two.py`, where R2's diff alone holds `two.py`. `Diff` refuses an earlier landing that is not the first parent of the one before it, S1 named as R2's: a usage error that says so, so no other change's commit enters a change's diff.
 
 **Not covered.** A commit pushed straight to the branch, with no pull request, in the same second as a squash of several commits and just before it, is taken for that pull request's: nothing in the history or the replica tells the two apart. `who_knows@1`'s blind spots say so. GitHub's `Commit.associatedPullRequests`, read at sync time, would map every commit exactly (a follow-up).
 

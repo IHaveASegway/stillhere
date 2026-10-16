@@ -43,10 +43,10 @@ const (
 	labelSkip       = "skip"
 )
 
-// The bar a ranked metric's labels clear (report.BarAUC, report.BarLabels).
+// The bar a ranked metric's labels clear (rank.BarAUC, rank.BarLabels).
 const (
-	minAUC    = report.BarAUC
-	minLabels = report.BarLabels
+	minAUC    = rank.BarAUC
+	minLabels = rank.BarLabels
 )
 
 // label is one labelled row of a labels file.
@@ -130,7 +130,8 @@ func Validate(ctx context.Context, d Deps, r ValidateRequest) (*report.Validatio
 		}
 		a := report.MetricAUC{Metric: m.def.ID.String()}
 		var pos, neg, sizePos, sizeNeg []float64
-		inWindow := 0 // the changes labelled meaningful or routine that landed in its window
+		var pairPos, pairNeg [][2]float64 // each scored change's score and size, together, for the paired comparison
+		inWindow := 0                     // the changes labelled meaningful or routine that landed in its window
 		for i, byMetric := range scored {
 			byMetric[a.Metric] = nil
 			if x, ok := scorer.Score(&changes[i]); ok {
@@ -148,9 +149,9 @@ func Validate(ctx context.Context, d Deps, r ValidateRequest) (*report.Validatio
 			}
 			size := float64(c.Added + c.Removed)
 			if votes.label[i] == labelMeaningful {
-				pos, sizePos = append(pos, x), append(sizePos, size)
+				pos, sizePos, pairPos = append(pos, x), append(sizePos, size), append(pairPos, [2]float64{x, size})
 			} else {
-				neg, sizeNeg = append(neg, x), append(sizeNeg, size)
+				neg, sizeNeg, pairNeg = append(neg, x), append(sizeNeg, size), append(pairNeg, [2]float64{x, size})
 			}
 		}
 		a.Meaningful, a.Routine, a.N = len(pos), len(neg), len(pos)+len(neg)
@@ -163,6 +164,14 @@ func Validate(ctx context.Context, d Deps, r ValidateRequest) (*report.Validatio
 			size := rank.AUC(sizePos, sizeNeg)
 			sizeLo, sizeHi := rank.AUCInterval(m.def.ID, sizePos, sizeNeg)
 			a.SizeAUC, a.SizeLo, a.SizeHi = &size, &sizeLo, &sizeHi
+			// Whether it beats size is a question about one sample, so the
+			// two AUCs are compared on the same resampled changes, not by
+			// their two intervals.
+			diffLo, diffHi := rank.AUCDiffInterval(m.def.ID, pairPos, pairNeg)
+			a.SizeDiffLo, a.SizeDiffHi = &diffLo, &diffHi
+			if sep, ok := a.Separation(); ok {
+				a.Verdict = sep.Verdict()
+			}
 		}
 		a.Beta = a.AUC == nil || *a.AUC < minAUC || a.N < minLabels
 		v.Metrics = append(v.Metrics, a)

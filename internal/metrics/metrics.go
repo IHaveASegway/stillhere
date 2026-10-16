@@ -56,6 +56,22 @@ type Definition struct {
 	// cannot print its estimates in another unit than its values.
 	Ratio                                             bool
 	Eligibility, BlindSpots, Gaming, Oracle, Validity string
+	// Reference is a ranked metric's reference result, shown beside its
+	// beta mark (Validity), never in its place (ADR 0014); nil for a metric
+	// with none.
+	Reference *Reference
+}
+
+// Reference is a ranked metric's reference result
+// (docs/validation.md#reference-results): validate's numbers on labels
+// that are not a lead's, from which its verdict follows by the one rule
+// (rank.Separation.Verdict), so the words a reader sees cannot drift from
+// the numbers. Source and About are the labels', the same for every metric
+// of one panel run.
+type Reference struct {
+	Source string // whose labels, of what, as of when
+	About  string // what the source is, in plain words, since its name alone is jargon
+	rank.Separation
 }
 
 // RankKind is how rank.Intervals bootstraps a ranked metric

@@ -29,9 +29,10 @@ func (simplifyingV1) Definition() Definition {
 		BlindSpots: "Deleting a feature looks like simplifying (deleting its tests does not: only prod lines count). A move counts " +
 			"its lines as removed, though its net is 0, so it is never a simplifying landing by itself. Removed code that comes " +
 			"back later is not detected in v1.",
-		Gaming:   "Deleting then re-adding. Revert detection catches the plain case: neither the reverted landing nor the revert counts.",
-		Oracle:   "testdata/fixture/SPEC.md#change-oracles-m1-testchangeoracles (main fixture and sibling)",
-		Validity: betaValidity + panelReference(simplifyingReference),
+		Gaming:    "Deleting then re-adding. Revert detection catches the plain case: neither the reverted landing nor the revert counts.",
+		Oracle:    "testdata/fixture/SPEC.md#change-oracles-m1-testchangeoracles (main fixture and sibling)",
+		Validity:  betaValidity,
+		Reference: panel(simplifyingPanel),
 	}
 }
 

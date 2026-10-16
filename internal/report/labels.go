@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/IHaveASegway/stillhere/internal/rank"
 )
 
 // This file is stillhere label's answers (docs/validation.md): a stratified
@@ -39,13 +41,13 @@ type LabelSample struct {
 }
 
 // LabelProgress is how far one ranked metric's labels are toward the bar:
-// BarLabels changes labelled meaningful or routine that it scores.
+// rank.BarLabels changes labelled meaningful or routine that it scores.
 type LabelProgress struct {
 	Metric   string `json:"metric"`
 	Ago      string `json:"ago"`      // the window it scores, in days before the run's now
 	Labelled int    `json:"labelled"` // changes the labeller labelled meaningful or routine that it scores, sampled or not
 	Sampled  int    `json:"sampled"`  // sampled changes it scores, less those answered noise or skip
-	Needed   int    `json:"needed"`   // BarLabels less Labelled, at least 0
+	Needed   int    `json:"needed"`   // rank.BarLabels less Labelled, at least 0
 }
 
 // LabelStratum is one window, size and repository of the sample, with the
@@ -151,7 +153,7 @@ func (s *LabelSample) ProgressText() string {
 	}
 	var parts []string
 	for _, p := range s.Progress {
-		part := fmt.Sprintf("%s %d of %d", p.Metric, min(p.Labelled, BarLabels), BarLabels)
+		part := fmt.Sprintf("%s %d of %d", p.Metric, min(p.Labelled, rank.BarLabels), rank.BarLabels)
 		if p.Needed > 0 {
 			part += fmt.Sprintf(" (%d more)", p.Needed)
 		}
@@ -160,7 +162,7 @@ func (s *LabelSample) ProgressText() string {
 	if len(parts) == 0 {
 		return ""
 	}
-	return fmt.Sprintf("Toward the bar, %d labels meaningful or routine that a metric scores: %s.", BarLabels,
+	return fmt.Sprintf("Toward the bar, %d labels meaningful or routine that a metric scores: %s.", rank.BarLabels,
 		strings.Join(parts, ", "))
 }
 
@@ -334,7 +336,13 @@ func (c *LabelCard) writeText(p *printer) {
 	p.line(head)
 	p.wrapped("  ", "  ", clean(ch.Title))
 	if len(ch.Commits) > 0 {
-		p.line("  commits it brought in:")
+		// A rebase merge brings nothing in: its commits are its landings,
+		// each put on the branch on its own.
+		if len(ch.Landings) > 1 {
+			p.line("  its commits, oldest first:")
+		} else {
+			p.line("  commits it brought in:")
+		}
 		for _, s := range ch.Commits {
 			p.wrapped("    - ", "      ", clean(s))
 		}
@@ -342,8 +350,15 @@ func (c *LabelCard) writeText(p *printer) {
 			p.linef("    and %s", plural(ch.MoreCommits, "more commit", "more commits"))
 		}
 	}
-	p.linef("  %s; +%s −%s on paths with a role", plural(len(ch.Files)+ch.MoreFiles, "file", "files"),
-		grouped(ch.Added), grouped(ch.Removed))
+	lines := "on paths with a role"
+	if len(ch.Landings) > 1 {
+		// Each landing's own diff, summed, as Size counts them: a line one
+		// landing adds and a later one removes counts in both, which the
+		// whole change's diff (d) nets out.
+		lines += ", summed over its " + strconv.Itoa(len(ch.Landings)) + " landings"
+	}
+	p.linef("  %s; +%s −%s %s", plural(len(ch.Files)+ch.MoreFiles, "file", "files"),
+		grouped(ch.Added), grouped(ch.Removed), lines)
 	var rows [][]string
 	for i, f := range ch.Files {
 		if i == maxCardFiles {

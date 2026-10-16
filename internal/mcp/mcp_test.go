@@ -361,14 +361,15 @@ func TestMCPTools(t *testing.T) {
 		if len(c.Changes) != 3 {
 			t.Fatalf("sibling changes since 2026-09-01: %d, want W9, W8 and S1", len(c.Changes))
 		}
-		// Each ranked metric's note holds its own model-panel reference, a
-		// verdict with what a model panel is, so the two metrics no longer
-		// share one caveat.
-		if !hasCaveat(c.Caveats, "validity", "Validity of durable@1: Beta") ||
-			!hasCaveat(c.Caveats, "validity", "Validity of simplifying@1: Beta") ||
-			!hasCaveat(c.Caveats, "validity", "Reference (model panel, 4 public repositories, 2026-10-15): does not separate") ||
-			!hasCaveat(c.Caveats, "validity", "The model panel is three AI models that labelled public changes blind") {
-			t.Errorf("changes carries %v, want the validity of each of the two metrics whose clusters it shows, with its reference", c.Caveats)
+		// The two metrics share their beta mark and their reference's
+		// source, so one caveat says them once, then each metric's verdict
+		// by name, and what a model panel is.
+		if !hasCaveat(c.Caveats, "validity", "Validity of durable@1 and simplifying@1: Beta") ||
+			!hasCaveat(c.Caveats, "validity", "Reference (model panel, 4 public repositories, 2026-10-15): durable@1 does not separate") ||
+			!hasCaveat(c.Caveats, "validity", "; simplifying@1 separates, but no better than change size") ||
+			!hasCaveat(c.Caveats, "validity", "The model panel is three AI models that labelled public changes without seeing any metric value") ||
+			countCode(c.Caveats, "validity") != 1 {
+			t.Errorf("changes carries %v, want one validity caveat for the two metrics whose clusters it shows, with each one's reference", c.Caveats)
 		}
 		s1 := c.Changes[2]
 		if len(s1.People) != 1 || s1.People[0].Name != "Lena Lead" || s1.People[0].Removed == nil ||
@@ -521,9 +522,8 @@ func TestMCPTools(t *testing.T) {
 		if !slices.ContainsFunc(h.Caveats, func(c report.Caveat) bool { return c.Code == "no-standout" }) {
 			t.Errorf("highlights caveats %v, want no-standout for tiers of everyone eligible", h.Caveats)
 		}
-		if !hasCaveat(h.Caveats, "validity", "Validity of durable@1: Beta") ||
-			!hasCaveat(h.Caveats, "validity", "Validity of simplifying@1: Beta") {
-			t.Errorf("highlights caveats %v, want the validity of each ranked metric it picks from", h.Caveats)
+		if !hasCaveat(h.Caveats, "validity", "Validity of durable@1 and simplifying@1: Beta") || countCode(h.Caveats, "validity") != 1 {
+			t.Errorf("highlights caveats %v, want one validity caveat for the ranked metrics it picks from", h.Caveats)
 		}
 		if len(h.Removed) < 2 || h.Removed[0].Person.Name != "Lena Lead" || h.Removed[0].Num != 22 ||
 			h.Removed[1].Person.Name != "Omar Ops" || h.Removed[1].Num != 21 {
@@ -1725,6 +1725,17 @@ func names(ks []report.Knower) string {
 // message holds text.
 func hasCaveat(cs []report.Caveat, code, text string) bool {
 	return slices.ContainsFunc(cs, func(c report.Caveat) bool { return c.Code == code && strings.Contains(c.Message, text) })
+}
+
+// countCode counts the caveats of code.
+func countCode(cs []report.Caveat, code string) int {
+	n := 0
+	for _, c := range cs {
+		if c.Code == code {
+			n++
+		}
+	}
+	return n
 }
 
 // withLines lists knowers by name and surviving lines under the path.

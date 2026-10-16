@@ -54,8 +54,9 @@ func (reviewsGiven) Definition() Definition {
 			"pull requests of a repository the run did not scan, scanned through a host alias, or failed to collect",
 		Gaming: "rubber-stamp approvals, which the share of approvals with no comment shows next to the count; " +
 			"reviewing many trivial pull requests, such as dependency bumps",
-		Oracle:   "testdata/github/README.md#reviews_given1 (TestGitHubSync)",
-		Validity: betaValidity + panelReference(reviewsReference),
+		Oracle:    "testdata/github/README.md#reviews_given1 (TestGitHubSync)",
+		Validity:  betaValidity,
+		Reference: panel(reviewsPanel),
 	}
 }
 
