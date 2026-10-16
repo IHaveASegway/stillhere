@@ -21,13 +21,17 @@ func (e *env) weekCommand() *cobra.Command {
 		Use:   "week PATH...",
 		Short: "Print what landed on each default branch in the last week (offline)",
 		Long: `week prints what landed on the default branch of each repository in the
-window that ends at --now: one row per person with commits, lines_added and
-prod_lines_added, and bots in a table of their own.
+window that ends at --now (landed@2): the scope's total, each landing once,
+then one row per person who wrote what landed, with the landings that hold
+their commits, those commits, the lines those commits added (all, and on
+prod paths), and the merges they landed, and bots in a table of their own. A
+merged branch counts for the people who wrote its commits, not for whoever
+merged it.
 
 Each PATH is a repository (a work tree or a bare mirror) or a group, a
 directory whose immediate children are repositories. week never fetches, so a
 stale clone gives a stale answer, and it stores nothing.`,
-		Args: usageArgs(cobra.MinimumNArgs(1)),
+		Args: pathsArgs,
 		RunE: func(cmd *cobra.Command, paths []string) error {
 			flags := cmd.Flags()
 			req := app.WeekRequest{
@@ -62,5 +66,6 @@ stale clone gives a stale answer, and it stores nothing.`,
 	f.StringVar(&sort, "week-sort", "", "row order: lines_added or commits (default the policy's [week] sort)")
 	addExcludeFlag(cmd, &exclude)
 	f.StringVar(&ignoreRevs, "ignore-revs-file", "", "accepted for symmetry with scan and ignored: git log has no such option")
+	e.addAllFlag(cmd)
 	return cmd
 }

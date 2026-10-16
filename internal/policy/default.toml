@@ -32,8 +32,15 @@ max_bytes = 400000
 
 [bots]
 # An identity whose canonical name or email (after the mailmap) contains one
-# of these, ignoring case, is a bot: listed apart, never ranked. A GitHub
-# noreply address is not a bot marker, because people use them.
+# of these, ignoring case, is a bot: listed apart, never ranked. A person's
+# GitHub noreply address (ID+login@users.noreply.github.com) is not a bot
+# marker, because people use them; GitHub's own address is.
+#
+# 2026-10-15: noreply@github.com, which no person has: commits a workflow
+# writes with it ("cli automation <noreply@github.com>" bumping a version
+# on a pull request's branch) were people's rows once landed@2 credited a
+# merged branch's commits to their authors. It matches no person's noreply
+# address, whose "@" follows the login, not "noreply".
 fragments = [
   "[bot]",          # GitHub Apps, such as dependabot[bot] and github-actions[bot]
   "copilot",        # GitHub Copilot's coding agent, when no person co-authored the commit
@@ -41,6 +48,7 @@ fragments = [
   "renovate",
   "github-actions",
   "gpt-engineer",
+  "noreply@github.com", # GitHub's own address: automation and workflows, never a person
 ]
 
 [ai]
@@ -49,10 +57,23 @@ fragments = [
 # agent_authors and a person co-authored it; that person gets the credit.
 # Emails match whole, never a name and never a fragment such as "noreply":
 # people use GitHub noreply addresses, and a person can be called Claude.
-version = 1
+# A GitHub noreply address that starts with an account id belongs to that
+# account alone, so an app's is as safe to list as Anthropic's.
+#
+# version 2 (2026-10-15, #102) added GitHub Copilot's three co-author
+# addresses: a person's commit made with Copilot carries
+# "Co-authored-by: Copilot <ID+Copilot@users.noreply.github.com>", which
+# version 1 did not match, so it tagged 2.3% of cli/cli's landings in a
+# year where these trailers put the share at 33.6%. Each id was checked
+# against GitHub's API (GET /user/ID) on 2026-10-15: all three are Bot
+# accounts with the login Copilot.
+version = 2
 coauthor_emails = [
-  "noreply@anthropic.com", # Claude Code: Co-Authored-By: <model name> <noreply@anthropic.com>
-  "aider@aider.chat",      # Aider: Co-authored-by: aider (<model>) <aider@aider.chat>
+  "noreply@anthropic.com",                         # Claude Code: Co-Authored-By: <model name> <noreply@anthropic.com>
+  "aider@aider.chat",                              # Aider: Co-authored-by: aider (<model>) <aider@aider.chat>
+  "175728472+copilot@users.noreply.github.com",    # GitHub Copilot code review's suggestions (app copilot-pull-request-reviewer)
+  "198982749+copilot@users.noreply.github.com",    # GitHub Copilot coding agent (app copilot-swe-agent)
+  "223556219+copilot@users.noreply.github.com",    # GitHub Copilot CLI (app github-copilot-cli)
 ]
 # Fragments of an agent author's canonical name or email, ignoring case.
 # GitHub's Copilot coding agent commits as copilot-swe-agent[bot] or Copilot

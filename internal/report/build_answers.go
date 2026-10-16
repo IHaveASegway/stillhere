@@ -23,6 +23,13 @@ type ExplainInput struct {
 	// Clusters holds, by Repo.Key, the subject's clusters in that
 	// repository's scope: the changes a ranked metric counted for them.
 	Clusters map[string][]rank.Cluster
+	// Trace is what a person's values of a metric that is not ranked are
+	// made of (#109, metrics.Traced); nil for any other.
+	Trace *domain.Trace
+	// Window is the window the metric reads (its clusters' or its trace's),
+	// which says why an answer with no value is empty (#92); zero for a
+	// value at HEAD, or when the reader cannot tell.
+	Window   domain.Window
 	Forge    *ForgeRead // the GitHub data the run read; nil when the reader cannot tell
 	Commands Commands   // how the answer names the commands it sends the reader to; nil: the command line's
 }
@@ -34,6 +41,7 @@ func NewExplain(in *ExplainInput) *Explain {
 		Metric:  in.Metric,
 		Subject: SubjectOf(in.Subject, in.Who),
 		Values:  Values(in.Values, in.Who),
+		addrs:   runAddresses(in.Who),
 	}
 	involved := map[string]bool{}
 	for _, v := range in.Values {
@@ -71,6 +79,9 @@ func NewExplain(in *ExplainInput) *Explain {
 		}
 	}
 	sortChanges(e.Changes)
+	if in.Trace != nil {
+		e.Landings, e.Commits, e.Files = traced(in.Facts, in.Trace, involved)
+	}
 	repos := reposWith(in.Facts, involved)
 	e.Provenance = datedProvenance(in.Run, in.Facts, in.Forge, repos, []string{in.Metric.ID})
 	e.Caveats = answerCaveats(repos)
@@ -80,6 +91,9 @@ func NewExplain(in *ExplainInput) *Explain {
 	}
 	if pulls > 0 {
 		e.Caveats = append(e.Caveats, pullsNotListed(in.Metric.ID))
+	}
+	if len(e.Values) == 0 {
+		e.Caveats = append(e.Caveats, explainEmpty(in))
 	}
 	if in.Subject.Kind == domain.SubjectPerson {
 		if c, ok := sameName(in.Facts, in.Who, in.Subject.Key, in.Commands); ok {
@@ -122,6 +136,78 @@ func explainCandidates(values []domain.MetricValue, cmds Commands) (Caveat, bool
 	return Caveat{}, false
 }
 
+// traced maps a trace (#109) onto the answer's lists, each item with its
+// repository's name and, for a landing or a commit the history holds, its
+// subject, and adds the repositories it names to involved.
+func traced(fs *domain.FactSet, t *domain.Trace, involved map[string]bool) ([]ExplainLanding, []ExplainCommit, []ExplainFile) {
+	type repo struct {
+		name     string
+		subjects map[string]string
+	}
+	repos := map[string]*repo{}
+	of := func(key string) *repo {
+		if r := repos[key]; r != nil {
+			return r
+		}
+		r := &repo{subjects: map[string]string{}}
+		for i := range fs.Repos {
+			if rf := &fs.Repos[i]; rf.Repo.Key == key {
+				r.name = rf.Repo.Name
+				for _, c := range rf.Commits {
+					r.subjects[c.SHA] = c.Subject
+				}
+			}
+		}
+		repos[key] = r
+		involved[key] = true
+		return r
+	}
+	known := func(n int) *int {
+		if n < 0 {
+			return nil
+		}
+		return &n
+	}
+	var landings []ExplainLanding
+	for _, l := range t.Landings {
+		r := of(l.Repo)
+		landings = append(landings, ExplainLanding{Repo: r.name, RepoKey: l.Repo, Landing: l.SHA, Time: l.Time, Merge: l.Merge,
+			Title: r.subjects[l.SHA], Commits: l.Commits, LinesAdded: known(l.Lines), ProdLinesAdded: known(l.ProdLines)})
+	}
+	slices.SortFunc(landings, func(a, b ExplainLanding) int {
+		return cmp.Or(cmp.Compare(a.Repo, b.Repo), cmp.Compare(a.RepoKey, b.RepoKey), a.Time.Compare(b.Time),
+			cmp.Compare(a.Landing, b.Landing))
+	})
+	var commits []ExplainCommit
+	for _, c := range t.Commits {
+		r := of(c.Repo)
+		commits = append(commits, ExplainCommit{Repo: r.name, RepoKey: c.Repo, Commit: c.SHA, Time: c.Time,
+			Title: r.subjects[c.SHA], Lines: c.Lines})
+	}
+	var files []ExplainFile
+	for _, f := range t.Files {
+		files = append(files, ExplainFile{Repo: of(f.Repo).name, RepoKey: f.Repo, Path: f.Path, Lines: f.Lines, Of: f.Of})
+	}
+	return landings, commits, files
+}
+
+// explainEmpty is the no-values caveat of an explanation that holds no
+// value of the metric about a subject the run has other values about (#92):
+// an empty answer must say whether it is a real nothing, and why, where
+// the run can tell.
+func explainEmpty(in *ExplainInput) Caveat {
+	msg := in.Metric.ID + " holds no value about this " + in.Subject.Kind + " in this run"
+	switch {
+	case in.Subject.Kind != domain.SubjectPerson:
+	case !in.Window.Since.IsZero() || !in.Window.Until.IsZero():
+		msg += ": no change of theirs in the window it reads, " + interval(intervalOf(in.Window)) + ", counts for it"
+	case in.Metric.ID == MetricSurviving || in.Metric.ID == MetricMajority:
+		msg += ": blame credits them with no prod line at HEAD that it counts"
+	}
+	return Caveat{Code: codeNoValues, Message: msg + ", though it holds other metrics' values about it: an empty answer, " +
+		"not a missing one."}
+}
+
 // sortChanges orders an explanation's changes by repository, then landing
 // time, then SHA.
 func sortChanges(cs []Change) {
@@ -148,6 +234,9 @@ type WhoKnowsInput struct {
 	Values   []domain.MetricValue
 	Forge    *ForgeRead // the GitHub data the run read; nil when the reader cannot tell
 	Commands Commands   // how the answer names the commands it sends the reader to; nil: the command line's
+	// Knowledge are knowledge_loss@1's and knowledge_concentration@1's
+	// values about the path, per repository (metrics.PathKnowledge, #105).
+	Knowledge []domain.MetricValue
 }
 
 // NewWhoKnows builds the who-knows answer: per repository, the majority
@@ -155,8 +244,10 @@ type WhoKnowsInput struct {
 // data the run read, the recent reviewers under the path, with bots apart
 // (docs/metrics.md#who_knows1-per-path).
 func NewWhoKnows(in *WhoKnowsInput) *WhoKnows {
-	w := &WhoKnows{Path: in.Path, Repo: in.Repo}
+	w := &WhoKnows{Path: in.Path, Repo: in.Repo, addrs: runAddresses(in.Who)}
 	ix := newValueIndex(in.Values)
+	kx := newValueIndex(in.Knowledge)
+	metrics := []string{MetricWhoKnows}
 	var asked []*domain.RepoFacts
 	for i := range in.Facts.Repos {
 		rf := &in.Facts.Repos[i]
@@ -174,6 +265,16 @@ func NewWhoKnows(in *WhoKnowsInput) *WhoKnows {
 				r.FilesWithMajority = count(v.Detail[detailFilesWithMajority])
 				break
 			}
+		}
+		for _, v := range kx[MetricKnowledgeLoss][scope] {
+			r.KnowledgeLoss = &Share{Metric: MetricKnowledgeLoss, Num: v.Num, Den: v.Den, Value: v.Value}
+			people, inactive := count(v.Detail[detailPeople]), count(v.Detail[detailPeopleInactive])
+			r.People, r.PeopleInactive = &people, &inactive
+			metrics = append(metrics, MetricKnowledgeLoss)
+		}
+		for _, v := range kx[MetricConcentration][scope] {
+			r.Concentration = concentrationOf(v)
+			metrics = append(metrics, MetricConcentration)
 		}
 		var humans []Knower
 		top := map[string]int{} // the metric's own top-author places, 1 to 5
@@ -236,7 +337,7 @@ func NewWhoKnows(in *WhoKnowsInput) *WhoKnows {
 		}
 	}
 	slices.SortFunc(w.Repos, func(a, b WhoKnowsRepo) int { return cmp.Or(cmp.Compare(a.Repo, b.Repo), cmp.Compare(a.Key, b.Key)) })
-	w.Provenance = datedProvenance(in.Run, in.Facts, in.Forge, asked, []string{MetricWhoKnows})
+	w.Provenance = datedProvenance(in.Run, in.Facts, in.Forge, asked, metrics)
 	w.Caveats = answerCaveats(asked)
 	if c, ok := whoKnowsMissing(in.Path, asked, ix); ok {
 		w.Caveats = append(w.Caveats, c)
@@ -268,6 +369,19 @@ func NewWhoKnows(in *WhoKnowsInput) *WhoKnows {
 		}
 		b := answerBuilder(in.Run, in.Facts, in.Forge)
 		w.Caveats = append(w.Caveats, b.forgeCaveats(listed, MetricWhoKnows, false)...)
+		if slices.Contains(metrics, MetricKnowledgeLoss) && in.Forge.reads(MetricKnowledgeLoss) {
+			// The path's knowledge loss counts a review in any repository of
+			// the run as activity, as a card's does: say where that is
+			// missing, in the repositories listed and outside them.
+			w.Caveats = append(w.Caveats, b.forgeCaveats(listed, MetricKnowledgeLoss, false)...)
+			var others []*domain.RepoFacts
+			for i := range in.Facts.Repos {
+				if rf := &in.Facts.Repos[i]; !slices.Contains(listed, rf) {
+					others = append(others, rf)
+				}
+			}
+			w.Caveats = append(w.Caveats, b.forgeElsewhere(others, MetricKnowledgeLoss)...)
+		}
 	}
 	return w
 }
@@ -332,6 +446,7 @@ func NewMe(in *MeInput) *Me {
 	m := &Me{
 		Person: SubjectOf(domain.Subject{Kind: domain.SubjectPerson, Key: in.Email}, in.Who),
 		Values: Values(in.Values, in.Who),
+		addrs:  runAddresses(in.Who),
 	}
 	involved := map[string]bool{}
 	metrics := map[string]bool{}

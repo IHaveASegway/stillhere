@@ -2,6 +2,7 @@ package collect
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -27,6 +28,16 @@ import (
 // the "---" and "+++" lines name its paths. The "diff --git" line itself is
 // never parsed for paths: "diff --git a/a b/b => c" has no unambiguous
 // split.
+//
+// A hunk line is never held whole (#73). The patch covers every changed
+// path, denied ones included, since the classification that would leave
+// them out comes later, and a minified bundle, a source map or one-line
+// JSON can hold a line of any length: read whole, one over the scanner's
+// 64 MiB failed the repository's whole scan. What a hunk line counts for
+// is its first byte and whether the rest is blank (patchLines.hunk), so it
+// is read in pieces of the reader's buffer and judged piece by piece. Only
+// the lines outside hunks, which name commits and paths, are read whole,
+// up to maxToken, as every other git output is.
 
 // readPatches runs the own-patch query over every non-merge commit the
 // window's landings brought in, the landings included, and adds each
@@ -47,7 +58,7 @@ func (h *historyRun) readPatches(ctx context.Context) error {
 			c := h.commits[sha].commit
 			switch {
 			case len(c.Parents) > 1: // a merge: no patch of its own in v1
-			case h.repo.Shallow && len(c.Parents) == 0: // the clone's boundary
+			case h.repo.Boundary(&c): // the clone's boundary
 			default:
 				want = append(want, sha)
 			}
@@ -91,7 +102,7 @@ func (h *historyRun) readPatches(ctx context.Context) error {
 // for it. Git prints a typechange as two files with one path, so fn can be
 // called twice for one path.
 func historyParsePatch(r io.Reader, fn func(commit, path string, added, removed int) error) error {
-	s := newScanner(r, bufio.ScanLines)
+	s := newPatchLines(r)
 	var (
 		commit           string
 		oldPath, newPath string
@@ -116,27 +127,30 @@ func historyParsePatch(r io.Reader, fn func(commit, path string, added, removed 
 		oldPath, newPath, oldSeen, newSeen = "", "", false, false
 	}
 
-	for s.Scan() {
+	for {
 		if oldLeft > 0 || newLeft > 0 {
-			// A hunk line, read as bytes: hunks are most of a patch, and
-			// counting them needs no string.
-			line := s.Bytes()
-			mark := byte(0) // an empty line has none
-			if len(line) > 0 {
-				mark = line[0]
+			// A hunk line, judged by its first byte and whether the rest
+			// is blank, never held whole: hunks are most of a patch, and a
+			// line of a minified file can be longer than any buffer.
+			mark, empty, rest, ok, err := s.hunk()
+			if err != nil {
+				return err
+			}
+			if !ok {
+				break // the output ended inside a hunk, which the check below reports
 			}
 			switch {
-			case mark == '+' && newLeft > 0:
+			case mark == '+' && !empty && newLeft > 0:
 				newLeft--
-				if nonBlank(line[1:]) {
+				if rest {
 					added++
 				}
-			case mark == '-' && oldLeft > 0:
+			case mark == '-' && !empty && oldLeft > 0:
 				oldLeft--
-				if nonBlank(line[1:]) {
+				if rest {
 					removed++
 				}
-			case (mark == ' ' || len(line) == 0) && oldLeft > 0 && newLeft > 0:
+			case (mark == ' ' || empty) && oldLeft > 0 && newLeft > 0:
 				// A context line, which -U0 prints only when
 				// diff.interHunkContext joins two hunks; an empty one
 				// under diff.suppressBlankEmpty.
@@ -150,7 +164,13 @@ func historyParsePatch(r io.Reader, fn func(commit, path string, added, removed 
 			continue
 		}
 
-		line := s.Text()
+		line, ok, err := s.text()
+		if err != nil {
+			return err
+		}
+		if !ok {
+			break
+		}
 		switch {
 		case strings.HasPrefix(line, "\x00"):
 			if err := flush(); err != nil {
@@ -192,13 +212,96 @@ func historyParsePatch(r io.Reader, fn func(commit, path string, added, removed 
 		// differ"), the "\ No newline" marker after a hunk's last line, or
 		// the blank line before a commit's first file: none changes counts.
 	}
-	if err := s.Err(); err != nil {
-		return err
-	}
 	if oldLeft > 0 || newLeft > 0 {
 		return fmt.Errorf("commit %s: the output ended inside a hunk", commit)
 	}
 	return flush()
+}
+
+// historyPatchLines reads the own-patch output one line at a time, as
+// bufio.ScanLines splits it (a final line without a newline included, a
+// carriage return before the newline dropped), in two ways: text returns
+// a line whole, up to maxToken bytes, and hunk returns only what a hunk
+// line counts for, reading it in pieces of the buffer, so its length is
+// unbounded (#73).
+type historyPatchLines struct {
+	r    *bufio.Reader
+	line []byte // text's line, reused
+}
+
+func newPatchLines(r io.Reader) *historyPatchLines {
+	return &historyPatchLines{r: bufio.NewReaderSize(r, 64<<10)}
+}
+
+// hunk reads one line of a hunk: its first byte, whether the line is
+// empty, and whether what follows its first byte holds a rune outside
+// White_Space (nonBlank). ok is false at the end of the output.
+func (p *historyPatchLines) hunk() (mark byte, empty, rest, ok bool, err error) {
+	var judge nonBlankPieces
+	first := true
+	for {
+		piece, rerr := p.r.ReadSlice('\n')
+		last := !errors.Is(rerr, bufio.ErrBufferFull)
+		switch {
+		case rerr == nil, errors.Is(rerr, bufio.ErrBufferFull):
+		case errors.Is(rerr, io.EOF):
+			if first && len(piece) == 0 {
+				return 0, false, false, false, nil
+			}
+		default:
+			return 0, false, false, false, rerr
+		}
+		if last {
+			piece = historyDropEOL(piece)
+		}
+		if first {
+			first = false
+			if len(piece) == 0 && last {
+				return 0, true, false, true, nil
+			}
+			mark, piece = piece[0], piece[1:]
+		}
+		judge.write(piece)
+		if last {
+			return mark, false, judge.done(), true, nil
+		}
+	}
+}
+
+// text reads one line whole, without its line ending; ok is false at the
+// end of the output. A line longer than maxToken is an error, as it is for
+// every other git output the collectors read: outside hunks, the patch
+// prints only commit names, paths and short headers.
+func (p *historyPatchLines) text() (string, bool, error) {
+	p.line = p.line[:0]
+	for {
+		piece, err := p.r.ReadSlice('\n')
+		switch {
+		case err == nil:
+			p.line = append(p.line, piece...)
+			return string(historyDropEOL(p.line)), true, nil
+		case errors.Is(err, bufio.ErrBufferFull):
+			if len(p.line)+len(piece) > maxToken {
+				return "", false, bufio.ErrTooLong
+			}
+			p.line = append(p.line, piece...)
+		case errors.Is(err, io.EOF):
+			p.line = append(p.line, piece...)
+			if len(p.line) == 0 {
+				return "", false, nil
+			}
+			return string(historyDropEOL(p.line)), true, nil
+		default:
+			return "", false, err
+		}
+	}
+}
+
+// historyDropEOL drops a line's newline and a carriage return before it,
+// as bufio.ScanLines does.
+func historyDropEOL(line []byte) []byte {
+	line = bytes.TrimSuffix(line, []byte{'\n'})
+	return bytes.TrimSuffix(line, []byte{'\r'})
 }
 
 // historyLabel returns the path a "---" or "+++" line names, without its

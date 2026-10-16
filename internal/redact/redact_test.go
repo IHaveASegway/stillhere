@@ -143,5 +143,20 @@ func TestRedact(t *testing.T) {
 		if got := redact.Message(in); strings.Contains(got, "TOK") {
 			t.Errorf("Message kept part of a credential at the cut: %q", got)
 		}
+		// A path keeps its end, where what is wrong with it most often is: a
+		// URL pasted as a PATH under a deep working directory (#93).
+		path := "/" + strings.Repeat("deep/", 40) + "https:/user:TOKEN@example.com/acme/pay.git"
+		got := redact.PathMessage(path)
+		if n := utf8.RuneCountInString(got); n > 180 || !strings.HasPrefix(got, "…") ||
+			!strings.HasSuffix(got, "/https:/example.com/acme/pay.git") || strings.Contains(got, "TOK") {
+			t.Errorf("PathMessage(a %d-rune path) = %d runes %q, want at most 180 beginning … and ending with the scrubbed URL",
+				utf8.RuneCountInString(path), n, got)
+		}
+		for _, unit := range []string{"é", "日", "e\u0301"} {
+			got := redact.PathMessage(strings.Repeat(unit, 200))
+			if body := strings.TrimPrefix(got, "…"); strings.Count(body, unit)*len(unit) != len(body) || !utf8.ValidString(got) {
+				t.Errorf("PathMessage(200 × %q) cut inside a character: %q", unit, got)
+			}
+		}
 	})
 }

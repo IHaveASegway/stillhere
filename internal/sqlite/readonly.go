@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 
+	sqlite3 "modernc.org/sqlite/lib"
+
 	"github.com/IHaveASegway/stillhere/internal/domain"
 )
 
@@ -55,25 +57,148 @@ func OpenReadOnly(ctx context.Context, path string) (*Store, error) {
 	case !fi.Mode().IsRegular():
 		return nil, &domain.UsageError{Msg: fmt.Sprintf("sqlite.OpenReadOnly %s: not a facts database file", abs)}
 	}
+	return openReadOnly(ctx, abs, "sqlite.OpenReadOnly")
+}
+
+// openReadOnly opens the facts database at abs read-only, as op. A reader
+// in a directory it cannot write (a read-only mount, another user's
+// directory) cannot make the -shm file SQLite keeps beside a WAL-mode
+// database, so SQLite refuses even a read-only open
+// (SQLITE_READONLY_DIRECTORY, https://sqlite.org/wal.html, "Read-Only
+// Databases"). Then, when no write-ahead log holds data, every committed
+// page is in the file itself, and it is opened immutable=1, which needs no
+// -shm. SQLite then trusts that nothing changes the file while it reads,
+// which this process's permissions do not promise: the directory may be
+// another user's, who scans into it while this one reads (a team server's
+// copy). So every read guards itself (immutableRead). A log that holds
+// data cannot be read that way, and the refusal says what to do. Neither
+// refusal says the reader must write (#79).
+func openReadOnly(ctx context.Context, abs, op string) (*Store, error) {
 	s := &Store{path: abs}
-	if err := s.readOnlyOpen(ctx); err != nil {
-		return nil, errors.Join(fmt.Errorf("sqlite.OpenReadOnly %s: %w", abs, err), s.Close())
+	err := s.readOnlyOpen(ctx, false)
+	if err == nil {
+		return s, nil
+	}
+	err = errors.Join(err, s.Close())
+	if !unwritableHere(err) {
+		return nil, readOnlyFailed(op, abs, err, false)
+	}
+	if walHolds(abs) {
+		return nil, &domain.UsageError{Msg: fmt.Sprintf("%s %s: this directory cannot be written, and the database's "+
+			"write-ahead log (%s-wal) holds commits that SQLite reads only through a shared-memory file beside it: "+
+			"make the directory writable for one read, or copy %s and %s-wal to a directory that is and pass --db",
+			op, abs, filepath.Base(abs), filepath.Base(abs), filepath.Base(abs))}
+	}
+	s = &Store{path: abs, immutable: true}
+	if err := s.readOnlyOpen(ctx, true); err != nil {
+		return nil, readOnlyFailed(op, abs, errors.Join(err, s.Close()), true)
 	}
 	return s, nil
 }
 
-func (s *Store) readOnlyOpen(ctx context.Context) error {
+// immutableRead is read for a Store opened immutable=1, where SQLite takes
+// no lock and ignores the write-ahead log, so nothing in SQLite stops it
+// reading beside a writer: a scan or a sync another user runs into the
+// same directory. A writer in WAL mode keeps its commits in the log until
+// a checkpoint copies them into the file, which is when a lockless read
+// could see pages of two states. So a read is refused while a log holds
+// data, which is the whole time a writer works; it reads on a connection
+// of its own (no idle connection is kept), so no cached page outlives it;
+// and when the file changed while it read, a checkpoint ran under it, so
+// it reads again, once, and is refused if the file changed again.
+func (s *Store) immutableRead(ctx context.Context, fn func(*sql.Tx) error) error {
+	for attempt := 0; ; attempt++ {
+		if walHolds(s.path) {
+			return &domain.UsageError{Msg: fmt.Sprintf("%s: another process is writing the facts database now (its "+
+				"write-ahead log, %s-wal, holds commits), and this directory cannot be written here, so stillhere cannot "+
+				"read beside it safely: run the command again when the scan or sync finishes, or copy the database to a "+
+				"directory that can be written and pass --db", s.path, filepath.Base(s.path))}
+		}
+		before, err := os.Stat(s.path)
+		if err != nil {
+			return err
+		}
+		err = s.readTx(ctx, fn)
+		after, serr := os.Stat(s.path)
+		if serr == nil && after.Size() == before.Size() && after.ModTime().Equal(before.ModTime()) && !walHolds(s.path) {
+			return err
+		}
+		if attempt > 0 {
+			return &domain.UsageError{Msg: fmt.Sprintf("%s: the facts database changed while it was read, twice, and "+
+				"this directory cannot be written here, so stillhere reads it without the locks that would keep a "+
+				"writer out: run the command again when the scan or sync that writes it finishes", s.path)}
+		}
+	}
+}
+
+// readOnlyFailed words a failed read-only open, in an unwritable directory
+// or not (here).
+func readOnlyFailed(op, abs string, err error, here bool) error {
+	var older *olderSchema
+	if errors.As(err, &older) {
+		if here {
+			return &domain.UsageError{Msg: fmt.Sprintf("%s %s: schema version %d is older than this stillhere's %d, and "+
+				"this directory cannot be written, so the file cannot be migrated here: copy it to a directory that can, "+
+				"run 'stillhere report --db COPY' once, which migrates the copy, and read the copy", op, abs,
+				older.version, older.latest)}
+		}
+		return &domain.UsageError{Msg: fmt.Sprintf("%s %s: schema version %d is older than this stillhere's %d, and a "+
+			"read-only open cannot migrate it: run 'stillhere report' once, which migrates the file, then start again",
+			op, abs, older.version, older.latest)}
+	}
+	var usage *domain.UsageError
+	if errors.As(err, &usage) {
+		return &domain.UsageError{Msg: fmt.Sprintf("%s %s: %s", op, abs, usage.Msg)}
+	}
+	return fmt.Errorf("%s %s: %w", op, abs, err)
+}
+
+// olderSchema is a facts database a read-only open cannot migrate.
+type olderSchema struct{ version, latest int }
+
+func (e *olderSchema) Error() string {
+	return fmt.Sprintf("schema version %d is older than this binary's %d", e.version, e.latest)
+}
+
+// unwritableHere reports whether err is SQLite failing because the file or
+// its directory cannot be written: READONLY, among them a directory where
+// the -shm file cannot be made, and CANTOPEN, which a read-write open of a
+// read-only file gives.
+func unwritableHere(err error) bool {
+	switch resultCode(err) {
+	case sqlite3.SQLITE_READONLY, sqlite3.SQLITE_CANTOPEN, sqlite3.SQLITE_PERM:
+		return true
+	}
+	return false
+}
+
+// walHolds reports whether the database's write-ahead log holds data: a
+// -wal file that is not empty, whose commits the database file may lack
+// until a checkpoint. A writer that closes cleanly checkpoints it and
+// removes it.
+func walHolds(abs string) bool {
+	fi, err := os.Stat(abs + "-wal")
+	return err == nil && fi.Size() > 0
+}
+
+func (s *Store) readOnlyOpen(ctx context.Context, immutable bool) error {
 	var err error
-	if s.ro, err = sql.Open("sqlite", readOnlyDSN(s.path)); err != nil {
+	if s.ro, err = sql.Open("sqlite", readOnlyDSN(s.path, immutable)); err != nil {
 		return err
 	}
 	s.ro.SetMaxOpenConns(readConns)
 	s.ro.SetMaxIdleConns(readConns)
+	if immutable {
+		// A connection opened immutable=1 never checks whether the file
+		// changed, so its page cache could outlive a writer's checkpoint:
+		// each read gets a connection of its own (immutableRead).
+		s.ro.SetMaxIdleConns(0)
+	}
 	// The write path (Store.write) needs a pool too. This one is read-only
 	// like the readers, so a write fails with SQLITE_READONLY rather than
 	// on a nil pool. database/sql connects lazily: a Store that never
 	// writes never opens it.
-	if s.writer, err = sql.Open("sqlite", readOnlyDSN(s.path)); err != nil {
+	if s.writer, err = sql.Open("sqlite", readOnlyDSN(s.path, immutable)); err != nil {
 		return err
 	}
 	s.writer.SetMaxOpenConns(1)
@@ -97,9 +222,7 @@ func (s *Store) readOnlyOpen(ctx context.Context) error {
 	case h.version == 0:
 		return &domain.UsageError{Msg: "an empty file, not a facts database yet: run 'stillhere scan PATH...' first"}
 	case h.version < len(ms):
-		return &domain.UsageError{Msg: fmt.Sprintf(
-			"schema version %d is older than this stillhere's %d, and a read-only open cannot migrate it: "+
-				"run 'stillhere report' once, which migrates the file, then start again", h.version, len(ms))}
+		return &olderSchema{version: h.version, latest: len(ms)}
 	}
 	return nil
 }
@@ -107,7 +230,13 @@ func (s *Store) readOnlyOpen(ctx context.Context) error {
 // readOnlyDSN is dsn's reader form with SQLite's mode=ro, which only a
 // file: URI passes to SQLite (modernc.org/sqlite's driver documentation):
 // the file is opened read-only, a missing file is SQLITE_CANTOPEN instead of
-// a new empty database, and every write is SQLITE_READONLY.
-func readOnlyDSN(path string) string {
-	return dsn(path, true, "ro")
+// a new empty database, and every write is SQLITE_READONLY. immutable adds
+// SQLite's immutable=1, for a directory the reader cannot write
+// (openReadOnly).
+func readOnlyDSN(path string, immutable bool) string {
+	d := dsn(path, true, "ro")
+	if immutable {
+		d += "&immutable=1"
+	}
+	return d
 }

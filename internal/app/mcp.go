@@ -116,6 +116,13 @@ func RunNames(ctx context.Context, d Deps, r NamesRequest) (*Names, error) {
 	if err != nil {
 		return nil, err
 	}
+	return runNames(s)
+}
+
+// runNames is a stored run's vocabulary, for RunNames and for a use case
+// that resolves a reader's name for a person in the run it loaded
+// (FindPerson: explain and me on the command line, PF-7).
+func runNames(s *stored) (*Names, error) {
 	n := &Names{Run: s.run}
 	for _, g := range s.facts.Groups {
 		n.Groups = append(n.Groups, NamedGroup{Name: g.Name, Repos: slices.Sorted(slices.Values(g.Repos))})
@@ -551,7 +558,8 @@ type mcpClusters struct {
 // mcpChangeClusters computes durable@1's and simplifying@1's clusters in each
 // repository of repos, as explain does for one person: the metric owns its
 // window, its exclusions and its credit rule, so this restates none of
-// them. Bots get no clusters: rank leaves them out.
+// them. Bots' clusters are not in RankInput.Data, as rank leaves them out:
+// changes and highlights credit people.
 func mcpChangeClusters(s *stored, repos []*domain.RepoFacts) (mcpClusters, error) {
 	ix := mcpClusters{durable: map[mcpClusterKey]rank.Cluster{}, simplifying: map[mcpClusterKey]rank.Cluster{}}
 	in := s.input()

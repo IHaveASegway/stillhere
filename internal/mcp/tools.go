@@ -768,6 +768,8 @@ func (toolCommands) Explain(metric string, kinds []string) string {
 
 func (toolCommands) WhoKnows() string { return "who_knows(path, repo)" }
 
+func (toolCommands) PersonKeys() string { return "every answer gives each person an id (p-…)" }
+
 func (toolCommands) OwnPage() string {
 	return `person(name: "") for the user the server runs for (--me)`
 }

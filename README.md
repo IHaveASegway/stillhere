@@ -50,6 +50,25 @@ docker pull ghcr.io/ihaveasegway/stillhere
 
 Each [release](https://github.com/IHaveASegway/stillhere/releases) also carries archives for every platform, which hold the shell completions and the [agent skill](#use-it-from-an-agent-mcp) beside the binary, and a checksums file to [verify them against](SECURITY.md#verifying-a-download).
 
+## Getting started in five minutes
+
+On a clone of your own (fetch it first: stillhere reads only what is cloned):
+
+```sh
+cd ~/src/your-repo
+stillhere week .                                   # 1. what landed this week, and who wrote it
+stillhere scan .                                   # 2. record a run: history, blame, metrics, ranks (seconds to minutes)
+stillhere report                                   # 3. read it again: each card says what the code is made of, where
+                                                   #    knowledge has gone quiet, and what could make the numbers wrong
+stillhere identities --format mailmap > ~/your.mailmap   # 4. one person, two addresses? review the suggestions,
+stillhere --mailmap ~/your.mailmap scan .          #    then scan with them
+stillhere who-knows src/payments                   # 5. who holds a path, and who works on it now
+stillhere report --rank durable --rank simplifying # 6. ranks, as 95% intervals: only people with 10 or more changes are ranked
+stillhere explain durable --person "Your Name"     # 7. the changes behind any number
+```
+
+Then, optionally, `stillhere sync github --org your-org` for reviews (review coverage, reviewers, `reviews_given@1`), and `claude mcp add` to [ask from your agent](#use-it-from-an-agent-mcp). [docs/getting-started.md](docs/getting-started.md) walks through every step on a public repository, with its real output and how to read it.
+
 ## Quickstart
 
 ```sh
@@ -60,7 +79,7 @@ stillhere week ~/src/acme --now 2026-10-07 --format json   # same inputs, same b
 stillhere help week
 ```
 
-`week` prints what landed on each repository's default branch: one row per person with commits, lines added, and lines added to production code, with bots in a table of their own. Each `PATH` is a repository (a work tree or a bare mirror) or a group: a directory whose immediate children are repositories. `week` reads only what is already cloned and stores nothing; fetch first for fresh numbers.
+`week` prints what landed on each repository's default branch: one row per person with their landings (a merged branch counts for the people who wrote it), commits, lines added, lines added to production code and the merges they landed, with bots in a table of their own. Text and Markdown print the first 10 rows of each table; `--all` prints every row. Each `PATH` is a repository (a work tree or a bare mirror) or a group: a directory whose immediate children are repositories. `week` reads only what is already cloned and stores nothing; fetch first for fresh numbers.
 
 Two files in the current directory change the answer when present. `.mailmap` folds one person's addresses into one identity (`--mailmap FILE` names another). `stillhere.toml` replaces the packaged policy as a whole: which paths count as production code, which authors are bots (`--policy FILE` names another). To start one, `stillhere policy > stillhere.toml` writes the packaged policy out as a complete file.
 
@@ -70,7 +89,7 @@ To keep a history, scan instead: `scan` records a run in facts.db (history, blam
 stillhere scan ~/src/acme                           # record a run: the default branch of each repository
 stillhere report --rank durable@1                   # the run as a report, with durable@1's rank table
 stillhere who-knows services/billing                # who knows the code under a path
-stillhere explain durable@1 --person ada@example.com  # the changes behind one person's value
+stillhere explain durable@1 --person "Ada Example"  # the changes behind one person's value: a name, @login, id or email
 stillhere me --email you@example.com                # your own page
 stillhere identities --format mailmap               # .mailmap suggestions with their evidence, never applied
 stillhere sync github --org acme                    # mirrors, pull requests and reviews: the one network command

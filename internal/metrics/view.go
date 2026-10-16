@@ -69,9 +69,18 @@ type repoView struct {
 	// cut is true when a shallow clone's boundary cuts the history (warning
 	// shallow-window): landings before the boundary are missing.
 	cut bool
+	// boundary is the newest committer time of a boundary commit the
+	// history holds (domain.Repo.Boundary), zero when it holds none: the
+	// clone holds every landing after it, so a window that starts later
+	// is inside its history (covers).
+	boundary time.Time
 	// lines is true when blame ran (RepoFacts.LineFacts), so surviving
 	// lines are known; without it they are unknown, not zero.
 	lines bool
+	// numstat is true when the history counted each commit's numstat, the
+	// lines landed@1 and landed@2 add up: false for a partial clone, whose
+	// blobs are not local, so its lines are unknown, not zero (#74).
+	numstat bool
 	// patches is true when every non-merge commit carries the counts of its
 	// own -U0 -w patch: false for week runs (AddedNonBlank is -1) and
 	// partial clones (no changes at all). Without them, added and removed
@@ -86,11 +95,12 @@ type repoView struct {
 
 // commitView is one commit of the history, with its credit and counts.
 type commitView struct {
-	credit  string // identity.Credit over its author and co-authors
-	ai      bool   // identity.AIAssisted
-	merge   bool   // more than one parent: excluded from both change metrics
-	ignored bool   // listed in the ignore-revs file blame used
-	changes []*domain.FileChange
+	credit   string // identity.Credit over its author and co-authors
+	ai       bool   // identity.AIAssisted
+	merge    bool   // more than one parent: excluded from both change metrics
+	ignored  bool   // listed in the ignore-revs file blame used
+	boundary bool   // a shallow clone's boundary (domain.Repo.Boundary): its parents are not in the clone
+	changes  []*domain.FileChange
 	// added and removed count non-blank lines on prod paths in the commit's
 	// own patch. traced is the part of added whose fate blame can tell, and
 	// surviving the non-blank lines blame attributes to the commit at HEAD
@@ -110,6 +120,7 @@ type landingView struct {
 	revert   bool          // a revert landing: its message names the commit it reverts
 	reverted bool          // a revert landing names a commit in its map
 	ai       bool          // a commit in its map is AI-assisted
+	cut      bool          // its map holds a shallow clone's boundary, behind which its commits are missing
 }
 
 // fileView is one prod file at HEAD and who holds its lines.
@@ -126,6 +137,8 @@ type ownerRow struct {
 	role   domain.Role
 	credit string
 	lines  int
+	commit string    // the blamed commit, for a trace (surviving@1)
+	at     time.Time // its author time, as blame gives it
 }
 
 // errNoFacts reports an Input that cannot be computed over.
@@ -165,6 +178,7 @@ func newRepoView(f *domain.RepoFacts, who *identity.Directory) *repoView {
 		history: f.History,
 		cut:     slices.ContainsFunc(f.Warnings, func(w domain.Warning) bool { return w.Code == warnShallowWindow }),
 		lines:   f.LineFacts,
+		numstat: !f.Repo.Partial,
 		patches: !f.Repo.Partial,
 		role:    make(map[string]domain.Role, len(f.Paths)),
 		commits: make(map[string]*commitView, len(f.Commits)),
@@ -186,10 +200,14 @@ func newRepoView(f *domain.RepoFacts, who *identity.Directory) *repoView {
 	for i := range f.Commits {
 		c := &f.Commits[i]
 		r.commits[c.SHA] = &commitView{
-			credit:  who.Credit(c.Author, c.CoAuthors),
-			ai:      who.AIAssisted(c),
-			merge:   len(c.Parents) > 1,
-			ignored: ignored[strings.ToLower(c.SHA)],
+			credit:   who.Credit(c.Author, c.CoAuthors),
+			ai:       who.AIAssisted(c),
+			merge:    len(c.Parents) > 1,
+			ignored:  ignored[strings.ToLower(c.SHA)],
+			boundary: f.Repo.Boundary(c),
+		}
+		if f.Repo.Boundary(c) && c.CommitTime.After(r.boundary) {
+			r.boundary = c.CommitTime
 		}
 	}
 	for i := range f.Changes {
@@ -238,6 +256,7 @@ func newRepoView(f *domain.RepoFacts, who *identity.Directory) *repoView {
 			}
 			lv.commits = append(lv.commits, c)
 			lv.ai = lv.ai || c.ai
+			lv.cut = lv.cut || c.boundary
 		}
 		r.landings = append(r.landings, lv)
 	}
@@ -385,7 +404,7 @@ func (r *repoView) indexLines(f *domain.RepoFacts, who *identity.Directory, untr
 			credit = who.Credit(o.Author, o.CoAuthors)
 			credits[o.Commit] = credit
 		}
-		r.owners = append(r.owners, ownerRow{path: o.Path, role: role, credit: credit, lines: o.Lines})
+		r.owners = append(r.owners, ownerRow{path: o.Path, role: role, credit: credit, lines: o.Lines, commit: o.Commit, at: o.AuthorTime})
 		if role != domain.RoleProd {
 			continue
 		}
@@ -420,22 +439,34 @@ func majorityOwners(byPerson map[string]int, total int) []string {
 // as a count, a sum or a share over w needs. A week run's history spans
 // only its own days, so a 365-day share computed from it would be a week's
 // share under a year's label: such a repository contributes nothing to a
-// window it does not cover. A history a shallow boundary cuts covers no
-// window: the warning does not say where the boundary is, so no window can
-// be trusted to start after it. An unset history (zero window) is trusted
-// as covering everything.
+// window it does not cover. An unset history (zero window) is trusted as
+// covering everything.
+//
+// A history a shallow boundary cuts (#74) covers a window that lies wholly
+// after the boundary: every boundary commit the history holds was
+// committed before the window starts, and no landing in the window brought
+// one in, whose commits behind it would be missing. The clone then holds
+// every landing of the window and every commit they brought in, so its
+// numbers there are exact, not partial: a depth-50 clone has a week's
+// landers, not none. Any other window is not covered, and gets no value
+// rather than a count of what the clone happens to hold; so is every
+// window when the history holds no boundary commit, as when the boundary
+// is dated after --now, since then nothing places it.
 //
 // Activity needs no coverage (view.active, landings_365d, who_knows@1's
 // recent landers): a landing seen in a window proves activity however much
 // history is missing, so it counts wherever it is seen.
 func (r *repoView) covers(w domain.Window) bool {
-	switch {
-	case r.cut:
+	if r.history != (domain.Window{}) && (r.history.Since.After(w.Since) || r.history.Until.Before(w.Until)) {
 		return false
-	case r.history == (domain.Window{}):
+	}
+	if !r.cut {
 		return true
 	}
-	return !r.history.Since.After(w.Since) && !r.history.Until.Before(w.Until)
+	if r.boundary.IsZero() || !r.boundary.Before(w.Since) {
+		return false
+	}
+	return !slices.ContainsFunc(r.landings, func(l *landingView) bool { return l.cut && w.Contains(l.time) })
 }
 
 // inScope reports whether the repository with this key and group belongs to
@@ -540,6 +571,28 @@ func areaSubject(key, prefix string) domain.Subject {
 
 func personSubject(email string) domain.Subject {
 	return domain.Subject{Kind: domain.SubjectPerson, Key: email}
+}
+
+// scopeSubject names a scope's own totals: its repository, its group, or
+// the whole run (domain.SubjectAll).
+func scopeSubject(s domain.Scope) domain.Subject {
+	switch s.Kind {
+	case domain.ScopeRepo:
+		return repoSubject(s.Key)
+	case domain.ScopeGroup:
+		return groupSubject(s.Key)
+	}
+	return domain.Subject{Kind: domain.SubjectAll}
+}
+
+// underPrefix returns the rule for the paths under a repo-relative prefix
+// as cleanPrefix leaves it, matching whole segments: "src" holds src and
+// src/pay.go but not srcutil/x.go, and "" holds every path. who_knows@1
+// and PathKnowledge ask about a path by it.
+func underPrefix(prefix string) func(path string) bool {
+	return func(p string) bool {
+		return prefix == "" || p == prefix || strings.HasPrefix(p, prefix+"/")
+	}
 }
 
 // topDir returns the top-level directory of a repo-relative path with its

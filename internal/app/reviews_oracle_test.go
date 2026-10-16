@@ -113,7 +113,7 @@ func reviewOracles(t *testing.T) {
 			}
 		}
 		sameRows(t, table+", reviews_given@1 in scope all", got, map[string]float64{
-			"bob@example.com": 1, "cara@example.com": 1, "@zoe": 2, "@copilot-pull-request-reviewer[bot]": 1,
+			"bob@example.com": 2, "cara@example.com": 1, "@zoe": 2, "@copilot-pull-request-reviewer[bot]": 2,
 		})
 		// The page names her as GitHub last showed her login: #6, updated
 		// last, says Zoe.
@@ -121,6 +121,16 @@ func reviewOracles(t *testing.T) {
 			w.Repos[0].RecentReviewers[0].Name != "@Zoe" {
 			t.Errorf("%s: new_name.py's reviewers %+v, want @zoe named @Zoe", table, w.Repos)
 		}
+	})
+
+	t.Run("review_coverage@1", func(t *testing.T) {
+		// Of rows 8 to 16, Copilot's row 10 is a bot's; #3, #4 and #6 had a
+		// review by someone else before they merged, #7 none, and rows 11,
+		// 13, 14 and 16 landed with no pull request.
+		want := reviewCoverageRow{Num: 3, Den: 8, Via: 4, Direct: 4, ApprovedOnly: 2, Bots: 1, Repos: 1}
+		reviewCheckCoverage(t, table+", review_coverage@1", s, map[string]reviewCoverageRow{
+			"repo:" + r.Key: want,
+		}, map[string]reviewCoverageRow{"all:": want})
 	})
 
 	t.Run("a later sync changes nothing in the stored run", func(t *testing.T) {
@@ -205,7 +215,7 @@ func reviewMergeMethods(t *testing.T) {
 	setOrigin(t, repo, reviewMergesRepo.Key)
 	shas := reviewSubjects(t, repo)
 	s := scan(t, "", nil, scanRanked(repo), func(st *sqlite.Store) {
-		reviewSeed(t, st, reviewMergesRepo, reviewMergesPulls(shas), reviewAt(time.October, 2, 12))
+		reviewSeed(t, st, reviewMergesRepo, reviewMergesPulls(shas), reviewAt(time.October, 3, 12))
 	})
 	r := onlyRepo(t, s.model)
 	for _, c := range []struct {
@@ -217,8 +227,78 @@ func reviewMergeMethods(t *testing.T) {
 		{"two.py", map[string]int{"@sam": 1}},
 		{"a.py", map[string]int{"@rita": 1}},
 		{"b.py", map[string]int{"@tess": 1}},
+		{"c.py", map[string]int{"rob@example.com": 1}},
 	} {
 		reviewCheckReviewers(t, "SPEC merge methods, who_knows@1, "+c.path, s.whoKnows(t, c.path), r.Key, c.want)
+	}
+	// review_coverage@1: B0 landed with no pull request; R1 and R2 are #1's,
+	// S1 #2's and S2 #3's, each approved before it merged; A1 is #4's,
+	// which the Copilot coding agent opened and wrote for Rob, so it is
+	// Rob's landing, and his approval is his own.
+	want := reviewCoverageRow{Num: 4, Den: 6, Via: 5, Direct: 1, ApprovedOnly: 4, Repos: 1}
+	reviewCheckCoverage(t, "SPEC merge methods, review_coverage@1", s,
+		map[string]reviewCoverageRow{"repo:" + r.Key: want}, map[string]reviewCoverageRow{"all:": want})
+
+	// A replica with a hole (#101): it lacks #3, whose squash, S2, names it.
+	// S2 is left out, unmatched, rather than counted as pushed directly.
+	pulls := reviewMergesPulls(shas)
+	holed := scan(t, "", nil, scanRanked(repo), func(st *sqlite.Store) {
+		reviewSeed(t, st, reviewMergesRepo, slices.Delete(slices.Clone(pulls), 2, 3), reviewAt(time.October, 3, 12))
+	})
+	want = reviewCoverageRow{Num: 3, Den: 5, Via: 4, Direct: 1, ApprovedOnly: 3, Unmatched: 1, Repos: 1}
+	reviewCheckCoverage(t, "SPEC merge methods, review_coverage@1 with #3 missing", holed,
+		map[string]reviewCoverageRow{"repo:" + r.Key: want}, map[string]reviewCoverageRow{"all:": want})
+
+	// A clone fresher than the last sync: synced 10-01 18:00, before S1,
+	// S2 and A1 landed, with #1 alone. Their pull requests may not be
+	// synced yet, so they are left out, after the sync.
+	stale := scan(t, "", nil, scanRanked(repo), func(st *sqlite.Store) {
+		reviewSeedAt(t, st, reviewMergesRepo, pulls[:1], reviewAt(time.October, 1, 12), reviewAt(time.October, 1, 18))
+	})
+	want = reviewCoverageRow{Num: 2, Den: 3, Via: 2, Direct: 1, ApprovedOnly: 2, AfterSync: 3, Repos: 1}
+	reviewCheckCoverage(t, "SPEC merge methods, review_coverage@1 synced before S1", stale,
+		map[string]reviewCoverageRow{"repo:" + r.Key: want}, map[string]reviewCoverageRow{"all:": want})
+}
+
+// reviewCoverageRow is one review_coverage@1 value: Num and Den, and Detail
+// via_pull_request, direct, approved_no_comment, bot_landings, after_sync,
+// unmatched and repos.
+type reviewCoverageRow struct{ Num, Den, Via, Direct, ApprovedOnly, Bots, AfterSync, Unmatched, Repos int }
+
+// reviewCheckCoverage compares the run's review_coverage@1 values in its
+// one repository's scope and in scope all with SPEC's.
+func reviewCheckCoverage(t *testing.T, oracle string, s *scanned, inRepo, inAll map[string]reviewCoverageRow) {
+	t.Helper()
+	id := domain.MetricID{Name: "review_coverage", Version: 1}
+	rows := func(scope domain.Scope) map[string]reviewCoverageRow {
+		got := map[string]reviewCoverageRow{}
+		for key, v := range s.stored(t, id, scope) {
+			if v.Detail["reviewed"] != v.Num {
+				t.Errorf("%s: %s's Detail reviewed is %v, Num %v: want them equal", oracle, key, v.Detail["reviewed"], v.Num)
+			}
+			got[key] = reviewCoverageRow{int(v.Num), int(v.Den), int(v.Detail["via_pull_request"]), int(v.Detail["direct"]),
+				int(v.Detail["approved_no_comment"]), int(v.Detail["bot_landings"]), int(v.Detail["after_sync"]),
+				int(v.Detail["unmatched"]), int(v.Detail["repos"])}
+		}
+		return got
+	}
+	r := onlyRepo(t, s.model)
+	sameRows(t, oracle+" in the repository", rows(domain.Scope{Kind: domain.ScopeRepo, Key: r.Key}), inRepo)
+	sameRows(t, oracle+" in the run", rows(domain.Scope{Kind: domain.ScopeAll}), inAll)
+	// The report reads the same values onto the repository's card and the
+	// run's overview (#107).
+	shown := func(c *report.ReviewCoverage) reviewCoverageRow {
+		if c == nil {
+			return reviewCoverageRow{}
+		}
+		return reviewCoverageRow{int(c.Num), int(c.Den), c.ViaPullRequest, c.Direct, c.ApprovedNoComment, c.BotLandings,
+			c.AfterSync, c.Unmatched, c.Repos}
+	}
+	if got, want := shown(r.Card.ReviewCoverage), inRepo["repo:"+r.Key]; got != want {
+		t.Errorf("%s: the card's review coverage %+v, want %+v", oracle, got, want)
+	}
+	if len(s.model.Overviews) != 1 || shown(s.model.Overviews[0].ReviewCoverage) != inAll["all:"] {
+		t.Errorf("%s: the overview of every repository does not show the run's review coverage %+v", oracle, inAll["all:"])
 	}
 }
 
@@ -291,7 +371,7 @@ func reviewLog(t *testing.T, repo, format string) map[string]string {
 	return log
 }
 
-// reviewPulls is SPEC's replica: the six pull requests of acme/fixture,
+// reviewPulls is SPEC's replica: the seven pull requests of acme/fixture,
 // with their merge commits found by the rows' committer times in commits.
 func reviewPulls(commits map[string]string) []domain.PullRequest {
 	user := func(login string) domain.ForgeUser { return domain.ForgeUser{Login: login} }
@@ -337,6 +417,14 @@ func reviewPulls(commits map[string]string) []domain.PullRequest {
 		merged(6, "erin", reviewAt(time.October, 4, 9), reviewAt(time.October, 6, 16), landed(reviewAt(time.October, 6, 16), "erin"),
 			[]domain.ForgeCommit{unlanded("6", "erin"), unlanded("7", "erin")},
 			review("PRR_6a", "Zoe", domain.ReviewApproved, reviewAt(time.October, 5, 8))),
+		// #107: reviewed only by its author, a bot and, after its merge,
+		// bob, so review_coverage@1 counts it unreviewed.
+		merged(7, "ivy", reviewAt(time.October, 5, 9), reviewAt(time.October, 6, 19), landed(reviewAt(time.October, 6, 19), "ivy"),
+			[]domain.ForgeCommit{unlanded("8", "ivy")},
+			domain.Review{ID: "PRR_7a", Author: domain.ForgeUser{Login: "copilot-pull-request-reviewer", Bot: true},
+				State: domain.ReviewApproved, Submitted: reviewAt(time.October, 6, 17)},
+			review("PRR_7b", "ivy", domain.ReviewCommented, reviewAt(time.October, 6, 18)),
+			review("PRR_7c", "bob", domain.ReviewApproved, reviewAt(time.October, 6, 20))),
 	}
 }
 
@@ -359,13 +447,21 @@ func reviewMergesPulls(shas map[string]string) []domain.PullRequest {
 			MergeCommit: commit(shas[merge], author), Commits: commits,
 			Reviews: []domain.Review{{ID: id + "a", Author: user(reviewer), State: domain.ReviewApproved, Submitted: submitted}}}
 	}
+	// #4: the Copilot coding agent's, an app account, approved only by
+	// rob, the person it worked for, whose commit its co-author trailer
+	// credits.
+	agent := merged(4, "copilot-swe-agent", reviewAt(time.October, 3, 12), "feat: add c.py (#4)",
+		[]domain.ForgeCommit{unlanded('d', "Copilot")}, "rob", reviewAt(time.October, 3, 9))
+	agent.Author.Bot = true
+	agent.MergeCommit.AuthorLogin = "Copilot"
 	return []domain.PullRequest{
 		merged(1, "rob", reviewAt(time.October, 1, 12), "feat: add two.py", // R2, after R1 in the same second
 			[]domain.ForgeCommit{unlanded('8', "rob"), unlanded('9', "rob")}, "sam", reviewAt(time.October, 1, 9)),
-		merged(2, "ali", reviewAt(time.October, 2, 12), "feat: add a.py", // S1
+		merged(2, "ali", reviewAt(time.October, 2, 12), "feat: add a.py (#2)", // S1
 			[]domain.ForgeCommit{unlanded('a', "ali")}, "rita", reviewAt(time.October, 2, 9)),
-		merged(3, "bo", reviewAt(time.October, 2, 12), "feat: add b.py", // S2, after S1 in the same second
+		merged(3, "bo", reviewAt(time.October, 2, 12), "feat: add b.py (#3)", // S2, after S1 in the same second
 			[]domain.ForgeCommit{unlanded('b', "bo"), unlanded('c', "bo")}, "tess", reviewAt(time.October, 2, 10)),
+		agent,
 	}
 }
 
@@ -373,6 +469,12 @@ func reviewMergesPulls(shas map[string]string) []domain.PullRequest {
 // one page of its pull requests with watermark updated, and the sync that
 // started at reviewSynced.
 func reviewSeed(t *testing.T, s *sqlite.Store, repo domain.ForgeRepo, pulls []domain.PullRequest, updated time.Time) {
+	t.Helper()
+	reviewSeedAt(t, s, repo, pulls, updated, reviewSynced)
+}
+
+// reviewSeedAt is reviewSeed with the sync that started at synced.
+func reviewSeedAt(t *testing.T, s *sqlite.Store, repo domain.ForgeRepo, pulls []domain.PullRequest, updated, synced time.Time) {
 	t.Helper()
 	ctx := t.Context()
 	page := domain.ForgePage{Repo: repo.ID, PullRequests: pulls, Updated: updated}
@@ -382,7 +484,7 @@ func reviewSeed(t *testing.T, s *sqlite.Store, repo domain.ForgeRepo, pulls []do
 	if err := s.PutForgePage(ctx, &page); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.MarkForgeSynced(ctx, repo.ID, reviewSynced); err != nil {
+	if err := s.MarkForgeSynced(ctx, repo.ID, synced); err != nil {
 		t.Fatal(err)
 	}
 }

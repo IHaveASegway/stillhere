@@ -15,6 +15,7 @@
 package identity
 
 import (
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -57,7 +58,8 @@ type Directory struct {
 	// (forgeAccounts): canonical email → every folded login the run's
 	// GitHub data attributes its commits to, sorted. The same-forge-account
 	// rule and Blocks read it; nil without GitHub data.
-	accounts map[string][]string
+	accounts  map[string][]string
+	addresses []string // every address the facts show someone by, sorted (Addresses)
 }
 
 // kind is an identity's classification under the policy.
@@ -92,7 +94,48 @@ func New(fs *domain.FactSet, p *policy.Policy) *Directory {
 		}
 	}
 	d.locals = personLocals(fs, d) // after kinds: a bot's address is no person's
+	d.addresses = runAddresses(fs)
 	return d
+}
+
+// Addresses returns every address the fact set shows someone by, a bot's
+// included: commit authors and co-authors and the authors and co-authors
+// of blamed commits, canonical (lowercased) and sorted; nil for none. A
+// page withholds each of them wherever repository text holds it, a commit
+// subject's or a git message's, whether or not the person is on the page
+// (#90), as the MCP server's egress does over the run's people.
+func (d *Directory) Addresses() []string { return d.addresses }
+
+// runAddresses lists the addresses Addresses returns.
+func runAddresses(fs *domain.FactSet) []string {
+	if fs == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	add := func(p domain.Person) {
+		if e := canonical(p.Email); e != "" && !LoginKey(e) {
+			seen[e] = true
+		}
+	}
+	for i := range fs.Repos {
+		r := &fs.Repos[i]
+		for j := range r.Commits {
+			add(r.Commits[j].Author)
+			for _, co := range r.Commits[j].CoAuthors {
+				add(co)
+			}
+		}
+		for j := range r.Owners {
+			add(r.Owners[j].Author)
+			for _, co := range r.Owners[j].CoAuthors {
+				add(co)
+			}
+		}
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	return slices.Sorted(maps.Keys(seen))
 }
 
 // Name returns the display name for a canonical email, or "" when the fact
@@ -122,6 +165,15 @@ func (d *Directory) Name(email string) string {
 // is a bot too. Bots are separated in every table and never ranked.
 func (d *Directory) Bot(email string) bool {
 	return d.kind(canonical(email)).bot
+}
+
+// Agent reports whether a canonical email, or a forge account's subject
+// (Reviewer), is a coding agent the [ai] table names: a bot whose commits
+// Credit gives to their first human co-author (ADR 0007), such as the
+// Copilot coding agent, which opens pull requests as
+// "@copilot-swe-agent[bot]" for the person who assigned it the work.
+func (d *Directory) Agent(email string) bool {
+	return d.kind(canonical(email)).agent
 }
 
 // AIAssisted reports whether c is a person's AI-assisted commit (ADR 0007):

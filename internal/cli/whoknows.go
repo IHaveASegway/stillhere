@@ -16,8 +16,12 @@ func (e *env) whoKnowsCommand() *cobra.Command {
 		Short: "Show who knows the code under a path",
 		Long: `who-knows lists the people who know the code under PATH, a path prefix inside
 a repository: majority owners, the top authors of surviving lines and recent
-landers. It is a routing answer, not a rank. It reads a stored run, by
-default the latest complete or partial scan.
+landers, and recent reviewers when the run read GitHub data. It is a routing
+answer, not a rank. For the path it also prints its knowledge loss (the share
+of its human-held lines whose people have gone quiet) and its majority-owner
+concentration, as the report prints them for a repository. It reads a stored
+run, by default the latest complete or partial scan. Each list shows its
+first 10 people, and --all every one.
 
 PATH is relative to a repository's root, such as src or src/pay.go, as the
 run stores it, and not a path on disk: an absolute path, or one relative to
@@ -36,5 +40,6 @@ answer then says so rather than "nobody".`,
 	}
 	cmd.Flags().StringVar(&repo, "repo", "", "repository `KEY` to search (default every repository in the run)")
 	addRunFlag(cmd, &run)
+	e.addAllFlag(cmd)
 	return cmd
 }

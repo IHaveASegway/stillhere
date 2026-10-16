@@ -102,6 +102,14 @@ func load(ctx context.Context, d Deps, runID int64) (*stored, error) {
 	}
 	// After the run's GitHub data: it links forge logins to the run's people.
 	s.who = identity.New(s.facts, p)
+	computed, err := s.computeUnstored()
+	if err != nil {
+		return nil, err
+	}
+	if len(computed) > 0 {
+		d.Log.Info("a stillhere older than these metrics stored the run, so it holds no value of them: they were "+
+			"computed from its facts as it was read", "run", run.ID, "metrics", strings.Join(computed, ", "))
+	}
 	return s, nil
 }
 
@@ -129,7 +137,8 @@ func withForge(ctx context.Context, d Deps, run domain.Run, fs *domain.FactSet) 
 		// replica, another snapshot than its git facts, so it is
 		// unknown rather than half of it.
 		d.Log.Warn("the run was stored before stillhere kept the pull requests a run reads: its stored GitHub numbers "+
-			"stand, and who-knows lists no reviewers for it: scan again", "run", run.ID)
+			"stand, and who-knows lists no reviewers for it, nor has a GitHub metric newer than the run (review "+
+			"coverage) a value: scan again", "run", run.ID)
 		return fs, forge, true, nil
 	}
 	// A copy: a store may hand every reader the same facts (the MCP
@@ -137,6 +146,51 @@ func withForge(ctx context.Context, d Deps, run domain.Run, fs *domain.FactSet) 
 	c := *fs
 	c.Forge = github
 	return &c, forge, false, nil
+}
+
+// computeUnstored computes the values of each metric a scan stores (its
+// Definition declares Subjects) of which the run holds none, over the run's
+// own facts, policy and GitHub data, and adds them to s.values; it returns
+// the ids it computed. Such a metric is newer than the stillhere that
+// stored the run, as landed@2 and review_coverage@1 are for a run stored
+// before #108 and #107, whose report would otherwise print "nothing landed"
+// over a run full of landings. The old run is told by its data, not by a
+// version: a metric's function over the same inputs gives what a scan by
+// this binary stores, as rankAll bootstraps a rank table the run did not
+// store (docs/spec/codebase.md#run-model), so the answer is the same every
+// time it is read. A metric that reads GitHub data is not computed for a
+// run that read none, whose value is absent by definition, and one that
+// produced no value when it was stored is computed again, to nothing.
+func (s *stored) computeUnstored() ([]string, error) {
+	held := map[domain.MetricID]bool{}
+	for _, v := range s.values {
+		held[v.Metric] = true
+	}
+	var ids []string
+	var added []domain.MetricValue
+	for _, m := range metrics.All() {
+		def := m.Definition()
+		if held[def.ID] || len(def.Subjects) == 0 || (def.Forge && s.facts.Forge == nil) {
+			continue
+		}
+		values, err := m.Compute(s.input())
+		if err != nil {
+			return nil, fmt.Errorf("computing %s over run %d's facts: %w", def.ID, s.run.ID, err)
+		}
+		if len(values) > 0 {
+			ids = append(ids, def.ID.String())
+			added = append(added, values...)
+		}
+	}
+	if len(added) > 0 {
+		// A copy, and in the store's order, metric by metric: a store may
+		// hand every reader the same slice (the MCP server caches it).
+		s.values = append(slices.Clone(s.values), added...)
+		slices.SortStableFunc(s.values, func(a, b domain.MetricValue) int {
+			return cmp.Or(cmp.Compare(a.Metric.Name, b.Metric.Name), cmp.Compare(a.Metric.Version, b.Metric.Version))
+		})
+	}
+	return ids, nil
 }
 
 // canonicalKeys upcasts the person keys of a run stored before #69, whose
@@ -359,6 +413,13 @@ func Explain(ctx context.Context, d Deps, r ExplainRequest) (*report.Explain, er
 		return nil, &domain.UsageError{Msg: fmt.Sprintf(
 			"%s about a person is shown only on their own page (ADR 0007): %s", def.ID, d.commands().OwnPage())}
 	}
+	if r.Person != "" {
+		r.Subject = domain.Subject{Kind: domain.SubjectPerson}
+		if report.OwnPageOnly(def.ID) {
+			return nil, &domain.UsageError{Msg: fmt.Sprintf(
+				"%s about a person is shown only on their own page (ADR 0007): %s", def.ID, d.commands().OwnPage())}
+		}
+	}
 	if !slices.Contains(def.Subjects, r.Subject.Kind) {
 		// No run holds an answer, so none is read.
 		return nil, explainKindError(d.commands(), def, r.Subject.Kind)
@@ -366,6 +427,15 @@ func Explain(ctx context.Context, d Deps, r ExplainRequest) (*report.Explain, er
 	s, err := load(ctx, d, r.RunID)
 	if err != nil {
 		return nil, err
+	}
+	var matched *report.Caveat
+	if r.Person != "" {
+		// The reader named the person as a page names them (PF-7).
+		p, caveat, err := s.findPerson(r.Person, d.commands())
+		if err != nil {
+			return nil, err
+		}
+		r.Subject.Key, matched = p.Key, caveat
 	}
 	var values []domain.MetricValue
 	known := false
@@ -384,7 +454,12 @@ func Explain(ctx context.Context, d Deps, r ExplainRequest) (*report.Explain, er
 			r.Subject.Kind, r.Subject.Key, s.run.ID, domain.ErrNotFound)
 	}
 	clusters := map[string][]rank.Cluster{}
+	var window domain.Window // the metric's window, which says why an empty answer is empty (#92)
+	var trace *domain.Trace
 	if rm, ok := m.(metrics.Ranked); ok && r.Subject.Kind == domain.SubjectPerson {
+		// A bot's clusters are listed too (#75): its values are in the
+		// report's bot tables. The metric keeps them apart from the people
+		// it ranks (RankInput.Bots).
 		in := s.input()
 		for _, rf := range s.facts.Repos {
 			if rf.Status != domain.RepoStatusOK {
@@ -394,16 +469,44 @@ func Explain(ctx context.Context, d Deps, r ExplainRequest) (*report.Explain, er
 			if err != nil {
 				return nil, fmt.Errorf("explaining %s: %w", def.ID, err)
 			}
-			if cs := ri.Data[r.Subject]; len(cs) > 0 {
+			window = ri.Window
+			cs := ri.Data[r.Subject]
+			if len(cs) == 0 {
+				cs = ri.Bots[r.Subject]
+			}
+			if len(cs) > 0 {
 				clusters[rf.Repo.Key] = cs
 			}
 		}
 	}
+	if tm, ok := m.(metrics.Traced); ok && r.Subject.Kind == domain.SubjectPerson {
+		// What a value that is not ranked is made of (#109).
+		t, err := tm.Trace(s.input(), r.Subject.Key)
+		if err != nil {
+			return nil, fmt.Errorf("explaining %s: %w", def.ID, err)
+		}
+		trace, window = &t, t.Window
+	}
 	run := s.run
-	return report.NewExplain(&report.ExplainInput{
+	e := report.NewExplain(&report.ExplainInput{
 		Run: &run, Facts: s.facts, Who: s.who, Metric: metricInfo(def), Subject: r.Subject,
-		Values: values, Clusters: clusters, Forge: s.forge, Commands: d.Commands,
-	}), nil
+		Values: values, Clusters: clusters, Trace: trace, Window: window, Forge: s.forge, Commands: d.Commands,
+	})
+	if matched != nil {
+		e.Caveats = append(e.Caveats, *matched)
+	}
+	return e, nil
+}
+
+// findPerson resolves a reader's name for a person in the stored run
+// (FindPerson), as the command line names people back: by id (p-…), never
+// by email, as no text page prints one, and by the --person flag.
+func (s *stored) findPerson(query string, cmds report.Commands) (NamedPerson, *report.Caveat, error) {
+	n, err := runNames(s)
+	if err != nil {
+		return NamedPerson{}, nil, err
+	}
+	return FindPerson(n, query, PersonQuery{Again: "Pass --person", Commands: cmds})
 }
 
 // explainKindError refuses to explain a metric about a kind of subject no
@@ -451,6 +554,8 @@ func explainKindOne(kind string) string {
 		return "an area"
 	case domain.SubjectChange:
 		return "a change"
+	case domain.SubjectAll:
+		return "the whole run"
 	}
 	return "a " + kind
 }
@@ -459,7 +564,7 @@ func explainKindOne(kind string) string {
 // "people", "repositories, areas and groups".
 func explainKindsMany(kinds []string) string {
 	plural := map[string]string{domain.SubjectPerson: "people", domain.SubjectRepo: "repositories",
-		domain.SubjectGroup: "groups", domain.SubjectArea: "areas", domain.SubjectChange: "changes"}
+		domain.SubjectGroup: "groups", domain.SubjectArea: "areas", domain.SubjectChange: "changes", domain.SubjectAll: "the whole run"}
 	var out []string
 	for _, k := range kinds {
 		out = append(out, cmp.Or(plural[k], k+"s"))
@@ -510,6 +615,12 @@ func WhoKnows(ctx context.Context, d Deps, r WhoKnowsRequest) (*report.WhoKnows,
 	if err != nil {
 		return nil, fmt.Errorf("computing %s: %w", report.MetricWhoKnows, err)
 	}
+	// The path's knowledge loss and concentration, by the computation a
+	// scan stores per top-level directory, for any path (#105).
+	knowledge, err := metrics.PathKnowledge(s.input(), repo, prefix)
+	if err != nil {
+		return nil, fmt.Errorf("computing the knowledge under %q: %w", prefix, err)
+	}
 	forge := s.forge
 	if s.unkept {
 		// The reviewers are computed from the pull requests, which this run
@@ -520,12 +631,76 @@ func WhoKnows(ctx context.Context, d Deps, r WhoKnowsRequest) (*report.WhoKnows,
 	run := s.run
 	w := report.NewWhoKnows(&report.WhoKnowsInput{
 		Run: &run, Facts: underPrefix(s.facts, prefix, repo), Who: s.who, Path: prefix, Repo: repo, Values: values,
-		Forge: forge, Commands: d.Commands,
+		Knowledge: knowledge, Forge: forge, Commands: d.Commands,
 	})
 	if c, ok := whoKnowsNoPath(s.facts, prefix, repo, run.ID); ok {
 		w.Caveats = append(w.Caveats, c)
+	} else if c, ok := whoKnowsNoRole(s.facts, prefix, repo, len(w.Repos)); ok {
+		w.Caveats = append(w.Caveats, c)
 	}
 	return w, nil
+}
+
+// whoKnowsNoRole is the no-values caveat (report.NoValuesCaveat) of a
+// who-knows answer that lists no one about a path that collected
+// repositories have, though none of the paths under it has a role (PF-8):
+// go.mod, which the policy leaves unclassified, or .github/, which its
+// deny list denies. who_knows@1 counts only paths with a role, so the
+// answer is empty because the policy leaves the path out, not because
+// nobody knows it; "nobody" would say the second. It counts the
+// repositories and the reasons the classifier gave, and names the command
+// that prints the policy.
+func whoKnowsNoRole(fs *domain.FactSet, prefix, repo string, listed int) (report.Caveat, bool) {
+	if prefix == "" || listed > 0 {
+		return report.Caveat{}, false
+	}
+	holding := 0
+	reasons := map[domain.Skip]int{}
+	for i := range fs.Repos {
+		rf := &fs.Repos[i]
+		if rf.Status != domain.RepoStatusOK || (repo != "" && rf.Repo.Key != repo) {
+			continue
+		}
+		found := false
+		for _, pc := range rf.Paths {
+			if !under(pc.Path, prefix) {
+				continue
+			}
+			if pc.Role != "" {
+				return report.Caveat{}, false // a path with a role: an empty answer is a real nobody
+			}
+			found = true
+			reasons[pc.Skip]++
+		}
+		if found {
+			holding++
+		}
+	}
+	if holding == 0 {
+		return report.Caveat{}, false
+	}
+	var why []string
+	for _, s := range []struct {
+		skip  domain.Skip
+		label string
+	}{{domain.SkipUnclassified, "unclassified"}, {domain.SkipDeniedPath, "denied"},
+		{domain.SkipGeneratedHeader, "generated"}, {domain.SkipTooBig, "too big"}} {
+		if n := reasons[s.skip]; n > 0 {
+			path := "paths"
+			if n == 1 {
+				path = "path"
+			}
+			why = append(why, fmt.Sprintf("%d %s %s", n, path, s.label))
+		}
+	}
+	where := "1 repository"
+	if holding > 1 {
+		where = fmt.Sprintf("%d repositories", holding)
+	}
+	return report.NoValuesCaveat(fmt.Sprintf("%q is in %s, but no path there has a role (%s), and %s counts only "+
+		"paths with one: this answer is empty because the policy leaves the path out, not because nobody knows it. "+
+		"'stillhere policy' prints the roles and the deny list; a role for it in stillhere.toml makes it count at the next scan.",
+		prefix, where, strings.Join(why, ", "), report.MetricWhoKnows)), true
 }
 
 // whoKnowsNoPathNames is how many repositories that hold the path a
@@ -712,16 +887,27 @@ func personPage(ctx context.Context, d Deps, cmd string, runID int64, email stri
 	if err != nil {
 		return nil, err
 	}
-	// Every person key is lowercased where it is made, an email by the
-	// collectors and a GitHub login by identity.Reviewer (#69), so the key
-	// a reader passes is made canonical the same way, whatever its case.
-	email = strings.ToLower(strings.TrimSpace(email))
-	if email == "" {
+	if strings.TrimSpace(email) == "" {
 		return nil, &domain.UsageError{Msg: cmd + " needs the person's email"}
 	}
 	s, err := load(ctx, d, runID)
 	if err != nil {
 		return nil, err
+	}
+	var matched *report.Caveat
+	if own {
+		// The command line names the person as a reader does: an email, a
+		// GitHub login, an id or a display name (PF-7).
+		p, caveat, err := s.findPerson(email, d.commands())
+		if err != nil {
+			return nil, err
+		}
+		email, matched = p.Key, caveat
+	} else {
+		// Every person key is lowercased where it is made, an email by the
+		// collectors and a GitHub login by identity.Reviewer (#69), so the
+		// key the MCP server passes is made canonical the same way.
+		email = strings.ToLower(strings.TrimSpace(email))
 	}
 	subject := domain.Subject{Kind: domain.SubjectPerson, Key: email}
 	var values []domain.MetricValue
@@ -749,8 +935,12 @@ func personPage(ctx context.Context, d Deps, cmd string, runID int64, email stri
 		return nil, err
 	}
 	run := s.run
-	return report.NewMe(&report.MeInput{
+	page := report.NewMe(&report.MeInput{
 		Run: &run, Facts: s.facts, Who: s.who, Email: email, Values: values, Ranks: sets, Forge: s.forge,
 		Metrics: Metrics().Metrics, Commands: d.Commands,
-	}), nil
+	})
+	if matched != nil {
+		page.Caveats = append(page.Caveats, *matched)
+	}
+	return page, nil
 }

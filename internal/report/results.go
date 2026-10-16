@@ -61,7 +61,53 @@ type Explain struct {
 	Subject    Subject    `json:"subject"`
 	Values     []Value    `json:"values"`  // one per scope and window, sorted
 	Changes    []Change   `json:"changes"` // a ranked metric's counted changes for a person; empty otherwise
-	Caveats    []Caveat   `json:"caveats"`
+	// Landings, Commits and Files are what a person's value of a metric
+	// that is not ranked is made of (#109): the landings landed@1 and
+	// landed@2 count, the blamed commits whose lines surviving@1 sums, the
+	// files majority_owner@1 counts; empty for every other metric.
+	Landings []ExplainLanding `json:"landings"` // by repository, then time
+	Commits  []ExplainCommit  `json:"commits"`  // the most surviving lines first
+	Files    []ExplainFile    `json:"files"`    // the most of the person's lines first
+	Caveats  []Caveat         `json:"caveats"`
+
+	addrs []string // the run's addresses (#90); never encoded
+}
+
+func (e *Explain) runAddresses() []string { return e.addrs }
+
+// ExplainLanding is one landing a landed value counts for the person.
+type ExplainLanding struct {
+	Repo    string    `json:"repo"` // name
+	RepoKey string    `json:"repo_key"`
+	Landing string    `json:"landing"` // full SHA
+	Time    time.Time `json:"time"`    // committer time
+	Merge   bool      `json:"merge"`
+	Title   string    `json:"title"` // the landing commit's subject: local output only, never sent to an AI
+	// Commits are the person's commits in it that the value counts:
+	// landed@2's non-merge commits, landed@1's landing commit.
+	Commits        int  `json:"commits"`
+	LinesAdded     *int `json:"lines_added"`      // what those commits added on paths with a role; null when unknown (#74)
+	ProdLinesAdded *int `json:"prod_lines_added"` // the prod subset
+}
+
+// ExplainCommit is one blamed commit whose prod lines at HEAD surviving@1
+// credits to the person: it may be older than the history.
+type ExplainCommit struct {
+	Repo    string    `json:"repo"` // name
+	RepoKey string    `json:"repo_key"`
+	Commit  string    `json:"commit"` // full SHA
+	Time    time.Time `json:"time"`   // author time
+	Title   string    `json:"title"`  // its subject when the history holds it, else ""; local output only
+	Lines   int       `json:"lines"`  // its non-blank prod lines at HEAD
+}
+
+// ExplainFile is one prod file the person holds at least half of.
+type ExplainFile struct {
+	Repo    string `json:"repo"` // name
+	RepoKey string `json:"repo_key"`
+	Path    string `json:"path"`
+	Lines   int    `json:"lines"` // the person's non-blank lines in it
+	Of      int    `json:"of"`    // the file's non-blank lines
 }
 
 // Change is one change's contribution to a person's value: a cluster, the
@@ -85,7 +131,11 @@ type WhoKnows struct {
 	Repo       string         `json:"repo"` // the --repo filter (Repo.Key), or "" for every repository
 	Repos      []WhoKnowsRepo `json:"repos"`
 	Caveats    []Caveat       `json:"caveats"`
+
+	addrs []string // the run's addresses (#90); never encoded
 }
+
+func (w *WhoKnows) runAddresses() []string { return w.addrs }
 
 // WhoKnowsRepo is who knows the path in one repository.
 type WhoKnowsRepo struct {
@@ -103,6 +153,15 @@ type WhoKnowsRepo struct {
 	// not list.
 	RecentReviewers []Knower `json:"recent_reviewers"`
 	Bots            []Knower `json:"bots"` // listed apart, never mixed into the lists above
+	// KnowledgeLoss, People and PeopleInactive are knowledge_loss@1 for the
+	// code under the path, and Concentration knowledge_concentration@1
+	// (#105): the computation a scan stores per repository and top-level
+	// directory, asked for any path (metrics.PathKnowledge). null where the
+	// metric has no value there (no person holds a line there).
+	KnowledgeLoss  *Share         `json:"knowledge_loss"`
+	People         *int           `json:"people"`          // humans holding prod lines under the path
+	PeopleInactive *int           `json:"people_inactive"` // of them, those gone quiet
+	Concentration  *Concentration `json:"concentration"`
 }
 
 // Knower is one person's knowledge of a path. Email is a reviewer's
@@ -131,7 +190,11 @@ type Me struct {
 	// as a share exactly when its metric's Ratio says so, whatever its den.
 	Metrics []MetricInfo `json:"metrics"`
 	Caveats []Caveat     `json:"caveats"`
+
+	addrs []string // the run's addresses (#90); never encoded
 }
+
+func (m *Me) runAddresses() []string { return m.addrs }
 
 // MeRank is one person's place in one rank table.
 type MeRank struct {

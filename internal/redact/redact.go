@@ -161,6 +161,27 @@ func Message(s string) string {
 	return string(runes[:cut]) + "…"
 }
 
+// PathMessage is Message for a path: the same scrub and one line, but a
+// path longer than 180 runes keeps its end, beginning "…", since what is
+// wrong with a path is most often its last segments, which a cut at the end
+// would drop. The cut never leaves a combining mark without the character
+// it belongs to.
+func PathMessage(s string) string {
+	s = Scrub(strings.ToValidUTF8(s, "�"))
+	s = strings.Join(strings.Fields(strings.Map(controlToSpace, s)), " ")
+	if utf8.RuneCountInString(s) <= maxMessage {
+		return s
+	}
+	runes := []rune(s)
+	from := len(runes) - (maxMessage - 1)
+	// runes[from] is the first rune kept. While it is a combining mark, the
+	// character it modifies was cut: drop the mark too.
+	for from < len(runes) && unicode.In(runes[from], unicode.Mn, unicode.Me, unicode.Mc) {
+		from++
+	}
+	return "…" + string(runes[from:])
+}
+
 func controlToSpace(r rune) rune {
 	if unicode.IsControl(r) {
 		return ' '

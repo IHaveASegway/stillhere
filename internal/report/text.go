@@ -20,6 +20,9 @@ func (m *Model) writeText(p *printer) {
 	textHeader(p, m)
 	textCaveats(p, "", "What could make this wrong", m.Caveats, false)
 	for i := range m.Overviews {
+		if m.repeats(&m.Overviews[i]) {
+			continue
+		}
 		p.blank()
 		textOverview(p, m, &m.Overviews[i])
 	}
@@ -40,12 +43,24 @@ func (m *Model) writeText(p *printer) {
 	}
 }
 
+// repeats reports whether an overview says only what the card of its one
+// repository, printed further down the same page, says: a run of one
+// repository, or a group of one. Text and Markdown leave it out, so that
+// no person is listed twice on one page (SR-14); JSON keeps it, so each
+// section reads on its own.
+func (m *Model) repeats(o *Overview) bool {
+	if o.Totals.Repos != 1 || len(o.Repos) != 1 {
+		return false
+	}
+	return slices.ContainsFunc(m.Repos, func(r Repo) bool { return r.Key == o.Repos[0].Key })
+}
+
 func textHeader(p *printer, m *Model) {
 	title := "stillhere " + m.Kind
 	if m.Run != nil {
 		title += fmt.Sprintf(" · run %d (%s)", m.Run.ID, clean(m.Run.Status))
 	}
-	p.line(title + " · as of " + day(m.Now))
+	p.line(title + " · as of " + dayUTC(m.Now))
 	p.wrapped("", "  ", policyText(m, clean))
 	p.wrapped("", "  ", windowSummary(m, clean))
 	if m.Kind == KindScan {
@@ -70,16 +85,16 @@ func policyText(m *Model, esc func(string) string) string {
 	return s + " · stillhere " + esc(m.Tool.Version)
 }
 
-// windowSummary is "landed window 2026-09-30 → 2026-10-07: 7 days (policy),
-// sorted by lines_added (policy)".
+// windowSummary is "landed window 2026-09-30 → 2026-10-07 UTC: 7 days
+// (policy), sorted by lines_added (policy)".
 func windowSummary(m *Model, esc func(string) string) string {
 	w := m.Window
 	return fmt.Sprintf("landed window %s: %s (%s), sorted by %s (%s)", interval(Interval{Since: w.Since, Until: w.Until}),
 		plural(w.Days, "day", "days"), fromText(w.DaysFrom, "--days"), esc(w.Sort), fromText(w.SortFrom, "--week-sort"))
 }
 
-// historySummary is "history 2025-10-07 → 2026-10-07: the landings scan
-// collected".
+// historySummary is "history 2025-10-07 → 2026-10-07 UTC: the landings
+// scan collected".
 func historySummary(m *Model) string {
 	return "history " + interval(m.History) + ": the landings the scan collected"
 }
@@ -209,8 +224,16 @@ func textOverview(p *printer, m *Model, o *Overview) {
 	if line := shareLine(o.KnowledgeLoss, o.AIAssisted, o.BotShare); line != "" {
 		p.wrapped("  ", "  ", line)
 	}
+	if o.ReviewCoverage != nil {
+		p.wrapped("  ", "    ", coverageText(o.ReviewCoverage, t.Repos))
+	}
 	if o.Concentration != nil {
 		p.wrapped("  ", "  ", concentrationText(o.Concentration))
+	}
+	if len(o.Repos) > 1 {
+		p.blank()
+		p.wrapped("  ", "    ", "Repositories: "+repoLegend(m, o.Repos))
+		textRepoTable(p, "    ", m, o.Repos)
 	}
 	if o.People != nil {
 		p.blank()
@@ -218,7 +241,7 @@ func textOverview(p *printer, m *Model, o *Overview) {
 			across(o.Scope), plural(o.People.FilesBlamed, "file", "files"))
 		textPeople(p, "    ", o.People)
 	}
-	if o.Week != nil {
+	if o.Week != nil || o.Totals.ReposOK > 0 {
 		p.blank()
 		textWeek(p, "  ", m, o.Week)
 	}
@@ -232,7 +255,12 @@ func peopleSummary(t Totals) string {
 	if t.People != nil {
 		parts = append(parts, plural(*t.People, "person", "people")+" with surviving prod lines")
 	}
-	parts = append(parts, plural(t.Landers, "person", "people")+" landed in the window", plural(t.Bots, "bot", "bots"))
+	if t.Landers != nil {
+		parts = append(parts, plural(*t.Landers, "person", "people")+" landed in the window")
+	} else {
+		parts = append(parts, "who landed in the window is unknown")
+	}
+	parts = append(parts, plural(t.Bots, "bot", "bots"))
 	return strings.Join(parts, " · ")
 }
 
@@ -249,6 +277,144 @@ func shareLine(loss, ai, bots *Share) string {
 		parts = append(parts, "bot share "+share(bots, "lines"))
 	}
 	return strings.Join(parts, " · ")
+}
+
+// coverageText is "review coverage 61.5% (24 of 39 human landings, 90 days)
+// · 12 pull requests merged without another's review · 3 landings with no
+// pull request in the GitHub data · 4 reviewed only by an approval with no
+// comment", with the landings it left out, after the last sync or naming a
+// pull request the data lacks, and, for a section
+// over more repositories than have GitHub data, "· over 3 of 5
+// repositories, those with GitHub data" (#107).
+func coverageText(c *ReviewCoverage, repos int) string {
+	s := fmt.Sprintf("review coverage %s (%s of %s, %s)", percent(c.Value), number(c.Num),
+		plural(count(c.Den), "human landing", "human landings"), plural(windowDays(c.Window), "day", "days"))
+	parts := []string{s}
+	if n := c.ViaPullRequest - count(c.Num); n > 0 {
+		parts = append(parts, plural(n, "pull request", "pull requests")+" merged without another's review")
+	}
+	if c.Direct > 0 {
+		parts = append(parts, plural(c.Direct, "landing", "landings")+" with no pull request in the GitHub data")
+	}
+	if c.AfterSync > 0 {
+		parts = append(parts, plural(c.AfterSync, "landing", "landings")+" since the last sync, left out")
+	}
+	if c.Unmatched > 0 {
+		parts = append(parts, plural(c.Unmatched, "landing", "landings")+
+			" naming a pull request the GitHub data lacks, left out (sync github again)")
+	}
+	if c.ApprovedNoComment > 0 {
+		parts = append(parts, grouped(c.ApprovedNoComment)+" reviewed only by an approval with no comment")
+	}
+	if repos > c.Repos {
+		parts = append(parts, fmt.Sprintf("over %d of %d repositories, those with GitHub data", c.Repos, repos))
+	}
+	return strings.Join(parts, " · ")
+}
+
+// repoLegend says what the repository table's short column heads mean:
+// "landings in the last 7 and 365 days · people: with surviving prod lines
+// · ...".
+func repoLegend(m *Model, rows []RepoRow) string {
+	cols, _ := repoTable(m, rows, clean)
+	var days, parts []string
+	for _, c := range cols[1:] {
+		if n, ok := strings.CutSuffix(c.head, "d"); ok && n != "" && strings.Trim(n, "0123456789") == "" {
+			days = append(days, n)
+		} else if s := repoColumnLegend[c.head]; s != "" {
+			parts = append(parts, c.head+": "+s)
+		}
+	}
+	return strings.Join(append([]string{"landings in the last " + joinNames(days) + " days"}, parts...), " · ")
+}
+
+// repoColumnLegend explains each head of the repository table but the
+// landings' ("7d", "365d"), which repoLegend words.
+var repoColumnLegend = map[string]string{
+	"people":       "with surviving prod lines",
+	"loss":         "knowledge loss",
+	"authors":      "who hold the majority in half the files with a majority owner",
+	"reviewed":     "review coverage in 90 days",
+	"last landing": "the newest in the history, UTC",
+}
+
+// textRepoTable prints an overview's repositories, one per line (#105).
+// A column every row leaves empty, such as the people of a week report,
+// is left out.
+func textRepoTable(p *printer, indent string, m *Model, rows []RepoRow) {
+	cols, cells := repoTable(m, rows, clean)
+	p.textTable(indent, cols, cells)
+}
+
+// repoTable lays out an overview's repositories for text and Markdown: the
+// landings in the landed window and the history, and, where any row has
+// one, the card's people, prod lines, knowledge loss, concentration,
+// review coverage and last landing; "—" where a row has none.
+func repoTable(m *Model, rows []RepoRow, esc func(string) string) ([]column, [][]string) {
+	type col struct {
+		c    column
+		has  func(RepoRow) bool
+		cell func(RepoRow) string
+	}
+	pct := func(s *Share) string {
+		if s == nil {
+			return "—"
+		}
+		return percent(s.Value)
+	}
+	all := []col{
+		{column{head: "repository"}, func(RepoRow) bool { return true }, func(r RepoRow) string {
+			if r.Status != "ok" {
+				return esc(r.Name) + " (failed)"
+			}
+			return esc(r.Name)
+		}},
+		{column{head: fmt.Sprintf("%dd", m.Window.Days), right: true}, func(RepoRow) bool { return true },
+			func(r RepoRow) string { return grouped(r.LandingsWindow) }},
+		{column{head: fmt.Sprintf("%dd", windowDays(m.History)), right: true}, func(RepoRow) bool { return m.Kind == KindScan },
+			func(r RepoRow) string { return grouped(r.LandingsHistory) }},
+		{column{head: "people", right: true}, func(r RepoRow) bool { return r.People != nil },
+			func(r RepoRow) string { return knownCount(r.People) }},
+		{column{head: "prod lines", right: true}, func(r RepoRow) bool { return r.ProdLines != nil },
+			func(r RepoRow) string { return knownCount(r.ProdLines) }},
+		{column{head: "loss", right: true}, func(r RepoRow) bool { return r.KnowledgeLoss != nil },
+			func(r RepoRow) string { return pct(r.KnowledgeLoss) }},
+		{column{head: "authors", right: true}, func(r RepoRow) bool { return r.AuthorsInPrefix != nil },
+			func(r RepoRow) string { return knownCount(r.AuthorsInPrefix) }},
+		{column{head: "reviewed", right: true}, func(r RepoRow) bool { return r.ReviewCoverage != nil },
+			func(r RepoRow) string {
+				if r.ReviewCoverage == nil {
+					return "—"
+				}
+				return percent(r.ReviewCoverage.Value)
+			}},
+		{column{head: "last landing"}, func(r RepoRow) bool { return r.LastLanding != nil },
+			func(r RepoRow) string {
+				if r.LastLanding == nil {
+					return "—"
+				}
+				return date(*r.LastLanding)
+			}},
+	}
+	var used []col
+	for _, c := range all {
+		if slices.ContainsFunc(rows, c.has) {
+			used = append(used, c)
+		}
+	}
+	cols := make([]column, len(used))
+	for i, c := range used {
+		cols[i] = c.c
+	}
+	var cells [][]string
+	for _, r := range rows {
+		row := make([]string, len(used))
+		for i, c := range used {
+			row[i] = c.cell(r)
+		}
+		cells = append(cells, row)
+	}
+	return cols, cells
 }
 
 // concentrationText is "majority-owner concentration: 2 authors (0 bots)
@@ -275,7 +441,7 @@ func textPeople(p *printer, indent string, t *StillHere) {
 		return []string{p.person(r.Email, r.Name, r.NameWithheld, clean), grouped(r.ProdNonblankLines),
 			grouped(r.MajorityFiles), grouped(r.Repos), grouped(r.Landings365d)}
 	}
-	p.textTable(indent, cols, withBots(t.Humans, t.Bots, row, len(cols)))
+	textPersonTable(p, indent, cols, t.Humans, t.Bots, row)
 }
 
 func textStillHere(p *printer, indent string, t *StillHere) {
@@ -284,12 +450,30 @@ func textStillHere(p *printer, indent string, t *StillHere) {
 		return
 	}
 	cols := []column{{head: "person"}, {head: "prod lines", right: true}, {head: "majority files", right: true},
-		{head: "other roles"}}
+		{head: "landings 365d", right: true}, {head: "other roles"}}
 	row := func(r StillHereRow) []string {
 		return []string{p.person(r.Email, r.Name, r.NameWithheld, clean), grouped(r.ProdNonblankLines),
-			grouped(r.MajorityFiles), otherRoles(r.LinesByRole)}
+			grouped(r.MajorityFiles), grouped(r.Landings365d), otherRoles(r.LinesByRole)}
 	}
-	p.textTable(indent, cols, withBots(t.Humans, t.Bots, row, len(cols)))
+	textPersonTable(p, indent, cols, t.Humans, t.Bots, row)
+}
+
+// textPersonTable prints a table of people, the first pageRows of the
+// humans and of the bots, and counts the rest (SR-14).
+func textPersonTable[R any](p *printer, indent string, cols []column, humans, bots []R, row func(R) []string) {
+	h, hiddenH := shown(p, humans, pageRows)
+	b, hiddenB := shown(p, bots, pageRows)
+	p.textTable(indent, cols, withBots(h, b, row, len(cols)))
+	var more []string
+	if s := moreText(hiddenH, "person", "people"); s != "" {
+		more = append(more, s)
+	}
+	if s := moreText(hiddenB, "bot", "bots"); s != "" {
+		more = append(more, s)
+	}
+	if len(more) > 0 {
+		p.wrapped(indent, indent, strings.Join(more, " · "))
+	}
 }
 
 // otherRoles is "test 6 · iac 2": the lines a person holds outside prod.
@@ -308,20 +492,71 @@ func otherRoles(byRole map[string]int) string {
 	return strings.Join(parts, " · ")
 }
 
+// textWeek prints a scope's what-landed table; t nil is a window its
+// history does not cover, whose landings are unknown (#74).
 func textWeek(p *printer, indent string, m *Model, t *WeekTable) {
 	w := Interval{Since: m.Window.Since, Until: m.Window.Until}
+	if t == nil {
+		p.wrapped(indent, indent+"  ", "What landed, "+interval(w)+": "+weekUnknown)
+		return
+	}
 	if len(t.Humans) == 0 && len(t.Bots) == 0 {
 		p.linef("%sWhat landed, %s: nothing", indent, interval(w))
 		return
 	}
 	p.linef("%sWhat landed, %s, by %s", indent, interval(w), strings.ReplaceAll(clean(m.Window.Sort), "_", " "))
-	cols := []column{{head: "person"}, {head: "commits", right: true}, {head: "lines added", right: true},
-		{head: "prod lines added", right: true}}
-	row := func(r WeekRow) []string {
-		return []string{p.person(r.Email, r.Name, r.NameWithheld, clean), grouped(r.Commits), grouped(r.LinesAdded),
-			grouped(r.ProdLinesAdded)}
+	if t.Total != nil {
+		p.wrapped(indent+"  ", indent+"    ", weekTotalText(t.Total))
 	}
-	p.textTable(indent+"  ", cols, withBots(t.Humans, t.Bots, row, len(cols)))
+	cols, row := weekColumns(p, t, clean)
+	textPersonTable(p, indent+"  ", cols, t.Humans, t.Bots, row)
+}
+
+// weekUnknown is what a page says of a window whose landings are unknown:
+// no table, never "nothing".
+const weekUnknown = "unknown: the history this run read does not cover the window (a shallow clone's history ends " +
+	"inside it), so its landings are not counted, which is not the same as none"
+
+// weekTotalText is "9 landings · 10 commits · 1 merge · 24 lines added, 20
+// prod": landed@2's numbers about the scope, each landing once (#108).
+func weekTotalText(t *WeekTotal) string {
+	parts := []string{plural(t.Landings, "landing", "landings"), plural(t.Commits, "commit", "commits")}
+	if t.Merged > 0 {
+		parts = append(parts, plural(t.Merged, "merge", "merges"))
+	}
+	if t.LinesAdded != nil {
+		s := grouped(*t.LinesAdded) + " lines added"
+		if t.ProdLinesAdded != nil {
+			s += ", " + grouped(*t.ProdLinesAdded) + " prod"
+		}
+		parts = append(parts, s)
+	}
+	if t.LinesUnknown > 0 {
+		parts = append(parts, "lines unknown for "+plural(t.LinesUnknown, "landing", "landings")+" (a partial clone has no numstat)")
+	}
+	return strings.Join(parts, " · ")
+}
+
+// weekColumns are a week table's columns and how a row fills them: the
+// landings that hold the person's commits (#108), the commits, the lines
+// they added ("—" where unknown) and, when any row has one, the merge
+// landings whose merge commit is theirs.
+func weekColumns(p *printer, t *WeekTable, esc func(string) string) ([]column, func(WeekRow) []string) {
+	merged := slices.ContainsFunc(t.Humans, func(r WeekRow) bool { return r.Merged > 0 }) ||
+		slices.ContainsFunc(t.Bots, func(r WeekRow) bool { return r.Merged > 0 })
+	cols := []column{{head: "person"}, {head: "landings", right: true}, {head: "commits", right: true},
+		{head: "lines added", right: true}, {head: "prod lines added", right: true}}
+	if merged {
+		cols = append(cols, column{head: "merges", right: true})
+	}
+	return cols, func(r WeekRow) []string {
+		cells := []string{p.person(r.Email, r.Name, r.NameWithheld, esc), grouped(r.Landings), grouped(r.Commits),
+			knownCount(r.LinesAdded), knownCount(r.ProdLinesAdded)}
+		if merged {
+			cells = append(cells, grouped(r.Merged))
+		}
+		return cells
+	}
 }
 
 // withBots lays out a table's human rows, then a "bots" row, then the bot
@@ -351,27 +586,85 @@ func textRanks(p *printer, t *RankTable) {
 	if len(t.Ranked) == 0 && len(t.BelowMin) == 0 && len(t.Bots) == 0 {
 		p.line("  nobody has a value")
 	} else {
-		cols := []column{{head: "#"}, {head: "person"}, {head: metricName(t.Metric), right: true},
-			{head: "95% interval", right: true}, {head: "n", right: true}}
-		name := func(r RankRow) string { return p.person(r.Email, r.Name, r.NameWithheld, clean) }
-		var rows [][]string
-		for _, r := range t.Ranked {
-			rows = append(rows, []string{rankText(r.RankLo, r.RankHi), name(r), estimateText(r.Estimate, t.Percent),
-				intervalText(r.Lo, r.Hi, t.Percent), grouped(r.N)})
+		cols, rows, notes := rankRows(p, t, clean, false)
+		if len(rows) > 0 { // a table of no row, its people only counted, prints no header
+			p.textTable("  ", cols, rows)
 		}
-		for _, r := range t.BelowMin {
-			rows = append(rows, []string{"—", name(r), "", "", grouped(r.N)})
+		for _, n := range notes {
+			p.wrapped("  ", "  ", n)
 		}
-		if len(t.Bots) > 0 {
-			rows = append(rows, []string{"", "bots", "", "", ""})
-			for _, r := range t.Bots {
-				rows = append(rows, []string{"—", name(r), estimateText(r.Estimate, t.Percent), "", grouped(r.N)})
-			}
-		}
-		p.textTable("  ", cols, rows)
 	}
-	p.wrapped("  ", "  ", rankFooter(t))
+	p.wrapped("  ", "  ", rankFooter(p, t))
 	textCaveats(p, "  ", "What could make this wrong", t.Caveats, true)
+}
+
+// rankRows lays out a rank table for text and Markdown: the first pageRows
+// ranked rows, then the people below the minimum, collapsed to a count
+// unless the page prints every row (SR-14: a table of 3 ranked people and
+// 53 blank rows reads as noise), then the bots. A table whose metric names
+// a counterweight (RankTable.Beside) shows it in a column of its own
+// (PF-5). notes are the lines that count what the table leaves out. md
+// marks each bot's row "bot", as a Markdown table has no label rows; text
+// puts the bots under a "bots" row.
+func rankRows(p *printer, t *RankTable, esc func(string) string, md bool) ([]column, [][]string, []string) {
+	cols := []column{{head: "#"}, {head: "person"}, {head: metricName(t.Metric), right: true},
+		{head: "95% interval", right: true}, {head: "n", right: true}}
+	if t.Beside != "" {
+		cols = append(cols, column{head: strings.ReplaceAll(t.Beside, "_", " "), right: true})
+	}
+	name := func(r RankRow) string { return p.person(r.Email, r.Name, r.NameWithheld, esc) }
+	beside := func(r RankRow) []string {
+		if t.Beside == "" {
+			return nil
+		}
+		if r.Beside == nil {
+			return []string{""}
+		}
+		if strings.HasSuffix(t.Beside, "_share") {
+			return []string{percent0(*r.Beside)}
+		}
+		return []string{number(*r.Beside)}
+	}
+	blank := func(cells ...string) []string {
+		for len(cells) < len(cols) {
+			cells = append(cells, "")
+		}
+		return cells
+	}
+	var rows [][]string
+	var notes []string
+	ranked, hidden := shown(p, t.Ranked, pageRows)
+	for _, r := range ranked {
+		rows = append(rows, append([]string{rankText(r.RankLo, r.RankHi), name(r), estimateText(r.Estimate, t.Percent),
+			intervalText(r.Lo, r.Hi, t.Percent), grouped(r.N)}, beside(r)...))
+	}
+	if hidden > 0 {
+		notes = append(notes, moreText(hidden, "person ranked", "people ranked"))
+	}
+	if p.all {
+		for _, r := range t.BelowMin {
+			rows = append(rows, blank(append([]string{"—", name(r), "", "", grouped(r.N)}, beside(r)...)...))
+		}
+	} else if n := len(t.BelowMin); n > 0 {
+		notes = append(notes, fmt.Sprintf("%s listed, not ranked: fewer than %d changes each (--all lists them)",
+			plural(n, "person", "people"), t.MinN))
+	}
+	if len(t.Bots) > 0 {
+		bots, hiddenBots := shown(p, t.Bots, pageRows)
+		mark := "bot"
+		if !md {
+			mark = "—"
+			rows = append(rows, blank("", "bots"))
+		}
+		for _, r := range bots {
+			rows = append(rows, blank(append([]string{mark, name(r), estimateText(r.Estimate, t.Percent), "", grouped(r.N)},
+				beside(r)...)...))
+		}
+		if hiddenBots > 0 {
+			notes = append(notes, moreText(hiddenBots, "bot", "bots"))
+		}
+	}
+	return cols, rows, notes
 }
 
 // rankForgeAsOf dates a rank table of a metric that reads GitHub data, and
@@ -383,10 +676,15 @@ func rankForgeAsOf(t *RankTable) string {
 	return forgeAsOf(t.Provenance.Forge)
 }
 
-// rankFooter explains how to read a rank table, as product.md shows it.
-func rankFooter(t *RankTable) string {
-	return fmt.Sprintf("— is listed, not ranked: fewer than %d changes · intervals are 95%% · "+
-		"ranks overlap when intervals do · bots are never ranked", t.MinN)
+// rankFooter explains how to read a rank table, as product.md shows it;
+// the rows marked "—" only where the page lists the people below the
+// minimum, which it otherwise counts (rankRows).
+func rankFooter(p *printer, t *RankTable) string {
+	s := "intervals are 95% · ranks overlap when intervals do · bots are never ranked"
+	if p.all && len(t.BelowMin) > 0 {
+		s = fmt.Sprintf("— is listed, not ranked: fewer than %d changes · ", t.MinN) + s
+	}
+	return s
 }
 
 // metricName is the column head for a metric: "durable" for durable@1.
@@ -460,10 +758,8 @@ func textRepo(p *printer, m *Model, r *Repo) {
 		return
 	}
 	textCard(p, m, r)
-	if r.Week != nil {
-		p.blank()
-		textWeek(p, "  ", m, r.Week)
-	}
+	p.blank()
+	textWeek(p, "  ", m, r.Week)
 	if r.StillHere != nil {
 		p.blank()
 		p.linef("  Still here at %s: surviving non-blank lines (%s blamed)", short(r.Head),
@@ -495,7 +791,7 @@ func cardFacts(m *Model, r *Repo) string {
 	c := &r.Card
 	var facts []string
 	if c.Age != nil {
-		facts = append(facts, fmt.Sprintf("age %s (first commit %s)", plural(c.Age.Days, "day", "days"), date(c.Age.FirstCommit)))
+		facts = append(facts, fmt.Sprintf("age %s (first commit %s UTC)", plural(c.Age.Days, "day", "days"), date(c.Age.FirstCommit)))
 	}
 	facts = append(facts, fmt.Sprintf("%s at HEAD, %s", plural(c.Size.Files, "file", "files"),
 		plural(c.Size.ProdPaths, "prod path", "prod paths")))
@@ -551,8 +847,45 @@ func textCard(p *printer, m *Model, r *Repo) {
 	if line := shareLine(c.KnowledgeLoss, c.AIAssisted, c.BotShare); line != "" {
 		p.wrapped("  ", "  ", line)
 	}
+	if c.ReviewCoverage != nil {
+		p.wrapped("  ", "    ", coverageText(c.ReviewCoverage, 1))
+	}
 	if c.Concentration != nil {
 		p.wrapped("  ", "  ", concentrationText(c.Concentration))
 	}
 	p.wrapped("  ", "  ", skippedText(r, clean))
+	if len(c.Areas) > 0 {
+		p.blank()
+		p.line("  Areas: top-level directories, by the prod lines people hold there")
+		cols, rows, more := areaTable(p, c.Areas, clean)
+		p.textTable("    ", cols, rows)
+		if more != "" {
+			p.line("    " + more)
+		}
+	}
+}
+
+// areaTable lays out a card's areas for text and Markdown (#105): the first
+// areaRows, largest first, each with the lines people hold there, their
+// knowledge loss, how many of its people have gone quiet, and the authors
+// who hold the majority in half its files with a majority owner; more
+// counts the rest.
+func areaTable(p *printer, areas []Area, esc func(string) string) (cols []column, rows [][]string, more string) {
+	cols = []column{{head: "area"}, {head: "lines", right: true}, {head: "knowledge loss", right: true},
+		{head: "people gone quiet", right: true}, {head: "authors", right: true}}
+	list, hidden := shown(p, areas, areaRows)
+	for _, a := range list {
+		loss, quiet, authors := "—", "—", "—"
+		if a.KnowledgeLoss != nil {
+			loss = percent(a.KnowledgeLoss.Value)
+		}
+		if a.People != nil && a.PeopleInactive != nil {
+			quiet = grouped(*a.PeopleInactive) + " of " + grouped(*a.People)
+		}
+		if a.Concentration != nil {
+			authors = grouped(a.Concentration.AuthorsInPrefix)
+		}
+		rows = append(rows, []string{esc(a.Path), grouped(a.Lines), loss, quiet, authors})
+	}
+	return cols, rows, moreText(hidden, "area", "areas")
 }

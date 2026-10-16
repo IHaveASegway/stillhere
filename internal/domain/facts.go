@@ -16,6 +16,17 @@ type Repo struct {
 	Partial bool   // a partial clone: no line facts
 }
 
+// Boundary reports whether c is where the repository's shallow clone ends:
+// a commit the clone holds without its parents, which git prints with
+// none. Its diff against the empty tree is its whole tree, not its change,
+// so the history collector gives it no FileChange; the metrics place a
+// window inside a shallow clone's history by it; and a diff of it is no
+// change of its own (docs/spec/week-collector.md). It is the one rule for
+// the boundary: a commit with no parent in a shallow clone, which can also
+// be a real root that the clone's depth reached, since git tells the two
+// apart nowhere in what it prints.
+func (r Repo) Boundary(c *Commit) bool { return r.Shallow && len(c.Parents) == 0 }
+
 // Group is a directory named on the command line whose immediate children
 // are repositories.
 type Group struct {

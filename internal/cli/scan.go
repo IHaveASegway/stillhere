@@ -32,7 +32,7 @@ Each PATH is a repository or a group, as for week. scan never fetches and
 never calls GitHub: the pull requests and reviews it counts are the ones
 'stillhere sync github' last copied into facts.db, and the run records when
 that was, which every report of it shows.`,
-		Args: usageArgs(cobra.MinimumNArgs(1)),
+		Args: pathsArgs,
 		RunE: func(cmd *cobra.Command, paths []string) error {
 			ids, err := parseMetricIDs(ranks)
 			if err != nil {
@@ -73,5 +73,6 @@ that was, which every report of it shows.`,
 	addRankFlag(cmd, &ranks)
 	f.StringVar(&scope, "scope", domain.ScopeGroup, "rank within each group, or across everything: group or all")
 	addExcludeFlag(cmd, &exclude)
+	e.addAllFlag(cmd)
 	return cmd
 }

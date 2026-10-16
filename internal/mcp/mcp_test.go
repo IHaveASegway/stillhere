@@ -172,11 +172,11 @@ func TestMCPTools(t *testing.T) {
 			!slices.Contains(pv.Metrics, "surviving@1") {
 			t.Errorf("fixture provenance %+v, want run 1, its HEAD, the digest and the metric versions", pv)
 		}
-		// metrics names every number's metric: the week table's landed@1
+		// metrics names every number's metric: the week table's landed@2
 		// beside the card's, and none the scan ranked, since no rank table
 		// was asked for.
-		if !slices.Contains(pv.Metrics, "landed@1") || slices.Contains(pv.Metrics, "durable@1") {
-			t.Errorf("fixture provenance metrics %v, want landed@1 and no durable@1", pv.Metrics)
+		if !slices.Contains(pv.Metrics, "landed@2") || slices.Contains(pv.Metrics, "durable@1") {
+			t.Errorf("fixture provenance metrics %v, want landed@2 and no durable@1", pv.Metrics)
 		}
 
 		// The sibling's surviving@1 credit, and the platform's durable@1
@@ -364,6 +364,14 @@ func TestMCPTools(t *testing.T) {
 			if c.Title != "" {
 				t.Errorf("explain shows the subject of %s without --allow-source", c.Landing)
 			}
+		}
+		// What a value that is not ranked is made of (#109): Bob's one
+		// landing of the week that holds a commit of his, delta; the merge
+		// of Cara's branch, his only by its merge commit, holds none.
+		var l explainOut
+		decode(t, ask(t, "explain", map[string]any{"metric": "landed", "subject": "Bob Builder"}), &l)
+		if len(l.Landings) != 1 || l.Landings[0].Commits != 1 || l.Landings[0].Title != "" || l.Landings[0].Merge {
+			t.Errorf("explain(landed, Bob) lists the landings %+v, want delta's alone, 1 commit, with no subject", l.Landings)
 		}
 		refused(t, "explain", map[string]any{"metric": "ai_assisted", "subject": "Omar Ops"})
 		decode(t, ask(t, "explain", map[string]any{"metric": "knowledge_loss", "subject": "fixture", "subject_kind": "repo"}), &e)

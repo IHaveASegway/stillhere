@@ -177,8 +177,10 @@ func TestPolicy(t *testing.T) {
 		got := summary(p)
 		for _, want := range []string{
 			`version=1 headline={Metric:prod_nonblank_lines} week={Days:7 Sort:lines_added} blame={MaxBytes:400000}`,
-			`bots=["[bot]" "copilot" "dependabot" "renovate" "github-actions" "gpt-engineer"]`,
-			`ai=1 ["noreply@anthropic.com" "aider@aider.chat"] ["copilot"]`,
+			`bots=["[bot]" "copilot" "dependabot" "renovate" "github-actions" "gpt-engineer" "noreply@github.com"]`,
+			// #102: GitHub Copilot's co-author addresses, one per app account.
+			`ai=2 ["noreply@anthropic.com" "aider@aider.chat" "175728472+copilot@users.noreply.github.com" ` +
+				`"198982749+copilot@users.noreply.github.com" "223556219+copilot@users.noreply.github.com"] ["copilot"]`,
 			`names=map[CMakeLists.txt:iac Containerfile:iac Dockerfile:iac Makefile:iac Procfile:iac]`,
 			"rule test (^|/)(tests|test|__tests__|spec|testing)(/|$) [prod sql markup iac]\n",
 			"rule migration (^|/)migrations(/|$) [prod]\n",

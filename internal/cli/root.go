@@ -106,6 +106,7 @@ type env struct {
 	mailmapPath string
 	logLevel    string
 	format      string
+	all         bool // --all on report, scan, week, explain and who-knows: every row of every table (SR-14)
 
 	log *slog.Logger // stderr, at --log-level; built by setup
 
@@ -237,6 +238,11 @@ func (e *env) with(ctx context.Context, n need, fn func(app.Deps) error) (err er
 		if err != nil {
 			return err
 		}
+		if n.write {
+			// Where the run goes, said once, as an absolute path (RB-12):
+			// a relative --db names a file in the working directory.
+			e.log.Info("facts database", "path", redact.Scrub(e.database))
+		}
 		d.Store, d.ForgeStore = store, store
 		defer func() {
 			if cerr := store.Close(); cerr != nil {
@@ -277,10 +283,12 @@ func (e *env) gitRunner(ctx context.Context) (*gitcli.Runner, error) {
 		e.log.Info("using the mailmap in the working directory (--mailmap names another)", "file", mailmap)
 	}
 	// git reads the file in every repository and silently ignores one it
-	// cannot open, so check it here, once.
+	// cannot open, so check it here, once, and say which lines it will skip
+	// or cut (RB-17).
 	if err := readable(flag, mailmap); err != nil {
 		return nil, err
 	}
+	checkMailmap(e.log, fileLabel(flag, mailmap), mailmap)
 	return gitcli.New(ctx, gitcli.Config{MailmapFile: mailmap, Logger: e.log})
 }
 
@@ -400,11 +408,20 @@ func (e *env) databasePath() (string, error) {
 }
 
 // stillhereHome returns $STILLHERE_HOME, which defaults to ~/.stillhere: the
-// directory for facts.db and the managed mirrors.
+// directory for facts.db and the managed mirrors. A relative one is
+// refused (RB-12): it would name another facts database in every directory
+// a command runs in, so a report run elsewhere than its scan would find
+// none, as the XDG Base Directory specification rules for its own
+// variables ("All paths set in these environment variables must be
+// absolute").
 func stillhereHome() (string, error) {
 	if home := os.Getenv("STILLHERE_HOME"); home != "" {
 		if err := localPath("STILLHERE_HOME", home); err != nil {
 			return "", err
+		}
+		if !filepath.IsAbs(home) {
+			return "", usagef("STILLHERE_HOME %q is a relative path, which names another facts database in every directory "+
+				"a command runs in: set it to an absolute path (such as \"$PWD/%s\"), or pass --db", home, home)
 		}
 		return home, nil
 	}
@@ -434,16 +451,37 @@ func (e *env) printAnswer(d report.Document, err error) error {
 	return e.render(d)
 }
 
-// render writes d to stdout in the chosen --format.
+// render writes d to stdout in the chosen --format: text and Markdown the
+// first rows of each table, or every row with --all; JSON every row.
 func (e *env) render(d report.Document) error {
+	var opts []report.Option
+	if e.all {
+		opts = append(opts, report.AllRows())
+	}
 	switch e.format {
 	case formatJSON:
 		return report.JSON(e.stdout, d)
 	case formatMarkdown:
-		return report.Markdown(e.stdout, d)
+		return report.Markdown(e.stdout, d, opts...)
 	default:
-		return report.Text(e.stdout, d)
+		return report.Text(e.stdout, d, opts...)
 	}
+}
+
+// addAllFlag defines --all, which render reads.
+func (e *env) addAllFlag(cmd *cobra.Command) {
+	cmd.Flags().BoolVar(&e.all, "all", false,
+		"print every row of every table in text and Markdown (default: the first 10 of each, then how many more); JSON holds every row")
+}
+
+// pathsArgs is the argument check of week and scan: at least one PATH, said
+// in stillhere's words rather than cobra's (RB-19).
+func pathsArgs(cmd *cobra.Command, args []string) error {
+	if len(args) == 0 {
+		return usagef("%s needs at least one PATH: a repository, or a group directory whose immediate children are "+
+			"repositories, such as '%s .' (see '%s --help')", cmd.Name(), cmd.CommandPath(), cmd.CommandPath())
+	}
+	return nil
 }
 
 // timeFlag is a pflag.Value that parses an RFC 3339 time, or a date that

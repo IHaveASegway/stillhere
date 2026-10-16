@@ -39,6 +39,9 @@ type Commands interface {
 	// OwnPage names where a person's own page is, which alone shows their
 	// own AI-assisted share (ADR 0007).
 	OwnPage() string
+	// PersonKeys names where the reader finds the id or the email that
+	// names a person, for one whose display name every page withholds.
+	PersonKeys() string
 }
 
 // CLI is the command line's Commands: every answer's, unless its reader
@@ -73,6 +76,10 @@ func (CLI) WhoKnows() string { return "'stillhere who-knows PATH'" }
 
 // OwnPage is the me command.
 func (CLI) OwnPage() string { return "'stillhere me --email EMAIL'" }
+
+// PersonKeys is the report in JSON, whose person rows carry each email,
+// which no text or Markdown page prints.
+func (CLI) PersonKeys() string { return "'stillhere report --format json' lists each person's email" }
 
 // CommandsOr returns c, or the command line's when c is nil: what an
 // answer's hints name when the inbound adapter said nothing.

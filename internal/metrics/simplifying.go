@@ -76,10 +76,9 @@ func (simplifyingV1) Clusters(in *Input, scope domain.Scope) (RankInput, error) 
 	return RankInput{
 		Window:  w,
 		Options: rank.Options{MinN: minClusters, Blocks: w.Weeks()},
-		Data: rankData(v, clusters, func(k *cluster) rank.Cluster {
-			return rank.Cluster{Change: k.landing.sha, Num: float64(k.removed), Block: w.Week(k.landing.time)}
-		}),
-	}, nil
+	}.withData(v.who, rankData(clusters, func(k *cluster) rank.Cluster {
+		return rank.Cluster{Change: k.landing.sha, Num: float64(k.removed), Block: w.Week(k.landing.time)}
+	})), nil
 }
 
 // simplifyingClusters returns the window's clusters and the landings among

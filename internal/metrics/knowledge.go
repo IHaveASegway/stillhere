@@ -52,13 +52,7 @@ func (m knowledgeLossV1) Compute(in *Input) ([]domain.MetricValue, error) { retu
 
 func (knowledgeLossV1) compute(v *view) ([]domain.MetricValue, error) {
 	w := v.window(activityDays, 0)
-	active := v.active(w)
-	// A review is activity as a landing is (docs/metrics.md#knowledge_loss1-per-area):
-	// someone who reviewed has not gone quiet. Only a reviewer linked to an
-	// email can hold lines, so only they change a value.
-	for email := range v.reviews().active(w) {
-		active[email] = true
-	}
+	active := knowledgeActive(v, w)
 	var out []domain.MetricValue
 	add := func(s domain.Scope, sub domain.Subject, files []*fileView) {
 		if val, ok := knowledgeLoss(v, active, s, sub, w, files); ok {
@@ -82,6 +76,79 @@ func (knowledgeLossV1) compute(v *view) ([]domain.MetricValue, error) {
 	}
 	for name, files := range groups {
 		add(domain.Scope{Kind: domain.ScopeGroup, Key: name}, groupSubject(name), files)
+	}
+	return sorted(out), nil
+}
+
+// knowledgeActive returns the people knowledge_loss@1 counts as active in
+// w, anywhere in the view: credited with a commit of a landing in w
+// (view.active), or the author of a review submitted in w. A review is
+// activity as a landing is (docs/metrics.md#knowledge_loss1-per-area):
+// someone who reviewed has not gone quiet. Only a reviewer linked to an
+// email can hold lines, so only they change a value.
+func knowledgeActive(v *view, w domain.Window) map[string]bool {
+	active := v.active(w)
+	for email := range v.reviews().active(w) {
+		active[email] = true
+	}
+	return active
+}
+
+// PathKnowledge answers knowledge_loss@1 and knowledge_concentration@1 for
+// the code under a repo-relative path prefix, such as "pkg", "pkg/sync" or
+// "pkg/sync/pool.go" ("" or "." for the whole repository), in the
+// repository whose Repo.Key is repo, or in each repository when repo is "".
+// A prefix matches whole segments, as who_knows@1's does, and repo is
+// matched as WhoKnows matches it. A scan stores both metrics per top-level
+// directory only (docs/metrics.md#units, "Area"), since every directory of
+// every repository would be more rows than the facts; this computes them
+// per query, for any prefix, so who-knows and the MCP server can drill
+// into a dominant area such as pkg/ without a second implementation of
+// either metric. It is the computation a scan stores (knowledgeLoss and
+// concentration over the prefix's files, activity read over every
+// repository of the run), so a top-level directory's answer is its stored
+// area value, and the root's is the repository's.
+//
+// Values are about the prefix (subject repo for the root, else area,
+// keyed "<repo key>:<file>" or "<repo key>:<dir>/"), in the scope of their
+// repository: one of each metric where it has a value, so a prefix that
+// holds no prod line with an owner gives none, and a repository without
+// blame gives none.
+func PathKnowledge(in *Input, repo, prefix string) ([]domain.MetricValue, error) {
+	if in == nil || in.Facts == nil {
+		return nil, errNoFacts
+	}
+	key, err := repoKey(in.Facts, repo)
+	if err != nil {
+		return nil, err
+	}
+	// Every repository: knowledge_loss@1's activity is anywhere in the run.
+	v, err := newView(in, nil)
+	if err != nil {
+		return nil, err
+	}
+	clean := cleanPrefix(prefix)
+	under := underPrefix(clean)
+	w := v.window(activityDays, 0)
+	active := knowledgeActive(v, w)
+	var out []domain.MetricValue
+	for _, r := range v.repos {
+		if (key != "" && r.key != key) || !r.lines {
+			continue
+		}
+		var files []*fileView
+		for _, f := range r.sortedFiles() {
+			if under(f.path) {
+				files = append(files, f)
+			}
+		}
+		scope, sub := domain.Scope{Kind: domain.ScopeRepo, Key: r.key}, pathSubject(r, clean)
+		if val, ok := knowledgeLoss(v, active, scope, sub, w, files); ok {
+			out = append(out, val)
+		}
+		if val, ok := concentration(v, scope, sub, files); ok {
+			out = append(out, val)
+		}
 	}
 	return sorted(out), nil
 }

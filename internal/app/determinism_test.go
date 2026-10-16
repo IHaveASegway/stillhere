@@ -3,6 +3,7 @@ package app_test
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -104,6 +106,20 @@ func TestDeterminism(t *testing.T) {
 	}
 	sameBytes(t, "report's JSON after a rename and a later sync, and the scan's", render(t, withoutTimings(m)).json, a.json)
 
+	// A run a stillhere older than landed@2 and review_coverage@1 stored
+	// holds no value of either. Its readers compute them from its facts,
+	// so its report is the scan's, what landed and review coverage
+	// included, rather than "nothing landed" over a run of landings
+	// (#108, #107).
+	forgetMetric(t, first.db, first.run, domain.MetricID{Name: "landed", Version: 2})
+	forgetMetric(t, first.db, first.run, domain.MetricID{Name: "review_coverage", Version: 1})
+	if m, err = app.Report(t.Context(), first.read, app.ReportRequest{RunID: first.run}); err != nil {
+		t.Fatalf("app.Report of a run without landed@2: %v", err)
+	}
+	old := render(t, withoutTimings(m))
+	sameBytes(t, "report's JSON of a run that holds no landed@2 or review_coverage@1 value, and the scan's", old.json, a.json)
+	sameBytes(t, "report's text of a run that holds no landed@2 or review_coverage@1 value, and the scan's", old.text, a.text)
+
 	t.Run("names that give an address away", displayNames)
 	t.Run("a token planted in a PATH", func(t *testing.T) {
 		// The review of #42 found a token typed in a PATH in facts.db and in
@@ -112,8 +128,11 @@ func TestDeterminism(t *testing.T) {
 		// scrubber did not match. The review of #13 found the same for a
 		// token in the query or the fragment. The token sits in each of the
 		// three parts of a URL that redact.URL removes: the userinfo, the
-		// query and the fragment. No PATH is a repository, so the run
-		// records each as a path-failed warning, scrubbed.
+		// query and the fragment. Discovery refuses a PATH that holds a
+		// credential where it enters (#93), before it looks for a
+		// directory, so the run records a path-failed warning that quotes
+		// it scrubbed; the three scrub to one path, so one warning names
+		// them.
 		var logs bytes.Buffer
 		log := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 		planted := []string{
@@ -122,15 +141,16 @@ func TestDeterminism(t *testing.T) {
 			"https://example.com/acme/pay.git#" + fixture.DiscoveryToken,
 		}
 		s := scan(t, mailmap, log, scanRanked(append([]string{group}, planted...)...))
-		failed := 0
+		var failed []string
 		for _, w := range s.model.Warnings {
 			if w.Code == "path-failed" {
-				failed++
+				failed = append(failed, w.Message)
 			}
 		}
-		if s.model.Run.Status != string(domain.RunStatusPartial) || failed != len(planted) {
-			t.Fatalf("the planted PATHs gave run status %q and %d path-failed warnings, want a partial run with %d",
-				s.model.Run.Status, failed, len(planted))
+		if s.model.Run.Status != string(domain.RunStatusPartial) || len(failed) != 1 ||
+			!strings.Contains(failed[0], "https:/example.com/acme/pay.git: holds what looks like a credential") {
+			t.Fatalf("the planted PATHs gave run status %q and path-failed warnings %q, want a partial run with one, "+
+				"naming the scrubbed path as holding a credential", s.model.Run.Status, failed)
 		}
 		m, err := app.Report(t.Context(), s.read, app.ReportRequest{RunID: s.run})
 		if err != nil {
@@ -453,5 +473,73 @@ func checkForgeRun(t *testing.T, s *scanned) {
 		return c.Code == "forge-not-synced" && slices.Equal(c.Repos, []string{"sibling"})
 	}):
 		t.Errorf("the reviews_given@1 table's caveats %+v do not name the sibling as without GitHub data", table.Caveats)
+	}
+	// Beside each count, the table shows the share of approvals with no
+	// comment, the counterweight reviews_given@1's definition promises
+	// (PF-5): zed's one approval, of PR_1, has none.
+	if table != nil {
+		var zed *report.RankRow
+		for _, rows := range [][]report.RankRow{table.Ranked, table.BelowMin} {
+			for i := range rows {
+				if rows[i].Email == "@zed" {
+					zed = &rows[i]
+				}
+			}
+		}
+		if table.Beside != "no_comment_share" || zed == nil || zed.Beside == nil || *zed.Beside != 1 {
+			t.Errorf("the reviews_given@1 table shows %q beside the count and zed's row %+v, want no_comment_share 1", table.Beside, zed)
+		}
+	}
+}
+
+// forgetMetric deletes every value of id from run in the facts.db at db, as
+// if a stillhere older than the metric had stored the run, and numbers the
+// values left as the store numbers them. It fails the test when the run
+// held none, which would leave the case checking nothing.
+func forgetMetric(t *testing.T, db string, run int64, id domain.MetricID) {
+	t.Helper()
+	ctx := t.Context()
+	raw, err := sql.Open("sqlite", db+"?_busy_timeout=10000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = raw.Close() }()
+	tx, err := raw.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	exec := func(q string, args ...any) int64 {
+		t.Helper()
+		res, err := tx.ExecContext(ctx, q, args...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	exec(`DELETE FROM metric_details WHERE run_id = ? AND value_seq IN
+		(SELECT seq FROM metric_values WHERE run_id = ? AND metric = ? AND version = ?)`, run, run, id.Name, id.Version)
+	if exec(`DELETE FROM metric_values WHERE run_id = ? AND metric = ? AND version = ?`, run, id.Name, id.Version) == 0 {
+		t.Fatalf("run %d holds no value of %s to forget, so this case checks nothing", run, id)
+	}
+	// The values left, numbered from 0 again, through negative numbers so
+	// that no two rows share a key on the way.
+	exec(`CREATE TEMP TABLE remap AS SELECT seq AS old, ROW_NUMBER() OVER (ORDER BY seq) - 1 AS new
+		FROM metric_values WHERE run_id = ?`, run)
+	for _, q := range []string{
+		`UPDATE metric_details SET value_seq = -1 - (SELECT new FROM remap WHERE old = value_seq) WHERE run_id = ?`,
+		`UPDATE metric_details SET value_seq = -1 - value_seq WHERE run_id = ?`,
+		`UPDATE metric_values SET seq = -1 - (SELECT new FROM remap WHERE old = seq) WHERE run_id = ?`,
+		`UPDATE metric_values SET seq = -1 - seq WHERE run_id = ?`,
+	} {
+		exec(q, run)
+	}
+	exec(`DROP TABLE remap`)
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -1,6 +1,6 @@
 # Discovery
 
-Status: carried over from the 2026-10-07 plan, updated 2026-10-14 (bare mirrors accepted, clone health checks added; #4 settled which commit a work tree's default branch names, unusable `.git` directories, group suffixes, directories reached twice and how failures are reported) and 2026-10-15 (#71: a directory with no repository among its children is an error that says what to pass, not an empty group) · tests in M0: `TestDiscover`, `TestCloneHealth`
+Status: carried over from the 2026-10-07 plan, updated 2026-10-14 (bare mirrors accepted, clone health checks added; #4 settled which commit a work tree's default branch names, unusable `.git` directories, group suffixes, directories reached twice and how failures are reported) and 2026-10-15 (#71: a directory with no repository among its children is an error that says what to pass, not an empty group; #93: a path that holds a credential is refused where it enters; #74: a window after a shallow boundary is counted) · tests in M0: `TestDiscover`, `TestCloneHealth`
 
 Repositories are named by positional paths only. There is no config file listing repositories.
 
@@ -29,6 +29,8 @@ Managed mirrors written by `stillhere sync github` are passed the same way, for 
 
 Worktrees, whose `.git` is a file, are repos. Submodules are not auto-discovered: a submodule is included only when its path is itself a selected repo or an immediate child of a group.
 
+**A path that holds a credential** (#93). Before any rule, a PATH whose absolute path `redact.Scrub` would change, and a group's child whose path would, fail (rule 4) with a message that quotes the path scrubbed and says it holds what looks like a credential: a remote's userinfo or token, or a query, as a remote pasted where a directory was made leaves it (`…/https:/x-access-token:TOKEN@github.com/acme`), or a `user:password@` segment. Nothing of it is read, so no stored, printed or sent path holds the credential: not facts.db (`run_repos.path`, `run_groups.path`), not a report, and not the MCP server's answers. The path is refused, not scrubbed, because a run's `Repo.Path` is where git runs and what the MCP server maps a path to its repository by; a scrubbed path names no directory. The command line already refuses such a value for `--db`, `--mirrors` and `STILLHERE_HOME` (#71); this covers a directory that already has such a name.
+
 ## Default branch
 
 Resolved locally, never fetched.
@@ -46,7 +48,7 @@ Run per repo, before any collector.
 
 | Check | Detection | Warning | Effect |
 | --- | --- | --- | --- |
-| Shallow | `git rev-parse --is-shallow-repository` prints `true` (verified) | `shallow-clone` | No blame facts, because blame credits every line older than the shallow boundary to the boundary commit. Week facts are produced only if every boundary commit listed in `$GIT_DIR/shallow` is older than the window start; otherwise the repo's week facts carry warning `shallow-window` and are marked incomplete. |
+| Shallow | `git rev-parse --is-shallow-repository` prints `true` (verified) | `shallow-clone` | No blame facts, because blame credits every line older than the shallow boundary to the boundary commit. When a boundary commit is inside the window the history collects, or a landing in it brought one in, the facts carry warning `shallow-window`, which names the boundary. A metric's window that lies wholly after every boundary commit the history holds, and holds no landing that brought one in, is still counted, exactly; any other window of the repository has no value, never a partial count ([metrics.md](../metrics.md#values-what-every-metric-returns), #74). The boundary is a commit with no parent in a shallow clone (`domain.Repo.Boundary`), whose diff is its whole tree, so it has no change facts. |
 | Partial | `git config --get-regexp '^remote\..*\.promisor$'` reports `true` for any remote, or `extensions.partialClone` is set | `partial-clone` | No line facts: no week numstat and no blame. Commit facts (landings, authors, trailers, subjects) are still collected with `git log` without `--numstat`. |
 
 Verified on 2.50.1: a `--filter=blob:none` clone sets `remote.origin.promisor=true` and `remote.origin.partialclonefilter`, but not `extensions.partialClone`, so detection must not rely on the extension alone. Under `GIT_NO_LAZY_FETCH=1`, both `git log --numstat` (even `-1` at HEAD) and `git blame` fail fatally on the first missing blob, while plain `git log` succeeds. Without this check, a partial clone would surface as a wall of per-file errors rather than one clear warning.

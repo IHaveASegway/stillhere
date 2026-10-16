@@ -5,6 +5,7 @@ import (
 	"encoding/json/v2"
 	"fmt"
 	"reflect"
+	"slices"
 
 	"github.com/IHaveASegway/stillhere/internal/identity"
 	"github.com/IHaveASegway/stillhere/internal/redact"
@@ -46,12 +47,29 @@ func encodeDocument(d Document, opts ...jsontext.Options) ([]byte, error) {
 	}, opts...)...)
 }
 
+// knower is a document that carries its run's addresses (#90): every
+// address the run shows someone by, which its builder read from People, so
+// that a page withholds a person's address wherever repository text holds
+// it, whether or not the person is on the page, as the MCP server's egress
+// withholds over the run's people. A document that does not carry them is
+// withheld by the vocabulary of its own people alone.
+type knower interface{ runAddresses() []string }
+
+// knownOf returns d's run's addresses, nil when d carries none.
+func knownOf(d Document) []string {
+	if k, ok := d.(knower); ok {
+		return k.runAddresses()
+	}
+	return nil
+}
+
 // withholdAddresses returns doc, a document encoded as JSON under opts, with
 // every email address outside the fields that hold a person's email
 // replaced by addressLabel, and whether it replaced any. The vocabulary is
-// the page's own people: the addresses at those fields, logins left out.
-func withholdAddresses(doc []byte, opts ...jsontext.Options) ([]byte, bool, error) {
-	var emails []string
+// the run's addresses, known, and the page's own people: the addresses at
+// those fields, logins left out.
+func withholdAddresses(doc []byte, known []string, opts ...jsontext.Options) ([]byte, bool, error) {
+	emails := slices.Clone(known)
 	err := redact.JSONStrings(doc, func(p redact.Place, s string) {
 		if p.Email() && !identity.LoginKey(s) {
 			emails = append(emails, s)
@@ -88,7 +106,7 @@ func page(d Document) (Document, error) {
 	if err != nil {
 		return nil, fmt.Errorf("report: encode: %w", err)
 	}
-	doc, withheld, err := withholdAddresses(doc)
+	doc, withheld, err := withholdAddresses(doc, knownOf(d))
 	if err != nil {
 		return nil, fmt.Errorf("report: withhold addresses: %w", err)
 	}

@@ -1,8 +1,8 @@
 # Week collector
 
-Status: carried over from the 2026-10-07 plan, updated 2026-10-14 (trailers, subjects, reverts, landing map; then by #6: `-z` numstat, own patches, pinned diff options, clone health; then by #6's review: `--since-as-filter`, NUL-separated text fields, Unix times, reverts over the landing map, six more pinned settings; then by #13: no `.gitattributes` read by any log, the `-c` settings moved into the runner's prefix, one non-blank predicate) · becomes tests in M0 (M1 for reverts and the landing map)
+Status: carried over from the 2026-10-07 plan, updated 2026-10-14 (trailers, subjects, reverts, landing map; then by #6: `-z` numstat, own patches, pinned diff options, clone health; then by #6's review: `--since-as-filter`, NUL-separated text fields, Unix times, reverts over the landing map, six more pinned settings; then by #13: no `.gitattributes` read by any log, the `-c` settings moved into the runner's prefix, one non-blank predicate; 2026-10-15: the landing map in week runs (#108), hunk lines of any length (#73), Copilot co-authors (#102)) · becomes tests in M0 (M1 for reverts and the landing map)
 
-This collector answers one question: what landed on the default branch in the window? It produces one row per landing commit, credited to that commit's author.
+This collector answers one question: what landed on the default branch in the window? It produces one row per landing commit, and, in week and scan runs alike (#108), the [map](#landing--commit-map) from each landing to the commits it brought in, with their numstat: `landed@1` credits a landing to its landing commit's author, `landed@2` to the authors of its commits ([../metrics.md](../metrics.md#landed2)).
 
 ## The log
 
@@ -66,7 +66,7 @@ With `-z` no row is ambiguous, nothing is dropped, and the collector never emits
 
 One predicate, shared by the collector and the tests: sum the numstat insertions (blank lines included) on every path that [classification.md](classification.md) assigns a role. Denied, too-big, header-generated and unclassified paths add 0, and the commit still counts. A dependency-bot commit that touches only lockfiles is still a landing, which is why those paths are not excluded by pathspec. `prod_lines_added` is the `prod` subset. Neither number is comparable to still-here non-blank lines, and neither is ever named `nonblank_lines`.
 
-Rows are per person, per repo, with `commits`, `lines_added`, and `prod_lines_added`. A person whose only rows are bot rows appears only in the bot table. The default sort is `lines_added` descending, then email ascending; `--week-sort commits` exists. Tests assert the set of rows, not the order among ties.
+Rows are `landed@2`'s (#108), per person, per repo: `landings` (the landings that hold a non-merge commit credited to the person), `commits` (those commits), `merged` (merge landings whose merge commit is theirs), and `lines_added` and `prod_lines_added` over their commits, `null` where the history counted no numstat (a partial clone); each table has the scope's own `total`, every landing once. A merged branch counts for the people who wrote it, and a bot's commits for the bot, so dependabot's commits reach the bot table even when a person merged them. Text and Markdown head the first column `landings` (the owner's call: "landings is fine for commits") and add a `merges` column when any row merged. `landed@1`, the table as M0 defined it, which credited a landing to its landing commit's author, stays computed. A person whose only rows are bot rows appears only in the bot table. The default sort is `lines_added` descending, then landings, then email ascending (unknown lines last); `--week-sort commits` sorts by commits. Tests assert the set of rows, not the order among ties.
 
 ## Window
 
@@ -80,13 +80,14 @@ Budget: `week` alone finishes in under 60 s for 100 repos.
 
 ## AI-assisted changes
 
-A landing is tagged AI-assisted when its author or any co-author matches a pattern in the versioned `[ai]` policy table. A scan also knows the commits a merge landing brought in, and tags the landing when any of them matches ([ai_assisted@1](../metrics.md#ai_assisted1)); a week run reads only the landing commit. Per the 2026-10-14 decision, the person gets the credit and the change carries the tag; an agent is never a row of its own. Defaults:
+A landing is tagged AI-assisted when its author or any co-author matches a pattern in the versioned `[ai]` policy table. A run also knows the commits a merge landing brought in, and tags the landing when any of them matches ([ai_assisted@1](../metrics.md#ai_assisted1)). Per the 2026-10-14 decision, the person gets the credit and the change carries the tag; an agent is never a row of its own. Defaults:
 
 | Tool | Signal | Rule |
 | --- | --- | --- |
 | Claude Code | co-author `<name> <noreply@anthropic.com>` | Match the email. The name varies ("Claude", "Claude Code", a model name). |
 | Aider | co-author `aider (<model>) <aider@aider.chat>` | Match the email. |
 | Copilot coding agent | Copilot is the commit author, and the person is a co-author | The author is a bot per [git-invocation.md](git-invocation.md#identity-mailmap-and-bots). Credit the first human co-author and tag the change AI-assisted. |
+| GitHub Copilot, as a co-author (policy `[ai] version = 2`, #102) | co-author `Copilot <id+Copilot@users.noreply.github.com>` on a person's commit, for the accounts 175728472 (code review's suggestions, app `copilot-pull-request-reviewer`), 198982749 (the coding agent, `copilot-swe-agent`) and 223556219 (the CLI, `github-copilot-cli`) | Match the whole email: a noreply address that starts with an account id belongs to that account alone. Each id was checked with `GET /user/<id>` on 2026-10-15: a Bot account named Copilot. |
 
 - Co-authors are canonicalised in week and scan runs alike, with one `git check-mailmap --stdin` per repository, so a Copilot commit's human co-author is the same person as that human's own commits. A trailer value without `<email>` names no identity and is dropped before `check-mailmap` (which dies on it below 2.47), as is a second trailer for the same canonical email. Trailer order is kept, because credit reads the first human. `internal/collect/coauthors.go` holds this reader; the blame collector calls it too.
 - Cursor's trailer string is unverified (sources show both `Made-with: Cursor` and `Co-authored-by: Cursor`), so it is not a default.
@@ -126,7 +127,7 @@ git <common> rev-list <landing>^1..<landing>
 - **Root commit:** maps to itself; `rev-list L^1..L` exits 128 on it, because `L^1` does not exist.
 - **Lines blamed to the merge commit itself** are conflict resolutions, and belong to the merge's author.
 
-The map is stored as facts (landing SHA, commit SHA) alongside the landings, in scan runs only.
+The map is stored as facts (landing SHA, commit SHA) alongside the landings. Week runs collect it too, with the brought-in commits' numstat (#108): `landed@2`, the week table's credit of a merged branch, needs both. Over cli/cli (git 2.50.1, a warm cache), a 30-day `week` took 0.30 s instead of 0.25 s, and a 365-day one, with 499 merge landings, 0.82 s instead of 0.47 s.
 
 **One walk, not one process per merge.** The collector computes every landing's map from one command, so a repository with a thousand merge landings starts one git process rather than a thousand:
 
@@ -150,11 +151,12 @@ git <common> --attr-source=<empty tree> \
 
 - **Never `--first-parent`.** Under it, git prints a merge's first-parent diff, which credits the merged branch's lines to the person who merged it. With `--no-walk` each commit is diffed against its first parent, a root commit against the empty tree, and a merge prints nothing; merges are also left out of stdin.
 - **`-w`** drops whitespace-only changes: a re-indent adds and removes nothing, and a file whose only changes are whitespace prints no section at all (verified).
+- **A hunk line of any length** (#73). The patch covers every changed path, denied ones included, since classification comes later, and a minified bundle, a source map or one-line JSON can hold a line longer than any buffer: one over 64 MiB, read whole, failed the repository's whole scan with `bufio.Scanner: token too long`. A hunk line counts by its first byte and by whether the rest is blank, so the reader judges it in pieces of its 64 KiB buffer and never holds it whole (`historyPatchLines`); each piece ends where a rune starts, so a rune split between two reads is judged whole, as `nonBlank` judges a whole line. Lines outside hunks, which name commits and paths, are read whole up to 64 MiB, as every other git output is. `TestNumstatRename` adds a line of 64 MiB and more.
 - **Hunks are read by their counts.** With `-U0` a hunk is exactly the lines its `@@ -a,b +c,d @@` header counts, so an added line whose text is `++ b/x` (printed `+++ b/x`) is never read as a header. A line counts when anything is left after trimming whitespace. One function decides it for both collectors, `nonBlank` in `internal/collect/scan.go`, so `durable@1` divides the lines blame keeps by lines counted the same way (changed by #13: history had its own copy, `strings.TrimSpace` on a string where blame used `bytes.TrimSpace` on bytes; the two agreed on 2,000,000 random strings built from every Unicode space, invalid UTF-8 and zero-width characters, but nothing kept them agreeing).
 - **Paths come from the `---` and `+++` lines**, never from `diff --git a/a b/b => c`. Git quotes a path that holds a quote, a backslash, a control character or a non-ASCII byte (octal escapes), and ends the line with a tab when the path holds a space. A deletion is named by its `---` line. A typechange prints two files with one path, which are summed.
 - Each file with hunks is joined to its numstat row by (commit, destination path). Both commands pin the same rename detection, so a file with hunks and no row is a bug in how a path was read, and fails the repository rather than passing silently.
 
-Numstat rows of the commits a merge brought in, which the first-parent log never prints, come from one more `git log --no-walk --stdin --diff-merges=off -z --numstat` with the same settings, diff options and format as the landing log. So every row carries both counts against the commit's first parent; a merge landing's numstat is its first-parent diff, as `week` counts it, and its own patch is empty in v1.
+Numstat rows of the commits a merge brought in, which the first-parent log never prints, come from one more `git log --no-walk --stdin --diff-merges=off -z --numstat` with the same settings, diff options and format as the landing log, in week runs too. So every row carries both counts against the commit's first parent; a merge landing's numstat is its first-parent diff, as `week` counts it, and its own patch is empty in v1.
 
 ## Repository config
 
@@ -203,7 +205,7 @@ The revert, root and co-author logs print no diff and take no source. The cost o
 ## Shallow and partial clones
 
 - **Partial clone:** commit facts only (landings, map, authors, trailers, subjects, reverts), and no `FileChange` rows. The landing log drops `--numstat`, its diff options and `--diff-merges=first-parent`: that option alone makes git diff every commit, and rename detection then reads blobs the clone does not have, which fails under `GIT_NO_LAZY_FETCH` even with nothing to print (verified).
-- **Shallow clone:** a parentless commit is the clone's boundary, whose diff against the empty tree is its whole tree, not its change (verified: in a `--depth 3` clone of the main fixture, numstat gives Ada's one-line commit, the boundary, 73 inserted lines). It keeps its commit and landing facts but gets no `FileChange` rows. The facts carry warning `shallow-window` when a boundary reachable from the scanned SHA has a committer time at or after the window start, or when a landing in the window brought in a boundary commit. A boundary is told from a true root only by the shallow file, which the collector does not read, so a true root inside a shallow clone's window is treated as a boundary too.
+- **Shallow clone:** a parentless commit is the clone's boundary, whose diff against the empty tree is its whole tree, not its change (verified: in a `--depth 3` clone of the main fixture, numstat gives Ada's one-line commit, the boundary, 73 inserted lines). It keeps its commit and landing facts but gets no `FileChange` rows. The facts carry warning `shallow-window` when a boundary reachable from the scanned SHA has a committer time at or after the window start, or when a landing in the window brought in a boundary commit; the metrics still count a window of their own that lies wholly after the boundary ([../metrics.md](../metrics.md#values-what-every-metric-returns), #74). A boundary is told from a true root only by the shallow file, which the collector does not read, so a true root inside a shallow clone's window is treated as a boundary too: the one rule is `domain.Repo.Boundary`, a commit with no parent in a shallow clone, which the collector and the metrics read, and by which a diff of the boundary landing can tell it is no change of its own.
 
 ## Repository age
 

@@ -25,6 +25,51 @@ type printer struct {
 	w     io.Writer
 	err   error
 	names pageNames
+	all   bool // print every row of every table (AllRows), not the first pageRows
+}
+
+// pageRows is how many rows of a list of people, a rank table's ranked
+// rows, or an explanation's changes, commits or files a page prints before
+// it counts the rest (SR-14): the first page a lead reads is the top of
+// each table, and JSON, or AllRows, has every row.
+const pageRows = 10
+
+// areaRows is how many of a repository's areas its card prints before it
+// counts the rest.
+const areaRows = 5
+
+// Option changes how Text and Markdown print a document. JSON always holds
+// every row.
+type Option func(*printer)
+
+// AllRows prints every row of every table, where a page otherwise prints
+// the first pageRows and counts the rest (the command line's --all).
+func AllRows() Option { return func(p *printer) { p.all = true } }
+
+// newPrinter is a page on w with opts.
+func newPrinter(w io.Writer, opts []Option) *printer {
+	p := &printer{w: w}
+	for _, o := range opts {
+		o(p)
+	}
+	return p
+}
+
+// shown returns the first rows of a table a page prints, max of them
+// unless it prints every row, and how many it leaves out.
+func shown[R any](p *printer, rows []R, limit int) ([]R, int) {
+	if p.all || len(rows) <= limit {
+		return rows, 0
+	}
+	return rows[:limit], len(rows) - limit
+}
+
+// moreText is "12 more people (--all lists them)", or "" for none.
+func moreText(n int, one, many string) string {
+	if n == 0 {
+		return ""
+	}
+	return plural(n, "more "+one, "more "+many) + " (--all lists them)"
 }
 
 func (p *printer) line(s string) {
@@ -285,7 +330,8 @@ func share(s *Share, of string) string {
 }
 
 // day formats an instant as a UTC date, with the time when it is not
-// midnight: "2026-10-07", or "2026-10-06 12:00".
+// midnight: "2026-10-07", or "2026-10-06 12:00". It is for a table cell
+// whose column head says UTC; prose prints dayUTC (#79).
 func day(t time.Time) string {
 	t = t.UTC()
 	if t.Hour() == 0 && t.Minute() == 0 && t.Second() == 0 {
@@ -294,13 +340,30 @@ func day(t time.Time) string {
 	return t.Format("2006-01-02 15:04")
 }
 
+// dayUTC is day saying it is UTC, "2026-10-07 UTC": a reader outside UTC
+// would otherwise read an as-of time or a window's edge in their own zone
+// (#79).
+func dayUTC(t time.Time) string { return day(t) + " UTC" }
+
 // date formats an instant as its UTC date.
 func date(t time.Time) string { return t.UTC().Format(time.DateOnly) }
 
-// interval formats a window as "2026-09-30 → 2026-10-07" (the end is
+// interval formats a window as "2026-09-30 → 2026-10-07 UTC" (the end is
 // exclusive, as everywhere in stillhere).
 func interval(w Interval) string {
-	return day(w.Since) + " → " + day(w.Until)
+	return day(w.Since) + " → " + dayUTC(w.Until)
+}
+
+// windowDays is a window's length in whole days: 90 for review_coverage@1's.
+func windowDays(w Interval) int { return int(w.Until.Sub(w.Since) / (24 * time.Hour)) }
+
+// knownCount prints a count that may be unknown (nil), of lines, people or
+// authors, as "—" when it is, so that "unknown" never reads as 0 (#74).
+func knownCount(n *int) string {
+	if n == nil {
+		return "—"
+	}
+	return grouped(*n)
 }
 
 // short abbreviates a full SHA for reading; JSON keeps the full one.

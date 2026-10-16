@@ -1,14 +1,21 @@
 package app_test
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
+	"maps"
+	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/IHaveASegway/stillhere/internal/app"
 	"github.com/IHaveASegway/stillhere/internal/domain"
 	"github.com/IHaveASegway/stillhere/internal/fixture"
+	"github.com/IHaveASegway/stillhere/internal/identity"
+	"github.com/IHaveASegway/stillhere/internal/metrics"
+	"github.com/IHaveASegway/stillhere/internal/policy"
 	"github.com/IHaveASegway/stillhere/internal/report"
 )
 
@@ -73,6 +80,7 @@ func TestChangeOracles(t *testing.T) {
 		mergedRevertGuard(t)
 	})
 	t.Run("binary files", func(t *testing.T) { t.Parallel(); binaryGuard(t) })
+	t.Run("partial and shallow clones", func(t *testing.T) { t.Parallel(); clonesOracle(t) })
 	t.Run("as it stood at --now", func(t *testing.T) { t.Parallel(); snapshotOracle(t) })
 	t.Run("identity candidates", func(t *testing.T) {
 		t.Parallel()
@@ -155,6 +163,70 @@ func mainChangeOracles(t *testing.T) {
 		}
 	})
 
+	t.Run("knowledge under a path", func(t *testing.T) {
+		// SPEC, "Knowledge under any path (main fixture)": metrics.PathKnowledge
+		// computes the stored values' metrics for any prefix, the root's
+		// being the repository's own.
+		p, err := policy.Default()
+		if err != nil {
+			t.Fatal(err)
+		}
+		in := &metrics.Input{Facts: s.facts(t), Policy: p}
+		loss := domain.MetricID{Name: "knowledge_loss", Version: 1}
+		conc := domain.MetricID{Name: "knowledge_concentration", Version: 1}
+		under := func(prefix string) map[string]domain.MetricValue {
+			vs, err := metrics.PathKnowledge(in, "", prefix)
+			if err != nil {
+				t.Fatalf("PathKnowledge(%q): %v", prefix, err)
+			}
+			out := map[string]domain.MetricValue{}
+			for _, v := range vs {
+				out[v.Metric.String()+" "+v.Subject.Kind+":"+v.Subject.Key] = v
+			}
+			return out
+		}
+		inRepo := domain.Scope{Kind: domain.ScopeRepo, Key: r.Key}
+		root := under("")
+		for _, id := range []domain.MetricID{loss, conc} {
+			want := s.stored(t, id, inRepo)["repo:"+r.Key]
+			if got := root[id.String()+" repo:"+r.Key]; !reflect.DeepEqual(got, want) {
+				t.Errorf("PathKnowledge of the root gives %s %+v, want the stored repository value %+v", id, got, want)
+			}
+		}
+		type known struct{ Num, Den, People, Inactive, Authors, WithMajority int }
+		read := func(vs map[string]domain.MetricValue, path string) known {
+			l, c := vs[loss.String()+" area:"+r.Key+":"+path], vs[conc.String()+" area:"+r.Key+":"+path]
+			return known{int(l.Num), int(l.Den), int(l.Detail["people"]), int(l.Detail["people_inactive"]),
+				int(c.Value), int(c.Detail["files_with_majority"])}
+		}
+		// split.py: Gina's 2 and Hank's 2, both gone quiet, one file both
+		// own half of; service.py: Ada's 6 and Bob's 2, both active.
+		for path, want := range map[string]known{
+			"split.py":   {4, 4, 2, 2, 1, 1},
+			"service.py": {0, 8, 2, 0, 1, 1},
+		} {
+			if got := read(under(path), path); got != want {
+				t.Errorf("SPEC knowledge under %s: %+v, want %+v", path, got, want)
+			}
+		}
+		// A prefix matches whole segments: side is neither side.py nor
+		// side_week.py.
+		if got := under("side"); len(got) != 0 {
+			t.Errorf("SPEC knowledge under side: %d values, want none: a prefix matches whole segments", len(got))
+		}
+		// who-knows shows the path's knowledge loss and concentration (#105),
+		// split.py's 4 of 4 lines held by its 2 people, both gone quiet.
+		w := s.whoKnows(t, "split.py")
+		if len(w.Repos) != 1 || w.Repos[0].KnowledgeLoss == nil || w.Repos[0].People == nil || w.Repos[0].Concentration == nil {
+			t.Fatalf("who-knows split.py: %+v, want one repository with its knowledge loss and concentration", w.Repos)
+		}
+		k := w.Repos[0]
+		if got := (known{int(k.KnowledgeLoss.Num), int(k.KnowledgeLoss.Den), *k.People, *k.PeopleInactive,
+			k.Concentration.AuthorsInPrefix, k.Concentration.FilesWithMajority}); got != (known{4, 4, 2, 2, 1, 1}) {
+			t.Errorf("SPEC knowledge under split.py, as who-knows shows it: %+v, want 4 / 4, 2 of 2 gone quiet, 1 author of 1 file", got)
+		}
+	})
+
 	t.Run("who_knows@1", func(t *testing.T) {
 		// SPEC, "who_knows@1 (main fixture)".
 		for _, c := range []whoKnowsCase{
@@ -176,11 +248,16 @@ func mainChangeOracles(t *testing.T) {
 		// "nobody" (#71). The caveat states what the run holds, not one
 		// reader's advice: the MCP server's who_knows takes an absolute
 		// path that the command line does not. notes.csv is a path the run
-		// knows, which no one holds lines of or landed lately: that one is
-		// a real "nobody".
+		// knows with no role, which who_knows@1 does not count, so its
+		// answer is empty for that reason, which a no-values caveat says
+		// (PF-8). app.py, renamed to service.py in January, has a role and
+		// no surviving line, and no one landed it lately: a real "nobody".
 		noPath := fmt.Sprintf("Repository %s of run %d has no path under %q, so this answer is missing, not a real \"nobody\": "+
 			"the run knows each path relative to its repository's root, such as src or src/pay.go.", r.Name, s.run, "fixture/service.py")
-		for _, c := range []struct{ path, caveat string }{{"fixture/service.py", noPath}, {"notes.csv", ""}} {
+		noRole := `"notes.csv" is in 1 repository, but no path there has a role (1 path unclassified), and who_knows@1 counts only ` +
+			"paths with one: this answer is empty because the policy leaves the path out, not because nobody knows it. " +
+			"'stillhere policy' prints the roles and the deny list; a role for it in stillhere.toml makes it count at the next scan."
+		for _, c := range []struct{ path, caveat string }{{"fixture/service.py", noPath}, {"notes.csv", noRole}, {"app.py", ""}} {
 			w := s.whoKnows(t, c.path)
 			var noValues, want []string
 			for _, cv := range w.Caveats {
@@ -194,6 +271,136 @@ func mainChangeOracles(t *testing.T) {
 			if len(w.Repos) != 0 || !slices.Equal(noValues, want) {
 				t.Errorf("who-knows %s: %d repositories, no-values caveats %q; want none, and %q", c.path, len(w.Repos), noValues, want)
 			}
+		}
+	})
+
+	t.Run("landed@2", func(t *testing.T) {
+		// SPEC, "landed@2 (main fixture)": Cara wrote Bob's merge (row 8),
+		// so it is her landing, with both of her commits' lines; Bob merged
+		// it and lands row 9 alone. Each scope has its totals.
+		want := map[string]landedRow{
+			"bob@example.com":     {1, 1, 1, 2, 2, 0},
+			"cara@example.com":    {1, 2, 0, 9, 9, 0},
+			"copilot@bot.example": {1, 1, 0, 3, 3, 0},
+			"dana@example.com":    {1, 1, 0, 1, 1, 0},
+			"erin@example.com":    {1, 1, 0, 1, 1, 0},
+			"frank@example.com":   {1, 1, 0, 3, 3, 0},
+			"ada@example.com":     {1, 1, 0, 1, 1, 0},
+			"ivy@example.com":     {1, 1, 0, 4, 0, 0},
+			"jules@example.com":   {1, 1, 0, 0, 0, 0},
+		}
+		totals := landedRow{9, 10, 1, 24, 20, 0}
+		inRepo := maps.Clone(want)
+		inRepo["repo:"+r.Key] = totals
+		checkLanded(t, "SPEC landed@2 (main fixture), the repository", s, landedV2, domain.Scope{Kind: domain.ScopeRepo, Key: r.Key}, inRepo)
+		want["all:"] = totals
+		checkLanded(t, "SPEC landed@2 (main fixture), the run", s, landedV2, domain.Scope{Kind: domain.ScopeAll}, want)
+		// SPEC, "landed@1 (main fixture)": the week table as M0 defined it,
+		// which landed@1 keeps (#108): Bob is credited with the merge he
+		// landed and its first-parent diff, Cara has no row.
+		checkLanded(t, "SPEC landed@1 (main fixture)", s, landedV1, domain.Scope{Kind: domain.ScopeRepo, Key: r.Key},
+			map[string]landedRow{
+				"bob@example.com":     {2, 0, 0, 11, 11, 0},
+				"ivy@example.com":     {1, 0, 0, 4, 0, 0},
+				"frank@example.com":   {1, 0, 0, 3, 3, 0},
+				"ada@example.com":     {1, 0, 0, 1, 1, 0},
+				"dana@example.com":    {1, 0, 0, 1, 1, 0},
+				"erin@example.com":    {1, 0, 0, 1, 1, 0},
+				"jules@example.com":   {1, 0, 0, 0, 0, 0},
+				"copilot@bot.example": {1, 0, 0, 3, 3, 0},
+			})
+	})
+
+	t.Run("explain traces and names", func(t *testing.T) {
+		// SPEC, "Explain traces (main fixture)" (#109): explain lists what a
+		// value that is not ranked is made of, and the command line names
+		// the person as a page does (PF-7): a display name, the start of
+		// each of its words, an email or an id.
+		explain := func(metric, who string) (*report.Explain, error) {
+			id, err := domain.ParseMetricID(metric)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return app.Explain(t.Context(), s.read, app.ExplainRequest{RunID: s.run, Metric: id, Person: who})
+		}
+		type landing struct {
+			title                string
+			merge                bool
+			commits, lines, prod int
+		}
+		landings := func(e *report.Explain) []landing {
+			var out []landing
+			for _, l := range e.Landings {
+				lines, prod := -1, -1
+				if l.LinesAdded != nil {
+					lines, prod = *l.LinesAdded, *l.ProdLinesAdded
+				}
+				out = append(out, landing{l.Title, l.Merge, l.Commits, lines, prod})
+			}
+			return out
+		}
+		// landed@2: Cara's one landing is Bob's merge of her branch, with
+		// both of her commits' lines.
+		e, err := explain("landed@2", "Cara Dev")
+		if err != nil {
+			t.Fatalf("explain landed@2 --person 'Cara Dev': %v", err)
+		}
+		if got, want := landings(e), []landing{{"Merge branch 'feature'", true, 2, 9, 9}}; !slices.Equal(got, want) {
+			t.Errorf("SPEC explain traces, landed@2 of Cara: landings %+v, want %+v", got, want)
+		}
+		// landed@1: Bob's two, the merge with its first-parent diff, and
+		// delta; "bob" matches Bob Builder by the start of a word, which a
+		// caveat says.
+		if e, err = explain("landed@1", "bob"); err != nil {
+			t.Fatalf("explain landed@1 --person bob: %v", err)
+		}
+		want := []landing{{"Merge branch 'feature'", true, 1, 9, 9}, {"add delta_bob_added", false, 1, 2, 2}}
+		if got := landings(e); !slices.Equal(got, want) || !slices.ContainsFunc(e.Caveats, func(c report.Caveat) bool { return c.Code == "name-match" }) {
+			t.Errorf("SPEC explain traces, landed@1 of bob: landings %+v and caveats %+v, want %+v and a name-match caveat", got, e.Caveats, want)
+		}
+		// surviving@1: Ada's 10 prod lines sit in three commits: the init
+		// commit's beta and alpha blocks in service.py (4, blame -M) and
+		// new_name.py's x, y and z (3, through Erin's rename), the gamma
+		// block from her second address (2) and ada_week.py (1).
+		if e, err = explain("surviving@1", "ada@example.com"); err != nil {
+			t.Fatalf("explain surviving@1 --person ada@example.com: %v", err)
+		}
+		type held struct {
+			what  string
+			lines int
+		}
+		var commits []held
+		for _, c := range e.Commits {
+			commits = append(commits, held{c.Title, c.Lines})
+		}
+		if want := []held{{"init", 7}, {"add gamma_added_later", 2}, {"add ada_week.py", 1}}; !slices.Equal(commits, want) {
+			t.Errorf("SPEC explain traces, surviving@1 of Ada: commits %+v, want %+v", commits, want)
+		}
+		// majority_owner@1: her three files, by her id as an MCP answer
+		// gives it.
+		if e, err = explain("majority_owner@1", identity.Pseudonym("ada@example.com")); err != nil {
+			t.Fatalf("explain majority_owner@1 --person <Ada's id>: %v", err)
+		}
+		var files []string
+		for _, f := range e.Files {
+			files = append(files, fmt.Sprintf("%s %d/%d", f.Path, f.Lines, f.Of))
+		}
+		if want := []string{"service.py 6/8", "new_name.py 3/4", "ada_week.py 1/1"}; !slices.Equal(files, want) {
+			t.Errorf("SPEC explain traces, majority_owner@1 of Ada: files %v, want %v", files, want)
+		}
+		// A value of the right kind the person has none of says why (#92):
+		// Gina's changes are January's, older than landed@2's week.
+		if e, err = explain("landed@2", "Gina Split"); err != nil {
+			t.Fatalf("explain landed@2 --person 'Gina Split': %v", err)
+		}
+		if len(e.Values) != 0 || !slices.ContainsFunc(e.Caveats, func(c report.Caveat) bool {
+			return c.Code == "no-values" && strings.Contains(c.Message, "2026-09-30 → 2026-10-07 UTC")
+		}) {
+			t.Errorf("SPEC explain traces, landed@2 of Gina: values %v and caveats %+v, want none and a no-values caveat naming the week", e.Values, e.Caveats)
+		}
+		// A name no one has is refused with near names; a miss is not found.
+		if _, err = explain("landed@2", "Cara Deb"); !errors.Is(err, domain.ErrNotFound) || !strings.Contains(err.Error(), `"Cara Dev"`) {
+			t.Errorf("explain landed@2 --person 'Cara Deb' gave %v, want not found, suggesting Cara Dev", err)
 		}
 	})
 
@@ -410,6 +617,178 @@ func mergedRevertGuard(t *testing.T) {
 		"nia@example.com": 6,
 	})
 }
+
+// The two versions of what landed, whose values the landed oracles read as
+// stored.
+var (
+	landedV1 = domain.MetricID{Name: "landed", Version: 1}
+	landedV2 = domain.MetricID{Name: "landed", Version: 2}
+)
+
+// landedRow is one subject's landed@1 or landed@2 value: Value, Detail
+// commits and merged (landed@2's), lines_added and prod_lines_added (-1
+// when absent: the lines are unknown), and landings_lines_unknown (0 when
+// absent).
+type landedRow struct{ Landings, Commits, Merged, Lines, Prod, Unknown int }
+
+// checkLanded compares a run's stored values of metric in scope with a SPEC
+// table keyed as scanned.stored keys them.
+func checkLanded(t *testing.T, table string, s *scanned, metric domain.MetricID, scope domain.Scope, want map[string]landedRow) {
+	t.Helper()
+	detail := func(v domain.MetricValue, key string, absent int) int {
+		if n, ok := v.Detail[key]; ok {
+			return int(n)
+		}
+		return absent
+	}
+	got := map[string]landedRow{}
+	for key, v := range s.stored(t, metric, scope) {
+		got[key] = landedRow{int(v.Value), detail(v, "commits", 0), detail(v, "merged", 0),
+			detail(v, "lines_added", -1), detail(v, "prod_lines_added", -1), detail(v, "landings_lines_unknown", 0)}
+	}
+	sameRows(t, table, got, want)
+}
+
+// clonesOracle checks SPEC's missing-facts oracles (#74): a partial clone of
+// the main fixture lands what the fixture lands with its lines unknown,
+// never 0, and the run's totals over it and the fixture add no zeros; a
+// shallow clone of the sibling whose boundary is older than simplifying@1's
+// window has the sibling's simplifying@1 there, and no value in a window
+// its boundary cuts.
+func clonesOracle(t *testing.T) {
+	t.Run("partial clone", func(t *testing.T) {
+		t.Parallel()
+		full := fixture.Main(t)
+		partial := fixture.Clone(t, full, "partial", "https://git.example.test/acme/partial.git", "--filter=blob:none")
+		s := scan(t, fixture.Mailmap(t), nil, scanRanked(full, partial))
+		var key string
+		for _, r := range s.model.Repos {
+			if r.Name == "partial" {
+				key = r.Key
+			}
+		}
+		if key == "" {
+			t.Fatalf("the run has no repository named partial: %+v", s.model.Repos)
+		}
+		const table = "SPEC partial clone"
+		inPartial := domain.Scope{Kind: domain.ScopeRepo, Key: key}
+		all := domain.Scope{Kind: domain.ScopeAll}
+		// landed@1: the week oracle's landings, with no line known.
+		checkLanded(t, table+", landed@1", s, landedV1, inPartial, map[string]landedRow{
+			"bob@example.com":     {2, 0, 0, -1, -1, 2},
+			"ivy@example.com":     {1, 0, 0, -1, -1, 1},
+			"frank@example.com":   {1, 0, 0, -1, -1, 1},
+			"ada@example.com":     {1, 0, 0, -1, -1, 1},
+			"dana@example.com":    {1, 0, 0, -1, -1, 1},
+			"erin@example.com":    {1, 0, 0, -1, -1, 1},
+			"jules@example.com":   {1, 0, 0, -1, -1, 1},
+			"copilot@bot.example": {1, 0, 0, -1, -1, 1},
+		})
+		// landed@2 in the partial clone, and over both: the fixture's lines
+		// alone, with the partial clone's landings counted as unknown.
+		checkLanded(t, table+", landed@2", s, landedV2, inPartial, map[string]landedRow{
+			"bob@example.com":     {1, 1, 1, -1, -1, 1},
+			"cara@example.com":    {1, 2, 0, -1, -1, 1},
+			"copilot@bot.example": {1, 1, 0, -1, -1, 1},
+			"dana@example.com":    {1, 1, 0, -1, -1, 1},
+			"erin@example.com":    {1, 1, 0, -1, -1, 1},
+			"frank@example.com":   {1, 1, 0, -1, -1, 1},
+			"ada@example.com":     {1, 1, 0, -1, -1, 1},
+			"ivy@example.com":     {1, 1, 0, -1, -1, 1},
+			"jules@example.com":   {1, 1, 0, -1, -1, 1},
+			"repo:" + key:         {9, 10, 1, -1, -1, 9},
+		})
+		checkLanded(t, table+" and the main fixture, landed@2 in the run", s, landedV2, all, map[string]landedRow{
+			"bob@example.com":     {2, 2, 2, 2, 2, 1},
+			"cara@example.com":    {2, 4, 0, 9, 9, 1},
+			"copilot@bot.example": {2, 2, 0, 3, 3, 1},
+			"dana@example.com":    {2, 2, 0, 1, 1, 1},
+			"erin@example.com":    {2, 2, 0, 1, 1, 1},
+			"frank@example.com":   {2, 2, 0, 3, 3, 1},
+			"ada@example.com":     {2, 2, 0, 1, 1, 1},
+			"ivy@example.com":     {2, 2, 0, 4, 0, 1},
+			"jules@example.com":   {2, 2, 0, 0, 0, 1},
+			"all:":                {18, 20, 2, 24, 20, 9},
+		})
+	})
+
+	t.Run("shallow clone", func(t *testing.T) {
+		t.Parallel()
+		// --depth 18 keeps W1 to W9's 17 landings and O10, the boundary, on
+		// 2026-05-18: older than the 90-day window, inside the 365 days
+		// the scan collects, which the shallow-window warning names.
+		shallow := fixture.Clone(t, fixture.Sibling(t), "shallow", "https://git.example.test/acme/shallow.git", "--depth", "18")
+		s := scan(t, fixture.SiblingMailmap(t), nil, scanRanked(shallow))
+		r := onlyRepo(t, s.model)
+		if !slices.ContainsFunc(r.Warnings, func(w report.Warning) bool { return w.Code == "shallow-window" }) {
+			t.Fatalf("SPEC shallow clone: no shallow-window warning in %+v, so this case checks nothing", r.Warnings)
+		}
+		// The sibling's simplifying@1, as "simplifying@1 (sibling)" has it.
+		checkSimplifying(t, s, r.Key, "SPEC shallow clone, simplifying@1", map[string]simplifyingRow{
+			"lena@example.com": {"Lena Lead", 23, 1, 10, true, false},
+			"omar@example.com": {"Omar Ops", 21, 0, 2, false, false},
+			"pia@example.com":  {"Pia Pair", 0, 0, 1, false, false},
+		}, map[string]map[string]cluster{
+			"lena@example.com": {
+				"2026-07-20T12:00:00Z": {}, "2026-07-27T12:00:00Z": {Num: 1}, "2026-08-03T12:00:00Z": {},
+				"2026-08-10T12:00:00Z": {}, "2026-08-17T12:00:00Z": {}, "2026-08-24T12:00:00Z": {},
+				"2026-08-31T12:00:00Z": {}, "2026-09-14T12:00:00Z": {Num: 22}, "2026-09-16T12:00:00Z": {},
+				"2026-09-21T12:00:00Z": {},
+			},
+			"omar@example.com": {"2026-07-24T12:00:00Z": {}, "2026-08-12T12:00:00Z": {Num: 21}},
+			"pia@example.com":  {"2026-07-29T12:00:00Z": {}},
+		})
+		// ai_assisted@1's 365 days start before the boundary: no share,
+		// not one of what the clone holds.
+		if r.Card.AIAssisted != nil {
+			t.Errorf("SPEC shallow clone: the AI-assisted share is %+v, want none: the boundary cuts its window", r.Card.AIAssisted)
+		}
+		if got := s.stored(t, domain.MetricID{Name: "ai_assisted", Version: 1}, domain.Scope{Kind: domain.ScopeRepo, Key: r.Key}); len(got) != 0 {
+			t.Errorf("SPEC shallow clone: ai_assisted@1 has %d values, want none: the boundary cuts its window", len(got))
+		}
+		// The week, [2026-09-30, 2026-10-07), is inside the clone's history
+		// and nothing landed in it: a total of 0, which pages print as
+		// nothing, not an unknown.
+		if w := r.Week; w == nil || !reflect.DeepEqual(w.Total, &report.WeekTotal{LinesAdded: ptr(0), ProdLinesAdded: ptr(0)}) ||
+			len(w.Humans)+len(w.Bots) != 0 {
+			t.Errorf("SPEC shallow clone: the week is %+v, want a table of no rows with a total of 0: nothing landed in a window the history covers", w)
+		}
+		if text := render(t, s.model).text; !bytes.Contains(text, []byte("What landed, 2026-09-30 → 2026-10-07 UTC: nothing")) {
+			t.Errorf("SPEC shallow clone: the text does not say nothing landed in the week:\n%s", text)
+		}
+	})
+
+	t.Run("shallow clone inside the week", func(t *testing.T) {
+		t.Parallel()
+		// --depth 3 keeps rows 16 to 14 of the main fixture, whose boundary,
+		// row 14 on 2026-10-06, is inside the week: what landed there is
+		// unknown, so landed@2 has no value and no page says nothing.
+		shallow := fixture.Clone(t, fixture.Main(t), "week", "https://git.example.test/acme/week.git", "--depth", "3")
+		s := scan(t, fixture.Mailmap(t), nil, scanRanked(shallow))
+		r := onlyRepo(t, s.model)
+		if got := s.stored(t, landedV2, domain.Scope{Kind: domain.ScopeRepo, Key: r.Key}); len(got) != 0 {
+			t.Errorf("SPEC shallow clone inside the week: landed@2 has %d values, want none: the boundary cuts its window", len(got))
+		}
+		if r.Week != nil {
+			t.Errorf("SPEC shallow clone inside the week: the week is %+v, want null: unknown, not nothing", r.Week)
+		}
+		out := render(t, s.model)
+		for _, page := range []struct {
+			name, says string
+			doc        []byte
+		}{
+			{"text", "What landed, 2026-09-30 → 2026-10-07 UTC: unknown: the history", out.text},
+			{"Markdown", "Unknown: the history this run read does not cover the window", out.markdown},
+		} {
+			if !bytes.Contains(page.doc, []byte(page.says)) || bytes.Contains(page.doc, []byte(": nothing")) ||
+				bytes.Contains(page.doc, []byte("Nothing landed")) {
+				t.Errorf("SPEC shallow clone inside the week: the %s does not say what landed is unknown:\n%s", page.name, page.doc)
+			}
+		}
+	})
+}
+
+func ptr[T any](v T) *T { return &v }
 
 // checkSurviving compares surviving@1, a repository's still-here table, with
 // a SPEC table of the prod lines each person holds at HEAD, and requires

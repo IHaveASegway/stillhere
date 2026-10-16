@@ -44,9 +44,12 @@ var namesHistory = []struct {
 	// two addresses share, which they read as no name at all.
 	{namesDay(time.March, 10), "Sam Same <sam@corp.example>", "sam.py", 3, ""},
 	{namesDay(time.March, 11), "SAM SAME. <sam@other.example>", "same.py", 2, ""},
-	// A subject that names an address no one in the run has and one a
-	// person of the run has, which no page prints (SEC-3).
-	{namesDay(time.March, 12), "Sam Same <sam@corp.example>", "thanks.py", 2, "thanks dave.private@hidden.example, jdoe@corp.example"},
+	// A subject that names an address no one in the run has, one a person
+	// of the run has, and one in a dotless domain of a person of the run
+	// who is on no page with it, which no page prints (SEC-3, #90).
+	{namesDay(time.March, 12), "Sam Same <sam@corp.example>", "thanks.py", 2,
+		"thanks dave.private@hidden.example, jdoe@corp.example, root@buildbox"},
+	{namesDay(time.March, 15), "Root Builder <root@buildbox>", "root.py", 2, ""},
 	{namesDay(time.March, 13), "Your Name <you@corp.example>", "yours.py", 2, ""},
 	{namesDay(time.March, 14), "Your Name <you@mail.example>", "yours2.py", 2, ""},
 	// A bot whose name is an address, and one whose name is its own
@@ -63,7 +66,7 @@ func namesDay(month time.Month, day int) time.Time {
 // namesSecrets are what no text or Markdown page of the names repository
 // may hold: the local parts its display names would give away, and every
 // domain, since no page prints an address.
-var namesSecrets = []string{"jdoe", "mary.major", "corp.example", "mail.example", "other.example", "noreply"}
+var namesSecrets = []string{"jdoe", "mary.major", "corp.example", "mail.example", "other.example", "noreply", "buildbox"}
 
 // namesLabel finds a label a page gives a person it cannot name, and not a
 // name printed quoted because it looks like one.
@@ -97,9 +100,12 @@ func displayNames(t *testing.T) {
 	sameBytes(t, "the names repository's report text and its scan's", rep.text, a.text)
 	sameBytes(t, "the names repository's report Markdown and its scan's", rep.markdown, a.markdown)
 	who := render(t, first.whoKnows(t, ""))
-	// Sam's subject names a customer's address and jdoe's: explain prints
-	// it in every format, each address as the label, and JSON keeps an
-	// email only where a person's email goes, Sam's own in the subject's key.
+	// Sam's subject names a customer's address, jdoe's and root's: explain
+	// prints it in every format, each address as the label, root's too,
+	// whom the page does not show and whose dotless domain looks like no
+	// address: the page withholds every address of the run (#90). JSON
+	// keeps an email only where a person's email goes, Sam's own in the
+	// subject's key.
 	sam, err := app.Explain(t.Context(), first.read, app.ExplainRequest{RunID: first.run, Metric: durable, Subject: person("sam@corp.example")})
 	if err != nil {
 		t.Fatalf("app.Explain(durable@1, sam@corp.example): %v", err)
@@ -110,9 +116,10 @@ func displayNames(t *testing.T) {
 		data []byte
 	}{{"text", explained.text}, {"Markdown", explained.markdown}, {"JSON", explained.json}} {
 		lower := bytes.ToLower(page.data)
+		// The text table cuts the title after the second label.
 		if !bytes.Contains(page.data, []byte("thanks (address withheld), (address withheld)")) ||
 			bytes.Contains(lower, []byte("dave.private")) || bytes.Contains(lower, []byte("hidden.example")) ||
-			bytes.Contains(lower, []byte("jdoe")) {
+			bytes.Contains(lower, []byte("jdoe")) || bytes.Contains(lower, []byte("buildbox")) {
 			t.Errorf("explain of Sam's durable@1 as %s does not print Sam's subject with both addresses withheld:\n%s", page.name, page.data)
 		}
 	}
@@ -173,6 +180,7 @@ func displayNames(t *testing.T) {
 		"sam@other.example":       {"SAM SAME.", false},
 		"you@corp.example":        {"Your Name", false},
 		"you@mail.example":        {"Your Name", false},
+		"root@buildbox":           {"Root Builder", false},
 		"renovate@corp.example":   {"", true},
 		"49699333+dependabot[bot]@users.noreply.github.com": {"dependabot[bot]", false},
 	})

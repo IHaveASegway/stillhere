@@ -88,7 +88,7 @@ type Input struct {
 	// identity.New built over the same facts, FactSet.Forge included: the
 	// GitHub data is what links a login to a person (Reviewer).
 	Who  *identity.Directory
-	Days int // landed@1 window, at least 1; 0: the policy's [week] days
+	Days int // landed@1's and landed@2's window, at least 1; 0: the policy's [week] days
 	// Candidates are the run's identity candidates (identity.Candidates
 	// over the whole run, with Who), which knowledge_loss@1 and
 	// knowledge_concentration@1 count and merge in their Detail (#104,
@@ -144,9 +144,38 @@ type RankInput struct {
 	// clusters) and, for Sum, the number of week Blocks in Window.
 	// Replicates 0 means rank's default, B = 1000.
 	Options rank.Options
-	// Data holds each person's clusters, sorted by Change. Bots are never
-	// ranked, so they are not in it; nil when the scope has no clusters.
+	// Data holds each person's clusters, sorted by Change: the population
+	// every caller ranks (rank.Intervals), scores (validate) or lists as
+	// people's changes. A bot's or an agent's are never in it: bots are
+	// never ranked or scored, and that rule is the metric's, here, so no
+	// caller restates it. nil when the scope has no clusters.
 	Data map[domain.Subject][]rank.Cluster
+	// Bots holds each bot's and agent's clusters (identity.Directory.Bot),
+	// sorted alike, for explain alone (#75): a bot's values are in the
+	// report's bot tables, so explain lists what they are made of. nil
+	// when there are none.
+	Bots map[domain.Subject][]rank.Cluster
+}
+
+// withData returns ri with data, every subject's clusters, split by the one
+// rule ranking follows: a bot's or an agent's go to Bots, everyone else's
+// to Data.
+func (ri RankInput) withData(who *identity.Directory, data map[domain.Subject][]rank.Cluster) RankInput {
+	ri.Data, ri.Bots = nil, nil
+	for s, cs := range data {
+		if len(cs) == 0 {
+			continue
+		}
+		into := &ri.Data
+		if who.Bot(s.Key) {
+			into = &ri.Bots
+		}
+		if *into == nil {
+			*into = map[domain.Subject][]rank.Cluster{}
+		}
+		(*into)[s] = cs
+	}
+	return ri
 }
 
 // projected is implemented by the metrics that compute over a shared
@@ -166,7 +195,9 @@ type projected interface {
 func All() []Metric {
 	return []Metric{
 		landedV1{},
+		landedV2{},
 		survivingV1{},
+		reviewCoverageV1{},
 		majorityOwnerV1{},
 		knowledgeConcentrationV1{},
 		knowledgeLossV1{},

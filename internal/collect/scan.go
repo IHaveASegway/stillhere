@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"strings"
+	"unicode/utf8"
 )
 
 // This file holds what every collector (#4, #5, #6, #7) needs to read git's
@@ -42,6 +43,49 @@ func newScanner(r io.Reader, split bufio.SplitFunc) *bufio.Scanner {
 func nonBlank(line []byte) bool {
 	return len(bytes.TrimSpace(line)) > 0
 }
+
+// nonBlankPieces tells nonBlank's answer for a line read in pieces, which
+// the own-patch reader uses for a hunk line it does not hold whole (#73).
+// A line is non-blank when some rune of it is outside White_Space, decoding
+// it as one stream (an invalid byte is U+FFFD, which is not white space),
+// so the answer for the line is the answer for any of its pieces as long
+// as each piece ends where a rune starts: a byte that starts a rune
+// (utf8.RuneStart) is never inside another rune, valid or not, so decoding
+// the whole line puts a boundary there too. write holds back the bytes of
+// a rune a piece cuts short and judges them with the next piece.
+type nonBlankPieces struct {
+	carry []byte // the start of a rune the last piece cut short
+	found bool   // a rune outside White_Space was seen
+}
+
+// write judges the next piece of the line.
+func (n *nonBlankPieces) write(p []byte) {
+	if n.found {
+		return
+	}
+	if len(n.carry) > 0 {
+		p = append(n.carry, p...)
+		n.carry = n.carry[:0]
+	}
+	end := len(p)
+	for i := len(p) - 1; i >= 0 && i >= len(p)-utf8.UTFMax; i-- {
+		if utf8.RuneStart(p[i]) {
+			if !utf8.FullRune(p[i:]) {
+				end = i
+			}
+			break
+		}
+	}
+	if nonBlank(p[:end]) {
+		n.found = true
+		return
+	}
+	n.carry = append(n.carry, p[end:]...)
+}
+
+// done reports whether the line was non-blank, once every piece is
+// written: a rune still cut short is invalid, U+FFFD, and so non-blank.
+func (n *nonBlankPieces) done() bool { return n.found || len(n.carry) > 0 }
 
 // unquotePath undoes git's quote_c_style, with which a path that holds a
 // quote, a backslash, a control character or (unless core.quotePath is

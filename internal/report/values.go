@@ -18,13 +18,19 @@ import (
 
 // The metric versions a report reads.
 const (
-	MetricLanded        = "landed@1"                  // week rows: Value is the landings credited; Detail lines_added, prod_lines_added
+	MetricLanded        = "landed@2"                  // week rows (#108): Value is the landings that hold the person's commits; Detail commits, merged, lines_added, prod_lines_added (absent when unknown), landings_lines_unknown; about the repository, group or all: the scope's totals
 	MetricSurviving     = "surviving@1"               // still-here rows: Value is prod non-blank lines; Detail majority_files, lines_<role>, repos, landings_365d; about a repository or group: Value prod lines, Detail prod_files, people, bot_share
 	MetricMajority      = "majority_owner@1"          // a person's majority files, when surviving@1 has no majority_files detail
 	MetricConcentration = "knowledge_concentration@1" // Value is authors_in_prefix; Detail files_with_majority, bots_in_prefix
 	MetricKnowledgeLoss = "knowledge_loss@1"          // Num is lines held by people gone quiet, Den lines held by people
 	MetricAIAssisted    = "ai_assisted@1"             // Num is AI-assisted landings, Den landings in 365 days
 	MetricWhoKnows      = "who_knows@1"               // per path: one value about the path (Detail prod_files, files_with_majority) and one per person (Value prod lines; Detail majority_files, recent_landings, top_author)
+	MetricReviews       = "reviews_given@1"           // rank rows (PF-5): Detail no_comment_share, shown beside the count
+	// MetricReviewCoverage (#107) is about a repository, a group or the
+	// whole run, never a person: Num the reviewed landings, Den the human
+	// ones; Detail via_pull_request, direct, approved_no_comment,
+	// bot_landings, repos.
+	MetricReviewCoverage = "review_coverage@1"
 )
 
 // maxTopAuthors is how many top authors a who-knows answer lists
@@ -44,7 +50,7 @@ const (
 	detailRecentLandings    = "recent_landings"
 	detailTopAuthor         = "top_author" // a top author's place, 1 to 5
 	detailProdFiles         = "prod_files"
-	detailPeople            = "people"    // surviving@1 about a repository or group: humans with surviving prod lines
+	detailPeople            = "people"    // surviving@1 about a repository or group: humans with surviving prod lines; knowledge_loss@1: humans holding lines
 	detailBotShare          = "bot_share" // surviving@1 about a repository or group: bot-held lines over prod lines
 	// knowledge_loss@1 and knowledge_concentration@1 (#104), present when
 	// identity candidates hold lines in the area: how many, the high ones,
@@ -55,6 +61,7 @@ const (
 	detailIfAllMergedNum = "if_all_merged_num" // knowledge_loss@1's Num
 	detailIfMerged       = "if_merged"         // knowledge_concentration@1's authors_in_prefix
 	detailIfAllMerged    = "if_all_merged"     // knowledge_concentration@1's authors_in_prefix
+	detailPeopleInactive = "people_inactive"
 )
 
 // shareIfMerged reads knowledge_loss@1's identity detail (#104): nil when
@@ -102,6 +109,35 @@ func concentrationIfMerged(v domain.MetricValue) *ConcentrationIfMerged {
 	return &ConcentrationIfMerged{Candidates: count(n), High: count(v.Detail[detailCandidatesHigh]),
 		HighAuthors: count(v.Detail[detailIfMerged]), AllAuthors: count(v.Detail[detailIfAllMerged])}
 }
+
+// The Detail keys of landed@2 and review_coverage@1, and the one a
+// reviews_given@1 rank row shows beside the count.
+const (
+	detailCommits           = "commits"
+	detailMerged            = "merged"
+	detailLinesUnknown      = "landings_lines_unknown"
+	detailViaPullRequest    = "via_pull_request"
+	detailDirect            = "direct"
+	detailApprovedNoComment = "approved_no_comment"
+	detailBotLandings       = "bot_landings"
+	detailAfterSync         = "after_sync"
+	detailUnmatched         = "unmatched"
+	detailNoCommentShare    = "no_comment_share"
+)
+
+// rankBeside names, per ranked metric, the Detail key of a person's value
+// that a rank table prints beside the estimate: a counterweight the metric's
+// definition promises next to it (PF-5: reviews_given@1's share of reviews
+// that were approvals with no comment). A metric not listed shows none.
+var rankBeside = map[string]string{MetricReviews: detailNoCommentShare}
+
+// forgeAnywhere holds the metrics that read GitHub data and count a review
+// in any repository of the run, beyond a section's own, as a person's
+// activity: knowledge_loss@1 (docs/metrics.md). A card or an overview that
+// shows one of them also says where the run's other repositories lack
+// GitHub data (forgeElsewhere); review_coverage@1 counts its own scope's
+// pull requests only.
+var forgeAnywhere = map[string]bool{MetricKnowledgeLoss: true}
 
 // population is surviving@1's value about a repository's or a group's code
 // as a whole. A field is nil when the value does not carry it.
@@ -340,6 +376,19 @@ type People interface {
 	// (identity.Directory.NameKey): every caveat that says two emails share
 	// a name groups them by it, so it names what identities compares.
 	NameKey(email string) string
+	// Addresses is every address of the run, logins left out
+	// (identity.Directory.Addresses): what a page withholds wherever
+	// repository text holds one, whether or not the person is on the page
+	// (#90).
+	Addresses() []string
+}
+
+// runAddresses is who's Addresses, nil for a nil who.
+func runAddresses(who People) []string {
+	if who == nil {
+		return nil
+	}
+	return who.Addresses()
 }
 
 // OwnPageOnly reports whether a metric's values about a person are shown on
@@ -375,6 +424,59 @@ func AIShareIn(v Value) (whole bool, key string) {
 		return false, detailAIAssistedShare
 	}
 	return false, ""
+}
+
+// Areas reads the area values of one repository (subject area, key
+// "<repo key>:<dir>/") of knowledge_loss@1 and knowledge_concentration@1,
+// the metrics a scan stores per top-level directory, as one row per area:
+// the largest first, by the lines people hold there, then by the lines
+// held by people gone quiet, then by path (#106). It is the one mapping of
+// those values for any page that lists areas; nil for none.
+func Areas(values []domain.MetricValue, repo string) []Area {
+	byPath := map[string]*Area{}
+	row := func(v domain.MetricValue) *Area {
+		path, ok := strings.CutPrefix(v.Subject.Key, repo+":")
+		if v.Subject.Kind != domain.SubjectArea || v.Scope.Kind != domain.ScopeRepo || v.Scope.Key != repo || !ok {
+			return nil
+		}
+		a := byPath[path]
+		if a == nil {
+			a = &Area{Path: path}
+			byPath[path] = a
+		}
+		return a
+	}
+	for _, v := range values {
+		switch v.Metric.String() {
+		case MetricKnowledgeLoss:
+			if a := row(v); a != nil {
+				a.Lines = count(v.Den)
+				a.KnowledgeLoss = &Share{Metric: MetricKnowledgeLoss, Num: v.Num, Den: v.Den, Value: v.Value}
+				people, inactive := count(v.Detail[detailPeople]), count(v.Detail[detailPeopleInactive])
+				a.People, a.PeopleInactive = &people, &inactive
+			}
+		case MetricConcentration:
+			if a := row(v); a != nil {
+				a.Concentration = concentrationOf(v)
+				files := count(v.Detail[detailProdFiles])
+				a.ProdFiles = &files
+			}
+		}
+	}
+	var out []Area
+	for _, a := range byPath {
+		out = append(out, *a)
+	}
+	gone := func(a Area) float64 {
+		if a.KnowledgeLoss == nil {
+			return 0
+		}
+		return a.KnowledgeLoss.Num
+	}
+	slices.SortFunc(out, func(x, y Area) int {
+		return cmp.Or(cmp.Compare(y.Lines, x.Lines), cmp.Compare(gone(y), gone(x)), cmp.Compare(x.Path, y.Path))
+	})
+	return out
 }
 
 func isBot(who People, email string) bool {

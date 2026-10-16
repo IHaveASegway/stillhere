@@ -88,6 +88,11 @@ type Store struct {
 	writer *sql.DB // one connection, whose transactions begin IMMEDIATE: use write
 	ro     *sql.DB // the readers, query_only connections: use read
 	leases leases  // the runs this Store began and has not finished
+	// immutable: the readers open the file with SQLite's immutable=1, in a
+	// directory this process cannot write (openReadOnly), so SQLite takes
+	// no lock and reads no write-ahead log. read then guards each read
+	// against a writer itself (immutableRead).
+	immutable bool
 }
 
 var _ domain.FactStore = (*Store)(nil)
@@ -161,6 +166,21 @@ func OpenExisting(ctx context.Context, path string) (*Store, error) {
 		return s, nil
 	}
 	err = errors.Join(err, s.Close())
+	if fi, serr := os.Stat(abs); serr == nil && fi.Mode().IsRegular() && unwritableHere(err) {
+		// A reader may not be able to write the file or its directory (a
+		// read-only mount, a team server's copy): it reads the file
+		// read-only instead, as the MCP server does, and never says it needs
+		// to write (#79).
+		ro, rerr := openReadOnly(ctx, abs, "sqlite.OpenExisting")
+		if rerr == nil {
+			return ro, nil
+		}
+		var usage *domain.UsageError
+		if errors.As(rerr, &usage) {
+			return nil, &domain.UsageError{Msg: abs + ": " + strings.TrimPrefix(usage.Msg, "sqlite.OpenExisting "+abs+": ")}
+		}
+		return nil, rerr
+	}
 	if resultCode(err) == sqlite3.SQLITE_CANTOPEN {
 		// SQLite says only that it could not open the file; say why, when
 		// it is the user's to fix.
@@ -527,6 +547,13 @@ func resultCode(err error) int {
 // read runs fn in one read transaction on a reader connection: every query
 // fn makes sees the same snapshot of the database.
 func (s *Store) read(ctx context.Context, fn func(*sql.Tx) error) error {
+	if s.immutable {
+		return s.immutableRead(ctx, fn)
+	}
+	return s.readTx(ctx, fn)
+}
+
+func (s *Store) readTx(ctx context.Context, fn func(*sql.Tx) error) error {
 	tx, err := s.ro.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return err

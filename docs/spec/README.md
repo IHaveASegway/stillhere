@@ -11,7 +11,7 @@ Behaviour marked "verified" was checked on Git 2.50.1 (Apple Git-155) on 2026-10
 | [codebase.md](codebase.md) | Package map, the dependency rule, domain types, ports, signatures between packages, run model, commands, conventions, the test list | Every milestone |
 | [git-invocation.md](git-invocation.md) | The one git adapter: hardening flags, environment, version floors, offline analysis vs network sync, credentials, URL scrubbing, identity (mailmap) and bots, logging | M0 (analysis), M2 (sync) |
 | [discovery.md](discovery.md) | Which paths are repos or groups, bare mirrors, duplicates, default branch, shallow and partial clone detection | M0 |
-| [classification.md](classification.md) | Ordered path classifier, RE2 deny list, `.gitattributes`, header sniff, roles; weights and gearing (open decision #2) | M0 (week predicate), M1 (blame roles) |
+| [classification.md](classification.md) | Ordered path classifier, RE2 deny list, `.gitattributes`, header sniff, roles; the cut weights and gearing design (open decision #2, decided 2026-10-15) | M0 (week predicate), M1 (blame roles) |
 | [week-collector.md](week-collector.md) | What landed: first-parent log, numstat and rename parsing, `lines_added`, co-author trailers and AI-assisted tags, subjects, reverts, landing → commit map | M0 (M1 for reverts and the landing map) |
 | [blame-collector.md](blame-collector.md) | What is still here: tree listing, blame flags, porcelain parsing, per-repo ignore-revs, persisted per-commit rows, majority owner, concentration walk | M1 |
 | [cache.md](cache.md) | Blob-level blame reuse and its invalidation | Deferred, open decision #3 |

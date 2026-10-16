@@ -315,6 +315,9 @@ type overviewItem struct {
 	AIAssisted    *report.Share         `json:"ai_assisted"`
 	BotShare      *report.Share         `json:"bot_share"`
 	Caveats       []report.Caveat       `json:"caveats,omitzero"` // detailed only
+	// ReviewCoverage is review_coverage@1 about the scope (#107); null
+	// without GitHub data.
+	ReviewCoverage *report.ReviewCoverage `json:"review_coverage"`
 }
 
 // stillHereOut is surviving@1's rows for a scope, the first rows of each
@@ -327,12 +330,15 @@ type stillHereOut struct {
 	BotsTotal   int                   `json:"bots_total"`
 }
 
-// weekOut is landed@1's rows for a scope, the first rows of each list.
+// weekOut is landed@2's table for a scope (#108): its total, each landing
+// once, and the first rows of each list. null, as the report's week, when
+// the scope's history does not cover the window (#74).
 type weekOut struct {
-	Humans      []report.WeekRow `json:"humans"`
-	HumansTotal int              `json:"humans_total"`
-	Bots        []report.WeekRow `json:"bots"`
-	BotsTotal   int              `json:"bots_total"`
+	Total       *report.WeekTotal `json:"total"`
+	Humans      []report.WeekRow  `json:"humans"`
+	HumansTotal int               `json:"humans_total"`
+	Bots        []report.WeekRow  `json:"bots"`
+	BotsTotal   int               `json:"bots_total"`
 }
 
 func stillHereOf(t *report.StillHere, rows int) *stillHereOut {
@@ -349,7 +355,7 @@ func weekOf(t *report.WeekTable, rows int) *weekOut {
 	if t == nil {
 		return nil
 	}
-	out := &weekOut{}
+	out := &weekOut{Total: t.Total}
 	out.Humans, out.HumansTotal = cut(t.Humans, rows)
 	out.Bots, out.BotsTotal = cut(t.Bots, rows)
 	return out
@@ -391,7 +397,8 @@ func (s *shaper) overview(o report.Overview, n named) overviewItem {
 		Scope: o.Scope, Totals: o.Totals,
 		People: stillHereOf(o.People, f.rows), Week: weekOf(o.Week, f.rows),
 		Concentration: o.Concentration, KnowledgeLoss: o.KnowledgeLoss, BotShare: o.BotShare,
-		AIAssisted: s.share(o.AIAssisted, o.Scope, scopeName(o.Scope, "")),
+		AIAssisted:     s.share(o.AIAssisted, o.Scope, scopeName(o.Scope, "")),
+		ReviewCoverage: o.ReviewCoverage,
 	}
 	if f.detailed {
 		pv := f.provenance(o.Provenance, n)
@@ -419,6 +426,9 @@ type repoSummary struct {
 	BotShare      *report.Share   `json:"bot_share"`
 	Landings      report.Landings `json:"landings"`
 	Caveats       []string        `json:"caveats"` // the codes of its card's caveats beyond the standing ones; overview(scope=repo) says them in full
+	// ReviewCoverage is review_coverage@1 about the repository (#107);
+	// null without GitHub data for it.
+	ReviewCoverage *report.ReviewCoverage `json:"review_coverage"`
 }
 
 // madeOf is one of the people a repository is made of.
@@ -435,7 +445,7 @@ func (s *shaper) summary(r report.Repo) repoSummary {
 		Name: r.Name, Key: r.Key, Group: r.Group, Status: r.Status, Error: r.Error, LineFacts: r.LineFacts,
 		Size: c.Size, People: c.People, Bots: c.Bots,
 		KnowledgeLoss: c.KnowledgeLoss, AIAssisted: s.share(c.AIAssisted, sc, scopeName(sc, r.Name)), BotShare: c.BotShare,
-		Landings: c.Landings,
+		ReviewCoverage: c.ReviewCoverage, Landings: c.Landings,
 	}
 	if c.Age != nil {
 		days := c.Age.Days
@@ -476,6 +486,7 @@ func (s *shaper) repoDetail(r report.Repo) report.Repo {
 	sc := report.Scope{Kind: domain.ScopeRepo, Key: r.Key}
 	r.Card.AIAssisted = s.share(r.Card.AIAssisted, sc, scopeName(sc, r.Name))
 	r.Card.MadeOf, _ = cut(r.Card.MadeOf, rows)
+	r.Card.Areas, _ = cut(r.Card.Areas, rows)
 	r.Warnings, _ = cut(r.Warnings, rows)
 	r.Errors.Blame, _ = cut(r.Errors.Blame, rows)
 	r.IgnoreRevs.Revs, _ = cut(r.IgnoreRevs.Revs, rows)
@@ -986,6 +997,13 @@ type explainOut struct {
 	// and repositories'.
 	ValuesTotal int             `json:"values_total"`
 	Changes     []report.Change `json:"changes"` // a ranked metric's counted changes for a person, newest last
+	// Landings, Commits and Files are what a person's value of a metric
+	// that is not ranked is made of (#109), paged as changes are: the
+	// landings landed@1 and landed@2 count, the blamed commits surviving@1
+	// sums, the files majority_owner@1 counts. Absent for other metrics.
+	Landings []report.ExplainLanding `json:"landings,omitempty"`
+	Commits  []report.ExplainCommit  `json:"commits,omitempty"`
+	Files    []report.ExplainFile    `json:"files,omitempty"`
 	tail
 }
 
@@ -1017,6 +1035,7 @@ func (s *shaper) explainAnswer(e *report.Explain, allowSource bool) *explainOut 
 	} else {
 		out.Metric = briefOf(e.Metric, true)
 	}
+	// One list is filled for any metric, so one page and cursor serve it.
 	changes, pg := paginate(e.Changes, f, e.Provenance.RunID)
 	if pg.Total > 0 {
 		out.Page = pg
@@ -1030,6 +1049,42 @@ func (s *shaper) explainAnswer(e *report.Explain, allowSource bool) *explainOut 
 		}
 		out.Changes = append(out.Changes, c)
 		n.key(c.RepoKey)
+	}
+	landings, pg := paginate(e.Landings, f, e.Provenance.RunID)
+	if pg.Total > 0 {
+		out.Page = pg
+	}
+	for _, l := range landings {
+		if !allowSource {
+			l.Title = ""
+		}
+		if !f.detailed {
+			l.Landing = shortSHA(l.Landing)
+		}
+		out.Landings = append(out.Landings, l)
+		n.key(l.RepoKey)
+	}
+	commits, pg := paginate(e.Commits, f, e.Provenance.RunID)
+	if pg.Total > 0 {
+		out.Page = pg
+	}
+	for _, c := range commits {
+		if !allowSource {
+			c.Title = ""
+		}
+		if !f.detailed {
+			c.Commit = shortSHA(c.Commit)
+		}
+		out.Commits = append(out.Commits, c)
+		n.key(c.RepoKey)
+	}
+	files, pg := paginate(e.Files, f, e.Provenance.RunID)
+	if pg.Total > 0 {
+		out.Page = pg
+	}
+	for _, x := range files {
+		out.Files = append(out.Files, x)
+		n.key(x.RepoKey)
 	}
 	out.head = head{Provenance: f.provenance(e.Provenance, n)}
 	out.Caveats = s.withheldAI(out.Caveats)

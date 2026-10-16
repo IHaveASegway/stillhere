@@ -346,14 +346,37 @@ func TestDiscover(t *testing.T) {
 		if err != nil {
 			t.Fatalf("gitcli.New: %v", err)
 		}
+		// #93: a remote pasted where a directory was made leaves the token
+		// in the path itself, here a repository named on its own and a
+		// group's member. Each is refused where it enters, quoted scrubbed,
+		// and nothing of it is read.
+		pasted := filepath.Join(t.TempDir(), "https:", "user:"+fixture.DiscoveryToken+"@github.com")
+		named, group := filepath.Join(pasted, "acme"), filepath.Join(t.TempDir(), "pasted")
+		member := filepath.Join(group, "user:"+fixture.DiscoveryToken+"@github.com")
+		for _, dir := range []string{named, member} {
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := git.Run(t.Context(), domain.GitCmd{Dir: dir, Args: []string{"init", "--quiet", "--template="}}); err != nil {
+				t.Fatalf("git init %s: %v", redact.Scrub(dir), err)
+			}
+		}
 		got, err := Discover(t.Context(), logged, []string{
 			fx.WidgetA, fx.WidgetB, fx.WidgetLink, fx.Other, fx.Mirror, fx.SCP, fx.HTTPS, fx.UnparsedA, fx.UnparsedB, fx.Reset,
 			fx.Bare, fx.Group, fx.Outer, fx.Project, fx.SrcA, fx.SrcB, fx.SrcC, fx.Lab, fx.Inside, fx.Mirrors,
 			fx.Tracking, fx.NoOriginHead, fx.OriginMaster, fx.DanglingHead, fx.MainFirst, fx.MasterOnly, fx.Current, fx.Detached,
 			fx.Empty, fx.Broken, fx.Stray, fx.StrayBare, fx.StrayTree, fx.Headless, fx.Unfinished, fx.File, fx.Missing,
+			named, group,
 		})
 		if err != nil {
 			t.Fatalf("Discover: %v", err)
+		}
+		for _, dir := range []string{named, member} {
+			if !slices.ContainsFunc(got.Failed, func(f domain.FileError) bool {
+				return f.Path == redact.Scrub(dir) && strings.Contains(f.Message, "credential")
+			}) {
+				t.Errorf("no failure names %s, scrubbed, as holding a credential: %+v", redact.Scrub(dir), got.Failed)
+			}
 		}
 		encoded, err := json.Marshal(got)
 		if err != nil {

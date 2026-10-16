@@ -8,7 +8,6 @@ import (
 	"strings"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
-	"github.com/IHaveASegway/stillhere/internal/identity"
 	"github.com/IHaveASegway/stillhere/internal/metrics"
 	"github.com/IHaveASegway/stillhere/internal/rank"
 	"github.com/IHaveASegway/stillhere/internal/report"
@@ -149,7 +148,7 @@ func rankAll(in *metrics.Input, ms []rankedMetric, scopes []domain.Scope, stored
 			if err != nil {
 				return nil, nil, fmt.Errorf("ranking %s in %s %s: %w", m.def.ID, s.Kind, s.Key, err)
 			}
-			data := people(ri.Data, in.Who)
+			data := ri.Data // people only: the metric sets bots apart (RankInput.Bots)
 			intervals := prev[key{m.def.ID, s}]
 			if subject != nil && len(data[*subject]) == 0 &&
 				!slices.ContainsFunc(intervals, func(x domain.RankInterval) bool { return x.Subject == *subject }) {
@@ -178,22 +177,6 @@ func rankAll(in *metrics.Input, ms []rankedMetric, scopes []domain.Scope, stored
 		)
 	})
 	return sets, all, nil
-}
-
-// people keeps the clusters of people who are not bots: bots are never
-// ranked, and a bot in the data would push every person down a place.
-func people(data map[domain.Subject][]rank.Cluster, who *identity.Directory) map[domain.Subject][]rank.Cluster {
-	var out map[domain.Subject][]rank.Cluster
-	for s, cs := range data {
-		if s.Kind != domain.SubjectPerson || who.Bot(s.Key) || len(cs) == 0 {
-			continue
-		}
-		if out == nil {
-			out = map[domain.Subject][]rank.Cluster{}
-		}
-		out[s] = cs
-	}
-	return out
 }
 
 // metricInfo is a metric's published definition as reports print it.
