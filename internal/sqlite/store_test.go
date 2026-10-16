@@ -91,15 +91,18 @@ func TestStoreRoundTrip(t *testing.T) {
 	// The GitHub data the run read, whole. A second call replaces the
 	// first, and a pull request of a repository that is not the run's is
 	// refused.
-	repos, pulls := sampleRunForge(zone)
-	if err := s.PutRunForge(ctx, id, repos[:1], pulls[:1]); err != nil {
+	repos, pulls, links := sampleRunForge(zone)
+	if err := s.PutRunForge(ctx, id, repos[:1], pulls[:1], links[:1]); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.PutRunForge(ctx, id, repos, pulls); err != nil {
+	if err := s.PutRunForge(ctx, id, repos, pulls, links); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.PutRunForge(ctx, id, repos[:1], pulls); err == nil {
+	if err := s.PutRunForge(ctx, id, repos[:1], pulls, nil); err == nil {
 		t.Error("PutRunForge took a pull request of a repository that is not among the run's")
+	}
+	if err := s.PutRunForge(ctx, id, repos[:1], pulls[:1], links); err == nil {
+		t.Error("PutRunForge took a link of a repository that is not among the run's")
 	}
 	before := time.Now().UTC()
 	if err := s.FinishRun(ctx, id, domain.RunStatusComplete); err != nil {
@@ -180,8 +183,8 @@ func TestStoreRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		repos, pulls := sampleRunForge(time.UTC)
-		want := &domain.ForgeFacts{Repos: repos, PullRequests: pulls}
+		repos, pulls, links := sampleRunForge(time.UTC)
+		want := &domain.ForgeFacts{Repos: repos, PullRequests: pulls, Links: links}
 		for _, wm := range sampleRunWatermarks(time.UTC) {
 			want.Watermarks = append(want.Watermarks, wm.ForgeWatermark)
 			if want.Join == nil {
@@ -190,7 +193,7 @@ func TestStoreRoundTrip(t *testing.T) {
 			want.Join[wm.Repo] = wm.Keys
 		}
 		wantEqual(t, "RunForge", want, got)
-		if err := s.PutRunForge(ctx, id, repos, pulls); err == nil {
+		if err := s.PutRunForge(ctx, id, repos, pulls, links); err == nil {
 			t.Error("PutRunForge changed a published run")
 		}
 	})
@@ -301,10 +304,10 @@ func sampleRunWatermarks(zone *time.Location) []domain.RunWatermark {
 }
 
 // sampleRunForge is the GitHub data the sample run kept, with times in
-// zone: the forge repositories of its watermarks, and their pull requests
-// with every field set somewhere and every list empty somewhere (nil), as
-// LoadForge sorts them.
-func sampleRunForge(zone *time.Location) ([]domain.ForgeRepo, []domain.PullRequest) {
+// zone: the forge repositories of its watermarks, their pull requests with
+// every field set somewhere and every list empty somewhere (nil), as
+// LoadForge sorts them, and the links of older pull requests (#103).
+func sampleRunForge(zone *time.Location) ([]domain.ForgeRepo, []domain.PullRequest, []domain.ForgeLink) {
 	at := func(day, hour int) time.Time {
 		return time.Date(2026, time.September, day, hour, 0, 0, 0, time.UTC).In(zone)
 	}
@@ -335,7 +338,11 @@ func sampleRunForge(zone *time.Location) ([]domain.ForgeRepo, []domain.PullReque
 		Created: at(5, 9), Updated: at(6, 9), Closed: at(6, 9), // a deleted author: no login
 		Reviews: []domain.Review{{ID: "PRR_3", Author: domain.ForgeUser{Login: "ada"}, State: domain.ReviewDismissed, Submitted: at(5, 10)}},
 	}}
-	return repos, pulls
+	links := []domain.ForgeLink{
+		{Repo: "R_api", ForgeCommit: domain.ForgeCommit{SHA: sha('a'), AuthorEmail: "ada@old.example", AuthorLogin: "ada"}},
+		{Repo: "R_docs", ForgeCommit: domain.ForgeCommit{SHA: sha('b'), AuthorEmail: "bob@example.com", AuthorLogin: "bob"}},
+	}
+	return repos, pulls, links
 }
 
 // wantEqual fails the test unless got is reflect.DeepEqual to want, naming
@@ -496,6 +503,10 @@ func sampleFacts(run domain.Run) *domain.FactSet {
 					Source: domain.IgnoreRevsRoot, SHA256: strings.Repeat("cd", 32), Revs: []string{sha('6'), sha('7')},
 				},
 				BlameErrors: []domain.FileError{{Path: "big.go", Message: "git blame: timed out after 2m0s"}},
+				Aliases: []domain.Alias{
+					{Email: "ada@old.example", Canonical: "ada@example.com"},
+					{Email: "pia@laptop.local", Canonical: "pia@example.com"},
+				},
 			},
 			{
 				Repo:   domain.Repo{Key: "local:empty", Name: "empty", Path: "/src/empty", Bare: true, Partial: true},

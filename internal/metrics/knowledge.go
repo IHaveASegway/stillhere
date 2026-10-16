@@ -23,7 +23,9 @@ func (knowledgeLossV1) Definition() Definition {
 			"credited to them, merge commits included, is in a landing in the window, so a side-branch author is active when " +
 			"the branch lands, or when they submitted a review (approved, changes requested or commented) in the window on any " +
 			"pull request of the scanned repositories, open, closed or merged, in the GitHub data the run read. Detail: people " +
-			"(humans holding lines), people_inactive.",
+			"(humans holding lines), people_inactive; and, when identity candidates hold lines in the area, identity_candidates, " +
+			"identity_candidates_high, and if_merged_num and if_all_merged_num, Num with the high candidates and with every " +
+			"candidate merged into one person each.",
 		Ratio:       true,
 		Ranked:      false,
 		Forge:       true,
@@ -87,31 +89,41 @@ func (knowledgeLossV1) compute(v *view) ([]domain.MetricValue, error) {
 // knowledgeLoss computes the share over files. ok is false when no person
 // holds a line there, which leaves a share of nothing.
 func knowledgeLoss(v *view, active map[string]bool, s domain.Scope, sub domain.Subject, w domain.Window, files []*fileView) (domain.MetricValue, bool) {
-	held, gone := 0, 0
-	people := make(map[string]bool)
+	held, gone, people, inactive := lossCounts(v, active, files)
+	if held == 0 {
+		return domain.MetricValue{}, false
+	}
+	detail := map[string]float64{
+		"people":          float64(people),
+		"people_inactive": float64(inactive),
+	}
+	v.lossIfMerged(detail, active, files) // #104: identities.go
+	return ratio(knowledgeLossID, s, sub, w, gone, held, 0, detail), true
+}
+
+// lossCounts counts, over files, the lines held by people (bots left out),
+// those held by people with no activity, and the people and inactive
+// people who hold them: knowledge_loss@1's parts, which lossIfMerged also
+// counts with identity candidates merged.
+func lossCounts(v *view, active map[string]bool, files []*fileView) (held, gone, people, inactive int) {
+	seen := make(map[string]bool)
 	for _, f := range files {
 		for email, n := range f.byPerson {
 			if v.who.Bot(email) {
 				continue
 			}
 			held += n
-			people[email] = !active[email]
 			if !active[email] {
 				gone += n
 			}
+			if !seen[email] {
+				seen[email] = true
+				people++
+				if !active[email] {
+					inactive++
+				}
+			}
 		}
 	}
-	if held == 0 {
-		return domain.MetricValue{}, false
-	}
-	inactive := 0
-	for _, isGone := range people {
-		if isGone {
-			inactive++
-		}
-	}
-	return ratio(knowledgeLossID, s, sub, w, gone, held, 0, map[string]float64{
-		"people":          float64(len(people)),
-		"people_inactive": float64(inactive),
-	}), true
+	return held, gone, people, inactive
 }

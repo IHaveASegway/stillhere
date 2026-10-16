@@ -740,6 +740,12 @@ func (toolCommands) Ranks(metric string) string {
 	return "overview(scope, rank: " + metric + ")"
 }
 
+// Mailmap is where the server's answer holds the .mailmap lines, which are
+// made of emails: each candidate's mailmap field, sent with --allow-emails.
+func (toolCommands) Mailmap() string {
+	return "each candidate's mailmap field of identity_candidates(scope), which the server sends with --allow-emails"
+}
+
 // Explain is explain with the subject kinds it takes among kinds: person,
 // repo, group and area.
 func (toolCommands) Explain(metric string, kinds []string) string {

@@ -89,6 +89,11 @@ type Input struct {
 	// GitHub data is what links a login to a person (Reviewer).
 	Who  *identity.Directory
 	Days int // landed@1 window, at least 1; 0: the policy's [week] days
+	// Candidates are the run's identity candidates (identity.Candidates
+	// over the whole run, with Who), which knowledge_loss@1 and
+	// knowledge_concentration@1 count and merge in their Detail (#104,
+	// identities.go); nil: none, and no such Detail.
+	Candidates []identity.Candidate
 }
 
 // weekDays returns landed@1's window in days: Days, else the policy's

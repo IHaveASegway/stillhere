@@ -22,6 +22,9 @@ type Commands interface {
 	// Identities names where the suggested .mailmap lines are, with the
 	// evidence for each.
 	Identities() string
+	// Mailmap names where the suggested .mailmap lines are as lines, to
+	// add to a .mailmap (#104).
+	Mailmap() string
 	// Report names where a run's numbers per repository and group are.
 	Report() string
 	// Ranks says how to read the rank tables of a ranked metric.
@@ -47,6 +50,9 @@ func (CLI) Metrics() string { return "'stillhere metrics'" }
 
 // Identities is the identities command.
 func (CLI) Identities() string { return "'stillhere identities'" }
+
+// Mailmap is the identities command's mailmap form.
+func (CLI) Mailmap() string { return "'stillhere identities --format mailmap'" }
 
 // Report is the report command.
 func (CLI) Report() string { return "'stillhere report'" }

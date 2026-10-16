@@ -136,7 +136,7 @@ func (l *loader) load() error {
 	for _, step := range []func() error{
 		l.groups, l.groupRepos, l.runWarnings, l.repoRows, l.repoWarnings, l.paths, l.commits, l.parents,
 		l.commitCoAuthors, l.landings, l.landingCommits, l.changes, l.reverts, l.owners, l.ownerCoAuthors,
-		l.ignoreRevs, l.blameErrors,
+		l.ignoreRevs, l.blameErrors, l.aliases,
 	} {
 		if err := step(); err != nil {
 			return err
@@ -569,6 +569,28 @@ func (l *loader) blameErrors() error {
 				return err
 			}
 			f.BlameErrors = append(f.BlameErrors, e)
+			return nil
+		})
+}
+
+// aliases reads the emails git's mailmap rewrote (migration 6, #53).
+func (l *loader) aliases() error {
+	return l.each("repo_aliases",
+		`SELECT repo_id, seq, email, canonical FROM repo_aliases WHERE `+ofRun+` ORDER BY repo_id, seq`,
+		func(rows *sql.Rows) error {
+			var repo, seq int64
+			var a domain.Alias
+			if err := rows.Scan(&repo, &seq, &a.Email, &a.Canonical); err != nil {
+				return err
+			}
+			f, err := l.repo(repo)
+			if err != nil {
+				return err
+			}
+			if err := position(seq, len(f.Aliases)); err != nil {
+				return err
+			}
+			f.Aliases = append(f.Aliases, a)
 			return nil
 		})
 }

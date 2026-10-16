@@ -58,6 +58,7 @@ type view struct {
 	who     *identity.Directory
 	repos   []*repoView     // the repositories with facts, in FactSet order (by key)
 	facts   *domain.FactSet // the facts projected, whose GitHub data (Forge) the review metrics read (reviews.go)
+	merges  *identityMerges // Input.Candidates indexed (identities.go); nil without any
 }
 
 // repoView is one repository's indexes.
@@ -144,7 +145,7 @@ func newView(in *Input, keep func(*domain.RepoFacts) bool) (*view, error) {
 	if who == nil {
 		who = identity.New(in.Facts, in.Policy)
 	}
-	v := &view{now: in.Facts.Now, who: who, facts: in.Facts}
+	v := &view{now: in.Facts.Now, who: who, facts: in.Facts, merges: newIdentityMerges(in.Candidates)}
 	v.days, v.daysErr = in.weekDays()
 	for i := range in.Facts.Repos {
 		f := &in.Facts.Repos[i]
@@ -397,13 +398,22 @@ func (r *repoView) indexLines(f *domain.RepoFacts, who *identity.Directory, untr
 		fv.byPerson[credit] += o.Lines
 	}
 	for _, fv := range r.files {
-		for email, n := range fv.byPerson {
-			if n*100 >= fv.total*majorityPercent {
-				fv.owners = append(fv.owners, email)
-			}
-		}
-		slices.Sort(fv.owners)
+		fv.owners = majorityOwners(fv.byPerson, fv.total)
 	}
+}
+
+// majorityOwners returns, sorted, the people holding at least half of a
+// file's total lines (majority_owner@1's rule): one, or two at exactly
+// half each.
+func majorityOwners(byPerson map[string]int, total int) []string {
+	var out []string
+	for email, n := range byPerson {
+		if n*100 >= total*majorityPercent {
+			out = append(out, email)
+		}
+	}
+	slices.Sort(out)
+	return out
 }
 
 // covers reports whether the repository's history holds every landing in w,

@@ -50,11 +50,13 @@ func Identities(ctx context.Context, d Deps, r IdentitiesRequest) (*report.Ident
 	if err != nil {
 		return nil, fmt.Errorf("reading run %d's facts: %w", run.ID, err)
 	}
-	scoped, scope, err := identitiesScope(fs, r.Scope, run.ID)
+	// The run's own GitHub data (ADR 0011): GitHub's links from commits to
+	// accounts are the same-forge-account rule's evidence (#103).
+	fs, forge, _, err := withForge(ctx, d, run, fs)
 	if err != nil {
 		return nil, err
 	}
-	forge, err := readForge(ctx, d, run)
+	scoped, scope, err := identitiesScope(fs, r.Scope, run.ID)
 	if err != nil {
 		return nil, err
 	}

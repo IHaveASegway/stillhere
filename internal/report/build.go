@@ -291,6 +291,9 @@ func (b *builder) card(rf *domain.RepoFacts, still *StillHere) RepoCard {
 	// print those once, at the top of the report.
 	c.Caveats = append([]Caveat{notFetched()}, stripRepos(repoCaveats(rf))...)
 	c.Caveats = append(c.Caveats, b.forgeSectionCaveats([]*domain.RepoFacts{rf}, used)...)
+	if cv, ok := candidatesCaveat(c.KnowledgeLoss, c.Concentration, false, b.in.Commands); ok {
+		c.Caveats = withCaveat(c.Caveats, cv)
+	}
 	if c.AIAssisted != nil {
 		c.Caveats = append(c.Caveats, aiLowerBound())
 	}
@@ -349,6 +352,11 @@ func (b *builder) overview(scope domain.Scope, members []*domain.RepoFacts) Over
 	b.use(used...)
 	o.Provenance = b.provenance(members, used)
 	o.Caveats = append(b.scopeCaveats(members, scope, o.AIAssisted != nil), b.forgeSectionCaveats(members, used)...)
+	// knowledge_loss@1 has no value about every repository, whose overview
+	// adds its repositories' up (share).
+	if cv, ok := candidatesCaveat(o.KnowledgeLoss, o.Concentration, scope.Kind == domain.ScopeAll, b.in.Commands); ok {
+		o.Caveats = withCaveat(o.Caveats, cv)
+	}
 	return o
 }
 
@@ -481,6 +489,7 @@ func (b *builder) concentration(scope domain.Scope) *Concentration {
 		AuthorsInPrefix:   count(v.Value),
 		BotsInPrefix:      count(v.Detail[detailBotsInPrefix]),
 		Label:             ConcentrationLabel,
+		IfMerged:          concentrationIfMerged(v),
 	}
 }
 
@@ -490,24 +499,34 @@ func (b *builder) concentration(scope domain.Scope) *Concentration {
 // counts (lines, landings) that add across repositories.
 func (b *builder) share(metric string, scope domain.Scope, members []*domain.RepoFacts) *Share {
 	if v, ok := b.ix.aggregate(metric, scope); ok {
-		return &Share{Metric: metric, Num: v.Num, Den: v.Den, Value: v.Value}
+		return &Share{Metric: metric, Num: v.Num, Den: v.Den, Value: v.Value, IfMerged: shareIfMerged(v)}
 	}
 	if scope.Kind == domain.ScopeRepo {
 		return nil
 	}
 	s := Share{Metric: metric}
-	found := false
+	found, merged := false, false
+	var sum *ShareIfMerged
 	for _, rf := range members {
 		if v, ok := b.ix.aggregate(metric, domain.Scope{Kind: domain.ScopeRepo, Key: rf.Repo.Key}); ok {
 			s.Num += v.Num
 			s.Den += v.Den
 			found = true
+			part := shareIfMerged(v)
+			merged = merged || part != nil
+			sum = addIfMerged(sum, part, v.Num)
 		}
 	}
 	if !found || s.Den == 0 {
 		return nil
 	}
 	s.Value = s.Num / s.Den
+	if merged {
+		// The lines add up exactly, as Num does: activity and the
+		// candidates are the run's, whichever repository holds the lines.
+		sum.HighValue, sum.AllValue = sum.HighNum/s.Den, sum.AllNum/s.Den
+		s.IfMerged = sum
+	}
 	return &s
 }
 

@@ -46,7 +46,62 @@ const (
 	detailProdFiles         = "prod_files"
 	detailPeople            = "people"    // surviving@1 about a repository or group: humans with surviving prod lines
 	detailBotShare          = "bot_share" // surviving@1 about a repository or group: bot-held lines over prod lines
+	// knowledge_loss@1 and knowledge_concentration@1 (#104), present when
+	// identity candidates hold lines in the area: how many, the high ones,
+	// and the value with them merged (the high ones, every one).
+	detailCandidates     = "identity_candidates"
+	detailCandidatesHigh = "identity_candidates_high"
+	detailIfMergedNum    = "if_merged_num"     // knowledge_loss@1's Num
+	detailIfAllMergedNum = "if_all_merged_num" // knowledge_loss@1's Num
+	detailIfMerged       = "if_merged"         // knowledge_concentration@1's authors_in_prefix
+	detailIfAllMerged    = "if_all_merged"     // knowledge_concentration@1's authors_in_prefix
 )
+
+// shareIfMerged reads knowledge_loss@1's identity detail (#104): nil when
+// no candidate holds lines in the value's area, or the run predates it.
+func shareIfMerged(v domain.MetricValue) *ShareIfMerged {
+	n, ok := v.Detail[detailCandidates]
+	if !ok || n == 0 {
+		return nil
+	}
+	m := &ShareIfMerged{Candidates: count(n), High: count(v.Detail[detailCandidatesHigh]),
+		HighNum: v.Detail[detailIfMergedNum], AllNum: v.Detail[detailIfAllMergedNum]}
+	if v.Den > 0 {
+		m.HighValue, m.AllValue = m.HighNum/v.Den, m.AllNum/v.Den
+	}
+	return m
+}
+
+// addIfMerged adds a repository's identity detail into a sum over several
+// (the overview of every repository); a nil part adds its Num to both
+// sums, since with no candidate in it, merging moves none of its lines.
+func addIfMerged(sum *ShareIfMerged, part *ShareIfMerged, num float64) *ShareIfMerged {
+	if sum == nil {
+		sum = &ShareIfMerged{}
+	}
+	if part == nil {
+		sum.HighNum += num
+		sum.AllNum += num
+		return sum
+	}
+	sum.Candidates += part.Candidates
+	sum.High += part.High
+	sum.HighNum += part.HighNum
+	sum.AllNum += part.AllNum
+	return sum
+}
+
+// concentrationIfMerged reads knowledge_concentration@1's identity detail
+// (#104): nil when no candidate holds lines in the value's area, or the run
+// predates it.
+func concentrationIfMerged(v domain.MetricValue) *ConcentrationIfMerged {
+	n, ok := v.Detail[detailCandidates]
+	if !ok || n == 0 {
+		return nil
+	}
+	return &ConcentrationIfMerged{Candidates: count(n), High: count(v.Detail[detailCandidatesHigh]),
+		HighAuthors: count(v.Detail[detailIfMerged]), AllAuthors: count(v.Detail[detailIfAllMerged])}
+}
 
 // population is surviving@1's value about a repository's or a group's code
 // as a whole. A field is nil when the value does not carry it.

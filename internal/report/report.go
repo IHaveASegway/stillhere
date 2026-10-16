@@ -324,6 +324,20 @@ type Concentration struct {
 	AuthorsInPrefix   int    `json:"authors_in_prefix"`
 	BotsInPrefix      int    `json:"bots_in_prefix"`
 	Label             string `json:"label"` // always ConcentrationLabel
+	// IfMerged (#104): the value with the run's identity candidates merged,
+	// when candidates hold lines in the scope; null otherwise, and in a run
+	// stored before stillhere computed it.
+	IfMerged *ConcentrationIfMerged `json:"if_merged"`
+}
+
+// ConcentrationIfMerged is knowledge_concentration@1 with the run's
+// identity candidates merged: Detail identity_candidates,
+// identity_candidates_high, if_merged and if_all_merged.
+type ConcentrationIfMerged struct {
+	Candidates  int `json:"candidates"`   // identity candidates with an address among the people holding lines in the scope
+	High        int `json:"high"`         // of them, the high ones, whose .mailmap lines the mailmap form writes uncommented
+	HighAuthors int `json:"high_authors"` // authors in the prefix with the high candidates merged
+	AllAuthors  int `json:"all_authors"`  // with every candidate merged
 }
 
 // Share is a ratio with its parts, so a reader can see what it is a share
@@ -333,6 +347,26 @@ type Share struct {
 	Num    float64 `json:"num"`
 	Den    float64 `json:"den"`
 	Value  float64 `json:"value"` // Num / Den
+	// IfMerged (#104): knowledge_loss@1's share with the run's identity
+	// candidates merged, when candidates hold lines in the scope; null for
+	// every other share, otherwise, and in a run stored before stillhere
+	// computed it.
+	IfMerged *ShareIfMerged `json:"if_merged"`
+}
+
+// ShareIfMerged is knowledge_loss@1 with the run's identity candidates
+// merged: Detail identity_candidates, identity_candidates_high,
+// if_merged_num and if_all_merged_num, over the share's own Den, which
+// merging people leaves as it is. The overview of every repository adds
+// its repositories' up, so a candidate holding lines in two of them counts
+// in Candidates twice; the lines add up exactly.
+type ShareIfMerged struct {
+	Candidates int     `json:"candidates"` // identity candidates with an address among the people holding lines in the scope
+	High       int     `json:"high"`       // of them, the high ones, whose .mailmap lines the mailmap form writes uncommented
+	HighNum    float64 `json:"high_num"`   // Num with the high candidates merged
+	HighValue  float64 `json:"high_value"` // HighNum / Den
+	AllNum     float64 `json:"all_num"`    // Num with every candidate merged: the most an unmerged identity can move it
+	AllValue   float64 `json:"all_value"`  // AllNum / Den
 }
 
 // Repo is one repository's part of a report: its card first, then the

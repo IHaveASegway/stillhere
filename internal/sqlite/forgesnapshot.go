@@ -19,11 +19,13 @@ import (
 // identifiers carry the prefix snapshot, as forge.go's carry forge.
 
 // PutRunForge records, for a running run, its forge repositories as the
-// replica listed them and every pull request of them it read, whole,
-// replacing any it recorded before. A pull request of a repository that is
-// not among repos is an error. The rows are deleted with the run (ON DELETE
-// CASCADE), by retention or as a crash's leftover.
-func (s *Store) PutRunForge(ctx context.Context, runID int64, repos []domain.ForgeRepo, pulls []domain.PullRequest) error {
+// replica listed them, every pull request of them it read, whole, and the
+// commit-to-account links of their older pull requests (migration 6, #103),
+// replacing any it recorded before. A pull request or a link of a
+// repository that is not among repos is an error. The rows are deleted
+// with the run (ON DELETE CASCADE), by retention or as a crash's leftover.
+func (s *Store) PutRunForge(ctx context.Context, runID int64, repos []domain.ForgeRepo, pulls []domain.PullRequest,
+	links []domain.ForgeLink) error {
 	known := make(map[string]bool, len(repos))
 	for _, r := range repos {
 		known[r.ID] = true
@@ -32,6 +34,12 @@ func (s *Store) PutRunForge(ctx context.Context, runID int64, repos []domain.For
 		if p := &pulls[i]; !known[p.Repo] {
 			return fmt.Errorf("sqlite.PutRunForge: run %d: pull request %s belongs to forge repository %s, which is none of the run's",
 				runID, p.ID, p.Repo)
+		}
+	}
+	for _, l := range links {
+		if !known[l.Repo] {
+			return fmt.Errorf("sqlite.PutRunForge: run %d: a link of commit %s belongs to forge repository %s, which is none of the run's",
+				runID, l.SHA, l.Repo)
 		}
 	}
 	err := s.write(ctx, func(tx *sql.Tx) error {
@@ -43,7 +51,7 @@ func (s *Store) PutRunForge(ctx context.Context, runID int64, repos []domain.For
 				return fmt.Errorf("clearing %s: %w", table, err)
 			}
 		}
-		return snapshotPut(ctx, tx, runID, repos, pulls)
+		return snapshotPut(ctx, tx, runID, repos, pulls, links)
 	})
 	if err != nil {
 		return fmt.Errorf("sqlite.PutRunForge: run %d: %w", runID, err)
@@ -53,12 +61,18 @@ func (s *Store) PutRunForge(ctx context.Context, runID int64, repos []domain.For
 
 // snapshotTables are the forge snapshot's tables, children first.
 var snapshotTables = []string{
-	"forge_snapshot_commits", "forge_snapshot_reviews", "forge_snapshot_labels", "forge_snapshot_pulls", "forge_snapshot_repos",
+	"forge_snapshot_links", "forge_snapshot_commits", "forge_snapshot_reviews", "forge_snapshot_labels", "forge_snapshot_pulls",
+	"forge_snapshot_repos",
 }
 
 // snapshotPut writes the rows of one run's forge snapshot, each list
 // numbered by its position, so RunForge returns it as it was put.
-func snapshotPut(ctx context.Context, tx *sql.Tx, runID int64, repos []domain.ForgeRepo, pulls []domain.PullRequest) error {
+func snapshotPut(ctx context.Context, tx *sql.Tx, runID int64, repos []domain.ForgeRepo, pulls []domain.PullRequest,
+	links []domain.ForgeLink) error {
+	linkRows := newInserter(ctx, tx, "forge_snapshot_links", "run_id", "seq", "repo", "sha", "author_email", "author_login")
+	for i, l := range links {
+		linkRows.add(runID, i, l.Repo, l.SHA, l.AuthorEmail, l.AuthorLogin)
+	}
 	repoRows := newInserter(ctx, tx, "forge_snapshot_repos", "run_id", "seq", "id", "key", "owner", "name",
 		"default_branch", "archived", "fork")
 	for i, r := range repos {
@@ -89,7 +103,7 @@ func snapshotPut(ctx context.Context, tx *sql.Tx, runID int64, repos []domain.Fo
 			commits.add(runID, i, j, c.SHA, c.AuthorEmail, c.AuthorLogin)
 		}
 	}
-	return closeAll(repoRows, pullRows, labels, reviews, commits)
+	return closeAll(linkRows, repoRows, pullRows, labels, reviews, commits)
 }
 
 // RunForge returns the forge snapshot a complete or partial run kept, with
@@ -247,6 +261,19 @@ SELECT pull_seq, seq, sha, author_email, author_login FROM forge_snapshot_commit
 			return position(seq, len(p.Commits)-1)
 		}); err != nil {
 		return nil, fmt.Errorf("reading forge_snapshot_commits: %w", err)
+	}
+	if err := each(ctx, tx, `
+SELECT seq, repo, sha, author_email, author_login FROM forge_snapshot_links WHERE run_id = ? ORDER BY seq`,
+		args, func(rows *sql.Rows) error {
+			var seq int64
+			var l domain.ForgeLink
+			if err := rows.Scan(&seq, &l.Repo, &l.SHA, &l.AuthorEmail, &l.AuthorLogin); err != nil {
+				return err
+			}
+			f.Links = append(f.Links, l)
+			return position(seq, len(f.Links)-1)
+		}); err != nil {
+		return nil, fmt.Errorf("reading forge_snapshot_links: %w", err)
 	}
 	return &f, nil
 }

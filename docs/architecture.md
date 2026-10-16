@@ -54,7 +54,7 @@ This is CQRS in its simplest form: jobs that write facts are separate from the s
 | Sources | repo, group, mirror, default branch | repos, heads | A forge inventory |
 | History | commit, landing, trailer | commits, commit_parents, commit_coauthors (the Co-authored-by trailers), landings, landing_commits, commit_files, reverts | Ownership |
 | Authorship | line owner, majority owner | line_owners (per run) | Activity |
-| Forge | pull request, review, team | forge_repos, forge_watermarks, forge_pull_requests, forge_pull_labels, forge_reviews (inline comments counted, not kept), forge_pull_commits; per run, what it read: forge_run_watermarks and forge_run_repos (the join), and the forge_snapshot_* copy of its repositories and pull requests ([ADR 0011](adr/0011-a-run-keeps-the-github-facts-it-read.md)) | Git facts |
+| Forge | pull request, review, team | forge_repos, forge_watermarks, forge_pull_requests, forge_pull_labels, forge_reviews (inline comments counted, not kept), forge_pull_commits; per run, what it read: forge_run_watermarks and forge_run_repos (the join), and the forge_snapshot_* copy of its repositories and pull requests, with the older pull requests' commit-to-account links (forge_snapshot_links, #103) ([ADR 0011](adr/0011-a-run-keeps-the-github-facts-it-read.md)) | Git facts |
 | Identity | person, alias, login link | Nothing: a run's people, and which person a GitHub login is, are derived each time the run is read (package `identity`) | A people database |
 | Metrics | metric@version, scope, window | metric_values, rank_intervals | Facts |
 | Presentation | page, highlight, tool | Nothing (read-only) | Measurement |

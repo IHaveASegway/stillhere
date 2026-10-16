@@ -1,10 +1,12 @@
 package collect
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"slices"
 	"strings"
 
@@ -40,8 +42,10 @@ const coAuthorFormat = "%(trailers:key=Co-authored-by,valueonly,separator=%x1e,u
 // A trailer value that names no email in angle brackets, such as
 // "Co-authored-by: someone", is not an identity and is left out, as is a
 // second trailer for a person already listed. shas must be full SHAs of
-// commits in repo; the order of shas does not matter.
-func coAuthors(ctx context.Context, git domain.GitRunner, repo domain.Repo, shas []string) (map[string][]domain.Person, error) {
+// commits in repo; the order of shas does not matter. It adds to aliases
+// what the mailmap rewrote in those commits, their authors' emails and
+// their trailers'.
+func coAuthors(ctx context.Context, git domain.GitRunner, repo domain.Repo, shas []string, aliases aliasSet) (map[string][]domain.Person, error) {
 	want := slices.Clone(shas)
 	slices.Sort(want)
 	want = slices.Compact(want)
@@ -59,6 +63,7 @@ func coAuthors(ctx context.Context, git domain.GitRunner, repo domain.Repo, shas
 	cmd := domain.GitCmd{Dir: repo.Path, Args: args, Stdin: historyStdin(want)}
 	err := git.Stream(ctx, cmd, func(r io.Reader) error {
 		return historyParseLog(r, func(rec *historyRecord) error {
+			aliases.add(rec.written, rec.commit.Author.Email)
 			if rec.coAuthors != nil {
 				raw[rec.commit.SHA] = rec.coAuthors
 			}
@@ -68,7 +73,7 @@ func coAuthors(ctx context.Context, git domain.GitRunner, repo domain.Repo, shas
 	if err != nil {
 		return nil, fmt.Errorf("collect.coAuthors: reading trailers: %w", err)
 	}
-	canonical, err := coAuthorCanonical(ctx, git, repo, raw)
+	canonical, err := coAuthorCanonical(ctx, git, repo, raw, aliases)
 	if err != nil {
 		return nil, fmt.Errorf("collect.coAuthors: %w", err)
 	}
@@ -110,6 +115,43 @@ func coAuthorContact(value string) (domain.Person, bool) {
 	return domain.Person{Name: strings.TrimSpace(name), Email: email}, true
 }
 
+// aliasSet gathers what git's mailmap rewrote while a collector read a
+// repository (#53, domain.Alias): each email a commit or a trailer was
+// written with, with the canonical email git gave it. A nil set gathers
+// nothing.
+type aliasSet map[domain.Alias]bool
+
+// add records that git gave the email written the canonical email
+// canonical, unless the two are one, or either is empty.
+func (s aliasSet) add(written, canonical string) {
+	written, canonical = strings.ToLower(strings.TrimSpace(written)), strings.ToLower(strings.TrimSpace(canonical))
+	if s != nil && written != "" && canonical != "" && written != canonical {
+		s[domain.Alias{Email: written, Canonical: canonical}] = true
+	}
+}
+
+// sorted returns the set by Email, then Canonical; nil when empty.
+func (s aliasSet) sorted() []domain.Alias {
+	return MergeAliases(slices.Collect(maps.Keys(s)))
+}
+
+// MergeAliases returns the aliases of several collectors (History's and
+// Blame's) as RepoFacts.Aliases holds them: sorted by Email, then
+// Canonical, each once; nil when there are none.
+func MergeAliases(lists ...[]domain.Alias) []domain.Alias {
+	var out []domain.Alias
+	for _, l := range lists {
+		out = append(out, l...)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	slices.SortFunc(out, func(a, b domain.Alias) int {
+		return cmp.Or(strings.Compare(a.Email, b.Email), strings.Compare(a.Canonical, b.Canonical))
+	})
+	return slices.Compact(out)
+}
+
 // coAuthorLine is a person as one line of git check-mailmap input.
 func coAuthorLine(p domain.Person) string {
 	if p.Name == "" {
@@ -129,8 +171,10 @@ func coAuthorLine(p domain.Person) string {
 //
 // git check-mailmap reads the same mailmaps as the log placeholders %aN and
 // %aE: the -c mailmap.file= the runner passes, and the repository's own
-// .mailmap (gitmailmap(5)).
-func coAuthorCanonical(ctx context.Context, git domain.GitRunner, repo domain.Repo, raw map[string][]domain.Person) (map[string][]domain.Person, error) {
+// .mailmap (gitmailmap(5)). Each trailer email it rewrote is added to
+// aliases.
+func coAuthorCanonical(ctx context.Context, git domain.GitRunner, repo domain.Repo, raw map[string][]domain.Person,
+	aliases aliasSet) (map[string][]domain.Person, error) {
 	var lines []string
 	for _, people := range raw {
 		for _, p := range people {
@@ -161,6 +205,9 @@ func coAuthorCanonical(ctx context.Context, git domain.GitRunner, repo domain.Re
 		if p, ok := coAuthorContact(line); ok {
 			p.Email = strings.ToLower(p.Email)
 			canonical[lines[i]] = p
+			if written, ok := coAuthorContact(lines[i]); ok {
+				aliases.add(written.Email, p.Email)
+			}
 		}
 	}
 

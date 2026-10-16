@@ -80,6 +80,16 @@ type IdentityAddress struct {
 	First        time.Time `json:"first"`       // the earliest author time of those commits
 	Last         time.Time `json:"last"`
 	Repos        []string  `json:"repos"` // the repositories' keys, sorted
+	// Aliases are the emails git's mailmap already rewrote to this address
+	// in the run's commits (identity.Address.Aliases, #53), each in a field
+	// named email, as every email of the answer is: the lines a suggested
+	// line must follow, since git never chains two. [] for none.
+	Aliases []IdentityAlias `json:"aliases"`
+}
+
+// IdentityAlias is one email git's mailmap rewrote to an address.
+type IdentityAlias struct {
+	Email string `json:"email"` // JSON only
 }
 
 // IdentityLink is one rule's evidence in a candidate.
@@ -139,9 +149,11 @@ const identCodeMailmap = "mailmap-at-scan"
 
 // identNoChain says how git applies a mailmap, which a person editing one
 // must know: the caveat and the mailmap form's header both say it.
-const identNoChain = "git applies one .mailmap line per commit and never follows a chain: if an alias in a " +
-	"suggested line is already the canonical address of lines in a .mailmap, change those lines to the " +
-	"suggested canonical address too, or their commits stay apart and the next scan suggests the same line again"
+const identNoChain = "git applies one .mailmap line per commit and never follows a chain, so where the run's " +
+	"commits show git rewriting other emails to a suggested alias, through lines a .mailmap already holds, the " +
+	"suggestion maps those emails to the canonical address too, to add after the lines they replace, and it " +
+	"writes no line git already applies; a run scanned before stillhere recorded what git rewrote shows none of " +
+	"them, so there change such lines to the suggested canonical address yourself"
 
 // NewIdentities builds the identities answer. Like every answer, it arranges
 // what another package computed, identity.Candidates here, and computes
@@ -202,10 +214,14 @@ func identCandidate(c *identity.Candidate, names map[string]string, who People) 
 	}
 	for _, a := range c.Addresses {
 		name, withheld := shown(a.Name)
+		aliases := []IdentityAlias{}
+		for _, e := range a.Aliases {
+			aliases = append(aliases, IdentityAlias{Email: e})
+		}
 		out.Addresses = append(out.Addresses, IdentityAddress{
 			Email: a.Email, Name: name, NameWithheld: withheld, DomainKind: string(a.Domain),
 			Canonical: a.Email == c.Canonical, Commits: a.Commits, CoAuthored: a.CoAuthored,
-			First: a.First, Last: a.Last, Repos: slices.Clone(a.Repos),
+			First: a.First, Last: a.Last, Repos: slices.Clone(a.Repos), Aliases: aliases,
 		})
 	}
 	for _, l := range c.Links {
@@ -431,6 +447,8 @@ func identWhy(c IdentityCandidate, esc, path func(string) string) []string {
 			}
 		case identity.RuleSameAccount:
 			out = append(out, which+" are GitHub noreply addresses of one account")
+		case identity.RuleSameForgeAccount:
+			out = append(out, "GitHub attributes the commits of "+which+" to one account")
 		case identity.RuleHandOff:
 			if h, ok := identHandOffText(l, esc, path); ok {
 				out = append(out, h)
@@ -439,6 +457,26 @@ func identWhy(c IdentityCandidate, esc, path func(string) string) []string {
 	}
 	if c.Chained {
 		out = append(out, "two of these addresses share nothing and are linked only through another, so the candidate is low")
+	}
+	// #53: what the .mailmap lines git already applies change in the lines.
+	var canonical IdentityAddress
+	for _, a := range c.Addresses {
+		if a.Canonical {
+			canonical = a
+		}
+	}
+	for i, a := range c.Addresses {
+		if a.Canonical {
+			continue
+		}
+		if identApplied(canonical, a.Email) {
+			out = append(out, fmt.Sprintf("a .mailmap line already maps address %d to the canonical address, so it gets no line "+
+				"of its own", i+1))
+		}
+		if n := len(a.Aliases); n > 0 {
+			out = append(out, fmt.Sprintf("address %d is where .mailmap lines map %s, which git does not follow on to the "+
+				"canonical address, so each gets a line of its own", i+1, plural(n, "another address", "other addresses")))
+		}
 	}
 	return out
 }
@@ -723,6 +761,16 @@ func (l identLine) mailmap(commented bool) string {
 
 // identLines are a candidate's .mailmap lines: one per alias, after a line
 // that gives the canonical address the suggested name when its own differs.
+//
+// git applies one line per commit and never follows a chain (#53), so an
+// alias that is itself the canonical address of lines git applied (its
+// Aliases: what git already rewrote to it) gets a line for each of those
+// emails too, mapping them to the candidate's canonical address directly;
+// git keeps the last line for one email, so these, added after the lines
+// they follow, replace them. And an alias git already rewrites to the
+// canonical address, as when a .mailmap holds the line and other emails
+// still reach the alias through older lines, gets no line of its own: it
+// is there.
 func identLines(c IdentityCandidate) []identLine {
 	var canonical *IdentityAddress
 	for i := range c.Addresses {
@@ -737,12 +785,31 @@ func identLines(c IdentityCandidate) []identLine {
 	if c.Name != "" && c.Name != canonical.Name {
 		out = append(out, identLine{name: c.Name, canonical: canonical.Email})
 	}
+	mapped := map[string]bool{} // the emails a line already maps: git keeps the last line for one
+	line := func(alias string) {
+		if !mapped[alias] {
+			mapped[alias] = true
+			out = append(out, identLine{name: c.Name, canonical: canonical.Email, alias: alias})
+		}
+	}
 	for _, a := range c.Addresses {
-		if !a.Canonical {
-			out = append(out, identLine{name: c.Name, canonical: canonical.Email, alias: a.Email})
+		if a.Canonical {
+			continue
+		}
+		if !identApplied(*canonical, a.Email) {
+			line(a.Email)
+		}
+		for _, al := range a.Aliases {
+			line(al.Email)
 		}
 	}
 	return out
+}
+
+// identApplied reports whether git already rewrites email to the address
+// to: a .mailmap line maps it there (IdentityAddress.Aliases).
+func identApplied(to IdentityAddress, email string) bool {
+	return slices.ContainsFunc(to.Aliases, func(al IdentityAlias) bool { return al.Email == email })
 }
 
 // identSafe reports whether git reads the line as the mapping it means, and

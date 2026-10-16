@@ -151,7 +151,7 @@ func putRepo(ctx context.Context, tx *sql.Tx, runID int64, f *domain.RepoFacts) 
 }
 
 // putRepoLists writes the repository's flat lists: warnings, path classes,
-// file changes, reverts, ignore-revs and blame errors.
+// file changes, reverts, ignore-revs, blame errors and mailmap aliases.
 func putRepoLists(ctx context.Context, tx *sql.Tx, id int64, f *domain.RepoFacts) error {
 	warnings := newInserter(ctx, tx, "repo_warnings", "repo_id", "seq", "code", "message", "repo")
 	for i, w := range f.Warnings {
@@ -180,7 +180,11 @@ func putRepoLists(ctx context.Context, tx *sql.Tx, id int64, f *domain.RepoFacts
 	for i, e := range f.BlameErrors {
 		blameErrors.add(id, i, e.Path, e.Message)
 	}
-	return closeAll(warnings, paths, changes, reverts, revs, blameErrors)
+	aliases := newInserter(ctx, tx, "repo_aliases", "repo_id", "seq", "email", "canonical")
+	for i, a := range f.Aliases {
+		aliases.add(id, i, a.Email, a.Canonical)
+	}
+	return closeAll(warnings, paths, changes, reverts, revs, blameErrors, aliases)
 }
 
 // putCommits writes the commits with their parents and co-authors.

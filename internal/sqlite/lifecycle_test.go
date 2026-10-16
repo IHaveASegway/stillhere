@@ -435,9 +435,10 @@ func retentionRuns(t *testing.T, seed uint64) {
 }
 
 // retentionForge records, for a running scan run, GitHub data it read (ADR
-// 0011): a watermark with its join, and a pull request with a label, a
-// review and a commit, so that every table of a run's GitHub data holds a
-// row of it, which retention must delete with the run.
+// 0011): a watermark with its join, a pull request with a label, a review
+// and a commit, and an older pull request's link (#103), so that every
+// table of a run's GitHub data holds a row of it, which retention must
+// delete with the run.
 func retentionForge(t *testing.T, s *sqlite.Store, id int64) {
 	t.Helper()
 	ctx := t.Context()
@@ -450,7 +451,8 @@ func retentionForge(t *testing.T, s *sqlite.Store, id int64) {
 	pull := domain.PullRequest{ID: "PR_1", Repo: repo.ID, Number: 1, State: domain.PullOpen, Labels: []string{"bug"},
 		Reviews: []domain.Review{{ID: "PRR_1", Author: domain.ForgeUser{Login: "ada"}, State: domain.ReviewApproved}},
 		Commits: []domain.ForgeCommit{{SHA: sha('a')}}}
-	if err := s.PutRunForge(ctx, id, []domain.ForgeRepo{repo}, []domain.PullRequest{pull}); err != nil {
+	link := domain.ForgeLink{Repo: repo.ID, ForgeCommit: domain.ForgeCommit{SHA: sha('b'), AuthorLogin: "ada"}}
+	if err := s.PutRunForge(ctx, id, []domain.ForgeRepo{repo}, []domain.PullRequest{pull}, []domain.ForgeLink{link}); err != nil {
 		t.Fatal(err)
 	}
 }

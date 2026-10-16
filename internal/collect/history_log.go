@@ -17,10 +17,10 @@ import (
 // The format keeps every field where no byte inside another field can move
 // it. A record starts at NUL with a header of the fields whose shape is
 // fixed, separated by U+001F: the SHA, the parents, and the committer and
-// author times in Unix seconds. Four NUL-terminated fields of free text
+// author times in Unix seconds. Five NUL-terminated fields of free text
 // follow, read by position whatever bytes they hold: the mailmapped author
-// name and email, the subject, and the co-author trailer values separated
-// by U+001E. None of them can hold a NUL: git reads a commit message only
+// name and email, the email as written, the subject, and the co-author
+// trailer values separated by U+001E. None of them can hold a NUL: git reads a commit message only
 // up to its first NUL, and git fsck rejects a NUL in a commit header. So a
 // U+001F inside a name, an email or a trailer value, which git accepts,
 // cannot shift a field, and History and coAuthors, which read the same
@@ -48,16 +48,21 @@ import (
 // repository sets log.mailmap=false; %an and %ae would not
 // (week-collector.md). %ct and %at print any time git stored, while %cI
 // prints an offset such as +0099, which git accepts, as "+00:99", which is
-// not RFC 3339 (verified on 2.50.1).
-const historyLogFormat = "%x00%H%x1f%P%x1f%ct%x1f%at%x00%aN%x00%aE%x00%s%x00" + coAuthorFormat + "%x00"
+// not RFC 3339 (verified on 2.50.1). %ae, the author email as the commit
+// wrote it, follows %aE so the facts can say what the mailmap rewrote
+// (#53, domain.Alias): stillhere never parses a mailmap, but it can record
+// what git made of one.
+const historyLogFormat = "%x00%H%x1f%P%x1f%ct%x1f%at%x00%aN%x00%aE%x00%ae%x00%s%x00" + coAuthorFormat + "%x00"
 
 // historyTextFields is the number of free-text fields after a header: the
-// author's name and email, the subject and the co-author trailers.
-const historyTextFields = 4
+// author's name and email, the email as written, the subject and the
+// co-author trailers.
+const historyTextFields = 5
 
 // historyRecord is one commit of a history log, as git printed it.
 type historyRecord struct {
 	commit    domain.Commit   // CoAuthors stays empty until historyRun.canonicalise
+	written   string          // the author email as the commit wrote it (%ae), lowercased: before the mailmap
 	coAuthors []domain.Person // as the trailers wrote them, before the mailmap
 	numstat   []historyNumstat
 }
@@ -179,13 +184,14 @@ func historyParseHeader(header string) (*historyRecord, error) {
 }
 
 // historySetText fills in the free-text fields of a record, in format
-// order: the mailmapped author name and email, the subject and the
-// co-author trailers. Error messages never quote them: they hold names,
-// emails and the subject.
+// order: the mailmapped author name and email, the email as written, the
+// subject and the co-author trailers. Error messages never quote them:
+// they hold names, emails and the subject.
 func historySetText(rec *historyRecord, text []string) {
 	rec.commit.Author = domain.Person{Name: text[0], Email: strings.ToLower(text[1])}
-	rec.commit.Subject = text[2]
-	rec.coAuthors = coAuthorParse(text[3])
+	rec.written = strings.ToLower(text[2])
+	rec.commit.Subject = text[3]
+	rec.coAuthors = coAuthorParse(text[4])
 }
 
 // historyUnix parses a time git printed with %ct or %at, in Unix seconds,

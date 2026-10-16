@@ -52,6 +52,12 @@ type Directory struct {
 	// The run's GitHub logins as people and pages see them (reviewer.go).
 	linked map[string][]string // canonical email → the folded logins Reviewer links to it, sorted (Logins)
 	forms  map[string]string   // forge login, folded → the login as GitHub last reported it (Name, Logins)
+
+	// accounts holds GitHub's own links from addresses to accounts
+	// (forgeAccounts): canonical email → every folded login the run's
+	// GitHub data attributes its commits to, sorted. The same-forge-account
+	// rule and Blocks read it; nil without GitHub data.
+	accounts map[string][]string
 }
 
 // kind is an identity's classification under the policy.
@@ -65,7 +71,7 @@ type kind struct {
 // forge app account. The fact set's GitHub data (FactSet.Forge) links forge
 // logins to its people (Reviewer).
 func New(fs *domain.FactSet, p *policy.Policy) *Directory {
-	d := &Directory{names: displayNames(fs), logins: reviewerLogins(fs), forms: loginForms(fs)}
+	d := &Directory{names: displayNames(fs), logins: reviewerLogins(fs), forms: loginForms(fs), accounts: forgeAccounts(fs)}
 	d.linked = linkedLogins(d.logins)
 	if p != nil {
 		d.botFragments = fragments(p.Bots.Fragments)

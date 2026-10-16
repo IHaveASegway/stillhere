@@ -388,12 +388,23 @@ func reviewsGivenOracle(t *testing.T, repos []domain.ForgeRepo, pages []domain.F
 	since := ts("2026-10-01T11:58:00Z")
 	var wantRecent []domain.PullRequest
 	var recentIDs []string
+	var wantLinks []domain.ForgeLink // the older pull requests' commits with an account (#103), distinct
 	for _, pr := range wantPulls {
 		if !pr.Updated.Before(since) {
 			wantRecent = append(wantRecent, pr)
 			recentIDs = append(recentIDs, pr.ID)
+			continue
+		}
+		for _, c := range append(slices.Clone(pr.Commits), pr.MergeCommit) {
+			if l := (domain.ForgeLink{Repo: pr.Repo, ForgeCommit: c}); c.AuthorLogin != "" && !slices.Contains(wantLinks, l) {
+				wantLinks = append(wantLinks, l)
+			}
 		}
 	}
+	slices.SortFunc(wantLinks, func(a, b domain.ForgeLink) int {
+		return cmp.Or(cmp.Compare(a.Repo, b.Repo), cmp.Compare(a.SHA, b.SHA), cmp.Compare(a.AuthorLogin, b.AuthorLogin),
+			cmp.Compare(a.AuthorEmail, b.AuthorEmail))
+	})
 	equal(t, "the pull requests updated at or after #10's update", recentIDs, []string{"PR_05", "PR_08", "PR_10"})
 	recent, err := store.LoadForge(ctx, since)
 	if err != nil {
@@ -403,6 +414,7 @@ func reviewsGivenOracle(t *testing.T, repos []domain.ForgeRepo, pages []domain.F
 		Repos:        wantRepos,
 		PullRequests: wantRecent,
 		Watermarks:   wantMarks,
+		Links:        wantLinks,
 	})
 	// The run scanned widget through a user's own SSH clone, not the managed
 	// mirror: the replica keys widget by its HTTPS clone URL, and the two

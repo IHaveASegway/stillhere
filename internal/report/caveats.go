@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
 )
@@ -340,6 +341,87 @@ func sharedNames(who People, emails map[string]bool, cmds Commands) (Caveat, boo
 		Message: msg + joinNames(named) + ". If the emails of a name are one person, a .mailmap line merges them: " +
 			identitiesHint(cmds),
 	}, true
+}
+
+// candidatesCaveat is the unmerged-identities caveat (#104) of a section
+// that shows knowledge_loss@1 or knowledge_concentration@1 (loss, conc;
+// either may be nil) while identity candidates hold lines in its scope, as
+// their values' Detail counts them (ShareIfMerged, ConcentrationIfMerged).
+// Both metrics count each address as a person, and their activity is the
+// whole run's, so an older address of someone active elsewhere holds lines
+// that look gone, with or without a display name two addresses share,
+// which is all sharedNames sees. The caveat goes where the number is
+// (#48): on a card, an overview and explain of either metric, at every
+// scope, an area's included. It says how far the number moves with the
+// candidates merged, the high ones and every one, so a reader can state a
+// range rather than a point (#104's sensitivity), and where the .mailmap
+// lines are. perRepo says the section adds its repositories' values up
+// (the overview of every repository), so a candidate is counted once per
+// repository it holds lines in.
+func candidatesCaveat(loss *Share, conc *Concentration, perRepo bool, cmds Commands) (Caveat, bool) {
+	var n, high int
+	if loss != nil && loss.IfMerged != nil {
+		n, high = loss.IfMerged.Candidates, loss.IfMerged.High
+	}
+	if conc != nil && conc.IfMerged != nil && n == 0 {
+		n, high = conc.IfMerged.Candidates, conc.IfMerged.High
+	}
+	if n == 0 {
+		return Caveat{}, false
+	}
+	cmds = CommandsOr(cmds)
+	lead := plural(n, "identity candidate holds", "identity candidates hold") + " lines here"
+	if perRepo {
+		lead = "Identity candidates hold lines in these repositories (" + grouped(n) +
+			", counted once in each repository where they hold lines)"
+	}
+	var b strings.Builder
+	b.WriteString(lead + ": addresses that may be one person, which these numbers count apart, so an older address " +
+		"of someone still active can hold lines that look gone.")
+	merged := "every one merged"
+	if n == 1 {
+		merged = "it merged"
+	}
+	if loss != nil && loss.IfMerged != nil {
+		m := loss.IfMerged
+		b.WriteString(" Knowledge loss is " + percent(loss.Value) + " as the run keys people")
+		if high > 0 && high < n {
+			b.WriteString(", " + percent(m.HighValue) + " with the " + plural(high, "high-confidence one", "high-confidence ones") + " merged")
+		}
+		b.WriteString(" and " + percent(m.AllValue) + " with " + merged + ".")
+	}
+	if conc != nil && conc.IfMerged != nil {
+		m := conc.IfMerged
+		b.WriteString(" Majority-owner concentration is " + plural(conc.AuthorsInPrefix, "author", "authors") + " as keyed")
+		if high > 0 && high < n {
+			b.WriteString(", " + grouped(m.HighAuthors) + " with the high-confidence ones merged")
+		}
+		b.WriteString(" and " + grouped(m.AllAuthors) + " with " + merged + ".")
+	}
+	conf := "none of them is high-confidence, so every line is commented out"
+	switch {
+	case high == n && n == 1:
+		conf = "it is high-confidence, so its lines are written as lines"
+	case high == n:
+		conf = "all of them are high-confidence, so their lines are written as lines"
+	case high > 0:
+		conf = "the high-confidence ones as lines, the others commented out"
+	}
+	b.WriteString(" " + cmds.Identities() + " lists them with the evidence for each, and the .mailmap lines are in " +
+		cmds.Mailmap() + " (" + conf + "); a line takes effect at the next scan.")
+	return Caveat{Code: codeIdentities, Message: b.String()}, true
+}
+
+// withCaveat adds c to a section's caveats, joining it to an
+// unmerged-identities caveat already there, so a section says it once.
+func withCaveat(cs []Caveat, c Caveat) []Caveat {
+	for i := range cs {
+		if cs[i].Code == c.Code {
+			cs[i].Message += " " + c.Message
+			return cs
+		}
+	}
+	return append(cs, c)
 }
 
 // noValues says which of the metrics a report reads produced no value at
