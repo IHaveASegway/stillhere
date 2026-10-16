@@ -1,6 +1,10 @@
 package report
 
-import "time"
+import (
+	"time"
+
+	"github.com/IHaveASegway/stillhere/internal/rank"
+)
 
 // The answers of the read commands. They live here, beside Model, so that
 // the text, Markdown and JSON renderers and the MCP server (#15) share one
@@ -43,7 +47,31 @@ type MetricInfo struct {
 	BlindSpots  string `json:"blind_spots"`
 	Gaming      string `json:"gaming"`
 	Oracle      string `json:"oracle"`
-	Validity    string `json:"validity"`
+	// Validity is how far the metric is validated: for a ranked metric, its
+	// beta mark, which every ranked metric shares. ValidityNote adds its
+	// Reference.
+	Validity  string     `json:"validity"`
+	Reference *Reference `json:"reference"` // a ranked metric's reference result; null for none, as for a metric not ranked
+}
+
+// Reference is a ranked metric's reference result
+// (docs/validation.md#reference-results): what validate found on labels
+// that are not a lead's, the model panel's, as a verdict with its numbers
+// (rank.Separation), shown beside the beta mark and never in its place
+// (ADR 0014). The source and what it is are the same for every metric of
+// one panel run, so a page that shows several says them once
+// (ValidityCaveats).
+type Reference struct {
+	Source  string `json:"source"`  // whose labels, of what, as of when: "model panel, 4 public repositories, 2026-10-15"
+	Verdict string `json:"verdict"` // what the numbers mean, in docs/metrics.md's words (rank.Separation.Verdict)
+	Result  string `json:"result"`  // the verdict with the numbers it rests on (rank.Separation.Result)
+	About   string `json:"about"`   // what the source is, in plain words, since its name alone is jargon
+}
+
+// NewReference is the reference result s gives, on the labels source names
+// and about explains.
+func NewReference(source, about string, s rank.Separation) *Reference {
+	return &Reference{Source: source, Verdict: s.Verdict(), Result: s.Result(), About: about}
 }
 
 // Catalog is the metric registry: every metric version with its question,
@@ -228,15 +256,31 @@ type Validation struct {
 	Noise      int         `json:"noise"`     // read and left out of every AUC
 	Unmatched  int         `json:"unmatched"` // rows that name no change of the run (a landing or a pull request), or several
 	Metrics    []MetricAUC `json:"metrics"`   // sorted by metric id
-	Caveats    []Caveat    `json:"caveats"`
+	// Scores is each labelled change as validate scored it (--scores), in
+	// the run's order of changes, so anyone can recompute an AUC or set it
+	// against the change's size; absent unless asked for.
+	Scores  []ChangeScore `json:"scores,omitzero"`
+	Caveats []Caveat      `json:"caveats"`
 }
 
-// The bar a ranked metric's labels clear (product.md, ADR 0014): an AUC of
-// at least BarAUC on at least BarLabels of its scored labels.
-const (
-	BarAUC    = 0.7
-	BarLabels = 50
-)
+// ChangeScore is one labelled change of a Validation (--scores): the label
+// it counts by, its size as label's strata measure it, and each ranked
+// metric's measure of it (metrics.Scorer), which is what that metric's AUC
+// is computed from.
+type ChangeScore struct {
+	Change  string     `json:"change"` // the full SHA of its first landing, as a labels row names it
+	Repo    string     `json:"repo"`   // repository name
+	Pull    *LabelPull `json:"pull"`   // null for a landing no pull request of the run's GitHub data landed
+	Landed  time.Time  `json:"landed"`
+	Label   string     `json:"label"` // meaningful, routine or noise: the label it counts by, with --labeller that labeller's, else the majority over every labeller
+	Size    string     `json:"size"`  // LabelSizes, by Added + Removed
+	Added   int        `json:"added"` // numstat lines of its landings' own diffs on paths with a role
+	Removed int        `json:"removed"`
+	// Scores holds every ranked metric of the Validation by id: its
+	// measure of the change, or null when it does not score the change.
+	// Noise is in no AUC, but its scores are here too.
+	Scores map[string]*float64 `json:"scores"`
+}
 
 // MetricAUC is one metric's separation of the labelled changes.
 type MetricAUC struct {
@@ -247,9 +291,35 @@ type MetricAUC struct {
 	N          int      `json:"n"` // distinct labelled changes the metric scored, each at its own grain (metrics.Scorer)
 	Meaningful int      `json:"meaningful"`
 	Routine    int      `json:"routine"`
-	// Beta is true when these labels do not clear the bar (AUC 0.7 on 50
-	// scored labels). False says they clear it, which is evidence about the
-	// labelled code: the beta mark in stillhere's output changes only with
-	// the metric's published Validity line (ADR 0014).
+	// SizeAUC is the AUC of change size alone (the lines added and removed
+	// on paths with a role) over the very changes the metric scored, with
+	// its interval by the same bootstrap: the bar a metric must beat to say
+	// more than "big changes matter". nil with AUC.
+	SizeAUC *float64 `json:"size_auc"`
+	SizeLo  *float64 `json:"size_lo"`
+	SizeHi  *float64 `json:"size_hi"`
+	// SizeDiffLo and SizeDiffHi are the 95% interval of AUC less SizeAUC,
+	// paired: each replicate resamples the changes once and takes both AUCs
+	// over them (rank.AUCDiffInterval). Above 0, the metric says more than
+	// size. nil with AUC.
+	SizeDiffLo *float64 `json:"size_diff_lo"`
+	SizeDiffHi *float64 `json:"size_diff_hi"`
+	// Verdict is what these numbers mean, in the words a Validity line
+	// publishes them with (rank.Separation.Verdict); "" with no AUC. It is
+	// not the bar: Beta says whether the labels clear that.
+	Verdict string `json:"verdict"`
+	// Beta is true when these labels do not clear the bar (rank.BarAUC on
+	// rank.BarLabels scored labels). False says they clear it, which is
+	// evidence about the labelled code: the beta mark in stillhere's output
+	// changes only with the metric's published Validity line (ADR 0014).
 	Beta bool `json:"beta"`
+}
+
+// Separation is a's numbers as the verdict rule reads them; false with no
+// AUC.
+func (a MetricAUC) Separation() (rank.Separation, bool) {
+	if a.AUC == nil || a.Lo == nil || a.Hi == nil || a.SizeAUC == nil || a.SizeDiffLo == nil || a.SizeDiffHi == nil {
+		return rank.Separation{}, false
+	}
+	return rank.Separation{AUC: *a.AUC, Lo: *a.Lo, Hi: *a.Hi, N: a.N, Size: *a.SizeAUC, DiffLo: *a.SizeDiffLo, DiffHi: *a.SizeDiffHi}, true
 }

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -42,10 +43,10 @@ const (
 	labelSkip       = "skip"
 )
 
-// The bar a ranked metric's labels clear (report.BarAUC, report.BarLabels).
+// The bar a ranked metric's labels clear (rank.BarAUC, rank.BarLabels).
 const (
-	minAUC    = report.BarAUC
-	minLabels = report.BarLabels
+	minAUC    = rank.BarAUC
+	minLabels = rank.BarLabels
 )
 
 // label is one labelled row of a labels file.
@@ -93,7 +94,8 @@ func Validate(ctx context.Context, d Deps, r ValidateRequest) (*report.Validatio
 			cmp.Or(r.LabelsName, "labels"), r.Labeller, votes.names())}
 	}
 	v := &report.Validation{Labels: votes.rows, Labellers: votes.named, Unmatched: votes.unmatched}
-	var judged []int // indexes into changes, of the changes labelled meaningful or routine, in order
+	var judged []int   // indexes into changes, of the changes labelled meaningful or routine, in order
+	var labelled []int // and of every change with a label, noise included, for --scores
 	for _, i := range votes.order {
 		switch votes.label[i] {
 		case labelMeaningful:
@@ -107,7 +109,17 @@ func Validate(ctx context.Context, d Deps, r ValidateRequest) (*report.Validatio
 		default:
 			continue // no majority
 		}
+		labelled = append(labelled, i)
 		v.Changes++
+	}
+	// scored is each labelled change's measure by each metric, when the
+	// request asks for them: the very numbers each AUC is computed from.
+	var scored map[int]map[string]*float64
+	if r.Scores {
+		scored = make(map[int]map[string]*float64, len(labelled))
+		for _, i := range labelled {
+			scored[i] = map[string]*float64{}
+		}
 	}
 	var ids, alone []string
 	var left []report.Caveat // what a metric left out of its AUC, and why
@@ -117,8 +129,15 @@ func Validate(ctx context.Context, d Deps, r ValidateRequest) (*report.Validatio
 			return nil, fmt.Errorf("scoring changes with %s: %w", m.def.ID, err)
 		}
 		a := report.MetricAUC{Metric: m.def.ID.String()}
-		var pos, neg []float64
-		inWindow := 0 // the changes labelled meaningful or routine that landed in its window
+		var pos, neg, sizePos, sizeNeg []float64
+		var pairPos, pairNeg [][2]float64 // each scored change's score and size, together, for the paired comparison
+		inWindow := 0                     // the changes labelled meaningful or routine that landed in its window
+		for i, byMetric := range scored {
+			byMetric[a.Metric] = nil
+			if x, ok := scorer.Score(&changes[i]); ok {
+				byMetric[a.Metric] = &x
+			}
+		}
 		for _, i := range judged {
 			c := &changes[i]
 			if scorer.Window().Contains(c.Time) {
@@ -128,10 +147,11 @@ func Validate(ctx context.Context, d Deps, r ValidateRequest) (*report.Validatio
 			if !ok {
 				continue
 			}
+			size := float64(c.Added + c.Removed)
 			if votes.label[i] == labelMeaningful {
-				pos = append(pos, x)
+				pos, sizePos, pairPos = append(pos, x), append(sizePos, size), append(pairPos, [2]float64{x, size})
 			} else {
-				neg = append(neg, x)
+				neg, sizeNeg, pairNeg = append(neg, x), append(sizeNeg, size), append(pairNeg, [2]float64{x, size})
 			}
 		}
 		a.Meaningful, a.Routine, a.N = len(pos), len(neg), len(pos)+len(neg)
@@ -139,6 +159,19 @@ func Validate(ctx context.Context, d Deps, r ValidateRequest) (*report.Validatio
 			auc := rank.AUC(pos, neg)
 			lo, hi := rank.AUCInterval(m.def.ID, pos, neg)
 			a.AUC, a.Lo, a.Hi = &auc, &lo, &hi
+			// Size alone, over the same changes: a metric that grows with
+			// size can separate the classes through size alone.
+			size := rank.AUC(sizePos, sizeNeg)
+			sizeLo, sizeHi := rank.AUCInterval(m.def.ID, sizePos, sizeNeg)
+			a.SizeAUC, a.SizeLo, a.SizeHi = &size, &sizeLo, &sizeHi
+			// Whether it beats size is a question about one sample, so the
+			// two AUCs are compared on the same resampled changes, not by
+			// their two intervals.
+			diffLo, diffHi := rank.AUCDiffInterval(m.def.ID, pairPos, pairNeg)
+			a.SizeDiffLo, a.SizeDiffHi = &diffLo, &diffHi
+			if sep, ok := a.Separation(); ok {
+				a.Verdict = sep.Verdict()
+			}
 		}
 		a.Beta = a.AUC == nil || *a.AUC < minAUC || a.N < minLabels
 		v.Metrics = append(v.Metrics, a)
@@ -151,6 +184,9 @@ func Validate(ctx context.Context, d Deps, r ValidateRequest) (*report.Validatio
 		}
 	}
 	slices.SortFunc(v.Metrics, func(a, b report.MetricAUC) int { return cmp.Compare(a.Metric, b.Metric) })
+	if scored != nil {
+		v.Scores = changeScores(changes, slices.Sorted(maps.Keys(scored)), scored, labelFacts(s.facts), votes.label)
+	}
 	run := s.run
 	v.Provenance = report.AnswerProvenance(&run, s.facts, s.forge, ids)
 	v.Caveats = report.AnswerCaveats(s.facts)
@@ -165,6 +201,24 @@ func Validate(ctx context.Context, d Deps, r ValidateRequest) (*report.Validatio
 		v.Caveats = append(v.Caveats, unmatchedCaveat(v.Unmatched, votes.unmatchedPulls, s))
 	}
 	return v, nil
+}
+
+// changeScores is the labelled changes, by their indexes into changes in
+// the run's order, as --scores gives them: each one's label, its size as
+// label's strata measure it, and each metric's measure of it.
+func changeScores(changes []metrics.Change, labelled []int, scored map[int]map[string]*float64, x *labelFactsIndex,
+	label map[int]string) []report.ChangeScore {
+	out := make([]report.ChangeScore, 0, len(labelled))
+	for _, i := range labelled {
+		c := &changes[i]
+		cs := report.ChangeScore{Change: c.Landings[0], Repo: x.name(c.Repo), Landed: c.Time, Label: label[i], Size: labelSize(c),
+			Added: c.Added, Removed: c.Removed, Scores: scored[i]}
+		if c.Pull != nil {
+			cs.Pull = &report.LabelPull{Repo: c.Pull.Repo, Number: c.Pull.Number}
+		}
+		out = append(out, cs)
+	}
+	return out
 }
 
 // unscoredCaveat says how many of the labelled changes of a metric's window

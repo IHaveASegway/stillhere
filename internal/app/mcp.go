@@ -1080,6 +1080,12 @@ type DiffRequest struct {
 	Change   string // a landing's SHA, or a prefix of at least 7 hex digits
 	Path     string // a repo-relative path prefix that limits the diff; "" for the whole change
 	MaxBytes int    // the patch is cut at about this many bytes; 0 means 24,000
+	// Earlier are the other landings of Change's change, newest first, as
+	// metrics.Change.Landings lists them after the first: a rebase merge's.
+	// Each must be the first parent of the one before it, Change's first,
+	// so the diff runs from the last one's first parent to Change: the
+	// whole change, not its newest commit. nil for Change alone.
+	Earlier []string
 }
 
 // DiffAnswer is one landing's first-parent diff: what it changed on the
@@ -1092,7 +1098,7 @@ type DiffAnswer struct {
 	Time       time.Time         `json:"time"`
 	Merge      bool              `json:"merge"`
 	Title      string            `json:"title"` // the landing commit's subject
-	Base       string            `json:"base"`  // the first parent the diff is taken against; "" for a root commit
+	Base       string            `json:"base"`  // the first parent the diff is taken against (of the oldest of Earlier, when asked); "" for a root commit
 	Path       string            `json:"path"`  // the prefix asked for; "" for the whole change
 	Files      []DiffFile        `json:"files"` // every path the diff touches under Path, by path
 	Patch      string            `json:"patch"` // the unified diff of the files with a role, cut at MaxBytes
@@ -1150,6 +1156,16 @@ func Diff(ctx context.Context, d Deps, r DiffRequest) (*DiffAnswer, error) {
 			boundary = rf.Repo.Boundary(c)
 		}
 	}
+	from := l // the oldest landing the diff covers: l, or the oldest of r.Earlier
+	if !boundary && len(r.Earlier) > 0 {
+		if from, boundary, err = diffEarlier(rf, l, a, r.Earlier); err != nil {
+			return nil, err
+		}
+		if a.Base == "" && !boundary {
+			return nil, &domain.UsageError{Msg: fmt.Sprintf("landing %s, the oldest of the change, is %q's root commit: "+
+				"the diff of a change that starts there would be its whole tree", mcpShort(from.SHA), rf.Repo.Name)}
+		}
+	}
 	if boundary {
 		// In a shallow clone a parentless commit is where the clone's
 		// history ends, by the one rule the history collector reads it by
@@ -1158,7 +1174,7 @@ func Diff(ctx context.Context, d Deps, r DiffRequest) (*DiffAnswer, error) {
 		// its whole tree, not its change (RB-5).
 		return nil, &domain.UsageError{Msg: fmt.Sprintf("landing %s is where %q's shallow clone ends: the clone does not "+
 			"hold its parent, so its diff would be its whole tree, not its change. Its change shows once the user deepens "+
-			"the clone (git fetch --unshallow) and scans again.", mcpShort(l.SHA), rf.Repo.Name)}
+			"the clone (git fetch --unshallow) and scans again.", mcpShort(from.SHA), rf.Repo.Name)}
 	}
 	// The two-tree form diffs the landing against its first parent, a
 	// merge included, on every git the floor admits; a root commit has no
@@ -1266,6 +1282,41 @@ func Diff(ctx context.Context, d Deps, r DiffRequest) (*DiffAnswer, error) {
 			"The patch was cut at %s bytes: ask for a path under the change to see the rest of it.", strconv.Itoa(limit))})
 	}
 	return a, nil
+}
+
+// diffEarlier moves a's base below the earlier landings of l's change
+// (DiffRequest.Earlier), so the diff is the whole change: each must be a
+// landing of the run and the first parent of the one before it, so the
+// change is one unbroken stretch of the first-parent history and no other
+// change's commit is in its diff. It returns the oldest landing, whose
+// first parent is the base, and whether it is the shallow clone's boundary.
+func diffEarlier(rf *domain.RepoFacts, l domain.Landing, a *DiffAnswer, earlier []string) (domain.Landing, bool, error) {
+	commits := make(map[string]*domain.Commit, len(rf.Commits))
+	for i := range rf.Commits {
+		commits[rf.Commits[i].SHA] = &rf.Commits[i]
+	}
+	landings := make(map[string]domain.Landing, len(rf.Landings))
+	for _, x := range rf.Landings {
+		landings[x.SHA] = x
+	}
+	for _, sha := range earlier {
+		sha = strings.ToLower(strings.TrimSpace(sha))
+		next, ok := landings[sha]
+		c := commits[sha]
+		if !ok || c == nil || sha != a.Base {
+			return l, false, &domain.UsageError{Msg: fmt.Sprintf("landing %s is not the first parent of landing %s in %q: "+
+				"a change's earlier landings follow one another on the first-parent history, newest first",
+				mcpShort(sha), mcpShort(l.SHA), rf.Repo.Name)}
+		}
+		l, a.Base = next, "" // the newer of the next pair, for its message
+		if len(c.Parents) > 0 {
+			a.Base = c.Parents[0]
+		}
+		if rf.Repo.Boundary(c) {
+			return l, true, nil
+		}
+	}
+	return l, false, nil
 }
 
 // mcpGitTimedOut reports whether a git command failed on its own timeout,

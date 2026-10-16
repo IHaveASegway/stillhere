@@ -4,6 +4,8 @@ import (
 	"database/sql"
 	"errors"
 	"math"
+	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -14,6 +16,7 @@ import (
 	"github.com/IHaveASegway/stillhere/internal/domain"
 	"github.com/IHaveASegway/stillhere/internal/fixture"
 	"github.com/IHaveASegway/stillhere/internal/gitcli"
+	"github.com/IHaveASegway/stillhere/internal/rank"
 	"github.com/IHaveASegway/stillhere/internal/report"
 	"github.com/IHaveASegway/stillhere/internal/sqlite"
 )
@@ -243,6 +246,7 @@ func reviewMergeMethods(t *testing.T) {
 	want := reviewCoverageRow{Num: 4, Den: 6, Via: 5, Direct: 1, ApprovedOnly: 4, Repos: 1}
 	reviewCheckCoverage(t, "SPEC merge methods, review_coverage@1", s,
 		map[string]reviewCoverageRow{"repo:" + r.Key: want}, map[string]reviewCoverageRow{"all:": want})
+	reviewWholeChange(t, s, shas)
 
 	// A replica with a hole (#101): it lacks #3, whose squash, S2, names it.
 	// S2 is left out, unmatched, rather than counted as pushed directly.
@@ -263,6 +267,53 @@ func reviewMergeMethods(t *testing.T) {
 	want = reviewCoverageRow{Num: 2, Den: 3, Via: 2, Direct: 1, ApprovedOnly: 2, AfterSync: 3, Repos: 1}
 	reviewCheckCoverage(t, "SPEC merge methods, review_coverage@1 synced before S1", stale,
 		map[string]reviewCoverageRow{"repo:" + r.Key: want}, map[string]reviewCoverageRow{"all:": want})
+}
+
+// reviewWholeChange checks that label shows the whole of #1, a rebase merge
+// of two landings, R2 and R1 (the panel's evidence showed a rebase merge's
+// newest landing alone): both commits on its card, oldest first, and both
+// files in its diff, taken from R1's parent; and that Diff refuses an
+// earlier landing that is not the first parent of the one before it.
+func reviewWholeChange(t *testing.T, s *scanned, shas map[string]string) {
+	t.Helper()
+	const oracle = "SPEC merge methods, label of a rebase merge"
+	ls, err := app.Label(t.Context(), s.read, app.LabelRequest{RunID: s.run, N: 10, Seed: 1})
+	if err != nil {
+		t.Fatalf("%s: app.Label: %v", oracle, err)
+	}
+	i := slices.IndexFunc(ls.Changes, func(c report.LabelChange) bool { return c.Pull != nil && c.Pull.Number == 1 })
+	if i < 0 {
+		t.Fatalf("%s: the sample holds no #1: %+v", oracle, ls.Changes)
+	}
+	c := ls.Changes[i]
+	r1, r2 := shas["feat: add one.py"], shas["feat: add two.py"]
+	if !slices.Equal(c.Landings, []string{r2, r1}) || !slices.Equal(c.Commits, []string{"feat: add one.py", "feat: add two.py"}) {
+		t.Errorf("%s: #1 is landings %v with commits %q, want R2 and R1, and both subjects, R1's first", oracle, c.Landings, c.Commits)
+	}
+	d := s.read
+	d.Git = writeDeps(t, "", nil).Git
+	files := func(a *app.DiffAnswer) []string {
+		var out []string
+		for _, f := range a.Files {
+			out = append(out, f.Path)
+		}
+		return out
+	}
+	whole, err := app.Diff(t.Context(), d, app.DiffRequest{RunID: s.run, Repo: c.RepoKey, Change: c.Change, Earlier: c.Landings[1:]})
+	if err != nil || !slices.Equal(files(whole), []string{"one.py", "two.py"}) || whole.Base != shas["feat: add base.py"] ||
+		!strings.Contains(whole.Patch, "+one_1 = 1") || !strings.Contains(whole.Patch, "+two_1 = 1") {
+		t.Errorf("%s: the whole change's diff is %+v, %v; want one.py and two.py from B0", oracle, whole, err)
+	}
+	alone, err := app.Diff(t.Context(), d, app.DiffRequest{RunID: s.run, Repo: c.RepoKey, Change: c.Change})
+	if err != nil || !slices.Equal(files(alone), []string{"two.py"}) {
+		t.Errorf("%s: R2's own diff is %+v, %v; want two.py alone", oracle, alone, err)
+	}
+	var usage *domain.UsageError
+	_, err = app.Diff(t.Context(), d, app.DiffRequest{RunID: s.run, Repo: c.RepoKey, Change: c.Change,
+		Earlier: []string{shas["feat: add a.py (#2)"]}})
+	if !errors.As(err, &usage) || !strings.Contains(usage.Msg, "is not the first parent of landing") {
+		t.Errorf("%s: an earlier landing that is not R2's parent gives %v, want a usage error that says so", oracle, err)
+	}
 }
 
 // reviewCoverageRow is one review_coverage@1 value: Num and Den, and Detail
@@ -523,7 +574,7 @@ func reviewValidate(t *testing.T, s *scanned, commits map[string]string) {
 	validate := func(labels, labeller string) *report.Validation {
 		t.Helper()
 		v, err := app.Validate(t.Context(), s.read, app.ValidateRequest{RunID: s.run, Labels: []byte(labels), LabelsName: "labels.csv",
-			Labeller: labeller})
+			Labeller: labeller, Scores: labeller == ""})
 		if err != nil {
 			t.Fatalf("app.Validate: %v", err)
 		}
@@ -560,6 +611,7 @@ func reviewValidate(t *testing.T, s *scanned, commits map[string]string) {
 	for m := range want {
 		t.Errorf("%s: validate scores no %s", table, m)
 	}
+	reviewScores(t, table, v, commits)
 	for _, c := range []struct{ code, text string }{
 		{"unmatched-labels", "#950, pr:950 or owner/name#950"},
 		{"unscored-labels", reviewsGiven.String() + " scored 3 of the 5 changes"}, // rows 13 and 14: no pull request
@@ -593,6 +645,121 @@ func reviewValidate(t *testing.T, s *scanned, commits map[string]string) {
 	if !errors.As(err, &usage) || !strings.Contains(usage.Msg, "read as comments: 2") {
 		t.Errorf("%s: a labels file of comments gives %v, want a usage error that counts its 2 comment lines", table, err)
 	}
+}
+
+// reviewScores checks validate --scores over the lead's labels: one row per
+// labelled change, noise included, with each metric's measure of it or
+// null, which are the very numbers each AUC and its "size alone" column are
+// computed from; and that docs/metrics.md's Validity line of each ranked
+// metric holds the metric's model-panel reference word for word.
+func reviewScores(t *testing.T, table string, v *report.Validation, commits map[string]string) {
+	t.Helper()
+	row := func(month time.Month, day, hour int) string { return commits[rfc3339(reviewAt(month, day, hour))] }
+	if len(v.Scores) != v.Changes {
+		t.Fatalf("%s: --scores gives %d rows for %d labelled changes", table, len(v.Scores), v.Changes)
+	}
+	byChange := map[string]report.ChangeScore{}
+	for _, c := range v.Scores {
+		byChange[c.Change] = c
+	}
+	score := func(sha string, m domain.MetricID) *float64 { return byChange[sha].Scores[m.String()] }
+	for _, c := range []struct {
+		sha    string
+		metric domain.MetricID
+		want   *float64 // nil: not scored
+	}{
+		{row(time.October, 6, 13), reviewsGiven, ptr(3.0)}, // #4: frank, cara and @zoe
+		{row(time.October, 6, 17), reviewsGiven, nil},      // row 13: no pull request
+		{row(time.January, 1, 12), durable, ptr(1.0)},      // row 1: 7 / 7
+		{row(time.January, 4, 12), durable, ptr(0.0)},      // row 3: 0 / 2
+		{row(time.October, 6, 15), simplifying, ptr(0.0)},  // row 11, noise: in no AUC, scored all the same
+		{row(time.January, 1, 12), reviewsGiven, nil},      // before reviews_given@1's window
+	} {
+		got := score(c.sha, c.metric)
+		if (got == nil) != (c.want == nil) || (got != nil && *got != *c.want) {
+			t.Errorf("%s: --scores gives %s of %s as %v, want %v", table, c.metric, shortSHA(c.sha), deref(got), deref(c.want))
+		}
+	}
+	if c := byChange[row(time.October, 6, 15)]; c.Label != "noise" || c.Pull != nil || c.Added+c.Removed == 0 {
+		t.Errorf("%s: --scores row 11 is %+v, want noise, no pull request, its lines", table, c)
+	}
+	// Size alone, derived by hand from the numstat of each labelled
+	// change's landings on paths with a role, blank lines included (SPEC's
+	// validate section): durable@1's meaningful rows 1 (10) and 5 (2)
+	// against routine rows 3 (4) and 7 (5) win 2 of 4 pairs;
+	// simplifying@1's #3 (9) and #4 (2) against #6 (1), row 13 (3) and row
+	// 14 (1) win 5 of 6; reviews_given@1's #3 and #4 both beat #6 (1). Each
+	// metric's n is under 50, so its verdict cannot tell yet.
+	sizeAlone := map[string]float64{durable.String(): 0.5, simplifying.String(): 5.0 / 6, reviewsGiven.String(): 1}
+	for _, a := range v.Metrics {
+		var pos, neg, sizePos, sizeNeg []float64
+		for _, c := range v.Scores {
+			x := c.Scores[a.Metric]
+			if x == nil || c.Label == "noise" {
+				continue
+			}
+			if c.Label == "meaningful" {
+				pos, sizePos = append(pos, *x), append(sizePos, float64(c.Added+c.Removed))
+			} else {
+				neg, sizeNeg = append(neg, *x), append(sizeNeg, float64(c.Added+c.Removed))
+			}
+		}
+		if len(pos) != a.Meaningful || len(neg) != a.Routine || a.AUC == nil || *a.AUC != rank.AUC(pos, neg) ||
+			a.SizeAUC == nil || *a.SizeAUC != rank.AUC(sizePos, sizeNeg) || *a.SizeLo > *a.SizeAUC || *a.SizeHi < *a.SizeAUC {
+			t.Errorf("%s: %s's AUC %v and size alone %v (%v–%v) are not those of its --scores rows (%d / %d: %v and %v)", table,
+				a.Metric, deref(a.AUC), deref(a.SizeAUC), deref(a.SizeLo), deref(a.SizeHi), len(pos), len(neg),
+				rank.AUC(pos, neg), rank.AUC(sizePos, sizeNeg))
+		}
+		if want, ok := sizeAlone[a.Metric]; !ok || a.SizeAUC == nil || math.Abs(*a.SizeAUC-want) > 1e-12 {
+			t.Errorf("%s: %s's size alone is %v, want %v, derived by hand", table, a.Metric, deref(a.SizeAUC), want)
+		}
+		if a.SizeDiffLo == nil || a.SizeDiffHi == nil || *a.SizeDiffLo > *a.AUC-*a.SizeAUC || *a.SizeDiffHi < *a.AUC-*a.SizeAUC ||
+			a.Verdict != rank.VerdictTooFew {
+			t.Errorf("%s: %s's paired interval of AUC less size alone is %v–%v around %v, verdict %q; want one that holds the difference, and %q",
+				table, a.Metric, deref(a.SizeDiffLo), deref(a.SizeDiffHi), *a.AUC-*a.SizeAUC, a.Verdict, rank.VerdictTooFew)
+		}
+	}
+
+	// One reference, the places that print it: each ranked metric's
+	// validity note (report.ValidityNote of its definition), which every
+	// validity caveat says, its Validity line in docs/metrics.md, and
+	// report-json.md's example of a rank table's caveat, durable@1's.
+	readDoc := func(path ...string) string {
+		t.Helper()
+		b, err := os.ReadFile(filepath.Join(append([]string{"..", ".."}, path...)...))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	doc, jsonDoc := readDoc("docs", "metrics.md"), readDoc("docs", "spec", "report-json.md")
+	for _, mi := range app.Metrics().Metrics {
+		if !mi.Ranked {
+			continue
+		}
+		if mi.Reference == nil {
+			t.Errorf("%s: %s has no reference result", table, mi.ID)
+			continue
+		}
+		ref := "Reference (" + mi.Reference.Source + "): " + mi.Reference.Result + ". " + mi.Reference.About
+		section, _, _ := strings.Cut(sectionAfter(doc, "\n### "+mi.ID), "\n### ")
+		_, line, _ := strings.Cut(section, "- **Validity**:")
+		line, _, _ = strings.Cut(line, "\n")
+		if !strings.Contains(line, ref) {
+			t.Errorf("%s: docs/metrics.md's Validity line of %s does not hold its definition's reference %q", table, mi.ID, ref)
+		}
+		if note := report.ValidityNote(mi); mi.ID == durable.String() && !strings.Contains(jsonDoc, `"message": "Validity: `+note+`"`) {
+			t.Errorf("%s: report-json.md's example rank table does not carry durable@1's validity note %q", table, note)
+		}
+	}
+}
+
+// sectionAfter is s from the first heading, after its marker, or "".
+func sectionAfter(s, marker string) string {
+	if _, after, ok := strings.Cut(s, marker); ok {
+		return after
+	}
+	return ""
 }
 
 // reviewLabel checks SPEC's "label over the same replica": the sample is

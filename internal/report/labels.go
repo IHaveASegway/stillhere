@@ -4,10 +4,13 @@ import (
 	"encoding/csv"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 	"unicode"
+
+	"github.com/IHaveASegway/stillhere/internal/rank"
 )
 
 // This file is stillhere label's answers (docs/validation.md): a stratified
@@ -38,13 +41,13 @@ type LabelSample struct {
 }
 
 // LabelProgress is how far one ranked metric's labels are toward the bar:
-// BarLabels changes labelled meaningful or routine that it scores.
+// rank.BarLabels changes labelled meaningful or routine that it scores.
 type LabelProgress struct {
 	Metric   string `json:"metric"`
 	Ago      string `json:"ago"`      // the window it scores, in days before the run's now
 	Labelled int    `json:"labelled"` // changes the labeller labelled meaningful or routine that it scores, sampled or not
 	Sampled  int    `json:"sampled"`  // sampled changes it scores, less those answered noise or skip
-	Needed   int    `json:"needed"`   // BarLabels less Labelled, at least 0
+	Needed   int    `json:"needed"`   // rank.BarLabels less Labelled, at least 0
 }
 
 // LabelStratum is one window, size and repository of the sample, with the
@@ -82,7 +85,7 @@ type LabelChange struct {
 	Size        string      `json:"size"`
 	Pull        *LabelPull  `json:"pull"`    // null for a landing no pull request landed
 	Title       string      `json:"title"`   // the pull request's title, else the landing commit's subject
-	Commits     []string    `json:"commits"` // the subjects of the commits a merge brought in, oldest first; [] otherwise
+	Commits     []string    `json:"commits"` // the subjects of the commits a merge brought in, or of a rebase merge's landings, oldest first; [] otherwise
 	MoreCommits int         `json:"more_commits"`
 	Added       int         `json:"added"` // numstat lines on paths with a role, as Size counts them
 	Removed     int         `json:"removed"`
@@ -150,7 +153,7 @@ func (s *LabelSample) ProgressText() string {
 	}
 	var parts []string
 	for _, p := range s.Progress {
-		part := fmt.Sprintf("%s %d of %d", p.Metric, min(p.Labelled, BarLabels), BarLabels)
+		part := fmt.Sprintf("%s %d of %d", p.Metric, min(p.Labelled, rank.BarLabels), rank.BarLabels)
 		if p.Needed > 0 {
 			part += fmt.Sprintf(" (%d more)", p.Needed)
 		}
@@ -159,7 +162,7 @@ func (s *LabelSample) ProgressText() string {
 	if len(parts) == 0 {
 		return ""
 	}
-	return fmt.Sprintf("Toward the bar, %d labels meaningful or routine that a metric scores: %s.", BarLabels,
+	return fmt.Sprintf("Toward the bar, %d labels meaningful or routine that a metric scores: %s.", rank.BarLabels,
 		strings.Join(parts, ", "))
 }
 
@@ -333,7 +336,13 @@ func (c *LabelCard) writeText(p *printer) {
 	p.line(head)
 	p.wrapped("  ", "  ", clean(ch.Title))
 	if len(ch.Commits) > 0 {
-		p.line("  commits it brought in:")
+		// A rebase merge brings nothing in: its commits are its landings,
+		// each put on the branch on its own.
+		if len(ch.Landings) > 1 {
+			p.line("  its commits, oldest first:")
+		} else {
+			p.line("  commits it brought in:")
+		}
 		for _, s := range ch.Commits {
 			p.wrapped("    - ", "      ", clean(s))
 		}
@@ -341,8 +350,15 @@ func (c *LabelCard) writeText(p *printer) {
 			p.linef("    and %s", plural(ch.MoreCommits, "more commit", "more commits"))
 		}
 	}
-	p.linef("  %s; +%s −%s on paths with a role", plural(len(ch.Files)+ch.MoreFiles, "file", "files"),
-		grouped(ch.Added), grouped(ch.Removed))
+	lines := "on paths with a role"
+	if len(ch.Landings) > 1 {
+		// Each landing's own diff, summed, as Size counts them: a line one
+		// landing adds and a later one removes counts in both, which the
+		// whole change's diff (d) nets out.
+		lines += ", summed over its " + strconv.Itoa(len(ch.Landings)) + " landings"
+	}
+	p.linef("  %s; +%s −%s %s", plural(len(ch.Files)+ch.MoreFiles, "file", "files"),
+		grouped(ch.Added), grouped(ch.Removed), lines)
 	var rows [][]string
 	for i, f := range ch.Files {
 		if i == maxCardFiles {
@@ -458,6 +474,54 @@ func Sheet(w io.Writer, s *LabelSample) error {
 	cw.Flush()
 	if err := cw.Error(); err != nil {
 		return fmt.Errorf("report: write sheet: %w", err)
+	}
+	return nil
+}
+
+// ScoreColumns are the first columns of validate's scores (--scores), named
+// as the sheet names them; one column per ranked metric follows, by id.
+var ScoreColumns = []string{"change", "label", "repo", "pull_request", "landed", "size", "added", "removed"}
+
+// Scores writes a Validation's per-change scores (Validation.Scores) as a
+// CSV: ScoreColumns, then each of its metrics' measure of the change, empty
+// where the metric does not score it. With it, anyone can recompute each
+// AUC, or compare it with size on exactly the changes the metric scored.
+// Its text is withheld and kept from formulas as the sheet's is.
+func Scores(w io.Writer, v *Validation) error {
+	d, err := page(v)
+	if err != nil {
+		return err
+	}
+	v = d.(*Validation)
+	cw := csv.NewWriter(w)
+	head := slices.Clone(ScoreColumns)
+	for _, a := range v.Metrics {
+		head = append(head, a.Metric)
+	}
+	if err := cw.Write(head); err != nil {
+		return fmt.Errorf("report: write scores: %w", err)
+	}
+	for _, c := range v.Scores {
+		pull := ""
+		if c.Pull != nil {
+			pull = (&LabelChange{Pull: c.Pull}).pullText()
+		}
+		row := []string{c.Change, c.Label, sheetCell(c.Repo), sheetCell(pull), date(c.Landed), c.Size,
+			strconv.Itoa(c.Added), strconv.Itoa(c.Removed)}
+		for _, a := range v.Metrics {
+			cell := ""
+			if x := c.Scores[a.Metric]; x != nil {
+				cell = strconv.FormatFloat(*x, 'f', -1, 64)
+			}
+			row = append(row, cell)
+		}
+		if err := cw.Write(row); err != nil {
+			return fmt.Errorf("report: write scores: %w", err)
+		}
+	}
+	cw.Flush()
+	if err := cw.Error(); err != nil {
+		return fmt.Errorf("report: write scores: %w", err)
 	}
 	return nil
 }

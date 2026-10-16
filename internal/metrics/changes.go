@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
+	"github.com/IHaveASegway/stillhere/internal/rank"
 )
 
 // This file is the grain a ranked metric is validated at (#77,
@@ -20,13 +21,41 @@ import (
 // metric's own measure in its own file; no second definition of any metric
 // lives here.
 
-// betaValidity is every ranked metric's validity note until a lead's labels
-// clear the bar (docs/metrics.md#validity-checks, ADR 0014): the rank
-// tables, explain and the MCP server print it wherever the metric's values
-// are, one caveat for the metrics that share it. A reference result, once
-// the model panel has run, is added beside it, never in its place.
+// betaValidity is every ranked metric's validity note until a lead's
+// labels clear the bar (docs/metrics.md#validity-checks, ADR 0014): the
+// rank tables, explain and the MCP server print it wherever the metric's
+// values are, with the metric's own Reference beside it, never in its
+// place.
 const betaValidity = "Beta: not yet checked against a lead's labels (stillhere label, then stillhere validate: " +
-	"AUC >= 0.7 on at least 50 scored labels; docs/validation.md). The model-panel reference has not run yet."
+	"AUC >= 0.7 on at least 50 scored labels; docs/validation.md)."
+
+// The model panel's run (docs/validation.md#reference-results): whose
+// labels, and what a model panel is in plain words. docs/metrics.md's
+// Validity lines hold the same words, which TestChangeOracles checks; a new
+// panel run changes them together.
+const (
+	panelSource = "model panel, 4 public repositories, 2026-10-15"
+	panelAbout  = "The model panel is three AI models that labelled public changes without seeing any metric value: " +
+		"evidence, not a lead's judgment."
+)
+
+// panel is a ranked metric's reference result from the model panel's
+// majority labels, pooled: validate's numbers (--format json) as printed,
+// from which the verdict follows.
+func panel(s rank.Separation) *Reference {
+	return &Reference{Source: panelSource, About: panelAbout, Separation: s}
+}
+
+// The panel's numbers per metric: AUC, interval and n, change size alone
+// over the same changes, and the paired interval of the difference.
+var (
+	durablePanel = rank.Separation{AUC: 0.4215277777777778, Lo: 0.29618055555555556, Hi: 0.5451388888888888, N: 76,
+		Size: 0.8159722222222222, DiffLo: -0.5541666666666667, DiffHi: -0.22534722222222225}
+	simplifyingPanel = rank.Separation{AUC: 0.7602813852813853, Lo: 0.6277056277056277, Hi: 0.8766233766233766, N: 65,
+		Size: 0.8674242424242424, DiffLo: -0.22023809523809523, DiffHi: 0.011904761904761862}
+	reviewsPanel = rank.Separation{AUC: 0.5508771929824562, Lo: 0.4017543859649123, Hi: 0.7070175438596491, N: 49,
+		Size: 0.8850877192982456, DiffLo: -0.5035087719298246, DiffHi: -0.16842105263157903}
+)
 
 // Change is one change of a run: a merged pull request of the run's GitHub
 // data with the landings that put it on its repository's default branch

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
+	"github.com/IHaveASegway/stillhere/internal/rank"
 )
 
 // Text and Markdown for the read commands' answers: explain, who-knows,
@@ -199,7 +200,7 @@ func (e *Explain) traceTables(p *printer, esc, code func(string) string) []trace
 func textDefinition(p *printer, d MetricInfo) {
 	var lines [][2]string
 	for _, f := range [][2]string{{"unit", d.Unit}, {"eligibility", d.Eligibility}, {"blind spots", d.BlindSpots},
-		{"how it can be gamed", d.Gaming}, {"validity", d.Validity}} {
+		{"how it can be gamed", d.Gaming}, {"validity", ValidityNote(d)}} {
 		if f[1] != "" {
 			lines = append(lines, f)
 		}
@@ -274,7 +275,7 @@ func (e *Explain) writeMarkdown(p *printer) {
 func mdDefinition(p *printer, level string, d MetricInfo) {
 	var lines []string
 	for _, f := range [][2]string{{"Unit", d.Unit}, {"Eligibility", d.Eligibility}, {"Blind spots", d.BlindSpots},
-		{"How it can be gamed", d.Gaming}, {"Oracle", d.Oracle}, {"Validity", d.Validity}} {
+		{"How it can be gamed", d.Gaming}, {"Oracle", d.Oracle}, {"Validity", ValidityNote(d)}} {
 		if f[1] != "" {
 			lines = append(lines, "- "+f[0]+": "+mdText(f[1]))
 		}
@@ -572,14 +573,20 @@ func (m *Me) writeMarkdown(p *printer) {
 // Validation.
 
 func aucRow(a MetricAUC) []string {
-	auc := "—"
-	if a.AUC != nil {
-		auc = fmt.Sprintf("%.2f", *a.AUC)
-		if a.Lo != nil && a.Hi != nil {
-			auc += fmt.Sprintf(" (%.2f–%.2f)", *a.Lo, *a.Hi)
-		}
+	return []string{a.Metric, aucText(a.AUC, a.Lo, a.Hi), grouped(a.N), grouped(a.Meaningful), grouped(a.Routine),
+		aucText(a.SizeAUC, a.SizeLo, a.SizeHi), a.status()}
+}
+
+// aucText is an AUC with its interval, "0.42 (0.30–0.55)", or "—".
+func aucText(auc, lo, hi *float64) string {
+	if auc == nil {
+		return "—"
 	}
-	return []string{a.Metric, auc, grouped(a.N), grouped(a.Meaningful), grouped(a.Routine), a.status()}
+	s := fmt.Sprintf("%.2f", *auc)
+	if lo != nil && hi != nil {
+		s += fmt.Sprintf(" (%.2f–%.2f)", *lo, *hi)
+	}
+	return s
 }
 
 // status says whether the labels clear the bar, and when not, what is
@@ -590,16 +597,29 @@ func (a MetricAUC) status() string {
 		return "clears the bar"
 	case a.AUC == nil:
 		return "below: no AUC"
-	case a.N < BarLabels:
-		return fmt.Sprintf("below: n < %d", BarLabels)
+	case a.N < rank.BarLabels:
+		return fmt.Sprintf("below: n < %d", rank.BarLabels)
 	}
-	return fmt.Sprintf("below: AUC < %.1f", BarAUC)
+	return fmt.Sprintf("below: AUC < %.1f", rank.BarAUC)
 }
 
-// validateBar says what the status column means.
+// validateBar says what the status column means, and what it does not.
 var validateBar = fmt.Sprintf("The bar: AUC ≥ %.1f on at least %d scored labels. Labels that clear it are evidence about the code "+
 	"they judge; the beta mark on stillhere's ranks changes only when a metric's published Validity line does "+
-	"(docs/validation.md).", BarAUC, BarLabels)
+	"(docs/validation.md). Clearing it does not say a metric beats change size; its verdict says that.", rank.BarAUC, rank.BarLabels)
+
+// verdicts are each metric's verdict with its numbers, the words a
+// Validity line publishes them with (docs/metrics.md#validity-checks), so a
+// lead reads what the table means rather than working it out.
+func (v *Validation) verdicts() [][2]string {
+	var out [][2]string
+	for _, a := range v.Metrics {
+		if s, ok := a.Separation(); ok {
+			out = append(out, [2]string{a.Metric, s.Result() + "."})
+		}
+	}
+	return out
+}
 
 func (v *Validation) summary() string {
 	who := "no labeller named"
@@ -614,18 +634,26 @@ func (v *Validation) summary() string {
 func (v *Validation) writeText(p *printer) {
 	p.line("validate · " + provenanceText(v.Provenance))
 	p.wrapped("  ", "  ", v.summary())
-	p.wrapped("  ", "  ", "AUC: the chance a meaningful change scores above a routine one; 0.5 is chance; in parentheses, its 95% interval")
+	p.wrapped("  ", "  ", "AUC: the chance a meaningful change scores above a routine one; 0.5 is chance; in parentheses, its 95% interval. "+
+		"Size alone: the same for change size (lines added and removed), over the same changes")
 	p.blank()
 	if len(v.Metrics) == 0 {
 		p.line("  no ranked metric scored a labelled change")
 	} else {
 		cols := []column{{head: "metric"}, {head: "AUC", right: true}, {head: "n", right: true},
-			{head: "meaningful", right: true}, {head: "routine", right: true}, {head: "status"}}
+			{head: "meaningful", right: true}, {head: "routine", right: true}, {head: "size alone", right: true}, {head: "status"}}
 		var rows [][]string
 		for _, a := range v.Metrics {
 			rows = append(rows, aucRow(a))
 		}
 		p.textTable("  ", cols, rows)
+		if vs := v.verdicts(); len(vs) > 0 {
+			p.blank()
+			p.line("  What it says (docs/metrics.md#validity-checks)")
+			for _, x := range vs {
+				p.wrapped("  - ", "    ", x[0]+": "+x[1])
+			}
+		}
 		p.blank()
 		p.wrapped("  ", "  ", validateBar)
 	}
@@ -637,13 +665,14 @@ func (v *Validation) writeMarkdown(p *printer) {
 	p.blank()
 	p.line("- " + provenanceText(v.Provenance))
 	p.line("- " + v.summary())
-	p.line("- AUC: the chance a meaningful change scores above a routine one; 0.5 is chance. In parentheses, its 95% bootstrap interval.")
+	p.line("- AUC: the chance a meaningful change scores above a routine one; 0.5 is chance. In parentheses, its 95% bootstrap interval. " +
+		"Size alone: the same for change size (lines added and removed), over the same changes.")
 	p.blank()
 	if len(v.Metrics) == 0 {
 		p.line("No ranked metric scored a labelled change.")
 	} else {
 		cols := []column{{head: "Metric"}, {head: "AUC", right: true}, {head: "n", right: true},
-			{head: "Meaningful", right: true}, {head: "Routine", right: true}, {head: "Status"}}
+			{head: "Meaningful", right: true}, {head: "Routine", right: true}, {head: "Size alone", right: true}, {head: "Status"}}
 		var rows [][]string
 		for _, a := range v.Metrics {
 			row := aucRow(a)
@@ -651,6 +680,14 @@ func (v *Validation) writeMarkdown(p *printer) {
 			rows = append(rows, row)
 		}
 		p.mdTable(cols, rows)
+		if vs := v.verdicts(); len(vs) > 0 {
+			p.blank()
+			p.line("What it says (docs/metrics.md#validity-checks):")
+			p.blank()
+			for _, x := range vs {
+				p.line("- " + mdID(x[0]) + ": " + mdText(x[1]))
+			}
+		}
 		p.blank()
 		p.line(validateBar)
 	}
@@ -677,7 +714,7 @@ func (c *Catalog) writeText(p *printer) {
 			p.wrapped("  ", "  ", clean(d.Question))
 		}
 		for _, f := range [][2]string{{"unit", d.Unit}, {"eligibility", d.Eligibility}, {"blind spots", d.BlindSpots},
-			{"how it can be gamed", d.Gaming}, {"oracle", d.Oracle}, {"validity", d.Validity}} {
+			{"how it can be gamed", d.Gaming}, {"oracle", d.Oracle}, {"validity", ValidityNote(d)}} {
 			if f[1] != "" {
 				p.wrapped("  "+f[0]+": ", "    ", clean(f[1]))
 			}
@@ -712,7 +749,7 @@ func (c *Catalog) writeMarkdown(p *printer) {
 		}
 		var lines []string
 		for _, f := range [][2]string{{"Unit", d.Unit}, {"Eligibility", d.Eligibility}, {"Blind spots", d.BlindSpots},
-			{"How it can be gamed", d.Gaming}, {"Oracle", d.Oracle}, {"Validity", d.Validity}} {
+			{"How it can be gamed", d.Gaming}, {"Oracle", d.Oracle}, {"Validity", ValidityNote(d)}} {
 			if f[1] != "" {
 				lines = append(lines, "- "+f[0]+": "+mdText(f[1]))
 			}

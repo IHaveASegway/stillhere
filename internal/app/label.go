@@ -635,6 +635,7 @@ func (x *labelFactsIndex) change(c *metrics.Change, size, ago string) report.Lab
 		}
 	}
 	files := map[string]*report.LabelFile{}
+	var brought []*domain.Commit // the commits it brought in, below
 	for _, sha := range c.Landings {
 		for _, fc := range r.changes[sha] {
 			f := files[fc.Path]
@@ -656,25 +657,32 @@ func (x *labelFactsIndex) change(c *metrics.Change, size, ago string) report.Lab
 		if l == nil {
 			continue
 		}
-		// The commits a merge brought in, oldest first by committer time
-		// (Landing.Commits is sorted by SHA), then by author time, which a
-		// rebase that gave them one committer time kept in order; the
-		// landing's own subject is the title.
-		var brought []*domain.Commit
+		// The commits a merge brought in, and each landing of a change of
+		// several: a rebase merge puts each of its commits on the branch as
+		// a landing of its own. The landing's own subject is the title.
 		for _, k := range l.Commits {
-			if cm := r.commits[k]; k != sha && cm != nil && len(cm.Parents) < 2 && labelBlind(cm.Subject) != lc.Title {
+			if cm := r.commits[k]; (k != sha || len(c.Landings) > 1) && cm != nil && len(cm.Parents) < 2 && labelBlind(cm.Subject) != lc.Title {
 				brought = append(brought, cm)
 			}
 		}
+	}
+	// Oldest first. A rebase merge's landings come newest first
+	// (metrics.Change.Landings), one commit each, so reversed they are in
+	// the branch's order; a merge's commits by committer time
+	// (Landing.Commits is sorted by SHA), then by author time, which a
+	// rebase that gave them one committer time kept in order.
+	if len(c.Landings) > 1 {
+		slices.Reverse(brought)
+	} else {
 		slices.SortFunc(brought, func(a, b *domain.Commit) int {
 			return cmp.Or(a.CommitTime.Compare(b.CommitTime), a.AuthorTime.Compare(b.AuthorTime), cmp.Compare(a.SHA, b.SHA))
 		})
-		for _, cm := range brought {
-			if len(lc.Commits) < labelMaxCommits {
-				lc.Commits = append(lc.Commits, labelBlind(cm.Subject))
-			} else {
-				lc.MoreCommits++
-			}
+	}
+	for _, cm := range brought {
+		if len(lc.Commits) < labelMaxCommits {
+			lc.Commits = append(lc.Commits, labelBlind(cm.Subject))
+		} else {
+			lc.MoreCommits++
 		}
 	}
 	for _, f := range files {

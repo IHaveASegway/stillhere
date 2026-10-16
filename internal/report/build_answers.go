@@ -108,8 +108,8 @@ func NewExplain(in *ExplainInput) *Explain {
 		// where the share is (report-json.md, caveats).
 		e.Caveats = append(e.Caveats, aiLowerBound())
 	}
-	if in.Metric.Validity != "" {
-		e.Caveats = append(e.Caveats, Caveat{Code: codeValidity, Message: "Validity: " + in.Metric.Validity})
+	if note := ValidityNote(in.Metric); note != "" {
+		e.Caveats = append(e.Caveats, Caveat{Code: codeValidity, Message: "Validity: " + note})
 	}
 	return e
 }
@@ -536,26 +536,66 @@ func NewMe(in *MeInput) *Me {
 	return m
 }
 
+// ValidityNote is how far the metric m is validated, as a section about it
+// alone (its rank table, explain, the catalog) and its docs/metrics.md
+// Validity line say it: its validity note, such as the ranked metrics'
+// "Beta: not yet checked against a lead's labels", and its reference
+// result, "Reference (model panel, …): VERDICT: …", with what the source is
+// in plain words.
+func ValidityNote(m MetricInfo) string {
+	r := m.Reference
+	if r == nil {
+		return m.Validity
+	}
+	return strings.TrimSpace(m.Validity + " Reference (" + r.Source + "): " + r.Result + ". " + r.About)
+}
+
 // ValidityCaveats says how far the ranked metrics among ms are validated,
 // for an answer that shows their values, ranks or clusters: each one's
-// validity note (MetricInfo.Validity), such as durable@1's "Beta: not yet
-// checked against a lead's labels". A caveat goes where the number it
-// qualifies is (#48), so every answer that shows a ranked metric's number
-// carries its note, not its rank table alone (#69). Metrics that share a
-// note share one caveat, which names them; a metric that is not ranked, or
-// has no note, gets none, and a section about one metric alone (its rank
-// table, explain) words its own.
+// validity note and reference result (ValidityNote). A caveat goes where
+// the number it qualifies is (#48), so every answer that shows a ranked
+// metric's number carries its note, not its rank table alone (#69).
+// Metrics that share a note and a reference's source share one caveat,
+// which names them, says the note and the source once and then each one's
+// result by name (three ranked metrics, one caveat, not three that
+// repeat the mark and what a model panel is); a metric that is not ranked,
+// or has no note, gets none, and a section about one metric alone (its
+// rank table, explain) words its own.
 func ValidityCaveats(ms ...MetricInfo) []Caveat {
-	byNote := map[string][]string{} // a note → the ranked metrics that have it
+	type shared struct{ note, source, about string }
+	byNote := map[shared][]MetricInfo{} // what the metrics share → the ranked metrics that share it
 	for _, m := range ms {
-		if m.Ranked && m.Validity != "" && !slices.Contains(byNote[m.Validity], m.ID) {
-			byNote[m.Validity] = append(byNote[m.Validity], m.ID)
+		if !m.Ranked || m.Validity == "" {
+			continue
+		}
+		k := shared{note: m.Validity}
+		if m.Reference != nil {
+			k.source, k.about = m.Reference.Source, m.Reference.About
+		}
+		if !slices.ContainsFunc(byNote[k], func(x MetricInfo) bool { return x.ID == m.ID }) {
+			byNote[k] = append(byNote[k], m)
 		}
 	}
 	var out []Caveat
-	for note, ids := range byNote {
-		slices.Sort(ids)
-		out = append(out, Caveat{Code: codeValidity, Message: "Validity of " + joinNames(ids) + ": " + note})
+	for k, group := range byNote {
+		slices.SortFunc(group, func(a, b MetricInfo) int { return cmp.Compare(a.ID, b.ID) })
+		var ids, results []string
+		for _, m := range group {
+			ids = append(ids, m.ID)
+			if m.Reference != nil {
+				results = append(results, m.ID+" "+m.Reference.Result)
+			}
+		}
+		msg := "Validity of " + joinNames(ids) + ": "
+		switch {
+		case len(group) == 1:
+			msg += ValidityNote(group[0])
+		case k.source == "":
+			msg += k.note
+		default:
+			msg += strings.TrimSpace(k.note + " Reference (" + k.source + "): " + strings.Join(results, "; ") + ". " + k.about)
+		}
+		out = append(out, Caveat{Code: codeValidity, Message: msg})
 	}
 	slices.SortFunc(out, func(a, b Caveat) int { return cmp.Compare(a.Message, b.Message) })
 	return out

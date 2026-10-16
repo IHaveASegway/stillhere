@@ -136,9 +136,14 @@ refused with the calls that answer instead.
 - **The ranked metrics are beta** until a lead's labels clear the bar (the
   lead runs `stillhere label`, then `stillhere validate`; docs/validation.md);
   every answer that shows their values, ranks or clusters carries a `validity`
-  caveat that says so: repeat it with the numbers. You cannot label for the
-  user: labels are a person's judgment of colleagues' work, and only a lead's
-  count.
+  caveat that says so: repeat it with the numbers. The caveat also gives each
+  metric's reference result, a model panel's (three AI models that labelled
+  public changes without seeing any metric value: evidence, not a lead's
+  judgment), as a verdict such as "does not separate meaningful from routine
+  changes" with its numbers. Quote the verdict from the caveat word for word
+  with any rank you report from that metric, rather than from memory: it
+  changes when the panel runs again. You cannot label for the user: labels are
+  a person's judgment of colleagues' work, and only a lead's count.
 - Reviews appear only once the user has run `stillhere sync github` and scanned
   since. A `forge-incomplete` caveat means the last sync found pull requests on
   GitHub that the copy lacks: the review numbers it qualifies may be low. Say

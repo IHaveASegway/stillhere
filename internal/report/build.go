@@ -791,8 +791,11 @@ func (b *builder) rankTable(rs RankSet) RankTable {
 		t.Caveats = append(t.Caveats, Caveat{Code: codeNoValues,
 			Message: rs.Metric.ID + " counted no change in this scope, so nobody is ranked or listed."})
 	}
-	if rs.Metric.Validity != "" {
-		t.Caveats = append(t.Caveats, Caveat{Code: codeValidity, Message: "Validity: " + rs.Metric.Validity})
+	// JSON keeps the validity note in every table, so a table handed to an
+	// agent reads on its own; text and Markdown say it once, at the top of
+	// the report (runCaveats, Caveat.Standing).
+	if note := ValidityNote(rs.Metric); note != "" {
+		t.Caveats = append(t.Caveats, Caveat{Code: codeValidity, Message: "Validity: " + note})
 	}
 	return t
 }
