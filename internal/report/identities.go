@@ -45,21 +45,27 @@ type Identities struct {
 	Candidates []IdentityCandidate `json:"candidates"` // most confident first
 	Rules      []IdentityRule      `json:"rules"`      // every rule's definition, in order
 	Caveats    []Caveat            `json:"caveats"`
+	rewrites   bool                // the scope's facts show git's mailmap rewriting an email (domain.RepoFacts.Aliases)
 }
 
 // IdentityCandidate is a group of addresses that may belong to one person.
 type IdentityCandidate struct {
-	Confidence string            `json:"confidence"` // high, medium or low
-	Guess      bool              `json:"guess"`      // a hand-off: never suggested as certain
-	Commented  bool              `json:"commented"`  // the mailmap form writes its lines commented out: every candidate that is not high
-	Chained    bool              `json:"chained"`    // two of the addresses are linked only through a third
-	Rules      []string          `json:"rules"`      // the rules that link the addresses, in the order of rules
-	Name       string            `json:"name"`       // the display name suggested for the person; "" keeps each commit's own
-	Addresses  []IdentityAddress `json:"addresses"`  // by first activity; exactly one is canonical
-	Links      []IdentityLink    `json:"links"`      // each rule's evidence: which addresses it links
+	Confidence string `json:"confidence"` // high, medium or low: its weakest pair's
+	Guess      bool   `json:"guess"`      // a hand-off: never suggested as certain
+	// Commented: the mailmap form writes every line of the candidate
+	// commented out, since no two of its addresses are linked by
+	// high-confidence evidence. A high candidate's lines are all written as
+	// lines; a medium or low one's, those of its addresses marked high
+	// (IdentityAddress.High, #103), the others commented out.
+	Commented bool              `json:"commented"`
+	Chained   bool              `json:"chained"`   // two of the addresses are linked only through a third
+	Rules     []string          `json:"rules"`     // the rules that link the addresses, in the order of rules
+	Name      string            `json:"name"`      // the display name suggested for the person; "" keeps each commit's own
+	Addresses []IdentityAddress `json:"addresses"` // by first activity; exactly one is canonical
+	Links     []IdentityLink    `json:"links"`     // each rule's evidence: which addresses it links
 	// Mailmap holds the candidate's suggested .mailmap lines exactly as
-	// the mailmap form writes them (MailmapLines), commented out unless
-	// the candidate is high. They are made of addresses, so only an answer
+	// the mailmap form writes them (MailmapLines), each commented out
+	// unless high evidence backs it. They are made of addresses, so only an answer
 	// that may show emails asks for them (IdentitiesInput.Mailmap: the MCP
 	// server with --allow-emails); otherwise it is nil, null in JSON: an
 	// absent section, never [], which would read as no lines.
@@ -80,6 +86,23 @@ type IdentityAddress struct {
 	First        time.Time `json:"first"`       // the earliest author time of those commits
 	Last         time.Time `json:"last"`
 	Repos        []string  `json:"repos"` // the repositories' keys, sorted
+	// High: high-confidence evidence links this address to the canonical
+	// one and to every other address marked high (identity.Candidate.High,
+	// #103), so the lines that map it are written as lines. Every address
+	// of a high candidate is; in a medium or low one, those that GitHub's
+	// links or a local part not made from the name tie together, the
+	// canonical one included; in a candidate with no high pair, none.
+	High bool `json:"high"`
+	// Aliases counts the emails git's mailmap already rewrote to this
+	// address in the run's commits (identity.Address.Aliases, #53): lines
+	// a .mailmap holds, which the suggested lines follow, since git never
+	// chains two. The emails are only in the mailmap lines, which are made
+	// of emails and which only a reader that may see them asks for, so no
+	// other field carries an address a .mailmap folded away.
+	Aliases int `json:"aliases"`
+	// rewritten is what git rewrote to the address, each email with the
+	// names it was written with and where: the mailmap lines read it.
+	rewritten []identity.Alias
 }
 
 // IdentityLink is one rule's evidence in a candidate.
@@ -139,9 +162,21 @@ const identCodeMailmap = "mailmap-at-scan"
 
 // identNoChain says how git applies a mailmap, which a person editing one
 // must know: the caveat and the mailmap form's header both say it.
-const identNoChain = "git applies one .mailmap line per commit and never follows a chain: if an alias in a " +
-	"suggested line is already the canonical address of lines in a .mailmap, change those lines to the " +
-	"suggested canonical address too, or their commits stay apart and the next scan suggests the same line again"
+// rewrites says whether the facts show git rewriting any email: a run
+// that shows none either applied no line, or was scanned before stillhere
+// recorded what git rewrote, and the facts cannot tell which.
+func identNoChain(rewrites bool) string {
+	s := "git applies one .mailmap line per commit and never follows a chain, so where the run's commits show git " +
+		"rewriting other emails to a suggested alias, through lines a .mailmap already holds, the suggestion maps " +
+		"those emails, with the names they were written with, to the canonical address too, which replaces those " +
+		"lines however they match, and it writes no line git already applies wherever the address's commits are"
+	if rewrites {
+		return s
+	}
+	return s + "; this run's commits here show git rewriting no email, either because no .mailmap line applied or " +
+		"because the run was scanned before stillhere recorded what git rewrote, and then change such lines to " +
+		"the suggested canonical address yourself"
+}
 
 // NewIdentities builds the identities answer. Like every answer, it arranges
 // what another package computed, identity.Candidates here, and computes
@@ -160,6 +195,9 @@ func NewIdentities(in *IdentitiesInput) *Identities {
 	names := map[string]string{}
 	for i := range fs.Repos {
 		names[fs.Repos[i].Repo.Key] = fs.Repos[i].Repo.Name
+	}
+	for i := range fs.Repos {
+		id.rewrites = id.rewrites || len(fs.Repos[i].Aliases) > 0
 	}
 	if s := in.Survey; s != nil {
 		id.Addresses, id.Bots, id.Shared, id.Oversized = s.Addresses, s.Bots, s.Shared, s.Oversized
@@ -182,7 +220,7 @@ func NewIdentities(in *IdentitiesInput) *Identities {
 		Code: identCodeMailmap,
 		Message: "These are the run's addresses, which git mailmapped when the run was scanned: an address the " +
 			"mailmap merged is in no candidate, and a .mailmap line added since takes effect at the next scan. " +
-			identSentence(identNoChain) + ".",
+			identSentence(identNoChain(id.rewrites)) + ".",
 	})
 	return id
 }
@@ -193,19 +231,20 @@ func identCandidate(c *identity.Candidate, names map[string]string, who People) 
 	out := IdentityCandidate{
 		Confidence: string(c.Confidence),
 		Guess:      c.Guess,
-		Commented:  c.Confidence != identity.ConfidenceHigh,
+		Commented:  len(c.High) == 0,
 		Chained:    c.Chained,
 		Name:       name,
 	}
 	for _, r := range c.Rules() {
 		out.Rules = append(out.Rules, string(r))
 	}
-	for _, a := range c.Addresses {
+	for i, a := range c.Addresses {
 		name, withheld := shown(a.Name)
 		out.Addresses = append(out.Addresses, IdentityAddress{
 			Email: a.Email, Name: name, NameWithheld: withheld, DomainKind: string(a.Domain),
 			Canonical: a.Email == c.Canonical, Commits: a.Commits, CoAuthored: a.CoAuthored,
-			First: a.First, Last: a.Last, Repos: slices.Clone(a.Repos),
+			First: a.First, Last: a.Last, Repos: slices.Clone(a.Repos), High: slices.Contains(c.High, i),
+			Aliases: len(a.Aliases), rewritten: slices.Clone(a.Aliases),
 		})
 	}
 	for _, l := range c.Links {
@@ -272,7 +311,7 @@ func identSummary(id *Identities) string {
 	}
 	if id.Shared > 0 {
 		aside = append(aside, plural(id.Shared, "shared address", "shared addresses")+
-			" (a role mailbox, or several people's names) compared with nothing")
+			" (a role mailbox, or several people's names) that no rule linked")
 	}
 	if id.Oversized > 0 {
 		// identity's limit on a candidate's addresses (candMaxShare).
@@ -431,6 +470,8 @@ func identWhy(c IdentityCandidate, esc, path func(string) string) []string {
 			}
 		case identity.RuleSameAccount:
 			out = append(out, which+" are GitHub noreply addresses of one account")
+		case identity.RuleSameForgeAccount:
+			out = append(out, "GitHub attributes the commits of "+which+" to one account")
 		case identity.RuleHandOff:
 			if h, ok := identHandOffText(l, esc, path); ok {
 				out = append(out, h)
@@ -439,6 +480,47 @@ func identWhy(c IdentityCandidate, esc, path func(string) string) []string {
 	}
 	if c.Chained {
 		out = append(out, "two of these addresses share nothing and are linked only through another, so the candidate is low")
+	}
+	// #103: the addresses high evidence ties together in a weaker candidate.
+	var high []int
+	for i, a := range c.Addresses {
+		if a.High {
+			high = append(high, i)
+		}
+	}
+	if len(high) > 0 && len(high) < len(c.Addresses) {
+		out = append(out, identWhich(high, len(c.Addresses))+" are linked to one another by high-confidence evidence, so "+
+			"their lines are written as lines")
+	}
+	// #53: what the .mailmap lines git already applies change in the lines.
+	var canonical IdentityAddress
+	for _, a := range c.Addresses {
+		if a.Canonical {
+			canonical = a
+		}
+	}
+	for i, a := range c.Addresses {
+		if a.Canonical {
+			continue
+		}
+		switch everywhere, somewhere := identApplied(canonical, a); {
+		case everywhere:
+			out = append(out, fmt.Sprintf("a .mailmap line already maps address %d to the canonical address wherever its "+
+				"commits are, so it gets no line of its own", i+1))
+		case somewhere:
+			out = append(out, fmt.Sprintf("a .mailmap line maps address %d to the canonical address in some repositories "+
+				"only, and a repository's own .mailmap applies only inside it, so address %d still gets a line", i+1, i+1))
+		}
+		switch n := a.Aliases; {
+		case n == 1:
+			out = append(out, fmt.Sprintf("address %d is where a .mailmap line maps another address, which git does not "+
+				"follow on to the canonical address, so that address gets a line of its own, naming what the line it "+
+				"replaces matched", i+1))
+		case n > 1:
+			out = append(out, fmt.Sprintf("address %d is where .mailmap lines map %d other addresses, which git does not "+
+				"follow on to the canonical address, so each gets a line of its own, naming what the line it replaces "+
+				"matched", i+1, n))
+		}
 	}
 	return out
 }
@@ -500,9 +582,9 @@ func identGap(d time.Duration) string {
 	return plural(max(1, int(math.Round(d.Minutes()))), "minute", "minutes")
 }
 
-// identCommentedNote explains a candidate whose lines are commented out:
-// on a page, where the mailmap form writes them so; in that form, above
-// them.
+// identCommentedNote explains a candidate some or all of whose lines are
+// commented out (identSomeCommented): on a page, where the mailmap form
+// writes them so; in that form, above them.
 func identCommentedNote(c IdentityCandidate, inMailmap bool) string {
 	what := "a weak match"
 	switch {
@@ -511,10 +593,23 @@ func identCommentedNote(c IdentityCandidate, inMailmap bool) string {
 	case c.Confidence == string(identity.ConfidenceMedium):
 		what = "a match on the display name, which two people of one name would also make"
 	}
-	if inMailmap {
+	switch {
+	case !c.Commented && inMailmap:
+		return "the other addresses are " + what + ", so their lines are commented out: uncomment them only if you know " +
+			"these addresses are one person"
+	case !c.Commented:
+		return "the other addresses are " + what + ": the mailmap form writes their lines commented out, to uncomment " +
+			"only if you know it is one person"
+	case inMailmap:
 		return what + ", so its lines are commented out: uncomment them only if you know these addresses are one person"
 	}
 	return what + ": the mailmap form writes its lines commented out, to uncomment only if you know it is one person"
+}
+
+// identSomeCommented reports whether the mailmap form writes any of a
+// candidate's lines commented out: every candidate that is not high.
+func identSomeCommented(c IdentityCandidate) bool {
+	return c.Confidence != string(identity.ConfidenceHigh)
 }
 
 // identRules are the definitions of the rules the candidates use, in order.
@@ -552,7 +647,7 @@ func (id *Identities) writeText(p *printer) {
 		for _, why := range identWhy(c, clean, clean) {
 			p.wrapped("   ", "     ", why)
 		}
-		if c.Commented {
+		if identSomeCommented(c) {
 			p.wrapped("   ", "     ", identCommentedNote(c, false))
 		}
 	}
@@ -601,7 +696,7 @@ func (id *Identities) writeMarkdown(p *printer) {
 		for _, why := range identWhy(c, mdText, mdCode) {
 			p.line("- " + identSentence(why) + ".")
 		}
-		if c.Commented {
+		if identSomeCommented(c) {
 			p.line("- " + identSentence(identCommentedNote(c, false)) + ".")
 		}
 	}
@@ -647,9 +742,10 @@ func (id *Identities) writeMailmap(p *printer) {
 	p.wrapped("# ", "# ", "Suggested .mailmap lines for a person to review: stillhere applies none, because git's "+
 		"mailmap is the only identity store. A wrong line merges two people into one who does not exist, so read "+
 		"each candidate's evidence before adding its lines to a .mailmap, or to the file --mailmap names. Only a "+
-		"candidate with evidence the display name does not explain (one GitHub account, or a local part not made "+
-		"from the name) is written as lines; every other one's lines are commented out: uncomment them only if "+
-		"you know the addresses are one person. "+identSentence(identNoChain)+". A line takes effect at the next scan.")
+		"line with evidence the display name does not explain (one GitHub account, or a local part not made "+
+		"from the name) between its addresses is written as a line; every other line is commented out: uncomment "+
+		"it only if you know the addresses are one person. "+identSentence(identNoChain(id.rewrites))+
+		". A line takes effect at the next scan.")
 	p.wrapped("# ", "# ", identSummary(id))
 	if len(id.Candidates) == 0 {
 		p.line("#")
@@ -665,7 +761,7 @@ func (id *Identities) writeMailmap(p *printer) {
 		for _, why := range identWhy(c, clean, clean) {
 			p.wrapped("#   ", "#     ", why)
 		}
-		if c.Commented {
+		if identSomeCommented(c) {
 			p.wrapped("#   ", "#     ", identCommentedNote(c, true))
 		}
 		for _, line := range identLines(c) {
@@ -673,34 +769,42 @@ func (id *Identities) writeMailmap(p *printer) {
 				p.wrapped("#   ", "#     ", "this line cannot be a .mailmap line: a name or an address in it holds "+
 					"< or >, a control character, or a name starts with #")
 			}
-			p.line(line.mailmap(c.Commented))
+			p.line(line.mailmap())
 		}
 	}
 }
 
 // MailmapLines returns a candidate's suggested .mailmap lines exactly as
-// the mailmap form writes them: as lines for a high candidate, commented
-// out ("# ") for every other one, and a line git could not read as the
+// the mailmap form writes them: as lines where high evidence backs them (a
+// high candidate's, and a weaker one's between its addresses marked high),
+// commented out ("# ") otherwise, and a line git could not read as the
 // mapping it means commented out and escaped. The mailmap form and an
 // answer that carries the lines (IdentityCandidate.Mailmap) both write
 // them through it, so the two cannot drift.
 func MailmapLines(c IdentityCandidate) []string {
 	var out []string
 	for _, line := range identLines(c) {
-		out = append(out, line.mailmap(c.Commented))
+		out = append(out, line.mailmap())
 	}
 	return out
 }
 
 // identLine is one .mailmap line: name and canonical replace a commit's
-// name and email when the commit's email is alias; with alias "", the line
-// replaces only the name of canonical's own commits.
-type identLine struct{ name, canonical, alias string }
+// name and email when the commit's email is alias and, when aliasName is
+// not "", its name is aliasName (git compares names without case); with
+// alias "", the line replaces only the name of canonical's own commits.
+type identLine struct {
+	name, canonical, aliasName, alias string
+	commented                         bool // no high evidence links alias to canonical
+}
 
 func (l identLine) text() string {
 	s := "<" + l.canonical + ">"
 	if l.name != "" {
 		s = l.name + " " + s
+	}
+	if l.aliasName != "" {
+		s += " " + l.aliasName
 	}
 	if l.alias != "" {
 		s += " <" + l.alias + ">"
@@ -708,14 +812,14 @@ func (l identLine) text() string {
 	return s
 }
 
-// mailmap is the line as the mailmap form writes it: commented out when its
-// candidate's lines are (commented), and, when git could not read it as
-// the mapping it means (identSafe), commented out with its text escaped.
-func (l identLine) mailmap(commented bool) string {
+// mailmap is the line as the mailmap form writes it: commented out when no
+// high evidence backs it, and, when git could not read it as the mapping it
+// means (identSafe), commented out with its text escaped.
+func (l identLine) mailmap() string {
 	switch {
 	case !identSafe(l):
 		return "# " + clean(l.text())
-	case commented:
+	case l.commented:
 		return "# " + l.text()
 	}
 	return l.text()
@@ -723,6 +827,21 @@ func (l identLine) mailmap(commented bool) string {
 
 // identLines are a candidate's .mailmap lines: one per alias, after a line
 // that gives the canonical address the suggested name when its own differs.
+// A line is commented out unless high evidence links its alias to the
+// canonical address (IdentityAddress.High); the name line, unless any does.
+//
+// git applies one line per commit and never follows a chain (#53), so an
+// alias that is itself the canonical address of lines git applied (what git
+// already rewrote to it) gets a line for each of those emails too, mapping
+// them to the candidate's canonical address directly. Such a line names the
+// email and each name it was written with: git prefers a line that matches
+// a commit's name and email over one that matches its email alone,
+// whatever their order, so only that form replaces both kinds of line. It
+// also maps no commit the line it replaces did not, where a line of the
+// email alone would take the commits a name-keyed line left out on purpose,
+// as when one mailbox is split between two people. And an alias git
+// already rewrites to the canonical address wherever its commits are gets
+// no line of its own: it is there (identApplied).
 func identLines(c IdentityCandidate) []identLine {
 	var canonical *IdentityAddress
 	for i := range c.Addresses {
@@ -735,14 +854,61 @@ func identLines(c IdentityCandidate) []identLine {
 	}
 	var out []identLine
 	if c.Name != "" && c.Name != canonical.Name {
-		out = append(out, identLine{name: c.Name, canonical: canonical.Email})
+		out = append(out, identLine{name: c.Name, canonical: canonical.Email, commented: c.Commented})
+	}
+	mapped := map[[2]string]bool{} // the email and name a line already maps: git keeps the last line for one
+	line := func(alias, aliasName string, commented bool) {
+		key := [2]string{alias, strings.ToLower(aliasName)}
+		if !mapped[key] {
+			mapped[key] = true
+			out = append(out, identLine{name: c.Name, canonical: canonical.Email, aliasName: aliasName, alias: alias,
+				commented: commented})
+		}
 	}
 	for _, a := range c.Addresses {
-		if !a.Canonical {
-			out = append(out, identLine{name: c.Name, canonical: canonical.Email, alias: a.Email})
+		if a.Canonical {
+			continue
+		}
+		if everywhere, _ := identApplied(*canonical, a); !everywhere {
+			line(a.Email, "", !a.High)
+		}
+		for _, al := range a.rewritten {
+			if len(al.Names) == 0 {
+				line(al.Email, "", !a.High)
+			}
+			for _, name := range al.Names {
+				line(al.Email, name, !a.High)
+			}
 		}
 	}
 	return out
+}
+
+// identApplied reports whether git already rewrites a's own commits to the
+// address to wherever they are (everywhere), and whether a .mailmap line
+// maps a there in any repository at all (somewhere). A repository's own
+// .mailmap applies only inside it, so a line one repository holds does
+// nothing for a's commits in another. And an address a .mailmap rewrites
+// appears in no fact of its repository but as the target of other lines (a's
+// own aliases there): where a appears without such a chain, some of its
+// commits were left as they were, by a line keyed by a name they do not
+// carry, and a still needs its line.
+func identApplied(to, a IdentityAddress) (everywhere, somewhere bool) {
+	in := func(list []identity.Alias, email, repo string) bool {
+		return slices.ContainsFunc(list, func(al identity.Alias) bool {
+			return (email == "" || al.Email == email) && slices.Contains(al.Repos, repo)
+		})
+	}
+	for _, al := range to.rewritten {
+		somewhere = somewhere || al.Email == a.Email
+	}
+	everywhere = somewhere && len(a.Repos) > 0
+	for _, repo := range a.Repos {
+		if !in(to.rewritten, a.Email, repo) || !in(a.rewritten, "", repo) {
+			everywhere = false
+		}
+	}
+	return everywhere, somewhere
 }
 
 // identSafe reports whether git reads the line as the mapping it means, and
@@ -755,7 +921,8 @@ func identSafe(l identLine) bool {
 			return r == '<' || r == '>' || unicode.IsControl(r) || unicode.Is(unicode.Cf, r) || r == utf8.RuneError
 		})
 	}
-	return l.canonical != "" && ok(l.canonical) && ok(l.alias) && ok(l.name) && !strings.HasPrefix(l.name, "#")
+	return l.canonical != "" && ok(l.canonical) && ok(l.alias) && ok(l.name) && ok(l.aliasName) &&
+		!strings.HasPrefix(l.name, "#")
 }
 
 // identSentence starts s with a capital letter.

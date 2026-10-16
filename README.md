@@ -82,6 +82,14 @@ A first `sync github` reads the pull requests updated in the last 365 days, the 
 
 Each mirror gets a commit-graph with changed-path filters (git 2.46 or later; on 2.45, a commit-graph without them), which made `scan`'s blame about three times faster on the same facts. `scan` never writes into your own clones; when blame in one is slow, it logs the command that does the same there: `git -c commitGraph.changedPathsVersion=2 commit-graph write --reachable --changed-paths` (version 2 filters, which read the same on every platform; on git 2.45, `git commit-graph write --reachable`).
 
+One person who committed from several addresses counts as several people, and an old address of someone still active looks like knowledge that left. `report` says so where the numbers are: knowledge loss and concentration carry an `unmerged-identities` caveat with the range (as keyed, with the high-confidence lines merged, with every candidate merged) wherever merging would move them. To merge them, review and add the suggested lines, then scan again; the high-confidence ones, such as two addresses GitHub attributes to one account after `sync github`, are written as lines and the rest commented out:
+
+```sh
+stillhere identities                                # the candidates, with the evidence for each
+stillhere identities --format mailmap >> .mailmap   # review, uncomment what you know to be one person
+stillhere scan ~/src/acme                           # the merges take effect at the next scan
+```
+
 In Docker, mount the repositories and run as the user who owns them, because git refuses to read a repository that belongs to someone else ("dubious ownership"):
 
 ```sh

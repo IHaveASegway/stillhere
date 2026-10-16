@@ -156,7 +156,21 @@ answer, and say if a later one carries `run-changed`.
 6. `who_knows(path: "", repo: R)` for the repositories that matter, then for
    their hot paths: owners, authors, recent landers and reviewers.
 7. `identity_candidates(scope: P)`: addresses that may be one person, which
-   split a person's numbers until a `.mailmap` line merges them.
+   split a person's numbers until a `.mailmap` line merges them. It lists the
+   run's candidates with an address in the scope, each with all its
+   addresses, so one whose old address is in this repository and active one
+   in another is there: every candidate the scope's caveat counts, and those
+   whose addresses there hold no surviving line. A high one (GitHub
+   attributes both addresses to one account, `same-forge-account`) is near
+   certain; a medium or low one needs the user's word, except its addresses
+   marked `high`, whose lines are as sure. Knowledge loss and concentration
+   count each address apart, so state them as a range: their `if_merged` (and
+   the `unmerged-identities` caveat, present when merging moves a number)
+   give the value as keyed, with the high-confidence lines merged and with
+   every candidate merged, such as "56.6% as keyed, 52.2% with the
+   high-confidence merges, as low as 17.6% with every candidate merged".
+   To fix the numbers, the user adds the lines (`stillhere identities --format
+   mailmap`) to the `.mailmap` and scans again.
 8. `metrics(metric: M)` before you explain any of `M`'s numbers, and
    `explain(metric, subject, subject_kind)` for a number worth tracing.
 

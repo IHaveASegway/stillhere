@@ -76,6 +76,10 @@ type HistoryFacts struct {
 	// Warnings holds shallow-window when a shallow clone's history ends
 	// inside what the window needs, sorted by Code, then Message.
 	Warnings []domain.Warning
+	// Aliases are the emails git's mailmap rewrote in the commits
+	// collected, their authors' (%ae beside %aE) and their trailers' (git
+	// check-mailmap), sorted (#53, domain.RepoFacts.Aliases).
+	Aliases []domain.Alias
 }
 
 // History walks the first-parent history of repo.Head over opt.Window and
@@ -128,6 +132,7 @@ func History(ctx context.Context, git domain.GitRunner, repo domain.Repo, opt Hi
 		lines:   !repo.Partial,
 		commits: make(map[string]*historyCommit),
 		changes: make(map[historyChangeKey]*domain.FileChange),
+		aliases: aliasSet{},
 	}
 	if err := h.run(ctx); err != nil {
 		return nil, fmt.Errorf("collect.History: %s: %w", repo.Name, err)
@@ -169,6 +174,7 @@ type historyRun struct {
 	reverts  []domain.Revert
 	first    time.Time
 	warnings []domain.Warning
+	aliases  aliasSet // what the mailmap rewrote (#53)
 }
 
 // historyCommit is a commit with its co-authors as its trailers wrote them,
@@ -295,6 +301,7 @@ func (h *historyRun) add(rec *historyRecord) error {
 		return fmt.Errorf("git printed commit %s twice", sha)
 	}
 	h.commits[sha] = &historyCommit{commit: rec.commit, coAuthors: rec.coAuthors}
+	h.aliases.add(rec.written, rec.commit.Author.Email)
 	if h.repo.Shallow && len(rec.commit.Parents) == 0 {
 		// The clone's boundary: its numstat is its whole tree, not its change.
 		h.cut = append(h.cut, sha)
@@ -450,7 +457,7 @@ func (h *historyRun) canonicalise(ctx context.Context) error {
 			raw[sha] = c.coAuthors
 		}
 	}
-	canonical, err := coAuthorCanonical(ctx, h.git, h.repo, raw)
+	canonical, err := coAuthorCanonical(ctx, h.git, h.repo, raw, h.aliases)
 	if err != nil {
 		return err
 	}
@@ -462,7 +469,7 @@ func (h *historyRun) canonicalise(ctx context.Context) error {
 
 // facts assembles the result, sorted as HistoryFacts documents.
 func (h *historyRun) facts() *HistoryFacts {
-	f := &HistoryFacts{FirstCommit: h.first, Warnings: h.warnings}
+	f := &HistoryFacts{FirstCommit: h.first, Warnings: h.warnings, Aliases: h.aliases.sorted()}
 	for _, c := range h.commits {
 		f.Commits = append(f.Commits, c.commit)
 	}

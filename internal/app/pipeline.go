@@ -280,7 +280,7 @@ func collectRepo(ctx context.Context, d Deps, job repoJob, opt collectOptions) (
 		Repo: repo, Status: domain.RepoStatusOK,
 		Warnings:    repoWarnings(repo, job.warnings, asOf, h.Warnings),
 		FirstCommit: h.FirstCommit, History: opt.window,
-		Commits: h.Commits, Landings: h.Landings, Changes: h.Changes, Reverts: h.Reverts,
+		Commits: h.Commits, Landings: h.Landings, Changes: h.Changes, Reverts: h.Reverts, Aliases: h.Aliases,
 	}
 	// A partial clone is classified too: its tree lists every path at HEAD
 	// with lazy fetch off, and where its blobs are absent, ClassifyPaths
@@ -323,6 +323,7 @@ func collectRepo(ctx context.Context, d Deps, job repoJob, opt collectOptions) (
 		}
 		rf.LineFacts = lineFacts
 		rf.Owners, rf.IgnoreRevs, rf.BlameErrors = bf.Owners, bf.IgnoreRevs, bf.Errors
+		rf.Aliases = collect.MergeAliases(rf.Aliases, bf.Aliases)
 		rf.Warnings = repoWarnings(repo, rf.Warnings, bf.Warnings)
 		if lineFacts && snap.Below > 0 {
 			rf.Warnings = repoWarnings(repo, rf.Warnings, []domain.Warning{snapshotDatedAfterNow(repo, opt.now, snap)})

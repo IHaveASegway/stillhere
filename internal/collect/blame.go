@@ -94,6 +94,10 @@ type BlameFacts struct {
 	// repository's own .git-blame-ignore-revs was not used, or not whole.
 	// The caller adds it to RepoFacts.Warnings.
 	Warnings []domain.Warning
+	// Aliases are the emails git's mailmap rewrote in the blamed commits,
+	// their authors' and their trailers', sorted (#53): blamed commits can
+	// be older than any history window, as an alias's commits often are.
+	Aliases []domain.Alias
 }
 
 // Blame attributes the non-blank lines of every path in opt.Paths at
@@ -165,9 +169,11 @@ func Blame(ctx context.Context, git domain.GitRunner, repo domain.Repo, opt Blam
 		}
 		facts.Owners = append(facts.Owners, r.owners...)
 	}
-	if err := blameCoAuthors(ctx, git, repo, facts.Owners); err != nil {
+	aliases := aliasSet{}
+	if err := blameCoAuthors(ctx, git, repo, facts.Owners, aliases); err != nil {
 		return nil, fmt.Errorf("collect.Blame: %w", err)
 	}
+	facts.Aliases = aliases.sorted()
 
 	slices.SortFunc(facts.Owners, func(a, b domain.LineOwner) int {
 		return cmp.Or(strings.Compare(a.Path, b.Path), strings.Compare(a.Commit, b.Commit),
@@ -296,8 +302,9 @@ func (b *blamer) args(path string) []string {
 // blameCoAuthors sets CoAuthors on every owner from its commit's
 // Co-authored-by trailers, read with one coAuthors call (coauthors.go) for
 // the distinct blamed commits. Blamed commits can be older than any history
-// window, so the history's commits cannot supply them.
-func blameCoAuthors(ctx context.Context, git domain.GitRunner, repo domain.Repo, owners []domain.LineOwner) error {
+// window, so the history's commits cannot supply them. The same call adds
+// to aliases what the mailmap rewrote in those commits.
+func blameCoAuthors(ctx context.Context, git domain.GitRunner, repo domain.Repo, owners []domain.LineOwner, aliases aliasSet) error {
 	if len(owners) == 0 {
 		return nil
 	}
@@ -307,7 +314,7 @@ func blameCoAuthors(ctx context.Context, git domain.GitRunner, repo domain.Repo,
 	}
 	slices.Sort(shas)
 	shas = slices.Compact(shas)
-	co, err := coAuthors(ctx, git, repo, shas)
+	co, err := coAuthors(ctx, git, repo, shas, aliases)
 	if err != nil {
 		return fmt.Errorf("co-authors of %d blamed commits: %w", len(shas), err)
 	}

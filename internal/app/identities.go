@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
 	"github.com/IHaveASegway/stillhere/internal/identity"
@@ -30,9 +31,13 @@ type IdentitiesRequest struct {
 // tables tell bots and agents apart, and never its metric values: the
 // candidates come from the facts alone, so the use case reads less than
 // the report does. Display names come from the whole run, as every other
-// page names people; the candidates come from the scope's repositories. A
-// scope that names no group or repository of the run is a
-// *domain.UsageError.
+// page names people, and so do the candidates, as the scan finds them for
+// the unmerged-identities caveat (#104): a scoped answer lists the run's
+// candidates with an address in the scope's repositories, each whole,
+// since the person's other addresses, in other repositories, are the ones
+// a .mailmap line must name. Its counts of addresses, bots, shared
+// addresses and oversized groups are the scope's own. A scope that names no
+// group or repository of the run is a *domain.UsageError.
 func Identities(ctx context.Context, d Deps, r IdentitiesRequest) (*report.Identities, error) {
 	d, err := d.ready("app.Identities", false, false, true)
 	if err != nil {
@@ -50,16 +55,35 @@ func Identities(ctx context.Context, d Deps, r IdentitiesRequest) (*report.Ident
 	if err != nil {
 		return nil, fmt.Errorf("reading run %d's facts: %w", run.ID, err)
 	}
+	// The run's own GitHub data (ADR 0011): GitHub's links from commits to
+	// accounts are the same-forge-account rule's evidence (#103).
+	fs, forge, _, err := withForge(ctx, d, run, fs)
+	if err != nil {
+		return nil, err
+	}
 	scoped, scope, err := identitiesScope(fs, r.Scope, run.ID)
 	if err != nil {
 		return nil, err
 	}
-	forge, err := readForge(ctx, d, run)
-	if err != nil {
-		return nil, err
-	}
 	who := identity.New(fs, p)
-	survey := identity.Candidates(scoped, who)
+	survey := identity.Candidates(fs, who)
+	if scope.Kind != domain.ScopeAll {
+		own := identity.Candidates(scoped, who) // the scope's own population
+		in := map[string]bool{}
+		for i := range scoped.Repos {
+			in[scoped.Repos[i].Repo.Key] = true
+		}
+		within := *own
+		within.Candidates = nil
+		for _, c := range survey.Candidates {
+			if slices.ContainsFunc(c.Addresses, func(a identity.Address) bool {
+				return slices.ContainsFunc(a.Repos, func(r string) bool { return in[r] })
+			}) {
+				within.Candidates = append(within.Candidates, c)
+			}
+		}
+		survey = &within
+	}
 	d.Log.Debug("identity candidates", "run", run.ID, "addresses", survey.Addresses, "candidates", len(survey.Candidates))
 	return report.NewIdentities(&report.IdentitiesInput{Run: &run, Facts: scoped, Scope: scope, Survey: survey, Who: who,
 		Forge: forge, Mailmap: r.Mailmap}), nil

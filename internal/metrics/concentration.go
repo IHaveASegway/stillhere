@@ -22,7 +22,10 @@ func (knowledgeConcentrationV1) Definition() Definition {
 		Unit: "Authors in the prefix, per repository (subject repo), per top-level directory (subject area, \"<repo key>:<dir>/\") " +
 			"and per group (subject group, the walk re-run on the summed columns). Sort people by majority_files descending, prod " +
 			"lines descending, email ascending, and walk until the running sum of majority_files is at least files_with_majority / 2. " +
-			"Detail: files_with_majority (each file once, even with two owners), bots_in_prefix, prod_files.",
+			"Detail: files_with_majority (each file once, even with two owners), bots_in_prefix, prod_files; and, when identity " +
+			"candidates hold lines in the area, identity_candidates, identity_candidates_high, and if_merged and if_all_merged, " +
+			"authors_in_prefix with the high-confidence lines (identity.Candidate.High) and with every candidate merged into " +
+			"one person each.",
 		Ranked:      false,
 		Subjects:    []string{domain.SubjectRepo, domain.SubjectArea, domain.SubjectGroup},
 		Eligibility: "Not ranked: it describes code, not people.",
@@ -95,12 +98,28 @@ func byTopDir(files []*fileView) []area {
 // concentration runs the walk over files. ok is false when no file has a
 // majority owner, which leaves nothing to walk.
 func concentration(v *view, s domain.Scope, sub domain.Subject, files []*fileView) (domain.MetricValue, bool) {
+	authors, bots, withMajority := concentrationWalk(v, files)
+	if withMajority == 0 {
+		return domain.MetricValue{}, false
+	}
+	detail := map[string]float64{
+		"files_with_majority": float64(withMajority),
+		"bots_in_prefix":      float64(bots),
+		"prod_files":          float64(len(files)),
+	}
+	v.concentrationIfMerged(detail, files) // #104: identities.go
+	return count(knowledgeConcentrationID, s, sub, domain.Window{}, authors, 0, detail), true
+}
+
+// concentrationWalk runs the walk over files: the authors in the prefix,
+// the bots among them, and the files with a majority owner, which leave
+// nothing to walk when there are none.
+func concentrationWalk(v *view, files []*fileView) (authors, bots, withMajority int) {
 	type person struct {
 		email           string
 		majority, lines int
 	}
 	people := make(map[string]*person)
-	withMajority := 0
 	for _, f := range files {
 		if len(f.owners) > 0 {
 			withMajority++
@@ -113,7 +132,7 @@ func concentration(v *view, s domain.Scope, sub domain.Subject, files []*fileVie
 		}
 	}
 	if withMajority == 0 {
-		return domain.MetricValue{}, false
+		return 0, 0, 0
 	}
 	var walk []*person
 	for email, p := range people {
@@ -125,7 +144,7 @@ func concentration(v *view, s domain.Scope, sub domain.Subject, files []*fileVie
 	slices.SortFunc(walk, func(a, b *person) int {
 		return cmp.Or(cmp.Compare(b.majority, a.majority), cmp.Compare(b.lines, a.lines), cmp.Compare(a.email, b.email))
 	})
-	authors, bots, running := 0, 0, 0
+	running := 0
 	for _, p := range walk {
 		authors++
 		if v.who.Bot(p.email) {
@@ -136,9 +155,5 @@ func concentration(v *view, s domain.Scope, sub domain.Subject, files []*fileVie
 			break
 		}
 	}
-	return count(knowledgeConcentrationID, s, sub, domain.Window{}, authors, 0, map[string]float64{
-		"files_with_majority": float64(withMajority),
-		"bots_in_prefix":      float64(bots),
-		"prod_files":          float64(len(files)),
-	}), true
+	return authors, bots, withMajority
 }

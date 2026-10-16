@@ -86,6 +86,9 @@ func NewExplain(in *ExplainInput) *Explain {
 			e.Caveats = append(e.Caveats, c)
 		}
 	}
+	if c, ok := explainCandidates(in.Values, in.Commands); ok {
+		e.Caveats = append(e.Caveats, c)
+	}
 	if in.Metric.ID == MetricAIAssisted && len(e.Values) > 0 {
 		// A page that holds an AI-assisted share says it is a lower bound,
 		// where the share is (report-json.md, caveats).
@@ -95,6 +98,28 @@ func NewExplain(in *ExplainInput) *Explain {
 		e.Caveats = append(e.Caveats, Caveat{Code: codeValidity, Message: "Validity: " + in.Metric.Validity})
 	}
 	return e
+}
+
+// explainCandidates is the unmerged-identities caveat (#104) of an
+// explanation of knowledge_loss@1 or knowledge_concentration@1 whose value
+// identity candidates hold lines in: about a repository, a group or an
+// area, as a card and an overview carry it (candidatesCaveat).
+func explainCandidates(values []domain.MetricValue, cmds Commands) (Caveat, bool) {
+	for _, v := range values {
+		switch v.Metric.String() {
+		case MetricKnowledgeLoss:
+			s := &Share{Metric: MetricKnowledgeLoss, Num: v.Num, Den: v.Den, Value: v.Value, IfMerged: shareIfMerged(v)}
+			if c, ok := candidatesCaveat(s, nil, 0, cmds); ok {
+				return c, true
+			}
+		case MetricConcentration:
+			conc := &Concentration{Metric: MetricConcentration, AuthorsInPrefix: count(v.Value), IfMerged: concentrationIfMerged(v)}
+			if c, ok := candidatesCaveat(nil, conc, 0, cmds); ok {
+				return c, true
+			}
+		}
+	}
+	return Caveat{}, false
 }
 
 // sortChanges orders an explanation's changes by repository, then landing

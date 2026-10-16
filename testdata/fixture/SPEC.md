@@ -828,6 +828,88 @@ The noreply address is never preferred, so `pia@example.com` is canonical. A nam
 
 The sibling has no hand-off. The only addresses with no commit since 2026-07-09 are Uma (U0, 2025-09-15: the next address to begin, Lena, began 49 days later), Claude Dupont (Q1, 2026-03-09: no address began in the 30 days after it, and none stopped in the 30 days before it) and, without the mailmap, Pia's noreply address, which Pia's candidate holds.
 
+### Ada: high, by GitHub's link (main fixture, no mailmap, a replica; #103, #104)
+
+The main fixture without its mailmap, with the origin `https://git.example.test/acme/fixture.git` of the [review cases](#reviews-in-knowledge_loss1-and-who_knows1-main-fixture) and a replica of one pull request, #9 by `ada`, squash-merged and last updated 2025-06-02 12:00, before the history window: so the run keeps only its links (`ForgeFacts.Links`). Its merge commit (SHA `9999…`) is authored `ada@example.com`, login `ada`; its one commit (SHA `8888…`) `ada@other.example`, login `Ada`. Neither SHA is in the run, so each link names the email GitHub read, both of which the run shows. One account to GitHub (logins compare without case), so the rule `same-forge-account` links Ada's two addresses, and the candidate is high: rules `same-name`, `same-local-part` and `same-forge-account`, the addresses of [Ada's medium candidate](#ada-medium-main-fixture-no-mailmap), canonical `ada@example.com`. Gina → Hank is as above. The mailmap form writes Ada's line uncommented: `Ada Example <ada@example.com> <ada@other.example>`, `MailmapText` byte for byte.
+
+What merging would do (#104), on the repository's card and in `explain` of `knowledge_loss@1` about it: 2 candidates hold lines (Ada's addresses 7 and 3, Gina's and Hank's 2 each), 1 of them high.
+
+| | `knowledge_loss@1` | `knowledge_concentration@1` |
+| --- | --- | --- |
+| As keyed (no mailmap) | 11 / 34 ([above](#knowledge_loss1-main-fixture)) | 3 authors: Cara (2 files, 9 lines) and `ada@example.com` (2, 7) bring the running sum to 4, Bob (1, 7) to 5 |
+| Ada merged (`if_merged_num`, `if_merged`) | 4 / 34: her quiet address's 7 lines are her active self's, as with the mailmap | 2 authors: Ada (3, 10) and Cara (2, 9), the still-here walk |
+| Every candidate merged (`if_all_merged_num`, `if_all_merged`) | 4 / 34: Gina and Hank merged are still quiet | 2 authors: `split.py` was already counted once |
+
+The card and the explanation carry an `unmerged-identities` caveat that says "2 identity candidates hold lines here" and "Knowledge loss is 32.4% as the run keys people, 11.8% with the high-confidence lines merged". With the mailmap instead (the [report-json.md](../../docs/spec/report-json.md) example), Gina → Hank is the one candidate holding lines, and merging the two quiet addresses moves neither number (4 / 34, 2 authors), so the card carries `if_merged` and no such caveat.
+
+Wrong implementations this catches:
+
+- **The window's pull requests only.** #9 is older than the window, so the link is lost and Ada is medium again, her line commented out.
+- **A login's case kept.** `ada` and `Ada` are two accounts, and the rule links nothing: Ada is medium.
+- **Majority owners kept as keyed when merging.** `service.py`'s owner stays `ada@example.com` alone at 4 of 8 lines, where Ada merged holds 6: the walk's files and authors no longer agree.
+
+### Ada: the line git still needs (main fixture, a mailmap chain; #53)
+
+The main fixture with this organisation mailmap: `MailmapText`, and `Ada Example <ada@other.example> Jules Note <jules@example.com>`, a line that folds Jules's commit, by its name and email, into the address `MailmapText` folds into `ada@example.com` (the case's shape, not the fixture's people: Jules is someone else). git applies one line per commit and never follows a chain, so git gives `ada@example.com` everything written as either of Ada's addresses, and `ada@other.example` only Jules's commit (2026-10-06 20:00, named Ada Example by the line). The run records what git rewrote, with the names written: `ada@other.example` (Ada Example) → `ada@example.com`, `jules@example.com` (Jules Note) → `ada@other.example`. 10 addresses, 1 bot.
+
+| # | Address | Domain | Name | Commits | First | Last | Canonical | Aliases |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 0 | `ada@example.com` | main | Ada Example | 4 | 2026-01-01 12:00 | 2026-10-06 18:00 | yes | 1 (`ada@other.example`) |
+| 1 | `ada@other.example` | other | Ada Example | 1 | 2026-10-06 20:00 | 2026-10-06 20:00 | | 1 (`jules@example.com`) |
+
+Medium, rules `same-name` and `same-local-part`, as Ada's above; `aliases` is 1 on each address, and the answer names neither email. Her one suggested line is `# Ada Example <ada@example.com> Jules Note <jules@example.com>`: none for `ada@other.example`, which `MailmapText` already maps there in the one repository it appears in, where it appears only as the line's target. `git check-mailmap "Jules Note <jules@example.com>"` gives `Ada Example <ada@other.example>` with the mailmap as it is, and `Ada Example <ada@example.com>` with the line uncommented after it, and also after the email-only form of the organisation's line (`Ada Example <ada@other.example> <jules@example.com>`); the email-only suggestion `Ada Example <ada@example.com> <jules@example.com>` after the name-keyed line leaves it at `ada@other.example`, since git prefers a line that matches the name and the email, whatever the order. Gina → Hank is as above.
+
+Wrong implementations this catches:
+
+- **No record of what git rewrote.** The line is `# Ada Example <ada@example.com> <ada@other.example>`, already in the file, and jules@'s commit stays apart at the next scan, which suggests the same line again (#53's report).
+- **No record of the name.** The line is `# Ada Example <ada@example.com> <jules@example.com>`, which the organisation's name-keyed line beats, so the same line comes back at every scan.
+- **Parsing the mailmap instead of asking git.** A `.mailmap` checked out in the work tree, or a repository's `mailmap.blob`, would be missed; the run reads what git did.
+
+### Pat, Kim and Alice: two repositories and a replica
+
+Two repositories in a group directory `ids`, written with `git fast-import` (each commit adds one `.py` file of the stated non-blank lines; author and committer are the same, at 12:00 UTC), scanned together at `--now 2026-10-07` without `--mailmap`. `one` has no origin (`local:one`) and an untracked `.mailmap` in its work tree, `Pat Doe <pat@new.example> <pat@old.example>`, which git reads in `one` only. `two` has the origin `https://git.example.test/acme/two.git` and no mailmap.
+
+| Repository | Day | Author as written | File, lines |
+| --- | --- | --- | --- |
+| one | 2025-11-03 | Pat Doe `pat@old.example` (git: `pat@new.example`) | `old.py`, 3 |
+| one | 2026-09-01, 09-02 | Pat Doe `pat@new.example` | `new.py`, `new2.py`, 3 each |
+| two | 2025-11-10, 11-11 | Pat Doe `pat@old.example` | `pat.py`, `pat2.py`, 4 each |
+| two | 2026-08-01 | kimlee `kim@home.example` | `kim1.py`, 2 |
+| two | 2026-08-02, 08-03 | Kim Lee `kim@home.example` | `kim2.py`, `kim3.py`, 2 each |
+| two | 2026-08-04 | Kim Lee `kim@corp.example`, trailer `Co-authored-by: Kim Lee <4242+kimlee@users.noreply.github.com>` | `corp1.py`, 2 |
+| two | 2026-08-05 to 08-07 | Kim Lee `kim@corp.example` | `corp2.py` to `corp4.py`, 2 each |
+| two | 2026-08-10 | Kim Lee `k.lee@legacy.example` | `klee.py`, 2 |
+| two | 2026-08-20 | Alice Ng `alice@x.example` | `alice.py`, 2 |
+| two | 2026-08-21 | Alice Ng `ngroe@shared.example` | `box1.py`, 2 |
+| two | 2026-08-22 | Bob Roe `ngroe@shared.example` | `box2.py`, 2 |
+| two | 2026-08-25 | Zed Ash `111+zed@users.noreply.github.com` | `z1.py`, 2 |
+| two | 2026-08-26 | Zed Birch `222+zed@users.noreply.github.com` | `z2.py`, 2 |
+
+The replica holds `two` (`R_two`) and one pull request, #31, last updated 2025-06-01, before the history window, so the run keeps only its links. Its commits, none of whose SHAs is in the run, link: (1) `kim@home.example` to `KimLee`, (2) `kim@corp.example` to `kimlee`, (3) `alice@x.example` to `alice`, (4) `ngroe@shared.example` to `alice`, (5) `111+zed@…` to `zed`, (6) `222+zed@…` to `zed`, (7) `kim@home.example` to `kimlee` again, (8) `nobody@else.example`, an address the run never shows, to `ghost`; its merge commit (9) `kim@corp.example` to `kimlee`. The run keeps 1 to 6: one link for each repository, address and account, so not 7 or 9, and not 8, which counts for nothing.
+
+10 addresses, no bot; `shared` and `oversized` are 0: `ngroe@shared.example` carries two names, so it is a shared address, but the forge rule links it, and `kim@home.example`'s other name, `kimlee`, is the login its link names, so it agrees with any name. No address is quiet for the hand-off rule but `pat@old.example`, which a candidate holds. No domain is the main one (each is one address's), so every address but the noreply ones is `other`. The candidates, by suggested name (all medium):
+
+- **Alice Ng**, rule `same-forge-account` only (the shared address is in no name group): `alice@x.example` (1 commit, 2026-08-20, canonical, as the address that is not shared) and `ngroe@shared.example` (named Bob Roe, its newer name, 2 commits, 2026-08-21 → 08-22). GitHub's link to a shared address is medium, so there is no high set and the line is commented out: `# Alice Ng <alice@x.example> <ngroe@shared.example>`.
+- **Kim Lee**, rules `same-name`, `same-local-part` (`kim`, made from the name) and `same-forge-account`: `kim@home.example` (3 commits, 2026-08-01 → 08-03), `4242+kimlee@users.noreply.github.com` (co-author of 1, 2026-08-04: no link names it, so it is its login's account, `kimlee`, which the run links), `kim@corp.example` (4 commits, 2026-08-04 → 08-07, canonical) and `k.lee@legacy.example` (1 commit, 2026-08-10). The first three are one account's to GitHub, every pair high, and the high set; `k.lee@legacy.example` matches them by the name alone, medium, which makes the candidate medium. The canonical address is the high set's preferred one: not the noreply address, then the most commits. Lines: `Kim Lee <kim@corp.example> <kim@home.example>` and `Kim Lee <kim@corp.example> <4242+kimlee@users.noreply.github.com>` as lines, `# Kim Lee <kim@corp.example> <k.lee@legacy.example>` commented out.
+- **Pat Doe**, rules `same-name` and `same-local-part` (`pat`, made from the name): `pat@new.example` (3 commits, in `one`: 2025-11-03 → 2026-09-02, canonical, the most commits; `aliases` 1) and `pat@old.example` (2 commits, in `two`: 2025-11-10 → 11-11). `one`'s `.mailmap` maps `pat@old.example` there, but only in `one`, so its line is written, commented out as a medium one's: `# Pat Doe <pat@new.example> <pat@old.example>`. `git check-mailmap <pat@old.example>` in `two`, with that line uncommented as the organisation's mailmap, gives `Pat Doe <pat@new.example>`.
+- **Zed** is no candidate: the forge rule's group `zed` and the local part `zed` hold two account ids, 111 and 222, so neither links them, and the names differ.
+
+A scope of `local:one` lists Pat's candidate, both addresses, with 1 address of its own; a scope of `two` lists all three, with 9.
+
+`two`'s card: `knowledge_loss@1` is 8 / 34 (Pat's 8 lines in `two` are `pat@old.example`'s, quiet since 2025-11-11, while everyone else landed in August), with `if_merged` `{candidates 3, high 1, high_num 8, all_num 0}`: Kim's high set moves no quiet line, and Pat merged is active through `pat@new.example`. Its concentration is 3 authors (`kim@corp.example`'s 4 files, `kim@home.example`'s 3, then `pat@old.example`'s 2 reach 9 of the 15 files), with `if_merged` `{3, 1, 2, 1}`: Kim's high set holds 7 files, and every candidate merged gives Kim 8, past half. The card's caveat says "3 identity candidates hold lines here", "Knowledge loss is 23.5% as the run keys people, 23.5% with the high-confidence lines merged and 0.0% with every one merged." and "Majority-owner concentration is 3 authors as keyed, 2 with the high-confidence lines merged and 1 with every one merged.". `one`'s card: 0 / 9 with `if_merged` `{candidates 1, high 0, high_num 0, all_num 0}` and 1 author either way, so it carries no `unmerged-identities` caveat.
+
+Wrong implementations this catches:
+
+- **Aliases read across the run.** `one`'s `.mailmap` line hides Pat's line, which `two` needs, and Pat stays split at every scan with no line to apply (the review's ID-1).
+- **Candidates of the scope's facts alone.** The scope `two` has no Pat, while its card counts him (ID-C1).
+- **A candidate's lines all as its weakest pair's.** Kim's three GitHub-linked addresses are commented out because of `k.lee@legacy.example` (ID-2).
+- **A noreply address linked only by a link.** Kim's noreply address matches the others by name alone, and its line is commented out (ID-2).
+- **The login name read as another person's.** `kim@home.example` is shared, so its link to `kim@corp.example` is medium, and its line is commented out.
+- **Two account ids merged.** Zed is a high candidate (ID-3).
+- **A shared mailbox high.** Alice's line is written, giving Bob's commit to Alice (ID-5).
+- **A link per commit kept.** The run keeps 9 links (ADR 0011's amendment).
+- **A caveat where nothing moves.** `one`'s card carries an `unmerged-identities` caveat that says 0.0% three times (ID-8).
+
 ### Wrong implementations this catches
 
 - **Co-authors not read.** The two noreply addresses and the agents appear only in trailers: the sibling has 5 addresses and 1 bot, and Pia's candidate is gone.
@@ -842,7 +924,7 @@ The sibling has no hand-off. The only addresses with no commit since 2026-07-09 
 
 ### The TestChangeOracles row
 
-The [issue](https://github.com/IHaveASegway/stillhere/issues/26) adds no test of its own; this is what `TestChangeOracles`' identity candidates subtest checks. Scan each fixture into a fresh facts.db, once without its mailmap and once with it, and call `app.Identities` with the zero scope. Assert `addresses` and `bots` from the first table, `shared` and `oversized` 0, and each candidate's confidence, guess and commented flags (`commented` is true for all three), rules, suggested name, canonical address and addresses (email, name, domain kind, commits, co-authored, first, last, repos) from the tables above; Ada's `same-local-part` link has `from_name` true; for Gina → Hank, a gap of 24 hours and one shared file, `split.py`. Then write `report.Mailmap`'s output for the scans without a mailmap to a file. It holds the three lines `# Ada Example <ada@example.com> <ada@other.example>`, `# Hank Split <hank@example.com> <gina@example.com>` and `# Pia Pair <pia@example.com> <81234567+piapair@users.noreply.github.com>`, and no line that is not a comment. Run `git check-mailmap` in each fixture through `gitcli.Runner` with that file as `Config.MailmapFile`: `<ada@other.example>`, `<81234567+piapair@users.noreply.github.com>` and `<gina@example.com>` all come back unchanged, since adding the output unread merges nobody. With the `# ` removed from those three lines, `<ada@other.example>` gives `Ada Example <ada@example.com>`, `<81234567+piapair@users.noreply.github.com>` gives `Pia Pair <pia@example.com>`, and `<gina@example.com>` gives `Hank Split <hank@example.com>`.
+The [issue](https://github.com/IHaveASegway/stillhere/issues/26) adds no test of its own; this is what `TestChangeOracles`' identity candidates subtest checks. Scan each fixture into a fresh facts.db, once without its mailmap and once with it, and call `app.Identities` with the zero scope. Assert `addresses` and `bots` from the first table, `shared` and `oversized` 0, and each candidate's confidence, guess and commented flags (`commented` is true for all three), rules, suggested name, canonical address and addresses (email, name, domain kind, commits, co-authored, first, last, repos) from the tables above; Ada's `same-local-part` link has `from_name` true; for Gina → Hank, a gap of 24 hours and one shared file, `split.py`. Then write `report.Mailmap`'s output for the scans without a mailmap to a file. It holds the three lines `# Ada Example <ada@example.com> <ada@other.example>`, `# Hank Split <hank@example.com> <gina@example.com>` and `# Pia Pair <pia@example.com> <81234567+piapair@users.noreply.github.com>`, and no line that is not a comment. Run `git check-mailmap` in each fixture through `gitcli.Runner` with that file as `Config.MailmapFile`: `<ada@other.example>`, `<81234567+piapair@users.noreply.github.com>` and `<gina@example.com>` all come back unchanged, since adding the output unread merges nobody. With the `# ` removed from those three lines, `<ada@other.example>` gives `Ada Example <ada@example.com>`, `<81234567+piapair@users.noreply.github.com>` gives `Pia Pair <pia@example.com>`, and `<gina@example.com>` gives `Hank Split <hank@example.com>`. Then the three cases above: [GitHub's link](#ada-high-by-githubs-link-main-fixture-no-mailmap-a-replica-103-104), with its candidates, its uncommented line, the card's `if_merged` values and the caveat on the card and on `explain`; [the mailmap chain](#ada-the-line-git-still-needs-main-fixture-a-mailmap-chain-53), with its candidates, aliases, Ada's one line and the four `git check-mailmap` answers; and [the two repositories](#pat-kim-and-alice-two-repositories-and-a-replica), with the run's candidates and their high addresses, every candidate's lines, the `git check-mailmap` answer in `two`, both scoped answers, both cards and the links the run keeps.
 
 ## Reviews in knowledge_loss@1 and who_knows@1 (main fixture)
 

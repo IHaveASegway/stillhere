@@ -10,8 +10,10 @@ import "github.com/IHaveASegway/stillhere/internal/domain"
 // the vetoes the rules apply: the words of any name seen with each, as
 // author or co-author, a default one such as John Doe included
 // (candWords); a local part without its +tag or a GitHub noreply address's
-// login (candLocalPart), whatever its length or kind; or a GitHub account
-// id. Blocks join through any number of links, however many addresses that
+// login (candLocalPart), whatever its length or kind; a GitHub account id;
+// or a GitHub account the run's GitHub data attributes commits of both to
+// (forgeAccounts, the same-forge-account rule's links, #103), an address
+// linked to two accounts joining both. Blocks join through any number of links, however many addresses that
 // makes, and each is named by its smallest address, so the result does not
 // depend on the order of the facts.
 //
@@ -27,6 +29,9 @@ import "github.com/IHaveASegway/stillhere/internal/domain"
 // match, and classification, which must make no false one (Christen, Data
 // Matching, Springer 2012, ch. 4). Blocks merges no one on any page.
 func Blocks(fs *domain.FactSet, who *Directory) map[string]string {
+	if who == nil {
+		who = New(fs, nil)
+	}
 	survey, addrs, leftOut := candSurvey(fs, who)
 	parent := make(map[string]string, len(addrs))
 	find := func(a string) string {
@@ -52,6 +57,12 @@ func Blocks(fs *domain.FactSet, who *Directory) map[string]string {
 		keys := []key{{"local", local}, {"account", account}}
 		for _, name := range a.nameKeys {
 			keys = append(keys, key{"name", name})
+		}
+		for _, login := range who.accounts[a.Email] {
+			keys = append(keys, key{"forge", login})
+		}
+		if a.forge != "" { // a noreply address's own login, when the run links that login (candForge)
+			keys = append(keys, key{"forge", a.forge})
 		}
 		for _, k := range keys {
 			if k.value == "" {

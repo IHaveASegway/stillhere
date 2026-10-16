@@ -13,7 +13,7 @@ git <common> --attr-source=<empty tree> \
   -z --numstat -M -l1000 --root --diff-algorithm=myers --no-textconv \
   --ignore-submodules=none --submodule=short \
   --no-color --encoding=UTF-8 \
-  --pretty='format:%x00%H%x1f%P%x1f%ct%x1f%at%x00%aN%x00%aE%x00%s%x00%(trailers:key=Co-authored-by,valueonly,separator=%x1e,unfold)%x00' \
+  --pretty='format:%x00%H%x1f%P%x1f%ct%x1f%at%x00%aN%x00%aE%x00%an%x00%ae%x00%s%x00%(trailers:key=Co-authored-by,valueonly,separator=%x1e,unfold)%x00' \
   <sha> --
 ```
 
@@ -23,7 +23,7 @@ git <common> --attr-source=<empty tree> \
 | --- | --- |
 | Merge diffs | `--first-parent` limits the walk, and the diff is taken against the first parent. Never use `-m`: it means `--diff-merges=separate`, one diff per parent, so the second-parent diff gets summed too. On 2.50.1, `--first-parent` alone already yields first-parent diffs for merges (verified); the explicit flag documents the intent. |
 | `--no-merges` | Wrong. It drops the merge commit and keeps side-branch commits whose own dates fall in the window, so it misses a merge of older commits and counts a side commit that never landed on its own. |
-| Mailmap placeholders | Use capital `%aN`/`%aE`, which apply the mailmap even with `log.mailmap=false` and even under `--no-use-mailmap`. Lowercase `%an`/`%ae` print the raw headers (verified). Repo-local config survives `GIT_CONFIG_GLOBAL=/dev/null`, so a lowercase format splits one person in two wherever a repo has turned `log.mailmap` off. |
+| Mailmap placeholders | Use capital `%aN`/`%aE`, which apply the mailmap even with `log.mailmap=false` and even under `--no-use-mailmap`. Lowercase `%an`/`%ae` print the raw headers (verified). Repo-local config survives `GIT_CONFIG_GLOBAL=/dev/null`, so a lowercase format splits one person in two wherever a repo has turned `log.mailmap` off. `%an` and `%ae` follow `%aN` and `%aE` only to record what the mailmap rewrote (`RepoFacts.Aliases`, #53), which the identities answer reads; no person is keyed by them. The name is kept because git prefers a `.mailmap` line that matches a commit's name and email over one that matches its email alone, so a suggested line that replaces such a line must name both. |
 | Renames | Never pass `--no-renames` here. With default rename detection, a pure rename is one numstat row; `--no-renames` turns it into a full delete plus a full add and inflates `lines_added`. `-M` pins that default against a repository's own `diff.renames=false`, which does the same (verified). |
 | Date field | `--since-as-filter` and `--until` filter on committer date. The report records `date_field = "committer"` and `walk = "first-parent"`. |
 | Backdated commits | Never plain `--since`. It stops the walk at the first commit older than the date, and under `--first-parent` there is only one chain, so one first-parent commit whose committer time is older than the window (`git rebase --committer-date-is-author-date`, `git am --committer-date-is-author-date`, a wrong clock) hides every landing below it: week and scan saw no landing at all in a window below such a commit (verified). `--since-as-filter` (git 2.37) walks the whole chain and only filters. The price is reading every first-parent commit's header: on a 200,000-commit linear history, with a one-week window at its top, 0.395 s instead of 0.015 s without a commit-graph, and 0.042 s instead of 0.016 s with one, which `git gc` writes by default (best of three, 2.50.1). Filtered commits print no diff, so numstat costs what it did. |

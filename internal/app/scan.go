@@ -120,7 +120,12 @@ func Scan(ctx context.Context, d Deps, r ScanRequest) (*report.Model, error) {
 	}
 
 	start = time.Now()
-	in := &metrics.Input{Facts: fs, Policy: d.Policy, Who: who, Days: d.Policy.Week.Days}
+	// The run's identity candidates, which the two metrics that count
+	// people holding lines merge in their Detail, so every page that shows
+	// them can say how far an unmerged identity moves them (#104).
+	survey := identity.Candidates(fs, who)
+	d.Log.Debug("identity candidates", "addresses", survey.Addresses, "candidates", len(survey.Candidates))
+	in := &metrics.Input{Facts: fs, Policy: d.Policy, Who: who, Days: d.Policy.Week.Days, Candidates: survey.Candidates}
 	values, err := metrics.Compute(in)
 	if err != nil {
 		return nil, fmt.Errorf("computing metrics: %w", err)
@@ -246,7 +251,7 @@ func storeRun(ctx context.Context, d Deps, run domain.Run, fs *domain.FactSet,
 		if err := d.ForgeStore.PutRunWatermarks(ctx, id, watermarks); err != nil {
 			return abort(fmt.Errorf("storing run %d's forge watermarks: %w", id, err))
 		}
-		if err := d.ForgeStore.PutRunForge(ctx, id, fs.Forge.Repos, fs.Forge.PullRequests); err != nil {
+		if err := d.ForgeStore.PutRunForge(ctx, id, fs.Forge.Repos, fs.Forge.PullRequests, fs.Forge.Links); err != nil {
 			return abort(fmt.Errorf("storing run %d's GitHub data: %w", id, err))
 		}
 	}
@@ -324,6 +329,19 @@ func runForge(repos []domain.RepoFacts, replica *domain.ForgeFacts) (*domain.For
 			own.PullRequests = append(own.PullRequests, *p)
 		}
 	}
+	// The older pull requests' links to accounts, which no metric reads and
+	// identity's same-forge-account rule does (#103): GitHub's attribution
+	// of an address does not age, so a run keeps it beside the pull
+	// requests in its window, as ADR 0011 widens what a scan reads; one
+	// link for each repository, address and account (identity.KeptLinks),
+	// so what a run keeps is bounded by the people its history shows.
+	var links []domain.ForgeLink
+	for _, l := range replica.Links {
+		if len(join[l.Repo]) > 0 {
+			links = append(links, l)
+		}
+	}
+	own.Links = identity.KeptLinks(&domain.FactSet{Repos: repos}, links)
 	// The order ForgeFacts documents, which RunForge reads back: repositories
 	// as the replica sorted them, watermarks by repository, pull requests by
 	// repository, then number, as the replica sorted them.

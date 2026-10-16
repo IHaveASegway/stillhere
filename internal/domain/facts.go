@@ -219,6 +219,24 @@ type RepoFacts struct {
 	Owners      []LineOwner
 	IgnoreRevs  IgnoreRevs // scan runs, shallow and partial clones included (collect.Blame with no paths resolves it)
 	BlameErrors []FileError
+	// Aliases are the emails git's mailmap rewrote in the commits the facts
+	// hold (#53): sorted by Email, Name, then Canonical, distinct; nil when
+	// it rewrote none, and in a run stored before facts.db kept them.
+	Aliases []Alias
+}
+
+// Alias is an email git's mailmap rewrote in a repository: a commit of the
+// facts, or one of its Co-authored-by trailers, was written as Name and
+// Email, and git gave it the canonical email Canonical. stillhere never
+// parses a mailmap; this is what git did with one, which the identities
+// answer reads to follow the lines git applied, since git never chains
+// them. The name is part of it because git prefers a line that matches a
+// commit's name and email over one that matches its email alone, whatever
+// their order in the file, so a line that replaces it must name both.
+type Alias struct {
+	Email     string // as the commit or the trailer wrote it, lowercased
+	Name      string // the name written beside it (%an, the trailer's), as written; "" for none
+	Canonical string // the email git's mailmap gave it, lowercased; never Email
 }
 
 // The values of RepoFacts.Status. A repository is a bulkhead: its failure

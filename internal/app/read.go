@@ -96,37 +96,47 @@ func load(ctx context.Context, d Deps, runID int64) (*stored, error) {
 		d.Log.Warn("the run was stored before stillhere compared GitHub logins without case, and holds one login in two "+
 			"cases: they stay two reviewers in its pages, and no name or id finds the one in capitals: scan again", "run", run.ID)
 	}
-	forge, watermarks, err := readForgeMarks(ctx, d, run)
-	if err != nil {
+	s := &stored{run: run, policy: p, values: values, ranks: ranks}
+	if s.facts, s.forge, s.unkept, err = withForge(ctx, d, run, fs); err != nil {
 		return nil, err
-	}
-	s := &stored{run: run, policy: p, facts: fs, values: values, ranks: ranks, forge: forge}
-	if len(watermarks) > 0 {
-		github, err := d.ForgeStore.RunForge(ctx, run.ID)
-		if err != nil {
-			return nil, fmt.Errorf("reading the GitHub data of run %d: %w", run.ID, err)
-		}
-		if github == nil {
-			// A run stored before facts.db kept the pull requests a run
-			// read (schema version 4). Its stored numbers stand, dated by
-			// the watermarks it kept; what is computed from the pull
-			// requests when it is read could only come from today's
-			// replica, another snapshot than its git facts, so it is
-			// unknown rather than half of it.
-			d.Log.Warn("the run was stored before stillhere kept the pull requests a run reads: its stored GitHub numbers "+
-				"stand, and who-knows lists no reviewers for it: scan again", "run", run.ID)
-			s.unkept = true
-		} else {
-			// A copy: a store may hand every reader the same facts (the MCP
-			// server caches them), which no use case changes.
-			c := *fs
-			c.Forge = github
-			s.facts = &c
-		}
 	}
 	// After the run's GitHub data: it links forge logins to the run's people.
 	s.who = identity.New(s.facts, p)
 	return s, nil
+}
+
+// withForge returns a stored run's facts with the GitHub data the run kept
+// (FactSet.Forge, ADR 0011), how that data is dated, and whether the run
+// read GitHub data but kept none of its pull requests (stored.unkept). The
+// read use cases build the run's directory over what it returns, so a
+// GitHub login links to a person, and GitHub's links group a person's
+// addresses (identity's same-forge-account rule), as they did when the run
+// was scanned.
+func withForge(ctx context.Context, d Deps, run domain.Run, fs *domain.FactSet) (*domain.FactSet, *report.ForgeRead, bool, error) {
+	forge, watermarks, err := readForgeMarks(ctx, d, run)
+	if err != nil || len(watermarks) == 0 {
+		return fs, forge, false, err
+	}
+	github, err := d.ForgeStore.RunForge(ctx, run.ID)
+	if err != nil {
+		return nil, nil, false, fmt.Errorf("reading the GitHub data of run %d: %w", run.ID, err)
+	}
+	if github == nil {
+		// A run stored before facts.db kept the pull requests a run
+		// read (schema version 4). Its stored numbers stand, dated by
+		// the watermarks it kept; what is computed from the pull
+		// requests when it is read could only come from today's
+		// replica, another snapshot than its git facts, so it is
+		// unknown rather than half of it.
+		d.Log.Warn("the run was stored before stillhere kept the pull requests a run reads: its stored GitHub numbers "+
+			"stand, and who-knows lists no reviewers for it: scan again", "run", run.ID)
+		return fs, forge, true, nil
+	}
+	// A copy: a store may hand every reader the same facts (the MCP
+	// server caches them), which no use case changes.
+	c := *fs
+	c.Forge = github
+	return &c, forge, false, nil
 }
 
 // canonicalKeys upcasts the person keys of a run stored before #69, whose
@@ -183,14 +193,6 @@ func canonicalKeys(values []domain.MetricValue, ranks []domain.RankInterval) ([]
 		}
 	}
 	return values, ranks, split
-}
-
-// readForge reads back how a stored run's GitHub data is dated, for a use
-// case that computes nothing from it: the watermarks alone, never the pull
-// requests the run kept.
-func readForge(ctx context.Context, d Deps, run domain.Run) (*report.ForgeRead, error) {
-	forge, _, err := readForgeMarks(ctx, d, run)
-	return forge, err
 }
 
 // readForgeMarks reads back the watermarks a stored run recorded

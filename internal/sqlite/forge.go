@@ -243,9 +243,10 @@ func (s *Store) CountForgePulls(ctx context.Context, repo string, since time.Tim
 
 // LoadForge returns the replica's repositories and watermarks, and every
 // pull request last updated at or after since (all of them for a zero
-// since), sorted like domain.ForgeFacts; nil when the replica holds no
-// repository. It reads in one transaction, so a sync writing at the same
-// time is seen whole or not at all.
+// since), sorted like domain.ForgeFacts, with the commit-to-account links
+// of the others (Links, #103); nil when the replica holds no repository.
+// It reads in one transaction, so a sync writing at the same time is seen
+// whole or not at all.
 func (s *Store) LoadForge(ctx context.Context, since time.Time) (*domain.ForgeFacts, error) {
 	var f *domain.ForgeFacts
 	err := s.forgeRead(ctx, "loading the forge replica", func(tx *sql.Tx) error {
@@ -381,6 +382,17 @@ FROM forge_reviews WHERE pull IN (` + forgeSincePulls + `) ORDER BY pull, submit
 	forgeSelectCommits = `
 SELECT pull, sha, author_email, author_login
 FROM forge_pull_commits WHERE pull IN (` + forgeSincePulls + `) ORDER BY pull, position`
+	// The commit-to-account links of the pull requests left out (#103):
+	// each one's own commits and its merge commit, distinct.
+	forgeSelectLinks = `
+SELECT DISTINCT repo, sha, author_email, author_login FROM (
+    SELECT p.repo AS repo, c.sha AS sha, c.author_email AS author_email, c.author_login AS author_login
+    FROM forge_pull_commits c JOIN forge_pull_requests p ON p.id = c.pull
+    WHERE c.author_login <> '' AND p.id NOT IN (` + forgeSincePulls + `)
+    UNION ALL
+    SELECT repo, merge_sha, merge_author_email, merge_author_login FROM forge_pull_requests
+    WHERE merge_sha <> '' AND merge_author_login <> '' AND id NOT IN (` + forgeSincePulls + `)
+) ORDER BY repo, sha, author_login, author_email`
 )
 
 func forgeLoad(ctx context.Context, tx *sql.Tx, since time.Time) (*domain.ForgeFacts, error) {
@@ -491,6 +503,16 @@ SELECT id, key, owner, name, default_branch, archived, fork FROM forge_repos ORD
 			return err
 		}
 		p.Commits = append(p.Commits, c)
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	if err := forgeRows(ctx, tx, forgeSelectLinks, []any{bound, bound, bound, bound}, func(rows *sql.Rows) error {
+		var l domain.ForgeLink
+		if err := rows.Scan(&l.Repo, &l.SHA, &l.AuthorEmail, &l.AuthorLogin); err != nil {
+			return err
+		}
+		f.Links = append(f.Links, l)
 		return nil
 	}); err != nil {
 		return nil, err

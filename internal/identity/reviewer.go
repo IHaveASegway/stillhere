@@ -2,6 +2,7 @@ package identity
 
 import (
 	"cmp"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -153,7 +154,7 @@ func reviewerLogins(fs *domain.FactSet) map[string]string {
 	type vote struct{ login, sha string }
 	seen := map[vote]bool{}
 	votes := map[string]map[string]int{} // folded login → email → distinct commits
-	count := func(c domain.ForgeCommit) {
+	forgeCommits(fs, false, func(c domain.ForgeCommit) {
 		email, ok := author[c.SHA]
 		login := foldLogin(c.AuthorLogin)
 		v := vote{login, c.SHA}
@@ -165,14 +166,7 @@ func reviewerLogins(fs *domain.FactSet) map[string]string {
 			votes[login] = map[string]int{}
 		}
 		votes[login][email]++
-	}
-	for i := range fs.Forge.PullRequests {
-		p := &fs.Forge.PullRequests[i]
-		for _, c := range p.Commits {
-			count(c)
-		}
-		count(p.MergeCommit)
-	}
+	})
 	if len(votes) == 0 {
 		return nil
 	}
@@ -185,6 +179,149 @@ func reviewerLogins(fs *domain.FactSet) map[string]string {
 			}
 		}
 		out[login] = best
+	}
+	return out
+}
+
+// forgeCommits calls fn for every commit of the pull requests the fact
+// set's GitHub data holds: each one's own commits and its merge commit, in
+// the replica's order; and, with older too, the links the run kept of its
+// older pull requests (ForgeFacts.Links). It is the one walk over the
+// forge's commit-to-account links: Reviewer's rule (reviewerLogins) reads
+// the pull requests, and the same-forge-account rule (forgeAccounts) every
+// link, since GitHub's attribution of an address does not age.
+func forgeCommits(fs *domain.FactSet, older bool, fn func(c domain.ForgeCommit)) {
+	if fs == nil || fs.Forge == nil {
+		return
+	}
+	for i := range fs.Forge.PullRequests {
+		p := &fs.Forge.PullRequests[i]
+		for _, c := range p.Commits {
+			fn(c)
+		}
+		fn(p.MergeCommit)
+	}
+	if older {
+		for _, l := range fs.Forge.Links {
+			fn(l.ForgeCommit)
+		}
+	}
+}
+
+// forgeAccounts returns, for each address of the fact set that GitHub's own
+// links attribute to an account, the folded logins (foldLogin) it is
+// attributed to, sorted: GitHub links a commit to the account that verified
+// its author email, or whose noreply address it is, and the replica keeps
+// that link with every pull request's commits (ForgeCommit). It is the
+// evidence of the same-forge-account rule (candidates.go) and of Blocks.
+// Each link is read by forgeLinkReader. nil without GitHub data.
+func forgeAccounts(fs *domain.FactSet) map[string][]string {
+	if fs == nil || fs.Forge == nil {
+		return nil
+	}
+	read := forgeLinkReader(fs)
+	links := map[string]map[string]bool{} // address → folded logins
+	forgeCommits(fs, true, func(c domain.ForgeCommit) {
+		email, login, ok := read(c)
+		if !ok {
+			return
+		}
+		if links[email] == nil {
+			links[email] = map[string]bool{}
+		}
+		links[email][login] = true
+	})
+	if len(links) == 0 {
+		return nil
+	}
+	out := make(map[string][]string, len(links))
+	for email, logins := range links {
+		out[email] = slices.Sorted(maps.Keys(logins))
+	}
+	return out
+}
+
+// forgeLinkReader returns the one reading of a forge commit's link that
+// the same-forge-account rule, Blocks and KeptLinks share: the run's
+// address it names and the account, folded, or false when it counts for
+// nothing.
+//
+// A link names the run's own address of its commit: the mailmapped author
+// git gave the SHA in the history, or in a blamed commit older than the
+// history, so a link follows the mailmap as every page does. A commit the
+// facts do not hold, such as a squashed pull request's own commit, names
+// its email as GitHub read it, when that email is an address the facts
+// show: git's mailmap left that address as it is, since one it rewrote
+// appears in no fact. Logins are folded as Reviewer folds them, so one
+// account is one key whatever case its commits carry; an app's login
+// ("name[bot]") and a link to an address the facts never show count for
+// nothing.
+func forgeLinkReader(fs *domain.FactSet) func(c domain.ForgeCommit) (email, login string, ok bool) {
+	author := map[string]string{} // SHA → the run's canonical author email
+	known := map[string]bool{}    // every address the facts show, as author or co-author
+	see := func(sha string, p domain.Person, co []domain.Person) {
+		if e := canonical(p.Email); e != "" {
+			known[e] = true
+			if _, ok := author[sha]; !ok {
+				author[sha] = e
+			}
+		}
+		for _, c := range co {
+			if e := canonical(c.Email); e != "" {
+				known[e] = true
+			}
+		}
+	}
+	for i := range fs.Repos {
+		rf := &fs.Repos[i]
+		for j := range rf.Commits {
+			c := &rf.Commits[j]
+			see(c.SHA, c.Author, c.CoAuthors)
+		}
+		for j := range rf.Owners {
+			o := &rf.Owners[j]
+			see(o.Commit, o.Author, o.CoAuthors)
+		}
+	}
+	return func(c domain.ForgeCommit) (string, string, bool) {
+		login := foldLogin(c.AuthorLogin)
+		if login == "" || strings.HasSuffix(login, appSuffix) {
+			return "", "", false
+		}
+		email, ok := author[c.SHA]
+		if !ok {
+			if email = canonical(c.AuthorEmail); !known[email] {
+				return "", "", false
+			}
+		}
+		return email, login, true
+	}
+}
+
+// KeptLinks returns, of links (the commit-to-account links of the pull
+// requests older than a run's window, ForgeFacts.Links), the first for
+// each repository, address and account they link, as forgeLinkReader reads
+// them over fs, in their order. The same-forge-account rule and Blocks read
+// only which addresses a repository's links tie to which accounts, so these
+// give them exactly what every link gives, while a run that keeps them
+// (ADR 0011's amendment) stores as many as its history shows people, not
+// one per commit of every pull request a sync ever copied. A link that
+// names no address of fs counts for nothing and is left out. fs must be
+// the facts the run keeps, which its readers read the links against.
+func KeptLinks(fs *domain.FactSet, links []domain.ForgeLink) []domain.ForgeLink {
+	if len(links) == 0 {
+		return nil
+	}
+	read := forgeLinkReader(fs)
+	seen := map[[3]string]bool{}
+	var out []domain.ForgeLink
+	for _, l := range links {
+		email, login, ok := read(l.ForgeCommit)
+		key := [3]string{l.Repo, email, login}
+		if ok && !seen[key] {
+			seen[key] = true
+			out = append(out, l)
+		}
 	}
 	return out
 }

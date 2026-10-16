@@ -236,6 +236,14 @@ type ForgeFacts struct {
 	Repos        []ForgeRepo      // sorted by Key, then ID
 	PullRequests []PullRequest    // sorted by Repo, then Number
 	Watermarks   []ForgeWatermark // sorted by Repo: the replica's, of which a run keeps those of its own repositories (RunWatermark)
+	// Links holds, of the pull requests LoadForge leaves out (those last
+	// updated before its since: older than every metric's window), only
+	// their commits' links to an account, distinct (#103). No metric reads
+	// it: GitHub's attribution of an address to an account is evidence of
+	// who it is however old the pull request, so identity's
+	// same-forge-account rule reads it beside the pull requests' own
+	// commits. Sorted by Repo, SHA, AuthorLogin, then AuthorEmail.
+	Links []ForgeLink
 	// Join is the run's join of these forge repositories to its own
 	// repositories, as its scan made it with ForgeJoin and recorded it
 	// (RunWatermark.Keys): ForgeRepo.ID → the sorted Repo.Key of every
@@ -245,6 +253,15 @@ type ForgeFacts struct {
 	// It is nil for the replica LoadForge returns, which no run has joined:
 	// a metric over the replica itself joins it with ForgeJoin.
 	Join map[string][]string
+}
+
+// ForgeLink is one commit of a pull request with the account the forge
+// resolved its author email to (ForgeFacts.Links): a pull request's own
+// commit or its merge commit, in the forge repository Repo. AuthorLogin is
+// never "".
+type ForgeLink struct {
+	Repo string // ForgeRepo.ID
+	ForgeCommit
 }
 
 // RunWatermark is the watermark of one of a scan run's forge repositories
@@ -404,7 +421,8 @@ type ForgeStore interface {
 	// transaction: an email asked about again keeps the newer answer.
 	PutForgeLinks(ctx context.Context, repo string, links []ForgeCommit) error
 	// LoadForge returns the replica's repositories and watermarks, and every
-	// pull request last updated at or after since, sorted; nil when the
+	// pull request last updated at or after since, sorted, with the
+	// commit-to-account links of the others (Links, #103); nil when the
 	// replica holds no repository.
 	LoadForge(ctx context.Context, since time.Time) (*ForgeFacts, error)
 	// PutRunWatermarks records, for a run that is being written, the
@@ -424,10 +442,12 @@ type ForgeStore interface {
 	// PutRunForge records, for a running run, the GitHub data it computed
 	// over (FactSet.Forge): its forge repositories (ForgeJoin) as the
 	// replica listed them, and every pull request of them it read, whole,
-	// with its labels, reviews and commits (ADR 0011). A pull request of a
-	// repository not among repos is an error. Like the watermarks, which
-	// PutRunWatermarks records, they are deleted with the run.
-	PutRunForge(ctx context.Context, runID int64, repos []ForgeRepo, pulls []PullRequest) error
+	// with its labels, reviews and commits (ADR 0011), and the
+	// commit-to-account links of its older pull requests (ForgeFacts.Links,
+	// #103). A pull request or a link of a repository not among repos is an
+	// error. Like the watermarks, which PutRunWatermarks records, they are
+	// deleted with the run.
+	PutRunForge(ctx context.Context, runID int64, repos []ForgeRepo, pulls []PullRequest, links []ForgeLink) error
 	// RunForge returns the GitHub data a complete or partial run kept
 	// (PutRunForge), sorted as LoadForge sorts, with the watermarks it
 	// recorded (PutRunWatermarks) as Watermarks: what the run computed
