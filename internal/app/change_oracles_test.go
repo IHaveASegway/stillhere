@@ -292,6 +292,10 @@ func mainChangeOracles(t *testing.T) {
 		if len(ps.Repos) != 1 || ps.PolicySource != "packaged policy" || ps.Provenance.RunID != s.run {
 			t.Fatalf("paths: %d repositories from %q in run %d", len(ps.Repos), ps.PolicySource, ps.Provenance.RunID)
 		}
+		// The packaged policy is named by its revision beside its hash.
+		if ps.Provenance.PolicyRevision != 3 {
+			t.Errorf("paths: policy revision %d, want the packaged revision 3", ps.Provenance.PolicyRevision)
+		}
 		repo := ps.Repos[0]
 		rows := map[string]report.PathRow{}
 		for _, row := range repo.Paths {
@@ -339,6 +343,25 @@ func mainChangeOracles(t *testing.T) {
 		for _, row := range under.Repos[0].Paths {
 			if row.Role != "test" || !strings.HasPrefix(row.Path, "tests/") {
 				t.Errorf("paths --role test tests lists %s (%s)", row.Path, row.Role)
+			}
+		}
+		// A PATH no repository holds, such as the absolute path a scan was
+		// given, lists nothing and says how the run writes its paths; one
+		// it holds says nothing of the kind.
+		if len(under.Caveats) > 0 && strings.Contains(fmt.Sprint(under.Caveats), "relative to its repository's root") {
+			t.Errorf("paths tests carries a no-path caveat: %+v", under.Caveats)
+		}
+		for _, pre := range []string{"/home/someone/fixture/src", "nowhere"} {
+			none, err := app.Paths(t.Context(), s.read, app.PathsRequest{RunID: s.run, Prefixes: []string{pre}})
+			if err != nil || len(none.Repos) != 1 || len(none.Repos[0].Paths) != 0 {
+				t.Fatalf("paths %s: %v", pre, err)
+			}
+			found := false
+			for _, c := range none.Caveats {
+				found = found || c.Code == "no-values" && strings.Contains(c.Message, strings.TrimPrefix(pre, "/")) && strings.Contains(c.Message, "relative to its repository's root")
+			}
+			if !found {
+				t.Errorf("paths %s: caveats %+v, want a no-values caveat naming it and how the run writes paths", pre, none.Caveats)
 			}
 		}
 		for _, bad := range []app.PathsRequest{{RunID: s.run, Role: "production"}, {RunID: s.run, Role: "prod", Skipped: true},

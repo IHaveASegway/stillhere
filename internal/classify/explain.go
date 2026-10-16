@@ -51,10 +51,14 @@ type Rule struct {
 	// Source is where the rule lives: SourcePackaged or SourceFile for the
 	// policy's rules, else SourceAttribute, SourceHeader or SourceFileType.
 	Source string
-	// Note says why, when anything does: the rule's own comment in the
-	// policy file, the deny list's label for its pattern, the path's size,
-	// a deny pattern .gitattributes overrode.
+	// Note says why the rule exists, when anything does: the rule's own
+	// comment in the policy file, the deny list's label for its pattern,
+	// what a step outside the policy means. It is the same for every path
+	// the rule decides, so a legend of the rules can print it once.
 	Note string
+	// Detail is what this path adds: its size, for a size bound, or the
+	// deny pattern that .gitattributes overrode; "" when nothing does.
+	Detail string
 }
 
 // Explain says which rule decided c, a class that Classify gave under p:
@@ -87,15 +91,18 @@ func Explain(p *policy.Policy, c domain.PathClass) Rule {
 	case domain.SkipTooBig:
 		if c.Size > p.Blame.MaxBytes {
 			return Rule{Kind: RuleSize, Text: fmt.Sprintf("max_bytes = %d", p.Blame.MaxBytes), Where: "[blame] max_bytes",
-				Source: source, Note: sizeNote(c.Size)}
+				Source: source, Note: "a larger file is never blamed", Detail: sizeNote(c.Size)}
 		}
 		if d := decide(p, c.Path, c.Size); d.tooBig {
 			r := p.Roles.Path[d.rule]
 			return Rule{Kind: RuleSize, Text: fmt.Sprintf("max_bytes = %d", r.MaxBytes), Where: fmt.Sprintf("[[roles.path]] rule %d", d.rule+1),
-				Source: source, Note: joinNotes(sizeNote(c.Size), r.Note)}
+				Source: source, Note: r.Note, Detail: sizeNote(c.Size)}
 		}
 		return unknown
 	case domain.SkipGeneratedHeader:
+		if !decide(p, c.Path, c.Size).counts() {
+			return unknown // only a path a rule counts is sniffed for a header
+		}
 		return Rule{Kind: RuleHeader, Text: "a generated-file header in the first 40 lines", Source: SourceHeader,
 			Note: "such as \"Code generated ... DO NOT EDIT\"; turning linguist-generated off for the path in .gitattributes counts it"}
 	case domain.SkipUnclassified:
@@ -106,9 +113,17 @@ func Explain(p *policy.Policy, c domain.PathClass) Rule {
 		case d.role != "":
 			return Rule{Kind: RuleNotFile, Text: "a symbolic link or a submodule", Source: SourceFileType,
 				Note: "only a regular file gets a role"}
+		case c.AtHead && c.Size < 0:
+			// git ls-tree prints no size for a submodule (a gitlink), and
+			// for a regular file only when it cannot read the blob, as in
+			// a blobless partial clone.
+			return Rule{Kind: RuleNotFile, Text: "no size at HEAD, as for a submodule", Source: SourceFileType,
+				Note: "a submodule gets no role, whatever the rules say; in a partial clone, where git reads no file's size, " +
+					"it can also be a file no name, extension or path rule gives a role"}
 		}
 		return Rule{Kind: RuleNone, Text: "no name, extension or path rule", Source: source,
-			Note: "a role for it in [roles.extensions], [roles.names] or [[roles.path]] makes it count"}
+			Note: "a role for it in [roles.extensions], [roles.names] or [[roles.path]] makes it count, " +
+				"unless HEAD holds a symbolic link there, which gets no role"}
 	case "":
 	default:
 		return unknown
@@ -129,7 +144,7 @@ func Explain(p *policy.Policy, c domain.PathClass) Rule {
 	}
 	r.Source = source
 	if dr, ok := p.Paths.Denying(c.Path); ok {
-		r.Note = joinNotes(r.Note, "deny pattern "+dr.Pattern+" matches it, but .gitattributes turns linguist-generated or linguist-vendored off")
+		r.Detail = "deny pattern " + dr.Pattern + " matches it, but .gitattributes turns linguist-generated or linguist-vendored off"
 	}
 	return r
 }
@@ -145,14 +160,3 @@ func denyWhere(p *policy.Policy, d policy.DenyRule) string {
 
 // sizeNote is a path's size as a Rule's note gives it.
 func sizeNote(size int64) string { return fmt.Sprintf("%d bytes", size) }
-
-// joinNotes joins the non-empty notes with "; ".
-func joinNotes(notes ...string) string {
-	var out []string
-	for _, n := range notes {
-		if n != "" {
-			out = append(out, n)
-		}
-	}
-	return strings.Join(out, "; ")
-}

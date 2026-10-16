@@ -647,8 +647,8 @@ func WhoKnows(ctx context.Context, d Deps, r WhoKnowsRequest) (*report.WhoKnows,
 // whoKnowsNoRole is the no-values caveat (report.NoValuesCaveat) of a
 // who-knows answer that lists no one about a path that collected
 // repositories have, though none of the paths under it has a role (PF-8):
-// go.mod, which the policy leaves unclassified, or .github/, which its
-// deny list denies. who_knows@1 counts only paths with a role, so the
+// go.mod, which the policy leaves unclassified, or node_modules/, which
+// its deny list denies. who_knows@1 counts only paths with a role, so the
 // answer is empty because the policy leaves the path out, not because
 // nobody knows it; "nobody" would say the second. It counts the
 // repositories and the reasons the classifier gave, and names the command
@@ -729,6 +729,16 @@ const whoKnowsNoPathNames = 3
 // about was collected says so with its failed caveats instead, and the
 // whole repository (prefix "") is never missing.
 func whoKnowsNoPath(fs *domain.FactSet, prefix, repo string, runID int64) (report.Caveat, bool) {
+	return noPathCaveat(fs, prefix, repo, runID, `, so this answer is missing, not a real "nobody": `)
+}
+
+// noPathCaveat is the no-values caveat of an answer about a path that no
+// collected repository asked about has (whoKnowsNoPath, and the paths
+// answer's for each PATH): what the run holds, and so is told, with
+// consequence, the clause that says what that means for the answer, put
+// between the fact and the run's other repositories that have the path or
+// how the run writes its paths.
+func noPathCaveat(fs *domain.FactSet, prefix, repo string, runID int64, consequence string) (report.Caveat, bool) {
 	if prefix == "" {
 		return report.Caveat{}, false
 	}
@@ -754,16 +764,15 @@ func whoKnowsNoPath(fs *domain.FactSet, prefix, repo string, runID int64) (repor
 	if len(asked) == 0 {
 		return report.Caveat{}, false
 	}
-	const missing = ", so this answer is missing, not a real \"nobody\": "
 	if len(holding) > 0 {
 		return report.NoValuesCaveat(fmt.Sprintf("Repository %s of run %d has no path under %q",
-			asked[0], runID, prefix) + missing + whoKnowsHolding(holding) + "."), true
+			asked[0], runID, prefix) + consequence + whoKnowsHolding(holding) + "."), true
 	}
 	lead := fmt.Sprintf("No repository of run %d has a path under %q", runID, prefix)
 	if collected == 1 {
 		lead = fmt.Sprintf("Repository %s of run %d has no path under %q", asked[0], runID, prefix)
 	}
-	return report.NoValuesCaveat(lead + missing +
+	return report.NoValuesCaveat(lead + consequence +
 		"the run knows each path relative to its repository's root, such as src or src/pay.go."), true
 }
 

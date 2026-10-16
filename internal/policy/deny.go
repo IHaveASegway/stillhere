@@ -66,10 +66,13 @@ type denyOrigin struct {
 }
 
 // denyNote is the label a comment line gives the patterns below it: the
-// line without its # marks, up to the first ": ", ", " or ". ", so
-// "xcode_file?: the extension is .nib" labels "xcode_file?" and "Test
+// line without its # marks, up to the first ": ", ", " or ". ", so "Test
 // fixtures" labels itself. A line of # marks alone, a banner, labels
-// nothing.
+// nothing. Section 2 of the packaged list heads each group with the name
+// of Linguist's Ruby method it translates, which says nothing to a reader
+// on its own, so a label that is one such name ("xcode_file?: the
+// extension is .nib", "cargo_lock?") reads "Linguist's generated.rb marks
+// it generated (cargo_lock?)".
 func denyNote(line string) string {
 	s := strings.TrimSpace(strings.TrimLeft(line, "#"))
 	s = strings.TrimSpace(strings.TrimRight(s, "#"))
@@ -78,7 +81,11 @@ func denyNote(line string) string {
 			s = s[:i]
 		}
 	}
-	return strings.TrimSuffix(s, ".")
+	s = strings.TrimSuffix(s, ".")
+	if len(s) > 1 && strings.HasSuffix(s, "?") && !strings.ContainsFunc(s, unicode.IsSpace) {
+		return "Linguist's generated.rb marks it generated (" + s + ")"
+	}
+	return s
 }
 
 // denyFilter is the prefilter of one deny pattern.

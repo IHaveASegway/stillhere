@@ -102,6 +102,15 @@ func TestClassify(t *testing.T) {
 			{"examples/testing/tests/x.rs", domain.RoleTest}, // test first
 			{"samples/basic.py", domain.RoleDoc},
 			{"pkg/samples/x.go", domain.RoleProd}, // samples/ and demos/ at the top only, as Linguist reads them
+			// A capital first letter counts, as in Linguist's patterns:
+			// SwiftPM's Examples/, .NET's Samples/ and Benchmarks/.
+			{"Examples/Basic/main.swift", domain.RoleDoc},
+			{"Samples/Console/Program.cs", domain.RoleDoc},
+			{"Demo/app.js", domain.RoleDoc},
+			{"Docs/conf.py", domain.RoleDoc},
+			{"Benchmarks/Bench.cs", domain.RoleTest},
+			{"Sources/Lib/lib.swift", domain.RoleProd},
+			{"Docs/v1/docs-gen.go", domain.RoleProd}, // a Go package, as under docs/
 			{"internal/exampleutil/x.go", domain.RoleProd},
 			// Benchmarks are test: Cargo's benches/, other ecosystems'
 			// directories, *_bench.* and *.bench.* names, a top-level
@@ -159,6 +168,7 @@ func TestClassify(t *testing.T) {
 			{"setup.py", domain.RoleIaC},
 			{"homeassistant/setup.py", domain.RoleProd}, // a module named setup
 			{"noxfile.py", domain.RoleIaC},
+			{"fabfile.py", domain.RoleIaC}, // the deny list leaves Linguist's Fabric rule to this one
 			{"setup.cfg", domain.RoleIaC},
 			{"tox.ini", domain.RoleIaC},
 			{"MANIFEST.in", domain.RoleIaC},
@@ -175,6 +185,16 @@ func TestClassify(t *testing.T) {
 		} {
 			if got := classify.Role(p, c.path); got != c.want {
 				t.Errorf("Role(%q) = %q, want %q", c.path, got, c.want)
+			}
+		}
+		// The paths only a path rule gives a role, which the header sniff
+		// must name one by one: no extension or name gives them one.
+		for path, want := range map[string]bool{
+			"requirements.txt": true, "requirements/dev.in": true,
+			"setup.py": false, "tests/x.py": false, "notes.txt": false,
+		} {
+			if got := classify.RoleByRuleAlone(p, path); got != want {
+				t.Errorf("RoleByRuleAlone(%q) = %v, want %v", path, got, want)
 			}
 		}
 	})
@@ -238,6 +258,8 @@ func TestClassify(t *testing.T) {
 			// data, data of unknown size and code there stay test.
 			{"large test data", at("tests/models/whatwg.json", 208844), "", domain.SkipTooBig},
 			{"small test data", at("tests/models/cases.json", 5000), domain.RoleTest, ""},
+			{"test data at the bound", at("tests/models/cases.json", 100000), domain.RoleTest, ""},
+			{"test data over the bound", at("tests/models/cases.json", 100001), "", domain.SkipTooBig},
 			{"test data of unknown size", at("tests/models/cases.json", -1), domain.RoleTest, ""},
 			{"large test code", at("tests/test_options.py", 134294), domain.RoleTest, ""},
 			// A directory rule matches directories only.
@@ -249,6 +271,11 @@ func TestClassify(t *testing.T) {
 			{"too big before the header", withHeader(at("gen_out.py", 400001)), "", domain.SkipTooBig},
 			{"denied before the header", withHeader(at("vendor/gen.py", 10)), "", domain.SkipDeniedPath},
 			{"no header sniff off Head", withHeader(gone(at("app.py", 188))), domain.RoleProd, ""},
+			// Only a path a rule counts is generated: one no rule gives a
+			// role stays unclassified, however widely the sniff read.
+			{"a header on a path with no role", withHeader(at("notes.txt", 50)), "", domain.SkipUnclassified},
+			{"a header on a path only a path rule gives a role", withHeader(at("requirements.txt", 50)), "", domain.SkipGeneratedHeader},
+			{"the Fabric tasks", at("fabfile.py", 120), domain.RoleIaC, ""},
 			{"a path off Head keeps its role", gone(at("old_name.py", 18)), domain.RoleProd, ""},
 			{"a path off Head is denied too", gone(at("vendor/old.py", 18)), "", domain.SkipDeniedPath},
 		} {
@@ -316,28 +343,52 @@ func TestClassify(t *testing.T) {
 		}{
 			{"an extension", in("src/lib.rs", 10), classify.RuleExtension, ".rs", "[roles.extensions] prod", classify.SourcePackaged, ""},
 			{"a name", in("deploy/Dockerfile", 10), classify.RuleName, "Dockerfile", "[roles.names] iac", classify.SourcePackaged, ""},
-			{"a path rule", in("examples/hello/main.rs", 10), classify.RulePath, `(^|/)_?examples?/|^(samples?|demos?)/`,
+			{"a path rule", in("examples/hello/main.rs", 10), classify.RulePath, `(^|/)_?[Ee]xamples?/|^([Ss]amples?|[Dd]emos?)/`,
 				"[[roles.path]] rule 4", classify.SourcePackaged, "Example code documents the product"},
 			{"a deny pattern", in("web/app.min.js", 10), classify.RuleDeny, `(\.|-)min\.(js|css)$`, "generated_paths.txt line ",
 				classify.SourcePackaged, "Minified JavaScript and CSS"},
 			{"an attribute", classify.Input{Path: "api/client.py", AtHead: true, Size: 10, Generated: "set"}, classify.RuleAttribute,
 				"linguist-generated or linguist-vendored", ".gitattributes", classify.SourceAttribute, "no deny pattern"},
 			{"an attribute un-denies", classify.Input{Path: "vendor/keep.py", AtHead: true, Size: 10, Generated: "unset"},
-				classify.RuleExtension, ".py", "[roles.extensions] prod", classify.SourcePackaged, "deny pattern (^|/)vendors?/ matches it"},
+				classify.RuleExtension, ".py", "[roles.extensions] prod", classify.SourcePackaged, ""},
 			{"[blame] max_bytes", in("service.py", 400001), classify.RuleSize, "max_bytes = 400000", "[blame] max_bytes",
-				classify.SourcePackaged, "400001 bytes"},
+				classify.SourcePackaged, "never blamed"},
+			// The rule that bounds test data decides small files too, and its
+			// reason says what it does with both.
 			{"a rule's max_bytes", in("tests/models/whatwg.json", 208844), classify.RuleSize, "max_bytes = 100000",
-				"[[roles.path]] rule 1", classify.SourcePackaged, "test data, not test code"},
+				"[[roles.path]] rule 1", classify.SourcePackaged, "test up to 100 KB"},
+			{"small test data", in("tests/small.json", 9), classify.RulePath, "(^|/)(tests|test|__tests__|spec|testing)/",
+				"[[roles.path]] rule 1", classify.SourcePackaged, "test up to 100 KB"},
 			{"a generated header", classify.Input{Path: "gen_out.py", AtHead: true, Size: 10, HeaderHit: true}, classify.RuleHeader,
 				"a generated-file header in the first 40 lines", "", classify.SourceHeader, ""},
 			{"a link", classify.Input{Path: "link.py", AtHead: true, Size: 7, NotFile: true}, classify.RuleNotFile,
 				"a symbolic link or a submodule", "", classify.SourceFileType, ""},
-			{"no rule", in("notes.csv", 10), classify.RuleNone, "no name, extension or path rule", "", classify.SourcePackaged, ""},
+			{"no rule", in("notes.csv", 10), classify.RuleNone, "no name, extension or path rule", "", classify.SourcePackaged, "makes it count"},
+			// A submodule has no size at HEAD, and no rule gives it a role:
+			// a role for it would change nothing.
+			{"a submodule", classify.Input{Path: "libs/sub", AtHead: true, Size: -1, NotFile: true}, classify.RuleNotFile,
+				"no size at HEAD, as for a submodule", "", classify.SourceFileType, "a submodule gets no role"},
 		} {
 			got := classify.Explain(p, classify.Classify(p, c.in))
 			if got.Kind != c.kind || got.Text != c.text || !strings.HasPrefix(got.Where, c.where) || got.Source != c.src ||
 				!strings.Contains(got.Note, c.note) {
 				t.Errorf("%s: Explain = %+v, want %s %q at %q from %s, noting %q", c.name, got, c.kind, c.text, c.where, c.src, c.note)
+			}
+		}
+		// What a path adds, its size or an attribute's override, is its
+		// Detail, never the rule's Note, which a legend prints once for
+		// every path the rule decides.
+		for _, c := range []struct {
+			in           classify.Input
+			note, detail string
+		}{
+			{in("tests/models/whatwg.json", 208844), "Configuration and data under a test directory are test up to 100 KB", "208844 bytes"},
+			{in("tests/edge.json", 100001), "Configuration and data under a test directory are test up to 100 KB", "100001 bytes"},
+			{classify.Input{Path: "vendor/keep.py", AtHead: true, Size: 10, Generated: "unset"}, "",
+				"deny pattern (^|/)vendors?/ matches it, but .gitattributes turns linguist-generated or linguist-vendored off"},
+		} {
+			if got := classify.Explain(p, classify.Classify(p, c.in)); got.Note != c.note || got.Detail != c.detail {
+				t.Errorf("Explain(%s) note %q, detail %q; want %q, %q", c.in.Path, got.Note, got.Detail, c.note, c.detail)
 			}
 		}
 		// A class this classifier would not give, as an older stillhere

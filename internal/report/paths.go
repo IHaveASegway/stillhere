@@ -73,7 +73,14 @@ type PathRule struct {
 	// Source is where the rule lives: "packaged policy", the policy file's
 	// name, "linguist attribute", "generated header" or "file type".
 	Source string `json:"source"`
-	Note   string `json:"note"` // why, when anything says: the policy's own comment for the rule, a size
+	// Note is why the rule exists, when anything says: the policy's own
+	// comment for it, the deny list's label; the same for every path the
+	// rule decides.
+	Note string `json:"note"`
+	// Detail is what this path adds, not the rule: its size for a size
+	// bound, or the deny pattern .gitattributes overrode; "" when nothing.
+	// The legend of the rules leaves it out.
+	Detail string `json:"detail"`
 }
 
 // PathRuleUse is one rule of the legend, and how many listed paths it
@@ -134,6 +141,7 @@ func NewPaths(in *PathsInput) *Paths {
 			u, ok := uses[k]
 			if !ok {
 				u = &PathRuleUse{PathRule: row.Rule, Class: class}
+				u.Detail = "" // a fact of the row's path, not of the rule
 				uses[k] = u
 			}
 			u.Paths++
@@ -227,10 +235,14 @@ func countsText(r PathsRepo) string {
 	return out
 }
 
-// pathsHeading is "Paths of run 7 · as of ... · packaged policy" and the
-// filters.
+// pathsHeading is "paths · run 7 · as of ... · policy 0123456789ab
+// (packaged revision 3)", or the policy file's name after its hash, and
+// the filters.
 func (ps *Paths) pathsHeading() string {
-	s := "paths · " + provenanceText(ps.Provenance) + " (" + ps.PolicySource + ")"
+	s := "paths · " + provenanceText(ps.Provenance)
+	if ps.Provenance.PolicyRevision == 0 { // a revision names the packaged policy already
+		s += " (" + ps.PolicySource + ")"
+	}
 	var filters []string
 	if len(ps.Prefixes) > 0 {
 		filters = append(filters, "under "+strings.Join(ps.Prefixes, ", "))
@@ -278,6 +290,9 @@ func (ps *Paths) writeText(p *printer) {
 			if !row.AtHead {
 				path += "  (history only)"
 			}
+			if row.Rule.Detail != "" {
+				path += "  (" + clean(row.Rule.Detail) + ")"
+			}
 			p.line("  " + pad(classLabel(pathClass(row)), classW) + "  " + pad(clean(ruleRef(row.Rule)), ruleW) + "  " + path)
 		}
 	}
@@ -318,6 +333,9 @@ func (ps *Paths) writeMarkdown(p *printer) {
 			path := mdCode(row.Path)
 			if !row.AtHead {
 				path += " (history only)"
+			}
+			if row.Rule.Detail != "" {
+				path += " (" + mdText(row.Rule.Detail) + ")"
 			}
 			p.line("| " + classLabel(pathClass(row)) + " | " + mdText(ruleRef(row.Rule)) + " | " + path + " |")
 		}

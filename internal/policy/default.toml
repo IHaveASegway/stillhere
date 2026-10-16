@@ -13,10 +13,14 @@
 # there, with [paths] deny written out in full from generated_paths.txt:
 # package_file names a file inside stillhere, which only this policy may use.
 #
-# Revisions of this packaged policy, which a run tells apart by the policy
-# hash it records (docs/spec/classification.md#packaged-policy-revisions):
+# Revisions of this packaged policy. A run records the policy's hash, and
+# internal/policy/revisions.go maps each hash this file and
+# generated_paths.txt have had to its revision, which reports print beside
+# it, so a change to either file is a new revision there
+# (docs/spec/classification.md#packaged-policy-revisions):
 #   1  2026-10-14  the first.
-#   2  2026-10-15  [ai] version 2: GitHub Copilot's co-author addresses.
+#   2  2026-10-15  [ai] version 2: GitHub Copilot's co-author addresses;
+#                  GitHub's own address among the bots.
 #   3  2026-10-16  what counts as product code: examples and docs are doc,
 #                  benchmarks and large test data are not test code, build
 #                  and packaging configuration and CI are iac, directory
@@ -137,34 +141,40 @@ iac = [
 # first whose pattern matches, and whose `when` admits the role the name or
 # extension gives, wins; without `when`, a rule admits any path. Patterns
 # match whole segments: (^|/)tests(/|$) matches tests/test_service.py, which
-# a search for "/tests/" misses. A rule with max_bytes skips a file it
-# admits that is larger than that as too big, rather than give it its role.
+# a search for "/tests/" misses. A rule's optional max_bytes, a whole number
+# of bytes of 1 or more, bounds the files it decides: one it admits that is
+# larger is skipped as too big, rather than given its role. The first
+# sentence of the comment inside a rule's table, or else of the comment
+# right above its header, is the reason 'stillhere paths' prints for it.
 #
 # What counts as product code (revision 3): example code documents the
 # product, benchmarks measure it, and build and CI tooling builds it; none
 # of them is the product, so none is prod. Precedence is test, then doc for
-# examples, then benchmarks (test), then doc for documentation, then
-# migration, then seed, then iac for CI and build tooling: tests/fixtures/x.py
-# would be test and examples/app/migrations/x.py is doc. The deny list
-# comes before every rule, though: Linguist's test-fixture pattern denies
-# tests/fixtures/, whatever role a rule here would give it.
+# examples, then prod for Go packages (the exception below), then
+# benchmarks (test), then doc for documentation, then migration, then seed,
+# then iac for CI and build tooling: tests/fixtures/x.py would be test and
+# examples/app/migrations/x.py is doc. The deny list comes before every
+# rule, though: Linguist's test-fixture pattern denies tests/fixtures/,
+# whatever role a rule here would give it.
+
 [[roles.path]]
 role = "test"
-# Large data under a test directory is test data, not test code: test
-# vectors, recorded responses and other files a tool wrote or someone
-# copied in, such as a 200 KB JSON of URL-parsing cases. Smaller
-# configuration and data there stay test, by the next rule.
+# Configuration and data under a test directory are test up to 100 KB. A
+# larger file there is test data, not test code, and is skipped as too big:
+# test vectors, recorded responses and other files a tool wrote or someone
+# copied in, such as a 200 KB JSON of URL-parsing cases.
 pattern = '(^|/)(tests|test|__tests__|spec|testing)/'
 when = ["iac"]
 max_bytes = 100000
 
 [[roles.path]]
 role = "test"
-# Code and configuration under a test directory. Data there (tests/data.csv,
-# golden files, Jest snapshots) has no role, and documentation stays doc, so
-# docs/spec/, a specification, is no test suite.
+# Code under a test directory, of any size. Data there (tests/data.csv,
+# golden files, Jest snapshots) has no role, configuration is the rule
+# above's, and documentation stays doc, so docs/spec/, a specification, is
+# no test suite.
 pattern = '(^|/)(tests|test|__tests__|spec|testing)(/|$)'
-when = ["prod", "sql", "markup", "iac"]
+when = ["prod", "sql", "markup"]
 
 [[roles.path]]
 role = "test"
@@ -179,8 +189,9 @@ role = "doc"
 # Example code documents the product; it is not the product: examples/,
 # example/ and Go's _examples/ and _example/ at any depth (Cargo's
 # examples/, a workspace member's, docs/examples/), and, as Linguist reads
-# them, samples/ and demos/ at the top.
-pattern = '(^|/)_?examples?/|^(samples?|demos?)/'
+# them, samples/ and demos/ at the top. A capital first letter counts, as
+# in Linguist's patterns: SwiftPM's Examples/, .NET's Samples/.
+pattern = '(^|/)_?[Ee]xamples?/|^([Ss]amples?|[Dd]emos?)/'
 when = ["prod", "sql", "markup", "iac"]
 
 [[roles.path]]
@@ -191,26 +202,26 @@ role = "prod"
 # the Google Docs and Apps Script clients of google.golang.org/api
 # (docs/v1, script/v1), nats.go's bench and a library's build-information
 # package. Go keeps its own benchmarks in _test.go files, test above.
-pattern = '(^(docs|build|script)/|(^|/)(bench|perf)/)(.*/)?[^/]+\.go$'
+pattern = '(^([Dd]ocs|build|script)/|(^|/)([Bb]ench|perf)/)(.*/)?[^/]+\.go$'
 when = ["prod"]
 
 [[roles.path]]
 role = "test"
 # Benchmarks measure the product; they are not the product: Cargo's
-# benches/, the benchmarks/ and bench/ directories of other ecosystems and
-# a top-level perf/, files named *_bench.* or *.bench.* (Vitest's
-# convention), and a top-level bench.py.
-pattern = '(^|/)(benches|benchmarks|bench)/|^perf/|[._]bench\.[^/.]+$|^bench\.py$'
+# benches/, the benchmarks/ and bench/ directories of other ecosystems
+# (.NET's Benchmarks/ with a capital) and a top-level perf/, files named
+# *_bench.* or *.bench.* (Vitest's convention), and a top-level bench.py.
+pattern = '(^|/)([Bb]enches|[Bb]enchmarks|[Bb]ench)/|^perf/|[._]bench\.[^/.]+$|^bench\.py$'
 when = ["prod", "sql", "markup", "iac"]
 
 [[roles.path]]
 role = "doc"
 # Code under the top-level docs/ builds or illustrates the documentation:
 # Sphinx's conf.py, a documentation site's theme and components, snippets.
-# Linguist counts ^docs?/ as documentation; a top-level doc/ is left out,
-# because Go projects keep packages there, such as cobra's doc/, which
+# Linguist counts ^[Dd]ocs?/ as documentation; a top-level doc/ is left
+# out, because Go projects keep packages there, such as cobra's doc/, which
 # writes man pages.
-pattern = '^docs/'
+pattern = '^[Dd]ocs/'
 when = ["prod", "sql", "markup", "iac"]
 
 [[roles.path]]
@@ -261,7 +272,8 @@ when = ["prod"]
 role = "iac"
 # Python's packaging and task files: setup.py at the top of the repository
 # (a package's own setup.py module, such as an application's
-# app/setup.py, stays prod), and nox's noxfile.py and Fabric's fabfile.py.
+# app/setup.py, stays prod), and nox's noxfile.py and Fabric's fabfile.py,
+# which the deny list leaves to this rule (generated_paths.txt).
 pattern = '^setup\.py$|(^|/)(noxfile|fabfile)\.py$'
 when = ["prod"]
 
@@ -276,7 +288,9 @@ when = ["prod"]
 [[roles.path]]
 role = "iac"
 # pip's requirements files: requirements.txt, requirements-dev.txt and
-# requirements/test.in, which no extension gives a role.
+# requirements/test.in, which no extension gives a role. The header sniff
+# reads them by name, so pip-compile's output, whose header says it is
+# autogenerated, is skipped as generated.
 pattern = '(^|/)requirements([-_.][^/]*)?\.(txt|in)$|(^|/)requirements/[^/]+\.(txt|in)$'
 
 [paths]

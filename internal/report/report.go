@@ -172,8 +172,13 @@ type Run struct {
 
 // Policy identifies the policy behind a report's numbers.
 type Policy struct {
-	Version  int    `json:"version"`  // the policy file's own schema version
-	SHA256   string `json:"sha256"`   // what the run recorded: the hash of the TOML, a length prefix and the deny list
+	Version int    `json:"version"` // the policy file's own schema version
+	SHA256  string `json:"sha256"`  // what the run recorded: the hash of the TOML, a length prefix and the deny list
+	// Revision is the packaged policy's revision whose hash SHA256 is
+	// (policy.PackagedRevision), so two runs' policies can be told apart by
+	// name; 0 for a policy file, or a packaged policy this stillhere does
+	// not know.
+	Revision int    `json:"revision"`
 	Headline string `json:"headline"` // the [headline] number, such as prod_nonblank_lines
 }
 
@@ -226,11 +231,14 @@ type Caveat struct {
 // Provenance says where a section's numbers come from, so the section can
 // be read, or handed to an agent, on its own.
 type Provenance struct {
-	RunID   int64     `json:"run_id"` // 0 for a week report, which stores nothing
-	AsOf    time.Time `json:"as_of"`
-	Policy  string    `json:"policy"`  // the policy's sha256
-	Heads   []Head    `json:"heads"`   // every repository the section covers, sorted by name and key
-	Metrics []string  `json:"metrics"` // metric@version of every number in the section, sorted
+	RunID  int64     `json:"run_id"` // 0 for a week report, which stores nothing
+	AsOf   time.Time `json:"as_of"`
+	Policy string    `json:"policy"` // the policy's sha256
+	// PolicyRevision is the packaged policy's revision whose hash Policy
+	// is (Policy.Revision); 0 for a policy file or an unknown one.
+	PolicyRevision int      `json:"policy_revision"`
+	Heads          []Head   `json:"heads"`   // every repository the section covers, sorted by name and key
+	Metrics        []string `json:"metrics"` // metric@version of every number in the section, sorted
 	// Forge is the GitHub data the run read for the repositories in Heads,
 	// which dates every number computed from the forge replica (ADR 0004);
 	// null when they had none, and in a week report.

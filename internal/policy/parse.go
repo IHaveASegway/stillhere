@@ -365,40 +365,72 @@ func (c *checker) roles(f rolesFile) Roles {
 }
 
 // ruleNotes reads, for each [[roles.path]] table of a policy's TOML in
-// order, the first sentence of the comment inside it, up to a colon
-// (PathRule.Note): the comment lines between its header and the next
-// table's, joined. A table without a comment has "". The caller uses the
-// notes only when there is one for every rule, so a file that writes its
-// rules another way (an inline array of tables) gets none rather than
-// another rule's.
+// order, the reason its comment gives (PathRule.Note): the first sentence,
+// up to a colon, of the comment inside the table, else of the comment
+// right above its header. Inside is a comment block that a key of the
+// table follows, as the packaged policy writes them; above is the last
+// paragraph (after the last line that is "#" alone) of the comment block
+// that runs into the header with no blank line between, as a TOML file
+// usually comments a table, and wherever it sits, so the comment above a
+// rule's header is that rule's, not the table's before it, and a rule
+// written under a comment on all the rules gets its own line, not that
+// comment's. A block that a blank line parts from the next header, such
+// as the packaged policy's comment on all the rules, is no rule's. A table
+// without either has "". The caller uses the notes only when there is one for every rule,
+// so a file that writes its rules another way (an inline array of tables)
+// gets none rather than another rule's.
 func ruleNotes(tomlText string) []string {
 	var notes []string
-	var text []string
+	var inside, above, block []string // the current table's comments; the block above its header; the comment lines read since the last other line
 	in := false
 	flush := func() {
 		if in {
-			s := strings.Join(text, " ")
-			for _, sep := range []string{": ", ". "} {
-				if i := strings.Index(s, sep); i >= 0 {
-					s = s[:i]
-				}
+			text := inside
+			if len(text) == 0 {
+				text = above
 			}
-			notes = append(notes, strings.TrimSuffix(s, "."))
+			notes = append(notes, firstSentence(strings.Join(text, " ")))
 		}
-		text = nil
 	}
 	for _, line := range strings.Split(tomlText, "\n") {
 		line = strings.TrimSpace(line)
 		switch {
+		case strings.HasPrefix(line, "#"):
+			block = append(block, strings.TrimSpace(strings.TrimLeft(line, "#")))
+			continue
 		case strings.HasPrefix(line, "["):
 			flush()
-			in = strings.ReplaceAll(line, " ", "") == "[[roles.path]]"
-		case in && strings.HasPrefix(line, "#"):
-			text = append(text, strings.TrimSpace(strings.TrimLeft(line, "#")))
+			header, _, _ := strings.Cut(line, "#") // a comment after the header
+			in = strings.Join(strings.Fields(header), "") == "[[roles.path]]"
+			inside, above = nil, lastParagraph(block)
+		case line != "" && in:
+			inside = append(inside, block...)
 		}
+		block = nil
 	}
 	flush()
 	return notes
+}
+
+// lastParagraph is a comment block's lines after its last empty one.
+func lastParagraph(block []string) []string {
+	for i := len(block) - 1; i >= 0; i-- {
+		if block[i] == "" {
+			return block[i+1:]
+		}
+	}
+	return block
+}
+
+// firstSentence is a comment's first sentence, up to a colon, without its
+// full stop: a rule's note.
+func firstSentence(s string) string {
+	for _, sep := range []string{": ", ". "} {
+		if i := strings.Index(s, sep); i >= 0 {
+			s = s[:i]
+		}
+	}
+	return strings.TrimSuffix(s, ".")
 }
 
 // roleMap inverts a role → keys table into the key → role map the
@@ -533,22 +565,10 @@ func (c *checker) pattern(where, s string) *regexp.Regexp {
 }
 
 // isRole reports whether s names one of the classifier's roles.
-func isRole(s string) bool {
-	switch domain.Role(s) {
-	case domain.RoleProd, domain.RoleSQL, domain.RoleMarkup, domain.RoleIaC,
-		domain.RoleDoc, domain.RoleTest, domain.RoleMigration, domain.RoleSeed:
-		return true
-	}
-	return false
-}
+func isRole(s string) bool { return domain.Role(s).Known() }
 
 // roleList names the roles for messages.
-func roleList() string {
-	return strings.Join([]string{
-		string(domain.RoleProd), string(domain.RoleSQL), string(domain.RoleMarkup), string(domain.RoleIaC),
-		string(domain.RoleDoc), string(domain.RoleTest), string(domain.RoleMigration), string(domain.RoleSeed),
-	}, ", ")
-}
+func roleList() string { return domain.RoleList() }
 
 // keyName renders a key path as a reader finds it in the file: "[week]
 // days" for a key in a table, "[roles.path] rule" for a key in an array of

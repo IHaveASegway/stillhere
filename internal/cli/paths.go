@@ -4,6 +4,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/IHaveASegway/stillhere/internal/app"
+	"github.com/IHaveASegway/stillhere/internal/domain"
 )
 
 func (e *env) pathsCommand() *cobra.Command {
@@ -45,7 +46,7 @@ report's "skipped paths" counts.`,
 		},
 	}
 	cmd.Flags().StringVar(&repo, "repo", "", "repository `KEY` to list (default every repository in the run)")
-	cmd.Flags().StringVar(&role, "role", "", "list only the paths with this `ROLE`: prod, test, doc, iac, markup, sql, migration or seed")
+	cmd.Flags().StringVar(&role, "role", "", "list only the paths with this `ROLE`, one of "+domain.RoleList())
 	cmd.Flags().BoolVar(&skipped, "skipped", false, "list only the paths the classifier skipped: denied, too big, generated header, unclassified")
 	addRunFlag(cmd, &run)
 	return cmd

@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/IHaveASegway/stillhere/internal/classify"
 	"github.com/IHaveASegway/stillhere/internal/domain"
@@ -29,8 +28,8 @@ func Paths(ctx context.Context, d Deps, r PathsRequest) (*report.Paths, error) {
 		return nil, err
 	}
 	if r.Role != "" {
-		if !knownRole(r.Role) {
-			return nil, &domain.UsageError{Msg: fmt.Sprintf("--role %q is not a role: want one of %s", r.Role, strings.Join(roleNames(), ", "))}
+		if !domain.Role(r.Role).Known() {
+			return nil, &domain.UsageError{Msg: fmt.Sprintf("--role %q is not a role: want one of %s", r.Role, domain.RoleList())}
 		}
 		if r.Skipped {
 			return nil, &domain.UsageError{Msg: "--role and --skipped ask for two kinds of path at once: a skipped path has no role"}
@@ -81,15 +80,25 @@ func Paths(ctx context.Context, d Deps, r PathsRequest) (*report.Paths, error) {
 			}
 			list = append(list, report.PathRow{
 				Path: pc.Path, Role: string(pc.Role), Skip: string(pc.Skip), AtHead: pc.AtHead, Size: pc.Size,
-				Rule: report.PathRule{Kind: string(rule.Kind), Text: rule.Text, Where: rule.Where, Source: rule.Source, Note: rule.Note},
+				Rule: report.PathRule{Kind: string(rule.Kind), Text: rule.Text, Where: rule.Where, Source: rule.Source, Note: rule.Note,
+					Detail: rule.Detail},
 			})
 		}
 		rows[rf.Repo.Key] = list
 	}
-	return report.NewPaths(&report.PathsInput{
+	ps := report.NewPaths(&report.PathsInput{
 		Run: &run, Facts: &asked, Prefixes: prefixes, Repo: repo, Role: r.Role, Skipped: r.Skipped,
 		PolicySource: source, Rows: rows,
-	}), nil
+	})
+	// A PATH no repository asked about holds lists nothing: say so, and how
+	// the run writes its paths, as who-knows does, rather than an empty
+	// list that reads as a path with nothing to show.
+	for _, pre := range prefixes {
+		if c, ok := noPathCaveat(fs, pre, repo, run.ID, ", so nothing is listed for it: "); ok {
+			ps.Caveats = append(ps.Caveats, c)
+		}
+	}
+	return ps, nil
 }
 
 // pathListed reports whether a classified path passes the paths answer's
@@ -119,22 +128,4 @@ func policyFileName(run domain.Run) string {
 		return name
 	}
 	return classify.SourceFile
-}
-
-// knownRole reports whether s names one of the classifier's roles.
-func knownRole(s string) bool {
-	for _, r := range roleNames() {
-		if r == s {
-			return true
-		}
-	}
-	return false
-}
-
-// roleNames are the classifier's roles, as --role takes them.
-func roleNames() []string {
-	return []string{
-		string(domain.RoleProd), string(domain.RoleTest), string(domain.RoleDoc), string(domain.RoleIaC),
-		string(domain.RoleMarkup), string(domain.RoleSQL), string(domain.RoleMigration), string(domain.RoleSeed),
-	}
 }

@@ -73,7 +73,7 @@ func Build(in *Input) *Model {
 		Kind:    in.Kind,
 		Tool:    Tool{Name: "stillhere", Version: in.Tool},
 		Now:     fs.Now,
-		Policy:  Policy{Version: fs.Policy.Version, SHA256: fs.Policy.SHA256},
+		Policy:  Policy{Version: fs.Policy.Version, SHA256: fs.Policy.SHA256, Revision: policy.PackagedRevision(fs.Policy.SHA256)},
 		Window:  b.landedWindow(),
 		History: intervalOf(in.History),
 		Timings: in.Timings,
@@ -806,7 +806,8 @@ func sameWindow(a, b domain.Window) bool {
 // provenance says where a section that covers repos and reads metrics comes
 // from.
 func (b *builder) provenance(repos []*domain.RepoFacts, metrics []string) Provenance {
-	p := Provenance{AsOf: b.in.Facts.Now, Policy: b.in.Facts.Policy.SHA256}
+	p := Provenance{AsOf: b.in.Facts.Now, Policy: b.in.Facts.Policy.SHA256,
+		PolicyRevision: policy.PackagedRevision(b.in.Facts.Policy.SHA256)}
 	if b.in.Run != nil {
 		p.RunID = b.in.Run.ID
 	}

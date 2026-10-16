@@ -166,7 +166,7 @@ func ClassifyPaths(ctx context.Context, git domain.GitRunner, repo domain.Repo, 
 	}
 	var hits map[string]bool
 	if len(head.order) > 0 {
-		if hits, err = classifyHeaders(ctx, git, repo, p); err != nil {
+		if hits, err = classifyHeaders(ctx, git, repo, p, head); err != nil {
 			return nil, err
 		}
 	}
@@ -358,15 +358,21 @@ func classifyAttributes(ctx context.Context, git domain.GitRunner, repo domain.R
 // the result (verified on git 2.50.1). The pathspecs keep binary files out
 // in practice.
 //
-// The sniff reads the files the policy can give a role by name or
-// extension; a policy with neither has it read every file.
-func classifyHeaders(ctx context.Context, git domain.GitRunner, repo domain.Repo, p *policy.Policy) (map[string]bool, error) {
+// The sniff reads the files the policy can give a role (classifyPathspecs).
+// Reading more would change no class, since classify.Classify reads a
+// header only on a path a rule counts, but it would cost time; with no
+// file that can get a role it does not run.
+func classifyHeaders(ctx context.Context, git domain.GitRunner, repo domain.Repo, p *policy.Policy, head *classifyHead) (map[string]bool, error) {
+	hits := map[string]bool{}
+	specs, sniff := classifyPathspecs(p, head)
+	if !sniff {
+		return hits, nil
+	}
 	args := []string{"grep", "--no-color", "--no-column", "-n", "-o", "-z", "-a", "-i", "-E", "-m", "1",
 		"-e", classifyHeaderGate, "--and", "(",
 		"-e", classifyHeaderDescribed, "-e", classifyHeaderDoNotModify, "-e", classifyHeaderDeclared,
 		")", repo.Head, "--"}
-	args = append(args, classifyPathspecs(p)...)
-	hits := map[string]bool{}
+	args = append(args, specs...)
 	prefix := repo.Head + ":"
 	cmd := domain.GitCmd{Dir: repo.Path, Args: args, OKExit: []int{1}}
 	err := git.Stream(ctx, cmd, func(r io.Reader) error {
@@ -411,21 +417,42 @@ func classifyGrepRecord(data []byte, atEOF bool) (advance int, token []byte, err
 	return 0, nil, nil
 }
 
-// classifyPathspecs limits the header sniff to the files the policy gives a
-// role by name or extension: ":(icase)*<ext>" for each extension, matched at
-// any depth and ignoring case as classify does, and "<name>" and
-// "*/<name>" for each exact name. Glob characters in a name or an
-// extension are escaped. A policy without either gets no pathspec, so git
-// reads every file.
-func classifyPathspecs(p *policy.Policy) []string {
-	var specs []string
+// classifySniffNamed bounds how many files the header sniff names one by
+// one (classifyPathspecs). git matches every path at Head against every
+// pathspec, so a long list costs more than reading every file; the
+// packaged policy names a repository's requirements files, a handful.
+const classifySniffNamed = 256
+
+// classifyPathspecs limits the header sniff to the files at Head that the
+// policy can give a role, so the sniff's reach and the role rules are one
+// statement: ":(icase)*<ext>" for each extension, matched at any depth and
+// ignoring case as classify does, "<name>" and "*/<name>" for each exact
+// name, glob characters escaped, and ":(literal)<path>" for each regular
+// file that only a path rule gives a role (classify.RoleByRuleAlone), such
+// as requirements.txt under the packaged policy. When more files than
+// classifySniffNamed need naming, the sniff reads every file (no
+// pathspec) instead. sniff is false when no file at Head can get a role:
+// then there is nothing to read.
+func classifyPathspecs(p *policy.Policy, head *classifyHead) (specs []string, sniff bool) {
 	for _, ext := range slices.Sorted(maps.Keys(p.Roles.Extensions)) {
 		specs = append(specs, ":(icase)*"+classifyGlobEscape(ext))
 	}
 	for _, name := range slices.Sorted(maps.Keys(p.Roles.Names)) {
 		specs = append(specs, classifyGlobEscape(name), "*/"+classifyGlobEscape(name))
 	}
-	return specs
+	var named []string
+	for _, path := range head.order {
+		if head.entries[path].file && classify.RoleByRuleAlone(p, path) {
+			named = append(named, ":(literal)"+path)
+		}
+	}
+	switch {
+	case len(named) > classifySniffNamed:
+		return nil, true
+	case len(specs)+len(named) == 0:
+		return nil, false
+	}
+	return append(specs, named...), true
 }
 
 // classifyGlobEscape escapes the characters a pathspec reads as a glob.
