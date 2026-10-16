@@ -907,6 +907,12 @@ func blamedProdLines(rf *domain.RepoFacts, keep func(path string) bool) int {
 	return n
 }
 
+// SurvivingProdLines is blamedProdLines over a whole repository: the lines
+// blame attributes on its prod paths at HEAD, for a use case that words a
+// message about them, such as the inline-tests warning a scan writes, which
+// states their share.
+func SurvivingProdLines(rf *domain.RepoFacts) int { return blamedProdLines(rf, nil) }
+
 // landingsOf counts a repository's landings in the landed window and in the
 // history window.
 func (b *builder) landingsOf(rf *domain.RepoFacts) Landings {
@@ -927,6 +933,9 @@ func (b *builder) landingsOf(rf *domain.RepoFacts) Landings {
 func skippedOf(paths []domain.PathClass) Skipped {
 	var s Skipped
 	for _, pc := range paths {
+		if pc.Skip != "" && !pc.AtHead {
+			s.HistoryOnly++
+		}
 		switch pc.Skip {
 		case domain.SkipDeniedPath:
 			s.DeniedPath++

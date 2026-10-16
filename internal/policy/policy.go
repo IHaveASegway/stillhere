@@ -95,3 +95,11 @@ func FromSource(name string, source []byte) (*Policy, error) {
 func (p *Policy) Ref() domain.PolicyRef {
 	return domain.PolicyRef{Version: p.Version, SHA256: p.SHA256}
 }
+
+// Packaged reports whether p is the policy stillhere ships (Default), or a
+// stored run's copy of it: only the packaged policy names a package file
+// for its deny list, so a policy file, even one 'stillhere policy' wrote
+// out from it, is not.
+func (p *Policy) Packaged() bool {
+	return strings.HasPrefix(p.Paths.Source, pathsFromPackage)
+}

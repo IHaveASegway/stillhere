@@ -29,7 +29,7 @@ func (p *Policy) File() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", p.Name, err)
 	}
-	if !strings.HasPrefix(p.Paths.Source, pathsFromPackage) {
+	if !p.Packaged() {
 		return slices.Clone(tomlText), nil
 	}
 	lines := strings.SplitAfter(string(tomlText), "\n")

@@ -93,9 +93,10 @@ type rolesFile struct {
 }
 
 type pathRuleFile struct {
-	Role    string   `toml:"role"`
-	Pattern string   `toml:"pattern"`
-	When    []string `toml:"when"`
+	Role     string   `toml:"role"`
+	Pattern  string   `toml:"pattern"`
+	When     []string `toml:"when"`
+	MaxBytes *int64   `toml:"max_bytes"` // optional, as when is; nil when absent
 }
 
 type pathsFile struct {
@@ -137,7 +138,7 @@ func known(k toml.Key) bool {
 		case k[0] == "roles" && (k[1] == "extensions" || k[1] == "names"):
 			return isRole(k[2])
 		case k[0] == "roles" && k[1] == "path":
-			return k[2] == "role" || k[2] == "pattern" || k[2] == "when"
+			return k[2] == "role" || k[2] == "pattern" || k[2] == "when" || k[2] == "max_bytes"
 		}
 	}
 	return false
@@ -213,6 +214,11 @@ func build(name string, tomlText, denyText []byte, from origin) (*Policy, []stri
 		c.problemf("[ai] version = %d: want 1 or more", f.AI.Version)
 	}
 	p.Roles = c.roles(f.Roles)
+	if notes := ruleNotes(string(tomlText)); len(notes) == len(p.Roles.Path) {
+		for i := range p.Roles.Path {
+			p.Roles.Path[i].Note = notes[i]
+		}
+	}
 	p.Paths = c.paths(f.Paths, denyText, from)
 	if len(c.problems) > 0 {
 		return nil, c.problems
@@ -338,6 +344,14 @@ func (c *checker) roles(f rolesFile) Roles {
 			c.problemf("%s: role %q is not a role (want one of %s)", where, rule.Role, roleList())
 		}
 		pr.Pattern = c.pattern(where, rule.Pattern)
+		// max_bytes is optional, as when is, so a policy written before it
+		// (a user's file, a stored run's source) reads as it always did.
+		if rule.MaxBytes != nil {
+			if *rule.MaxBytes < 1 {
+				c.problemf("%s: max_bytes = %d: want 1 or more", where, *rule.MaxBytes)
+			}
+			pr.MaxBytes = *rule.MaxBytes
+		}
 		for _, w := range rule.When {
 			if !isRole(w) {
 				c.problemf("%s: when %q is not a role (want one of %s)", where, w, roleList())
@@ -348,6 +362,43 @@ func (c *checker) roles(f rolesFile) Roles {
 		r.Path = append(r.Path, pr)
 	}
 	return r
+}
+
+// ruleNotes reads, for each [[roles.path]] table of a policy's TOML in
+// order, the first sentence of the comment inside it, up to a colon
+// (PathRule.Note): the comment lines between its header and the next
+// table's, joined. A table without a comment has "". The caller uses the
+// notes only when there is one for every rule, so a file that writes its
+// rules another way (an inline array of tables) gets none rather than
+// another rule's.
+func ruleNotes(tomlText string) []string {
+	var notes []string
+	var text []string
+	in := false
+	flush := func() {
+		if in {
+			s := strings.Join(text, " ")
+			for _, sep := range []string{": ", ". "} {
+				if i := strings.Index(s, sep); i >= 0 {
+					s = s[:i]
+				}
+			}
+			notes = append(notes, strings.TrimSuffix(s, "."))
+		}
+		text = nil
+	}
+	for _, line := range strings.Split(tomlText, "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case strings.HasPrefix(line, "["):
+			flush()
+			in = strings.ReplaceAll(line, " ", "") == "[[roles.path]]"
+		case in && strings.HasPrefix(line, "#"):
+			text = append(text, strings.TrimSpace(strings.TrimLeft(line, "#")))
+		}
+	}
+	flush()
+	return notes
 }
 
 // roleMap inverts a role → keys table into the key → role map the
@@ -421,7 +472,7 @@ func (c *checker) paths(f pathsFile, denyText []byte, from origin) Paths {
 			}
 		}
 	} else {
-		ps.Deny = c.denyList(f.PackageFile, string(denyText))
+		ps.Deny, ps.origins = c.denyList(f.PackageFile, string(denyText))
 		ps.Source = pathsFromPackage + f.PackageFile
 	}
 	for _, re := range ps.Deny {
@@ -432,19 +483,37 @@ func (c *checker) paths(f pathsFile, denyText []byte, from origin) Paths {
 
 // denyList compiles a package file's deny list text: one RE2 pattern per
 // line; blank lines and lines whose first non-blank character is # are
-// comments, and surrounding whitespace is ignored.
-func (c *checker) denyList(name, text string) []*regexp.Regexp {
+// comments, and surrounding whitespace is ignored. Each pattern's origin
+// is its line and the label of the comment block that opens its group: the
+// first line of the block that says something (denyNote), for every
+// pattern until a blank line ends the group.
+func (c *checker) denyList(name, text string) ([]*regexp.Regexp, []denyOrigin) {
 	var deny []*regexp.Regexp
+	var origins []denyOrigin
+	note, block := "", false // the group's label; whether the line above was a comment
 	for i, line := range strings.Split(text, "\n") {
 		line = strings.TrimSpace(line)
-		if line == "" || strings.HasPrefix(line, "#") {
+		switch {
+		case line == "":
+			note, block = "", false
+			continue
+		case strings.HasPrefix(line, "#"):
+			if !block {
+				note = ""
+			}
+			if note == "" {
+				note = denyNote(line)
+			}
+			block = true
 			continue
 		}
+		block = false
 		if re := c.pattern(fmt.Sprintf("%s line %d", name, i+1), line); re != nil {
 			deny = append(deny, re)
+			origins = append(origins, denyOrigin{line: i + 1, note: note})
 		}
 	}
-	return deny
+	return deny, origins
 }
 
 // pattern compiles one RE2 path pattern. An empty pattern would match every

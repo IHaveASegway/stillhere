@@ -603,16 +603,9 @@ func WhoKnows(ctx context.Context, d Deps, r WhoKnowsRequest) (*report.WhoKnows,
 	if err != nil {
 		return nil, err
 	}
-	repo := r.Repo
-	if repo != "" && !hasRepo(s.facts, repo) {
-		// A remote pasted with its credentials names its scrubbed key. The
-		// error quotes only the scrubbed form: it is printed and may be
-		// logged (docs/spec/git-invocation.md#url-scrubbing).
-		repo = redact.URL(repo)
-		if !hasRepo(s.facts, repo) {
-			return nil, &domain.UsageError{Msg: fmt.Sprintf(
-				"--repo %q is not a repository of run %d: it takes a repository key, as 'stillhere report --format json' lists them", repo, s.run.ID)}
-		}
+	repo, err := repoKey(s.facts, r.Repo, s.run.ID)
+	if err != nil {
+		return nil, err
 	}
 	// The path is echoed in the answer, its header and its caveats, and a
 	// URL pasted as PATH can carry a token: it is scrubbed once, here, and
@@ -812,6 +805,23 @@ func holdsPath(rf *domain.RepoFacts, prefix string) bool {
 		}
 	}
 	return false
+}
+
+// repoKey checks a --repo filter against a run's repositories, for
+// who-knows and paths alike: the key itself, or a remote pasted with its
+// credentials, which names its scrubbed key. The error quotes only the
+// scrubbed form: it is printed and may be logged
+// (docs/spec/git-invocation.md#url-scrubbing).
+func repoKey(fs *domain.FactSet, repo string, runID int64) (string, error) {
+	if repo == "" || hasRepo(fs, repo) {
+		return repo, nil
+	}
+	repo = redact.URL(repo)
+	if hasRepo(fs, repo) {
+		return repo, nil
+	}
+	return "", &domain.UsageError{Msg: fmt.Sprintf(
+		"--repo %q is not a repository of run %d: it takes a repository key, as 'stillhere report --format json' lists them", repo, runID)}
 }
 
 func hasRepo(fs *domain.FactSet, key string) bool {

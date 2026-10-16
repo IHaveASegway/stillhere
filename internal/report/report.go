@@ -574,6 +574,10 @@ type Skipped struct {
 	TooBig          int `json:"too_big"`
 	GeneratedHeader int `json:"generated_header"`
 	Unclassified    int `json:"unclassified"`
+	// HistoryOnly counts, of the paths above, those HEAD no longer has,
+	// which only the history touched: the counts cover every classified
+	// path, at HEAD or not, while the card's "files at HEAD" covers HEAD.
+	HistoryOnly int `json:"history_only"`
 }
 
 // IgnoreRevs records the .git-blame-ignore-revs blame used.

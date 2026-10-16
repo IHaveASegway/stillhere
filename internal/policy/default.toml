@@ -12,8 +12,19 @@
 # which prints the policy a scan would use, this one unless a policy file is
 # there, with [paths] deny written out in full from generated_paths.txt:
 # package_file names a file inside stillhere, which only this policy may use.
+#
+# Revisions of this packaged policy, which a run tells apart by the policy
+# hash it records (docs/spec/classification.md#packaged-policy-revisions):
+#   1  2026-10-14  the first.
+#   2  2026-10-15  [ai] version 2: GitHub Copilot's co-author addresses.
+#   3  2026-10-16  what counts as product code: examples and docs are doc,
+#                  benchmarks and large test data are not test code, build
+#                  and packaging configuration and CI are iac, directory
+#                  rules of the deny list match directories only, and
+#                  Jinja templates are markup.
 
-# The policy schema version this file is written for.
+# The policy schema version this file is written for: the shape of the
+# file, not the revision of its rules.
 version = 1
 
 [headline]
@@ -103,6 +114,7 @@ sql = [".sql"]
 markup = [
   ".css", ".scss", ".sass", ".less", ".html", ".htm", ".storyboard", ".xib",
   ".erb", ".eex", ".heex", ".leex",
+  ".jinja", ".jinja2", ".j2", # Jinja templates, Linguist's markup type for them
 ]
 iac = [
   ".yml", ".yaml", ".tf", ".tfvars", ".hcl", ".toml", ".xml", ".json",
@@ -112,38 +124,160 @@ iac = [
 doc = [".md", ".rst", ".adoc"]
 
 [roles.names]
-# Exact file names; a name wins over the extension.
-iac = ["Dockerfile", "Makefile", "Containerfile", "CMakeLists.txt", "Procfile"]
+# Exact file names; a name wins over the extension. Python's packaging and
+# test-runner configuration (setup.cfg, tox.ini, MANIFEST.in, Pipfile) is
+# iac as pyproject.toml is, and so is a Jenkins pipeline: build and CI
+# definitions, at any depth, which no product file is named.
+iac = [
+  "Dockerfile", "Makefile", "Containerfile", "CMakeLists.txt", "Procfile",
+  "setup.cfg", "tox.ini", "MANIFEST.in", "Pipfile", "Jenkinsfile",
+]
 
 # Path rules: RE2 patterns over the repo-relative path, tried in order. The
 # first whose pattern matches, and whose `when` admits the role the name or
 # extension gives, wins; without `when`, a rule admits any path. Patterns
 # match whole segments: (^|/)tests(/|$) matches tests/test_service.py, which
-# a search for "/tests/" misses. Precedence is test, then migration, then
-# seed, so tests/fixtures/x.py is test.
+# a search for "/tests/" misses. A rule with max_bytes skips a file it
+# admits that is larger than that as too big, rather than give it its role.
+#
+# What counts as product code (revision 3): example code documents the
+# product, benchmarks measure it, and build and CI tooling builds it; none
+# of them is the product, so none is prod. Precedence is test, then doc for
+# examples, then benchmarks (test), then doc for documentation, then
+# migration, then seed, then iac for CI and build tooling: tests/fixtures/x.py
+# would be test and examples/app/migrations/x.py is doc. The deny list
+# comes before every rule, though: Linguist's test-fixture pattern denies
+# tests/fixtures/, whatever role a rule here would give it.
 [[roles.path]]
 role = "test"
-pattern = '(^|/)(tests|test|__tests__|spec|testing)(/|$)'
-# Code and configuration only: data under a test directory (tests/data.csv,
+# Large data under a test directory is test data, not test code: test
+# vectors, recorded responses and other files a tool wrote or someone
+# copied in, such as a 200 KB JSON of URL-parsing cases. Smaller
+# configuration and data there stay test, by the next rule.
+pattern = '(^|/)(tests|test|__tests__|spec|testing)/'
+when = ["iac"]
+max_bytes = 100000
+
+[[roles.path]]
+role = "test"
+# Code and configuration under a test directory. Data there (tests/data.csv,
 # golden files, Jest snapshots) has no role, and documentation stays doc, so
 # docs/spec/, a specification, is no test suite.
+pattern = '(^|/)(tests|test|__tests__|spec|testing)(/|$)'
 when = ["prod", "sql", "markup", "iac"]
 
 [[roles.path]]
 role = "test"
-# Test.php and Tests.swift are the PHPUnit and XCTest conventions, such as
-# UserTest.php; a lowercase test.php would also take latest.php.
-pattern = '(_test\.go|\.(test|spec)\.(ts|tsx|js)|Test\.php|Tests\.swift)$'
+# Test files by name: Go's _test.go, Jest's and Vitest's .test and .spec
+# files, PHPUnit's Test.php and XCTest's Tests.swift (case-sensitive, as in
+# UserTest.php: a lowercase test.php would also take latest.php), and
+# pytest's conftest.py, which only the test runner loads.
+pattern = '(_test\.go|\.(test|spec)\.(ts|tsx|js)|Test\.php|Tests\.swift|(^|/)conftest\.py)$'
+
+[[roles.path]]
+role = "doc"
+# Example code documents the product; it is not the product: examples/,
+# example/ and Go's _examples/ and _example/ at any depth (Cargo's
+# examples/, a workspace member's, docs/examples/), and, as Linguist reads
+# them, samples/ and demos/ at the top.
+pattern = '(^|/)_?examples?/|^(samples?|demos?)/'
+when = ["prod", "sql", "markup", "iac"]
+
+[[roles.path]]
+role = "prod"
+# Go packages keep their role: Go code under docs/, build/ and script/ at
+# the top and under any bench/ or perf/, which the rules below would take.
+# In Go a directory is a package, and packages carry those names, such as
+# the Google Docs and Apps Script clients of google.golang.org/api
+# (docs/v1, script/v1), nats.go's bench and a library's build-information
+# package. Go keeps its own benchmarks in _test.go files, test above.
+pattern = '(^(docs|build|script)/|(^|/)(bench|perf)/)(.*/)?[^/]+\.go$'
+when = ["prod"]
+
+[[roles.path]]
+role = "test"
+# Benchmarks measure the product; they are not the product: Cargo's
+# benches/, the benchmarks/ and bench/ directories of other ecosystems and
+# a top-level perf/, files named *_bench.* or *.bench.* (Vitest's
+# convention), and a top-level bench.py.
+pattern = '(^|/)(benches|benchmarks|bench)/|^perf/|[._]bench\.[^/.]+$|^bench\.py$'
+when = ["prod", "sql", "markup", "iac"]
+
+[[roles.path]]
+role = "doc"
+# Code under the top-level docs/ builds or illustrates the documentation:
+# Sphinx's conf.py, a documentation site's theme and components, snippets.
+# Linguist counts ^docs?/ as documentation; a top-level doc/ is left out,
+# because Go projects keep packages there, such as cobra's doc/, which
+# writes man pages.
+pattern = '^docs/'
+when = ["prod", "sql", "markup", "iac"]
+
+[[roles.path]]
+role = "doc"
+# Contribution templates run nothing: GitHub's issue, discussion and pull
+# request templates, and FUNDING.yml, which draws the sponsor button,
+# describe how to take part.
+pattern = '(?i)(^|/)\.github/(issue_template/|discussion_template/|pull_request_template|funding\.ya?ml$)'
+when = ["iac"]
 
 [[roles.path]]
 role = "migration"
+# Database migrations: code under a migrations/ directory.
 pattern = '(^|/)migrations(/|$)'
 when = ["prod"]
 
 [[roles.path]]
 role = "seed"
+# Seed data and model factories, as code or SQL.
 pattern = '(^|/)(seeders|factories|seeds|fixtures)(/|$)'
 when = ["prod", "sql"]
+
+[[roles.path]]
+role = "iac"
+# Continuous integration is infrastructure: code under .github/,
+# .circleci/, .buildkite/, .teamcity/ and .gitlab/ runs only in CI, as
+# their YAML and Kotlin DSL, iac by their extensions, define.
+pattern = '(^|/)\.(github|circleci|buildkite|teamcity|gitlab)/'
+when = ["prod"]
+
+[[roles.path]]
+role = "iac"
+# Build and release tooling at the top of a repository: build/ (packaging
+# and CI, in the Go project layout's words), script/ and scripts/.
+pattern = '^(build|scripts?)/'
+when = ["prod"]
+
+[[roles.path]]
+role = "iac"
+# Build tool configuration written as code: the configuration files of
+# JavaScript build tools, test runners, linters and frameworks, at any
+# depth, such as vite.config.ts, vitest.config.ts, rollup.config.mjs,
+# eslint.config.js, .eslintrc.js and a gulpfile.
+pattern = '(^|/)(vite|vitest|rollup|rolldown|webpack|rspack|esbuild|tsup|tsdown|unbuild|jest|playwright|cypress|karma|eslint|oxlint|prettier|stylelint|commitlint|babel|postcss|tailwind|svelte|astro|next|nuxt|turbo)(\.[^/]+)?\.config\.[cm]?[jt]s$|(^|/)\.(eslintrc|prettierrc|babelrc|stylelintrc|mocharc|lintstagedrc)\.[cm]?js$|(^|/)(gulpfile|Gruntfile)\.[cm]?[jt]s$'
+when = ["prod"]
+
+[[roles.path]]
+role = "iac"
+# Python's packaging and task files: setup.py at the top of the repository
+# (a package's own setup.py module, such as an application's
+# app/setup.py, stays prod), and nox's noxfile.py and Fabric's fabfile.py.
+pattern = '^setup\.py$|(^|/)(noxfile|fabfile)\.py$'
+when = ["prod"]
+
+[[roles.path]]
+role = "iac"
+# A Cargo build script: build.rs at a package's root, which is anywhere
+# outside a src/ directory, where Cargo's modules live
+# (src/bin/cargo/commands/build.rs is a module, cargo's own build command).
+pattern = '^(([^/s][^/]*|s|s[^/r][^/]*|sr|sr[^/c][^/]*|src[^/]+)/)*build\.rs$'
+when = ["prod"]
+
+[[roles.path]]
+role = "iac"
+# pip's requirements files: requirements.txt, requirements-dev.txt and
+# requirements/test.in, which no extension gives a role.
+pattern = '(^|/)requirements([-_.][^/]*)?\.(txt|in)$|(^|/)requirements/[^/]+\.(txt|in)$'
 
 [paths]
 # The deny list: RE2 patterns over the repo-relative path, translated from

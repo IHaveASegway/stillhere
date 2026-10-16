@@ -139,6 +139,16 @@ type WhoKnowsRequest struct {
 	Repo  string // Repo.Key; "" searches every repository in the run
 }
 
+// PathsRequest asks which class each path of a stored run got, and by
+// which rule (stillhere paths).
+type PathsRequest struct {
+	RunID    int64    // 0: the latest complete or partial scan run
+	Prefixes []string // repo-relative path prefixes, any of which a listed path is under; none: every path
+	Repo     string   // Repo.Key; "" lists every repository in the run
+	Role     string   // a role: only the paths that have it; "": any
+	Skipped  bool     // only the paths the classifier skipped (denied, too big, generated header, unclassified)
+}
+
 // MeRequest asks for one person's own page.
 type MeRequest struct {
 	RunID int64 // 0: the latest complete or partial scan run

@@ -25,6 +25,7 @@ const (
 	codeShallowWindow = "shallow-window"
 	codeBlameErrors   = "blame-errors"
 	codeBinary        = "binary-changes" // #64: prod changes git took for binary, whose lines no change metric counts
+	codeInlineTests   = "inline-tests"   // a repository's warning: Rust unit tests inside prod files, which count as prod
 	codeNoIgnoreRevs  = "no-ignore-revs"
 	codeExcluded      = "excluded-repo"
 	codeDuplicate     = "duplicate-repo" // a repository's warning: another clone of its remote was skipped
@@ -52,7 +53,7 @@ const largeRepoLines = 10000
 // damaging; codes not listed follow, sorted.
 var caveatOrder = []string{
 	codeFailed, codeShallow, codePartial, codeShallowWindow,
-	codeBlameErrors, codeBinary, codeNoIgnoreRevs,
+	codeBlameErrors, codeBinary, codeInlineTests, codeNoIgnoreRevs,
 }
 
 // summaries say what a repository caveat means when it concerns several
@@ -67,6 +68,8 @@ var summaries = map[string]string{
 		"leave them out, and the lines landed do not count them.",
 	codeNoIgnoreRevs: "Large repositories without a .git-blame-ignore-revs: a formatting commit would take the credit for every line it touched.",
 	codeDuplicate:    "Clones of the same remote as these repositories were skipped as duplicates: each repository is counted once (see their warnings).",
+	codeInlineTests: "Rust unit tests inside the source (#[cfg(test)] items in prod files) count as prod in these repositories, " +
+		"because a file has one role (see their warnings for how many lines).",
 	codeHeadAfterNow: "These repositories are read at the newest commit on their branch's first-parent chain committed before --now: " +
 		"their branches have landings at or after it, which no number here counts (see their warnings for the commit read and how many).",
 	codeDatedAfterNow: "In these repositories, landings dated at or after --now lie below the commit read, as a backdated commit " +

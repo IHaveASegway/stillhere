@@ -25,17 +25,60 @@ import (
 // each pattern, which skips the pattern when path cannot match it. A
 // pattern added to Deny by hand has none and is always tried, so the answer
 // never depends on the prefilter.
-func (ps *Paths) Denies(path string) bool {
+func (ps *Paths) Denies(path string) bool { return ps.denying(path) >= 0 }
+
+// Denying returns the first Deny pattern that matches path, the one
+// Denies stops at, with where the policy holds it; false when none does.
+// classify.Explain reads it to say which rule denied a path, so the reason
+// a reader is given and the decision are one computation.
+func (ps *Paths) Denying(path string) (DenyRule, bool) {
+	i := ps.denying(path)
+	if i < 0 {
+		return DenyRule{}, false
+	}
+	d := DenyRule{Pattern: ps.Deny[i].String(), Index: i + 1}
+	if i < len(ps.origins) {
+		d.Line, d.Note = ps.origins[i].line, ps.origins[i].note
+	}
+	return d, true
+}
+
+// denying is the index of the first Deny pattern that matches path, or -1.
+func (ps *Paths) denying(path string) int {
 	var folded string // path in canonical case, computed on first use
 	for i, re := range ps.Deny {
 		if i < len(ps.filter) && ps.filter[i].re == re && !ps.filter[i].admits(path, &folded) {
 			continue
 		}
 		if re.MatchString(path) {
-			return true
+			return i
 		}
 	}
-	return false
+	return -1
+}
+
+// denyOrigin is where a package file holds one deny pattern: its line,
+// from 1, and the label of its group, the first words of the comment block
+// above it (denyNote).
+type denyOrigin struct {
+	line int
+	note string
+}
+
+// denyNote is the label a comment line gives the patterns below it: the
+// line without its # marks, up to the first ": ", ", " or ". ", so
+// "xcode_file?: the extension is .nib" labels "xcode_file?" and "Test
+// fixtures" labels itself. A line of # marks alone, a banner, labels
+// nothing.
+func denyNote(line string) string {
+	s := strings.TrimSpace(strings.TrimLeft(line, "#"))
+	s = strings.TrimSpace(strings.TrimRight(s, "#"))
+	for _, sep := range []string{": ", ", ", ". "} {
+		if i := strings.Index(s, sep); i >= 0 {
+			s = s[:i]
+		}
+	}
+	return strings.TrimSuffix(s, ".")
 }
 
 // denyFilter is the prefilter of one deny pattern.

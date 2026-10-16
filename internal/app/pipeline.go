@@ -331,6 +331,18 @@ func collectRepo(ctx context.Context, d Deps, job repoJob, opt collectOptions) (
 			d.Log.Info("landings dated at or after --now below the commit read", "repo", repo.Name,
 				"commit", snapshotShort(snap.Commit), "landings", snap.Below)
 		}
+		if lineFacts {
+			start := time.Now()
+			inline, err := collect.InlineTests(ctx, d.Git, repo, prodPaths(rf.Paths))
+			t.ClassifyMS += time.Since(start).Milliseconds()
+			if err != nil {
+				return fail("inline tests", err)
+			}
+			if w, ok := inlineTestsWarning(&rf, inline); ok {
+				rf.Warnings = repoWarnings(repo, rf.Warnings, []domain.Warning{w})
+				d.Log.Info("Rust unit tests inside prod files", "repo", repo.Name, "files", inline.Files, "lines", inline.Lines)
+			}
+		}
 		for i, e := range bf.Errors {
 			if i == 8 {
 				d.Log.Warn("more blame failures", "repo", repo.Name, "files", len(bf.Errors)-8)
@@ -429,6 +441,44 @@ func blamePaths(paths []domain.PathClass) []string {
 	}
 	slices.Sort(out)
 	return out
+}
+
+// prodPaths lists the prod paths at HEAD: the files whose lines the
+// headline counts, which InlineTests reads.
+func prodPaths(paths []domain.PathClass) []string {
+	var out []string
+	for _, pc := range paths {
+		if pc.AtHead && pc.Role == domain.RoleProd {
+			out = append(out, pc.Path)
+		}
+	}
+	return out
+}
+
+// warnInlineTests is the repository warning, and so the caveat, of a scan
+// whose prod Rust files hold #[cfg(test)] items
+// (docs/spec/classification.md#rust-inline-tests).
+const warnInlineTests = "inline-tests"
+
+// inlineTestsWarning says how many of a repository's surviving prod lines
+// are Rust unit tests inside its source, which count as prod because a
+// file has one role: false when there are none.
+func inlineTestsWarning(rf *domain.RepoFacts, n collect.InlineTestCount) (domain.Warning, bool) {
+	if n.Lines == 0 {
+		return domain.Warning{}, false
+	}
+	share := ""
+	if total := report.SurvivingProdLines(rf); total > 0 {
+		share = fmt.Sprintf(" (%.1f%% of %s surviving prod lines)", 100*float64(n.Lines)/float64(total), report.Grouped(total))
+	}
+	files := "files hold"
+	if n.Files == 1 {
+		files = "file holds"
+	}
+	return domain.Warning{Code: warnInlineTests, Message: fmt.Sprintf(
+		"Rust unit tests inside the source: %s prod .rs %s #[cfg(test)] items, whose %s non-blank lines%s count as prod "+
+			"in every number here, because a file has one role.",
+		report.Grouped(n.Files), files, report.Grouped(n.Lines), share)}, true
 }
 
 // blameProgress logs a repository's blame progress every 1,000 files and at

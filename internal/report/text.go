@@ -816,12 +816,22 @@ func cardFacts(m *Model, r *Repo) string {
 	return strings.Join(facts, " · ")
 }
 
-// skippedText is "skipped paths: 4 denied, ... · blame ignore-revs: root
-// (feedfacefeed, 1 commit)"; the ignore-revs part only when blame ran.
-func skippedText(r *Repo, code func(string) string) string {
+// skippedText is "skipped paths: 4 denied, ..., 1 of them only in the
+// history (stillhere paths --skipped lists them) · blame ignore-revs:
+// root (feedfacefeed, 1 commit)": the counts cover the paths the history
+// touched as well as those at HEAD, which the line says when any is not at
+// HEAD; the command, only for a stored run, which it reads; the
+// ignore-revs part only when blame ran.
+func skippedText(m *Model, r *Repo, code func(string) string) string {
 	s := r.Skipped
 	out := fmt.Sprintf("skipped paths: %d denied, %d too big, %d generated header, %d unclassified",
 		s.DeniedPath, s.TooBig, s.GeneratedHeader, s.Unclassified)
+	if s.HistoryOnly > 0 {
+		out += fmt.Sprintf(", %d of them only in the history", s.HistoryOnly)
+	}
+	if m.Kind == KindScan && m.Run != nil && s.DeniedPath+s.TooBig+s.GeneratedHeader+s.Unclassified > 0 {
+		out += " (" + code("stillhere paths --skipped") + " lists them)"
+	}
 	if !r.LineFacts {
 		return out
 	}
@@ -853,7 +863,7 @@ func textCard(p *printer, m *Model, r *Repo) {
 	if c.Concentration != nil {
 		p.wrapped("  ", "  ", concentrationText(c.Concentration))
 	}
-	p.wrapped("  ", "  ", skippedText(r, clean))
+	p.wrapped("  ", "  ", skippedText(m, r, clean))
 	if len(c.Areas) > 0 {
 		p.blank()
 		p.line("  Areas: top-level directories, by the prod lines people hold there")
