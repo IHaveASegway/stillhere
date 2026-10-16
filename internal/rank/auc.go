@@ -57,15 +57,18 @@ func AUC(pos, neg []float64) float64 {
 // Bootstrap, 1993, ch. 13). DeLong, DeLong and Clarke-Pearson's variance
 // (Biometrics, 1988) is the analytic alternative; the bootstrap needs no
 // normal approximation, which a sample of 50 labels and an AUC near 1
-// strain. The draws come from a stream derived from id alone, so the same
-// labels give the same interval on every platform and Go release. With pos
-// or neg empty there is no pair to compare, and both ends are 0.5, as AUC
-// is. The inputs are not modified.
+// strain. The draws come from a stream derived from id alone, and resample
+// pos and neg sorted, so the interval depends on the scores alone, not on
+// the order of the labels file's rows: the same labels give the same
+// interval in any order, on every platform and Go release. With pos or neg
+// empty there is no pair to compare, and both ends are 0.5, as AUC is. The
+// inputs are not modified.
 func AUCInterval(id domain.MetricID, pos, neg []float64) (lo, hi float64) {
 	if len(pos) == 0 || len(neg) == 0 {
 		return 0.5, 0.5
 	}
 	src := newStream(Seed(id, domain.Scope{Kind: domain.ScopeAll}, domain.Window{}), "auc")
+	pos, neg = slices.Sorted(slices.Values(pos)), slices.Sorted(slices.Values(neg))
 	p, q := make([]float64, len(pos)), make([]float64, len(neg))
 	replicates := make([]float64, defaultReplicates)
 	for r := range replicates {

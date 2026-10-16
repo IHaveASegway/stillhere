@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
 	"github.com/IHaveASegway/stillhere/internal/metrics"
@@ -41,10 +42,10 @@ const (
 	labelSkip       = "skip"
 )
 
-// The bar a ranked metric clears to lose its beta mark.
+// The bar a ranked metric's labels clear (report.BarAUC, report.BarLabels).
 const (
-	minAUC    = 0.7
-	minLabels = 50
+	minAUC    = report.BarAUC
+	minLabels = report.BarLabels
 )
 
 // label is one labelled row of a labels file.
@@ -64,7 +65,9 @@ type changeRef struct {
 }
 
 // Validate scores each ranked metric in the registry against hand labels
-// with the AUC, over the changes of a stored run.
+// with the AUC, over the changes of a stored run. A change counts once
+// (labelVotes): one label per change and labeller, and over several
+// labellers the label most of them gave.
 func Validate(ctx context.Context, d Deps, r ValidateRequest) (*report.Validation, error) {
 	d, err := d.ready("app.Validate", false, false, true)
 	if err != nil {
@@ -84,40 +87,30 @@ func Validate(ctx context.Context, d Deps, r ValidateRequest) (*report.Validatio
 		return nil, fmt.Errorf("reading run %d's changes: %w", s.run.ID, err)
 	}
 	idx := newChangeIndex(changes)
-	v := &report.Validation{Labels: len(labels)}
-	labellers := map[string]bool{}
-	type judged struct {
-		change int // index into changes
-		value  string
+	votes := labelVotes(labels, idx, r.Labeller)
+	if r.Labeller != "" && votes.rows == 0 {
+		return nil, &domain.UsageError{Msg: fmt.Sprintf("%s: no labelled row of labeller %q (--labeller): the file's labellers are %s",
+			cmp.Or(r.LabelsName, "labels"), r.Labeller, votes.names())}
 	}
-	var matched []judged
-	unmatchedPulls := 0
-	for _, l := range labels {
-		if l.labeller != "" {
-			labellers[l.labeller] = true
-		}
-		switch l.value {
+	v := &report.Validation{Labels: votes.rows, Labellers: votes.named, Unmatched: votes.unmatched}
+	var judged []int // indexes into changes, of the changes labelled meaningful or routine, in order
+	for _, i := range votes.order {
+		switch votes.label[i] {
 		case labelMeaningful:
 			v.Meaningful++
+			judged = append(judged, i)
 		case labelRoutine:
 			v.Routine++
-		default:
+			judged = append(judged, i)
+		case labelNoise:
 			v.Noise++
+		default:
+			continue // no majority
 		}
-		i, ok := idx.resolve(l.ref)
-		if !ok {
-			v.Unmatched++
-			if l.ref.number > 0 {
-				unmatchedPulls++
-			}
-			continue
-		}
-		if l.value != labelNoise {
-			matched = append(matched, judged{change: i, value: l.value})
-		}
+		v.Changes++
 	}
-	v.Labellers = len(labellers)
-	var ids []string
+	var ids, alone []string
+	var left []report.Caveat // what a metric left out of its AUC, and why
 	for _, m := range allRanked() {
 		scorer, err := metrics.NewScorer(m.ranked, in)
 		if err != nil {
@@ -125,12 +118,17 @@ func Validate(ctx context.Context, d Deps, r ValidateRequest) (*report.Validatio
 		}
 		a := report.MetricAUC{Metric: m.def.ID.String()}
 		var pos, neg []float64
-		for _, j := range matched {
-			x, ok := scorer.Score(&changes[j.change])
+		inWindow := 0 // the changes labelled meaningful or routine that landed in its window
+		for _, i := range judged {
+			c := &changes[i]
+			if scorer.Window().Contains(c.Time) {
+				inWindow++
+			}
+			x, ok := scorer.Score(c)
 			if !ok {
 				continue
 			}
-			if j.value == labelMeaningful {
+			if votes.label[i] == labelMeaningful {
 				pos = append(pos, x)
 			} else {
 				neg = append(neg, x)
@@ -145,31 +143,216 @@ func Validate(ctx context.Context, d Deps, r ValidateRequest) (*report.Validatio
 		a.Beta = a.AUC == nil || *a.AUC < minAUC || a.N < minLabels
 		v.Metrics = append(v.Metrics, a)
 		ids = append(ids, a.Metric)
+		if m.def.Forge && a.N == 0 {
+			alone = append(alone, a.Metric) // nothing scored: its own GitHub caveats say why, as a section about it alone does
+		}
+		if len(judged) > 0 && (inWindow == 0 || a.N < inWindow) {
+			left = append(left, unscoredCaveat(a.Metric, scorer, a.N, inWindow, s.facts.Now))
+		}
 	}
 	slices.SortFunc(v.Metrics, func(a, b report.MetricAUC) int { return cmp.Compare(a.Metric, b.Metric) })
 	run := s.run
 	v.Provenance = report.AnswerProvenance(&run, s.facts, s.forge, ids)
 	v.Caveats = report.AnswerCaveats(s.facts)
-	v.Caveats = append(v.Caveats, report.ForgeCaveats(&run, s.facts, s.forge, ids)...)
+	v.Caveats = append(v.Caveats, report.ForgeCaveats(&run, s.facts, s.forge, slices.DeleteFunc(slices.Clone(ids),
+		func(id string) bool { return slices.Contains(alone, id) }))...)
+	for _, id := range alone {
+		v.Caveats = append(v.Caveats, report.ForgeCaveatsAlone(&run, s.facts, s.forge, id)...)
+	}
+	v.Caveats = append(v.Caveats, left...)
+	v.Caveats = append(v.Caveats, votes.caveats(r.Labeller)...)
 	if v.Unmatched > 0 {
-		v.Caveats = append(v.Caveats, unmatchedCaveat(v.Unmatched, unmatchedPulls, s))
+		v.Caveats = append(v.Caveats, unmatchedCaveat(v.Unmatched, votes.unmatchedPulls, s))
 	}
 	return v, nil
+}
+
+// unscoredCaveat says how many of the labelled changes of a metric's window
+// it scored, and which changes it scores, or that none of them landed in
+// its window.
+func unscoredCaveat(metric string, s *metrics.Scorer, scored, inWindow int, now time.Time) report.Caveat {
+	ago := labelAgo(now, s.Window())
+	if inWindow == 0 {
+		return report.Caveat{Code: "unscored-labels", Message: fmt.Sprintf("%s scores the changes that landed %s, "+
+			"and none of the changes labelled meaningful or routine did.", metric, ago)}
+	}
+	return report.Caveat{Code: "unscored-labels", Message: fmt.Sprintf("%s scored %d of the %s labelled meaningful or "+
+		"routine that landed %s, the window it scores: it scores %s.", metric, scored, nounCount(inWindow, "change", "changes"),
+		ago, s.Scores())}
+}
+
+// nounCount is "1 change" or "3 changes".
+func nounCount(n int, one, many string) string {
+	if n == 1 {
+		return "1 " + one
+	}
+	return strconv.Itoa(n) + " " + many
+}
+
+// votes is a labels file's labels of the run's changes, one per change: each
+// labeller's last row for a change wins, as label resumes, and over several
+// labellers the label most of them gave, none when two labels tie.
+type votes struct {
+	order          []int          // the labelled changes, by their first row
+	label          map[int]string // change → its label; "" for a tie
+	rows           int            // the labelled rows read: one labeller's, when one is asked for
+	named          int            // distinct labellers named
+	labellers      map[string]bool
+	other          int // rows of other labellers, left out
+	otherNames     map[string]bool
+	unmatched      int // rows that name no change of the run, or several
+	unmatchedPulls int // of them, rows that name a pull request
+	repeated       int // rows that a later row of the same labeller for the same change replaced
+	several        int // changes labelled by more than one labeller
+	agreed         int // of them, those every labeller gave one label
+	ties           int // of them, those with no majority label
+}
+
+// labelVotes resolves each row of labels to its change, keeping only the
+// rows of labeller when one is named.
+func labelVotes(labels []label, idx *changeIndex, labeller string) *votes {
+	type key struct {
+		change   int
+		labeller string
+	}
+	v := &votes{label: map[int]string{}, labellers: map[string]bool{}, otherNames: map[string]bool{}}
+	last := map[key]string{}
+	var keys []key
+	for _, l := range labels {
+		if labeller != "" && l.labeller != labeller {
+			v.other++
+			v.otherNames[l.labeller] = true
+			continue
+		}
+		v.rows++
+		v.labellers[l.labeller] = true
+		i, ok := idx.resolve(l.ref)
+		if !ok {
+			v.unmatched++
+			if l.ref.number > 0 {
+				v.unmatchedPulls++
+			}
+			continue
+		}
+		k := key{i, l.labeller}
+		if _, seen := last[k]; seen {
+			v.repeated++
+		} else {
+			keys = append(keys, k)
+		}
+		last[k] = l.value
+	}
+	for name := range v.labellers {
+		if name != "" {
+			v.named++
+		}
+	}
+	count := map[int]map[string]int{}
+	for _, k := range keys {
+		if count[k.change] == nil {
+			count[k.change] = map[string]int{}
+			v.order = append(v.order, k.change)
+		}
+		count[k.change][last[k]]++
+	}
+	for _, i := range v.order {
+		best, top, tie, n := "", 0, false, 0
+		for _, value := range []string{labelMeaningful, labelRoutine, labelNoise} {
+			c := count[i][value]
+			n += c
+			switch {
+			case c > top:
+				best, top, tie = value, c, false
+			case c == top && c > 0:
+				tie = true
+			}
+		}
+		if n > 1 {
+			v.several++
+			if top == n {
+				v.agreed++
+			}
+		}
+		if tie {
+			v.ties++
+			best = ""
+		}
+		v.label[i] = best
+	}
+	return v
+}
+
+// names lists the file's labellers, for a message.
+func (v *votes) names() string {
+	var out []string
+	for name := range v.otherNames {
+		if name == "" {
+			name = "(none)"
+		} else {
+			name = strconv.Quote(name)
+		}
+		out = append(out, name)
+	}
+	slices.Sort(out)
+	if len(out) == 0 {
+		return "none"
+	}
+	return strings.Join(out, ", ")
+}
+
+// caveats says which rows were replaced, left out, or pooled.
+func (v *votes) caveats(labeller string) []report.Caveat {
+	var out []report.Caveat
+	if v.repeated > 0 {
+		what := fmt.Sprintf("%d rows label a change that another row", v.repeated)
+		if v.repeated == 1 {
+			what = "1 row labels a change that another row"
+		}
+		out = append(out, report.Caveat{Code: "repeated-labels", Message: what + " of the same labeller labels too (by its " +
+			"SHA, a prefix of it, or its pull request): a change counts once, by its labeller's last row, as stillhere label resumes."})
+	}
+	if labeller != "" && v.other > 0 {
+		out = append(out, report.Caveat{Code: "several-labellers", Message: fmt.Sprintf("Only %s's labels count "+
+			"(--labeller): the %s of the file's other labellers were left out.", labeller, nounCount(v.other, "row", "rows"))})
+	}
+	if v.several > 0 {
+		msg := fmt.Sprintf("%s were labelled by more than one labeller: each counts once, by the label most of them "+
+			"gave; they agreed on %d of them", nounCount(v.several, "change", "changes"), v.agreed)
+		if v.several == 1 {
+			agreed := "who gave it different labels"
+			if v.agreed == 1 {
+				agreed = "who agreed"
+			}
+			msg = "1 change was labelled by more than one labeller, " + agreed + ": it counts once, by the label most of them gave"
+		}
+		if v.ties > 0 {
+			msg += fmt.Sprintf("; %s with no majority (two labels given equally often) left out", nounCount(v.ties, "change", "changes"))
+		}
+		out = append(out, report.Caveat{Code: "several-labellers", Message: msg + ". 'stillhere validate --labeller NAME' " +
+			"scores one labeller's labels, so two leads' AUCs can be compared."})
+	}
+	return out
 }
 
 // unmatchedCaveat says how many labelled rows name no change of the run, or
 // several, and how a change is named; when some named a pull request and
 // the run read no GitHub data, that pull requests need it.
 func unmatchedCaveat(n, pulls int, s *stored) report.Caveat {
-	what := fmt.Sprintf("%d labelled changes are not changes of run %d, or name more than one, and were left out", n, s.run.ID)
+	what := fmt.Sprintf("%d labelled rows name no change of run %d, or name more than one, and were left out", n, s.run.ID)
 	if n == 1 {
-		what = fmt.Sprintf("1 labelled change is not a change of run %d, or names more than one, and was left out", s.run.ID)
+		what = fmt.Sprintf("1 labelled row names no change of run %d, or names more than one, and was left out", s.run.ID)
 	}
 	what += ": a change is a landing's SHA or an unambiguous prefix of at least 7 of its hex digits, or a pull request " +
 		"that landed in the run's history, written #950, pr:950 or owner/name#950"
 	if pulls > 0 && (s.facts.Forge == nil || len(s.facts.Forge.PullRequests) == 0) {
-		what += fmt.Sprintf("; %d of them name a pull request, and run %d read no GitHub data: run 'stillhere sync github', "+
-			"then scan again", pulls, s.run.ID)
+		which := fmt.Sprintf("%d of them name a pull request", pulls)
+		if pulls == 1 {
+			which = "1 of them names a pull request"
+			if n == 1 {
+				which = "it names a pull request"
+			}
+		}
+		what += fmt.Sprintf("; %s, and run %d read no GitHub data: run 'stillhere sync github', then scan again", which, s.run.ID)
 	}
 	return report.Caveat{Code: "unmatched-labels", Message: what + "."}
 }
@@ -279,15 +462,15 @@ func pullRow(line string) bool {
 		return false
 	}
 	rest = strings.TrimLeft(rest[digits:], " \t")
-	return rest == "" || rest[0] == ',' || rest[0] == '\r'
+	return rest == "" || rest[0] == ',' || rest[0] == '\r' || rest[0] == '\n'
 }
 
 // labelsFile is what a labels file holds.
 type labelsFile struct {
-	labels     []label     // the rows labelled meaningful, routine or noise
-	skipped    []changeRef // the rows labelled skip: passed over, so stillhere label does not ask again
-	unlabelled int         // the rows that name a change and give no label yet, as a sheet's do
-	comments   int         // the lines read as comments
+	labels     []label // the rows labelled meaningful, routine or noise
+	skipped    []label // the rows labelled skip: passed over, so stillhere label does not ask its labeller again
+	unlabelled int     // the rows that name a change and give no label yet, as a sheet's do
+	comments   int     // the lines read as comments
 }
 
 // readLabels reads a labels CSV: change, label, and optionally the
@@ -331,11 +514,15 @@ func readLabels(data []byte, name string) (*labelsFile, error) {
 			value = strings.ToLower(strings.TrimSpace(rec[1]))
 		}
 		ref, isRef := parseChangeRef(rec[0])
+		labeller := ""
+		if len(rec) > 2 {
+			labeller = strings.TrimSpace(rec[2])
+		}
 		switch value {
 		case labelMeaningful, labelRoutine, labelNoise:
 		case labelSkip:
 			if isRef {
-				f.skipped = append(f.skipped, ref)
+				f.skipped = append(f.skipped, label{ref: ref, value: labelSkip, labeller: labeller})
 			}
 			continue
 		case "":
@@ -350,12 +537,9 @@ func readLabels(data []byte, name string) (*labelsFile, error) {
 			return nil, &domain.UsageError{Msg: fmt.Sprintf("%s:%d: label %q: want meaningful, routine or noise "+
 				"(skip, or no label, passes a change over)", name, line, rec[1])}
 		}
-		l := label{ref: ref, value: value}
+		l := label{ref: ref, value: value, labeller: labeller}
 		if !isRef {
 			l.ref = changeRef{sha: strings.ToLower(strings.TrimSpace(rec[0]))} // names no change: unmatched
-		}
-		if len(rec) > 2 {
-			l.labeller = strings.TrimSpace(rec[2])
 		}
 		f.labels = append(f.labels, l)
 	}

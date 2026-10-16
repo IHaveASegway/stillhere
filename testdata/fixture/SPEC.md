@@ -927,34 +927,39 @@ After the scan, a sync stores #3 again, updated 10-12 with one more review, hank
 
 ### validate over the same replica
 
-`stillhere validate` (#77) scores each ranked metric's measure of a labelled change at the metric's own grain ([metrics.md](../../docs/metrics.md#validity-checks)): `durable@1` and `simplifying@1` by the change's landings, `reviews_given@1` by its pull request, whose clusters are its reviewers in `[2026-07-09, 2026-10-07)`. A change of that window with no reviewer other than its author, in a repository with GitHub data, scores 0; one outside it is not scored by `reviews_given@1`. Derived by hand from the replica above and [Change facts per landing](#change-facts-per-landing-main-fixture):
+`stillhere validate` (#77) scores each ranked metric's measure of a labelled change at the metric's own grain ([metrics.md](../../docs/metrics.md#validity-checks)): `durable@1` and `simplifying@1` by the change's landings' clusters, `reviews_given@1` by its pull request: the people other than its author, bots aside, who reviewed it at any time before `Now`, for a change that landed in `[2026-07-09, 2026-10-07)`. A pull request no one else reviewed scores 0; a landing no pull request of the replica landed is not scored, nor is a change that landed outside the window, whenever its reviews were. A change counts once: each labeller's last row for it, and over several labellers the label most of them gave. Derived by hand from the replica above and [Change facts per landing](#change-facts-per-landing-main-fixture):
 
-| Labels row | Change | Label | `durable@1` | `simplifying@1` | `reviews_given@1` |
+| Labels row (labeller lead) | Change | Label | `durable@1` | `simplifying@1` | `reviews_given@1` |
 | --- | --- | --- | --- | --- | --- |
 | `#3` | row 8 (#3, Bob's merge) | meaningful | not scored (outside the cohort) | 0 (Cara's commits remove nothing) | 1 (bob) |
-| `pr:4` | row 9 (#4) | meaningful | not scored | 0 | 2 (cara, `@zoe`; frank's is before the window, the copilot reviewer a bot, bob the author) |
-| `acme/fixture#6` | row 12 (#6) | meaningful | not scored | 0 | 1 (`@zoe`) |
-| row 13's SHA | row 13, Frank's, no pull request | routine | not scored | 0 | 0 |
-| row 14's first 7 digits | row 14, Ada's, no pull request | routine | not scored | 0 | 0 |
+| `pr:4` | row 9 (#4) | meaningful | not scored | 0 | 3 (frank on 06-15, before the window, which selects the change and not its reviews; cara; `@zoe`. The copilot reviewer is a bot, bob the author) |
+| `acme/fixture#6` | row 12 (#6) | routine | not scored | 0 | 1 (`@zoe`) |
+| row 13's SHA | row 13, Frank's, no pull request | routine | not scored | 0 | not scored: no pull request |
+| row 14's first 7 digits | row 14, Ada's, no pull request | routine | not scored | 0 | not scored: no pull request |
 | row 11's SHA | row 11, Dana's | noise | in no AUC | | |
 | row 1's SHA | row 1, Ada's init | meaningful | 7 / 7 = 1 | not scored | not scored |
 | row 3's SHA | row 3, Bob's move | routine | 0 / 2 = 0 | not scored | not scored |
-| `#1` | row 5 (#1, Gina's) | meaningful | 2 / 2 = 1 | not scored | not scored |
+| `#1` | row 5 (#1, Gina's) | meaningful | 2 / 2 = 1 | not scored | not scored: merged 01-06, before the window, although hank reviewed it |
 | row 7's SHA | row 7, Bob's | routine | 5 / 5 = 1 | not scored | not scored |
 | `#9` | no pull request 9 | meaningful | unmatched | | |
 | row 16's SHA | row 16 | skip | no label | | |
+| row 8's SHA | row 8 again | meaningful | the same change as `#3`: counted once | | |
 
-So the file holds 11 labels (6 meaningful, 4 routine, 1 noise) from 1 labeller, 1 unmatched, and: `reviews_given@1` AUC 1 over 3 meaningful (1, 2, 1) and 2 routine (0, 0); `durable@1` AUC 0.75 over 2 and 2 (1 and 1 against 0 and 1: three pairs won or tied, 1 + 0.5 + 1 + 0.5 of 4); `simplifying@1` AUC 0.5 over 3 and 2, every one 0. Each is beta (fewer than 50 labels), and each interval holds its AUC. A file whose only lines are `# 3,meaningful` and `#pr 4,routine` holds 2 comments and no label: a usage error that counts them, since only `#` followed by digits names a pull request.
+So the file holds 12 labelled rows from 1 labeller, 1 unmatched, labelling 10 changes (4 meaningful, 5 routine, 1 noise), and: `reviews_given@1` AUC 0.75 over 2 meaningful (1, 3) and 1 routine (1), with an `unscored-labels` caveat, since it scored 3 of the 5 changes labelled meaningful or routine in its window; `durable@1` AUC 0.75 over 2 and 2 (1 and 1 against 0 and 1: 1 + 0.5 + 1 + 0.5 of 4); `simplifying@1` AUC 0.5 over 2 and 3, every one 0; a `repeated-labels` caveat for row 8's second row. Each is beta (fewer than 50 labels), and each interval holds its AUC. With a second labeller's `#3,meaningful` and `acme/fixture#6,meaningful` added, the file labels 9 changes from 2 labellers: they agree on #3 and tie on #6, which is left out (`several-labellers`); `--labeller lead` keeps the lead's 10, with `reviews_given@1` n 3 again, and says the second's 2 rows were left out. A file whose only lines are `# 3,meaningful` and `#pr 4,routine` holds 2 comments and no label: a usage error that counts them, since only `#` followed by digits names a pull request.
 
 Wrong implementations this catches:
 
 - **Labels matched to landings only** (#77 as found). `reviews_given@1` scores nothing, and `#3`, `pr:4`, `acme/fixture#6` and `#1` are unmatched.
-- **No 0 for an unreviewed change.** `reviews_given@1` has no routine change, so no AUC.
+- **A direct push scored 0** (#77's first fix). Rows 13 and 14 score 0, as a pull request no one reviewed would, so a sync that missed pull requests turns their reviews into 0: `reviews_given@1` AUC 0.92 over 2 against 3, and no `unscored-labels` caveat.
+- **The change's window not checked.** #1 scores 1 (hank), and `reviews_given@1` counts 3 meaningful.
+- **Rows counted, not changes.** Row 8 counts twice: 11 changes, and `simplifying@1` has 3 meaningful.
+
+Not covered: #4's 3 against 2 (reviews counted in the window only) moves no AUC here, since every other pull request scores 1; the measure is stated in [metrics.md](../../docs/metrics.md#reviews_given1-m2).
 - **`#950` read as a comment** (KB-19). The four pull request rows vanish, and the comment file gives "no labelled changes" with no count.
 
 ### label over the same replica
 
-`stillhere label` draws from the changes a ranked metric scores, people's only. In `durable@1`'s cohort those are rows 1, 2, 3, 5 (#1), 6 (#2) and 7: row 4, the `git mv`, adds no line. In the 90-day window, where `simplifying@1` has a cluster for every person's landing and `reviews_given@1` scores every change in this synced repository, rows 8 (#3), 9 (#4), 11, 12 (#6), 13, 14, 15 and 16; row 10 is the bot's. The pool is 14 changes, 6 and 8. The windows take turns, so the first 4 of the sample are 2 from each; a sample of 20 is all 14, with a `small-sample` caveat, and a sample of 4 is its first 4. A labels file holding `#3,meaningful` marks row 8 labelled meaningful.
+`stillhere label` draws from the changes a ranked metric scores, people's only. In `durable@1`'s cohort those are rows 1, 2, 3, 5 (#1), 6 (#2) and 7: row 4, the `git mv`, adds no line. In the 90-day window, where `simplifying@1` has a cluster for every person's landing and `reviews_given@1` scores the pull requests #3, #4 and #6, rows 8 (#3), 9 (#4), 11, 12 (#6), 13, 14, 15 and 16; row 10 is the bot's. The pool is 14 changes, 6 and 8. The windows take turns, so the first 4 of the sample are 2 from each; a sample of 20 is all 14, with a `small-sample` caveat, and a sample of 4 is its first 4. A labels file holding `#3,meaningful` marks row 8 labelled meaningful, for the rows' labeller (none named); for labeller `second` it marks nothing, and names 1 other labeller.
 
 ### Merge methods (`fixture.MergeMethods`)
 

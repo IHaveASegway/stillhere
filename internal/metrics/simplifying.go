@@ -82,6 +82,13 @@ func (simplifyingV1) Clusters(in *Input, scope domain.Scope) (RankInput, error) 
 	}, nil
 }
 
+// scores names the changes simplifying@1's clusters measure
+// (Scorer.Scores).
+func (simplifyingV1) scores() string {
+	return "a change with a person's commit that is no merge, revert or reverted change, in a repository whose patches " +
+		"the scan read"
+}
+
 // simplifyingClusters returns the window's clusters and the landings among
 // them that are simplifying: the net of a landing's counted commits, all
 // people together, is -20 lines or fewer, and -20 counts.

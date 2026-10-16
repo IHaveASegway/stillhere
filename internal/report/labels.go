@@ -22,14 +22,29 @@ import (
 // LabelSample is the changes stillhere label asks about, in the order to
 // label them.
 type LabelSample struct {
-	Provenance Provenance     `json:"provenance"`
-	Seed       uint64         `json:"seed"`     // the same run, size and seed give the same sample; a larger size extends it
-	Asked      int            `json:"asked"`    // the sample size asked for (--n)
-	Pool       int            `json:"pool"`     // the run's changes a ranked metric scores, a person's: what the sample is drawn from
-	Labelled   int            `json:"labelled"` // sampled changes the labels file holds a label or a skip for
-	Strata     []LabelStratum `json:"strata"`   // by window, then size, then repository
-	Changes    []LabelChange  `json:"changes"`  // the sample, in the order to label it
-	Caveats    []Caveat       `json:"caveats"`
+	Provenance Provenance `json:"provenance"`
+	Seed       uint64     `json:"seed"`     // the same run, size, seed and labels give the same sample; a larger one extends it
+	Asked      int        `json:"asked"`    // the sample size asked for (--n); 0: until the bar, per window
+	Pool       int        `json:"pool"`     // the run's changes a ranked metric scores, a person's: what the sample is drawn from
+	Labeller   string     `json:"labeller"` // whose labels it resumes (--labeller); "" for the rows that name none
+	// OtherLabellers counts the labellers of the labels file's other rows,
+	// whose labels this sample does not resume.
+	OtherLabellers int             `json:"other_labellers"`
+	Labelled       int             `json:"labelled"` // sampled changes the labeller has labelled or skipped
+	Progress       []LabelProgress `json:"progress"` // per ranked metric, by id: the labels toward its bar
+	Strata         []LabelStratum  `json:"strata"`   // by window, then size, then repository
+	Changes        []LabelChange   `json:"changes"`  // the sample, in the order to label it
+	Caveats        []Caveat        `json:"caveats"`
+}
+
+// LabelProgress is how far one ranked metric's labels are toward the bar:
+// BarLabels changes labelled meaningful or routine that it scores.
+type LabelProgress struct {
+	Metric   string `json:"metric"`
+	Ago      string `json:"ago"`      // the window it scores, in days before the run's now
+	Labelled int    `json:"labelled"` // changes the labeller labelled meaningful or routine that it scores, sampled or not
+	Sampled  int    `json:"sampled"`  // sampled changes it scores, less those answered noise or skip
+	Needed   int    `json:"needed"`   // BarLabels less Labelled, at least 0
 }
 
 // LabelStratum is one window, size and repository of the sample, with the
@@ -67,7 +82,7 @@ type LabelChange struct {
 	Size        string      `json:"size"`
 	Pull        *LabelPull  `json:"pull"`    // null for a landing no pull request landed
 	Title       string      `json:"title"`   // the pull request's title, else the landing commit's subject
-	Commits     []string    `json:"commits"` // the subjects of the commits a merge brought in, newest last; [] otherwise
+	Commits     []string    `json:"commits"` // the subjects of the commits a merge brought in, oldest first; [] otherwise
 	MoreCommits int         `json:"more_commits"`
 	Added       int         `json:"added"` // numstat lines on paths with a role, as Size counts them
 	Removed     int         `json:"removed"`
@@ -115,8 +130,73 @@ func (c *LabelChange) pullText() string {
 }
 
 func (s *LabelSample) summary() string {
-	return fmt.Sprintf("%s sampled of %s that a ranked metric scores (seed %d, %d asked) · %d labelled so far",
-		plural(len(s.Changes), "change", "changes"), plural(s.Pool, "change", "changes"), s.Seed, s.Asked, s.Labelled)
+	asked := fmt.Sprintf("%d asked", s.Asked)
+	if s.Asked == 0 {
+		asked = "until the bar"
+	}
+	who := "no labeller named"
+	if s.Labeller != "" {
+		who = "labeller " + s.Labeller
+	}
+	return fmt.Sprintf("%s sampled of %s that a ranked metric scores (seed %d, %s) · %s, %d labelled so far",
+		plural(len(s.Changes), "change", "changes"), plural(s.Pool, "change", "changes"), s.Seed, asked, who, s.Labelled)
+}
+
+// ProgressText says how far each ranked metric's labels are toward the
+// bar, in one sentence; "" when there is nothing to label.
+func (s *LabelSample) ProgressText() string {
+	if s.Pool == 0 {
+		return ""
+	}
+	var parts []string
+	for _, p := range s.Progress {
+		part := fmt.Sprintf("%s %d of %d", p.Metric, min(p.Labelled, BarLabels), BarLabels)
+		if p.Needed > 0 {
+			part += fmt.Sprintf(" (%d more)", p.Needed)
+		}
+		parts = append(parts, part)
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("Toward the bar, %d labels meaningful or routine that a metric scores: %s.", BarLabels,
+		strings.Join(parts, ", "))
+}
+
+// Ready reports whether every ranked metric has the labels its bar needs.
+func (s *LabelSample) Ready() bool {
+	for _, p := range s.Progress {
+		if p.Needed > 0 {
+			return false
+		}
+	}
+	return len(s.Progress) > 0
+}
+
+// LabelHeader writes what stillhere label's session prints before its
+// first card: the sample, the labels toward the bar, and the caveats, with
+// addresses withheld as on every page.
+func LabelHeader(w io.Writer, s *LabelSample) error {
+	d, err := page(s)
+	if err != nil {
+		return err
+	}
+	s = d.(*LabelSample)
+	p := &printer{w: w}
+	p.line("label · " + provenanceText(s.Provenance))
+	p.wrapped("  ", "  ", s.summary())
+	if s.OtherLabellers > 0 {
+		p.wrapped("  ", "  ", fmt.Sprintf("The labels file also holds the labels of %s, which this session neither "+
+			"shows nor changes: --labeller NAME resumes one's.", plural(s.OtherLabellers, "other labeller", "other labellers")))
+	}
+	if t := s.ProgressText(); t != "" {
+		p.wrapped("  ", "  ", t)
+	}
+	textCaveats(p, "", "What could make this wrong", s.Caveats, false)
+	if p.err != nil {
+		return fmt.Errorf("report: write text: %w", p.err)
+	}
+	return nil
 }
 
 // windowRows are the strata summed over repositories: one row per window
@@ -186,10 +266,15 @@ func (s *LabelSample) writeText(p *printer) {
 	p.line("label · " + provenanceText(s.Provenance))
 	p.wrapped("  ", "  ", s.summary())
 	p.line("  blinded: no metric value, rank or author is shown, so a label judges the change alone")
-	p.blank()
-	p.line("  Strata (pool → sample)")
-	p.textTable("  ", []column{{head: "window"}, {head: "scored by"}, {head: "size"}, {head: "pool", right: true},
-		{head: "sample", right: true}}, s.windowRows())
+	if t := s.ProgressText(); t != "" {
+		p.wrapped("  ", "  ", t)
+	}
+	if rows := s.windowRows(); len(rows) > 0 {
+		p.blank()
+		p.line("  Strata (pool → sample)")
+		p.textTable("  ", []column{{head: "window"}, {head: "scored by"}, {head: "size"}, {head: "pool", right: true},
+			{head: "sample", right: true}}, rows)
+	}
 	if rows := s.repoRows(clean); rows != nil {
 		p.blank()
 		p.textTable("  ", []column{{head: "repository"}, {head: "pool", right: true}, {head: "sample", right: true}}, rows)
@@ -211,9 +296,14 @@ func (s *LabelSample) writeMarkdown(p *printer) {
 	p.line("- " + provenanceText(s.Provenance))
 	p.line("- " + s.summary())
 	p.line("- Blinded: no metric value, rank or author is shown, so a label judges the change alone.")
-	p.blank()
-	p.mdTable([]column{{head: "Window"}, {head: "Scored by"}, {head: "Size"}, {head: "Pool", right: true},
-		{head: "Sample", right: true}}, s.windowRows())
+	if t := s.ProgressText(); t != "" {
+		p.line("- " + t)
+	}
+	if rows := s.windowRows(); len(rows) > 0 {
+		p.blank()
+		p.mdTable([]column{{head: "Window"}, {head: "Scored by"}, {head: "Size"}, {head: "Pool", right: true},
+			{head: "Sample", right: true}}, rows)
+	}
 	if rows := s.repoRows(mdText); rows != nil {
 		p.blank()
 		p.mdTable([]column{{head: "Repository"}, {head: "Pool", right: true}, {head: "Sample", right: true}}, rows)
@@ -336,8 +426,8 @@ var SheetColumns = []string{"change", "label", "labeller", "repo", "pull_request
 	"added", "removed", "files", "title", "commits"}
 
 // Sheet writes the sample as a CSV, one row per change in its order, with
-// each change's label so far: what a labeller fills in, in a spreadsheet,
-// for validate. Addresses in its text are withheld as on every page. A cell
+// each change's label so far and its labeller (LabelSample.Labeller): what
+// a labeller fills in, in a spreadsheet, for validate. Addresses in its text are withheld as on every page. A cell
 // a spreadsheet would read as a formula (one that starts with =, +, -, @,
 // a tab or a carriage return) starts with a ' instead, which spreadsheets
 // show as text: a commit subject is anyone's text (OWASP, "CSV
@@ -358,7 +448,7 @@ func Sheet(w io.Writer, s *LabelSample) error {
 		if c.MoreCommits > 0 {
 			commits += fmt.Sprintf(" · and %d more", c.MoreCommits)
 		}
-		row := []string{c.Change, c.Label, "", sheetCell(c.Repo), sheetCell(c.pullText()), date(c.Landed), c.Ago, c.Size,
+		row := []string{c.Change, c.Label, sheetCell(s.Labeller), sheetCell(c.Repo), sheetCell(c.pullText()), date(c.Landed), c.Ago, c.Size,
 			strconv.Itoa(c.Added), strconv.Itoa(c.Removed), strconv.Itoa(len(c.Files) + c.MoreFiles), sheetCell(c.Title),
 			sheetCell(commits)}
 		if err := cw.Write(row); err != nil {

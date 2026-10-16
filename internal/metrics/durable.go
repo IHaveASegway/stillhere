@@ -102,6 +102,11 @@ func (durableV1) Clusters(in *Input, scope domain.Scope) (RankInput, error) {
 	}, nil
 }
 
+// scores names the changes durable@1's clusters measure (Scorer.Scores).
+func (durableV1) scores() string {
+	return "a change with a person's commit that added a prod line whose fate blame can tell, in a repository blame ran in"
+}
+
 // durableClusters returns the cohort's clusters that added a prod line
 // whose survival blame can tell: a landing that adds none (a pure rename, a
 // whitespace-only or a test-only change) says nothing about durability, and

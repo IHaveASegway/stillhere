@@ -15,8 +15,10 @@ import (
 // (docs/metrics.md#units), and each ranked metric's measure of one change,
 // which stillhere validate compares with a person's labels and stillhere
 // label samples from. The measure is what the change adds to the metric's
-// clusters, so validate scores the numbers the ranks are made of, and no
-// second definition of any metric lives here.
+// clusters, so validate scores the numbers the ranks are made of, or, for a
+// metric whose clusters are not keyed by the change's landings, the
+// metric's own measure in its own file; no second definition of any metric
+// lives here.
 
 // betaValidity is every ranked metric's validity note until a lead's labels
 // clear the bar (docs/metrics.md#validity-checks, ADR 0014): the rank
@@ -36,9 +38,9 @@ type Change struct {
 	Landings []string  // full SHAs, the pull request's merge commit (or the landing) first, then the earlier ones a rebase merge put on the branch
 	Time     time.Time // when it landed: the committer time of Landings[0]
 	Pull     *Pull     // nil for a landing that no pull request of the run's GitHub data landed
-	// Bot is true when every commit its landings brought in, merge commits
-	// aside, is credited to a bot or an agent (identity.Directory.Bot): a
-	// dependency bump, say, whoever merged it.
+	// Bot is true when the change is a bot's (botLandings): every commit
+	// its landings brought in, merge commits aside, is credited to a bot,
+	// such as a dependency bump, whoever merged it.
 	Bot bool
 	// Added and Removed are the numstat lines, blank ones included, of its
 	// landings' own diffs (a merge's first-parent diff, as landed@1 reads
@@ -76,20 +78,23 @@ func Changes(in *Input) ([]Change, error) {
 		pulls, _ := x.landings(r)
 		for _, pl := range pulls {
 			c := Change{Repo: r.key, Pull: &Pull{ID: pl.pull.ID, Repo: names[pl.pull.Repo], Number: pl.pull.Number, Title: pl.pull.Title}}
+			var mine []*landingView
 			for _, l := range pl.landings {
 				if !taken[l.sha] {
 					taken[l.sha] = true
-					c.add(r, l, v)
+					c.add(r, l)
+					mine = append(mine, l)
 				}
 			}
-			if len(c.Landings) > 0 {
+			if len(mine) > 0 {
+				c.Bot = v.botLandings(mine...)
 				out = append(out, c)
 			}
 		}
 		for _, l := range r.landings {
 			if !taken[l.sha] {
-				c := Change{Repo: r.key}
-				c.add(r, l, v)
+				c := Change{Repo: r.key, Bot: v.botLandings(l)}
+				c.add(r, l)
 				out = append(out, c)
 			}
 		}
@@ -101,25 +106,12 @@ func Changes(in *Input) ([]Change, error) {
 }
 
 // add puts landing l of repository r into c: its SHA, its time when it is
-// c's first, its lines, and whether a person wrote any of it.
-func (c *Change) add(r *repoView, l *landingView, v *view) {
+// c's first, and its lines.
+func (c *Change) add(r *repoView, l *landingView) {
 	if len(c.Landings) == 0 {
 		c.Time = l.time
-		c.Bot = true
 	}
 	c.Landings = append(c.Landings, l.sha)
-	human, brought := false, false
-	for _, k := range l.commits {
-		if k.merge {
-			continue
-		}
-		brought = true
-		human = human || !v.who.Bot(k.credit)
-	}
-	if !brought && l.commit != nil {
-		human = !v.who.Bot(l.commit.credit)
-	}
-	c.Bot = c.Bot && !human
 	if l.commit == nil {
 		return
 	}
@@ -132,25 +124,62 @@ func (c *Change) add(r *repoView, l *landingView, v *view) {
 	}
 }
 
-// Scorer is one ranked metric's measure of a change: what the change adds
-// to the metric's clusters in scope all, which is how stillhere validate
-// scores a labelled change (docs/metrics.md#validity-checks). For a ratio
-// (Definition.Ratio), the clusters' numerators over their denominators,
-// summed over every person and every landing of the change; for a sum,
-// their sum. A change with no cluster is not measured, unless the metric
-// measures it as 0: reviews_given@1 has one cluster per reviewer, so a
-// change no one else reviewed has none.
-type Scorer struct {
-	ratio    bool
-	num, den map[string]float64 // cluster Change → its clusters' sums, over every person
-	zero     func(*Change) bool // the changes without a cluster that the metric measures as 0; nil for none
-	window   domain.Window
+// botLandings is the one rule for whether a change, or a landing, is a
+// bot's (docs/metrics.md#units): every commit the landings brought in,
+// merge commits aside, is credited to a bot (identity.Credit, so an
+// agent's commit counts for its first human co-author, ADR 0007, and
+// identity.Directory.Bot); a landing that brought in none, an empty
+// merge, by its own commit's credit. It reads who wrote the change, as
+// landed@2 credits it, not who merged it or opened its pull request: a
+// person's merge of a dependency bump is the bot's, and a pull request an
+// agent opened for a person is the person's. With no commit it can read,
+// it is not a bot's.
+func (v *view) botLandings(landings ...*landingView) bool {
+	human, known := false, false
+	for _, l := range landings {
+		brought := false
+		for _, k := range l.commits {
+			if !k.merge {
+				brought, known = true, true
+				human = human || !v.who.Bot(k.credit)
+			}
+		}
+		if !brought && l.commit != nil {
+			known = true
+			human = human || !v.who.Bot(l.commit.credit)
+		}
+	}
+	return known && !human
 }
 
-// zeroMeasured is a ranked metric some of whose changes have no cluster
-// although it measures them: it says which, as a 0.
-type zeroMeasured interface {
-	measuredZero(in *Input, w domain.Window) func(*Change) bool
+// Scorer is one ranked metric's measure of a change, which is how
+// stillhere validate scores a labelled change (docs/metrics.md#validity-checks).
+// It is what the change adds to the metric's clusters in scope all: for a
+// ratio (Definition.Ratio), the clusters' numerators over their
+// denominators, summed over every person and every landing of the change;
+// for a sum, their sum. A change with no cluster is not measured. A metric
+// whose clusters are not the change's own measures the change itself
+// (changeMeasured): reviews_given@1, whose clusters are a reviewer's in its
+// window. Only a change that landed in the metric's window is measured.
+type Scorer struct {
+	ratio    bool
+	num, den map[string]float64            // cluster Change → its clusters' sums, over every person
+	measure  func(*Change) (float64, bool) // a metric's own measure of a change (changeMeasured); nil: by its clusters
+	window   domain.Window
+	scores   string // which changes it measures, for a message that says why one was not
+}
+
+// changeMeasured is a ranked metric that measures a change itself, rather
+// than by the clusters keyed by its landings. Score has already checked
+// that the change landed in the metric's window.
+type changeMeasured interface {
+	measureChanges(in *Input) func(*Change) (float64, bool)
+}
+
+// scoring is a ranked metric's description of the changes it measures,
+// for a message that says why a change was not measured.
+type scoring interface {
+	scores() string
 }
 
 // NewScorer computes m's clusters over in, in scope all, once.
@@ -163,29 +192,43 @@ func NewScorer(m Ranked, in *Input) (*Scorer, error) {
 		return nil, err
 	}
 	s := &Scorer{ratio: m.Definition().Ratio, num: map[string]float64{}, den: map[string]float64{}, window: ri.Window}
+	if d, ok := m.(scoring); ok {
+		s.scores = d.scores()
+	}
+	if cm, ok := m.(changeMeasured); ok {
+		s.measure = cm.measureChanges(in)
+		return s, nil
+	}
 	for _, cs := range ri.Data {
 		for _, c := range cs {
 			s.num[c.Change] += c.Num
 			s.den[c.Change] += c.Den
 		}
 	}
-	if z, ok := m.(zeroMeasured); ok {
-		s.zero = z.measuredZero(in, ri.Window)
-	}
 	return s, nil
 }
 
-// Window is the metric's window, which the changes it measures landed in.
+// Window is the metric's window: the changes it measures landed in it.
 func (s *Scorer) Window() domain.Window { return s.window }
 
-// Score is the metric's measure of c, and whether it measures c at all.
+// Scores says which changes of its window the metric measures, as a phrase
+// ("a pull request of the run's GitHub data"), for a message that says why
+// a change was not measured.
+func (s *Scorer) Scores() string { return s.scores }
+
+// Score is the metric's measure of c, and whether it measures c at all: a
+// change that landed outside the metric's window is not measured, whatever
+// its clusters, so a pull request merged before the window and reviewed in
+// it is not reviews_given@1's.
 func (s *Scorer) Score(c *Change) (float64, bool) {
-	keys := c.Landings
-	if c.Pull != nil {
-		keys = append(slices.Clip(keys), c.Pull.ID)
+	if !s.window.Contains(c.Time) {
+		return 0, false
+	}
+	if s.measure != nil {
+		return s.measure(c)
 	}
 	num, den, found := 0.0, 0.0, false
-	for _, k := range keys {
+	for _, k := range c.Landings {
 		if n, ok := s.num[k]; ok {
 			num += n
 			den += s.den[k]
@@ -194,9 +237,6 @@ func (s *Scorer) Score(c *Change) (float64, bool) {
 	}
 	switch {
 	case !found:
-		if s.zero != nil && s.zero(c) {
-			return 0, true
-		}
 		return 0, false
 	case s.ratio:
 		if den == 0 {

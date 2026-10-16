@@ -430,6 +430,17 @@ func ForgeCaveats(run *domain.Run, fs *domain.FactSet, forge *ForgeRead, metrics
 	return out
 }
 
+// ForgeCaveatsAlone is ForgeCaveats for one metric that reads GitHub data,
+// as a section about that metric alone says them (forge-not-synced): even
+// in a run that read no GitHub data, so that validate and label can say
+// why reviews_given@1 scored nothing.
+func ForgeCaveatsAlone(run *domain.Run, fs *domain.FactSet, forge *ForgeRead, metric string) []Caveat {
+	if !forge.reads(metric) {
+		return nil
+	}
+	return answerBuilder(run, fs, forge).forgeCaveats(reposWith(fs, nil), metric, true)
+}
+
 // datedProvenance is the provenance of an answer over repos, whose GitHub
 // data forge, what the run read, dates.
 func datedProvenance(run *domain.Run, fs *domain.FactSet, forge *ForgeRead, repos []*domain.RepoFacts, metrics []string) Provenance {

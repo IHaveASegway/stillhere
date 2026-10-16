@@ -395,42 +395,53 @@ func reviewSeed(t *testing.T, s *sqlite.Store, repo domain.ForgeRepo, pulls []do
 // reviewValidate checks SPEC's "validate over the same replica" (#77): a
 // labelled change is a landing or a pull request, named by SHA or by
 // number, and each ranked metric scores it at its own grain, durable@1 and
-// simplifying@1 by its landings and reviews_given@1 by its pull request,
-// which a change no one else reviewed scores 0 in its window.
+// simplifying@1 by its landings and reviews_given@1 by its pull request's
+// reviewers, a landing no pull request landed unscored; a change counts
+// once, whatever names it, and over two labellers by its majority label.
 func reviewValidate(t *testing.T, s *scanned, commits map[string]string) {
 	const table = "SPEC validate over the same replica"
 	row := func(month time.Month, day, hour int) string { return commits[rfc3339(reviewAt(month, day, hour))] }
-	labels := strings.Join([]string{
+	lead := strings.Join([]string{
 		"# the lead's labels; a comment",
 		"change,label,labeller",
 		"#3,meaningful,lead",                           // row 8, Bob's merge: reviewed by bob
-		"pr:4,meaningful,lead",                         // row 9: cara and @zoe
-		"acme/fixture#6,meaningful,lead",               // row 12: @zoe
-		row(time.October, 6, 17) + ",routine,lead",     // row 13, Frank's, no pull request: 0 reviews
-		row(time.October, 6, 18)[:7] + ",routine,lead", // row 14, Ada's, by a prefix: 0 reviews
+		"pr:4,meaningful,lead",                         // row 9: frank, cara and @zoe
+		"acme/fixture#6,routine,lead",                  // row 12: @zoe
+		row(time.October, 6, 17) + ",routine,lead",     // row 13, Frank's, no pull request
+		row(time.October, 6, 18)[:7] + ",routine,lead", // row 14, Ada's, by a prefix, no pull request
 		row(time.October, 6, 15) + ",noise,lead",       // row 11, Dana's: noise, in no AUC
 		row(time.January, 1, 12) + ",meaningful,lead",  // row 1, Ada's init: durable 7 / 7
 		row(time.January, 4, 12) + ",routine,lead",     // row 3, Bob's move: durable 0 / 2
-		"#1,meaningful,lead",                           // row 5, Gina's: durable 2 / 2
+		"#1,meaningful,lead",                           // row 5 (#1, Gina's): durable 2 / 2; hank's review is before the window
 		row(time.March, 1, 12) + ",routine,lead",       // row 7, Bob's: durable 5 / 5
 		"#9,meaningful,lead",                           // no such pull request: unmatched
 		row(time.October, 6, 20) + ",skip,lead",        // row 16: passed over, no label
+		row(time.October, 6, 12) + ",meaningful,lead",  // row 8 again, by its SHA: one change, counted once
 	}, "\n")
-	v, err := app.Validate(t.Context(), s.read, app.ValidateRequest{RunID: s.run, Labels: []byte(labels), LabelsName: "labels.csv"})
-	if err != nil {
-		t.Fatalf("app.Validate: %v", err)
+	validate := func(labels, labeller string) *report.Validation {
+		t.Helper()
+		v, err := app.Validate(t.Context(), s.read, app.ValidateRequest{RunID: s.run, Labels: []byte(labels), LabelsName: "labels.csv",
+			Labeller: labeller})
+		if err != nil {
+			t.Fatalf("app.Validate: %v", err)
+		}
+		return v
 	}
-	if v.Labels != 11 || v.Meaningful != 6 || v.Routine != 4 || v.Noise != 1 || v.Unmatched != 1 || v.Labellers != 1 {
-		t.Errorf("%s: %d labels (%d meaningful, %d routine, %d noise), %d unmatched, %d labellers; want 11 (6, 4, 1), 1 and 1",
-			table, v.Labels, v.Meaningful, v.Routine, v.Noise, v.Unmatched, v.Labellers)
+	hasCaveat := func(v *report.Validation, code, text string) bool {
+		return slices.ContainsFunc(v.Caveats, func(c report.Caveat) bool { return c.Code == code && strings.Contains(c.Message, text) })
+	}
+	v := validate(lead, "")
+	if v.Labels != 12 || v.Changes != 10 || v.Meaningful != 4 || v.Routine != 5 || v.Noise != 1 || v.Unmatched != 1 || v.Labellers != 1 {
+		t.Errorf("%s: %d rows labelling %d changes (%d meaningful, %d routine, %d noise), %d unmatched, %d labellers; "+
+			"want 12 rows, 10 changes (4, 5, 1), 1 and 1", table, v.Labels, v.Changes, v.Meaningful, v.Routine, v.Noise, v.Unmatched, v.Labellers)
 	}
 	want := map[string]struct {
 		auc                 float64
 		meaningful, routine int
 	}{
-		reviewsGiven.String(): {1, 3, 2},    // 1, 2, 1 against 0, 0
+		reviewsGiven.String(): {0.75, 2, 1}, // 1 and 3 against 1
 		durable.String():      {0.75, 2, 2}, // 1, 1 against 0, 1
-		simplifying.String():  {0.5, 3, 2},  // every one removes nothing
+		simplifying.String():  {0.5, 2, 3},  // every one removes nothing
 	}
 	for _, a := range v.Metrics {
 		w, ok := want[a.Metric]
@@ -447,15 +458,34 @@ func reviewValidate(t *testing.T, s *scanned, commits map[string]string) {
 	for m := range want {
 		t.Errorf("%s: validate scores no %s", table, m)
 	}
-	if !slices.ContainsFunc(v.Caveats, func(c report.Caveat) bool {
-		return c.Code == "unmatched-labels" && strings.Contains(c.Message, "#950, pr:950 or owner/name#950") && !strings.Contains(c.Message, "M2")
-	}) {
-		t.Errorf("%s: the caveats %+v say nothing of how a pull request is named, or still say it needs M2", table, v.Caveats)
+	for _, c := range []struct{ code, text string }{
+		{"unmatched-labels", "#950, pr:950 or owner/name#950"},
+		{"unscored-labels", reviewsGiven.String() + " scored 3 of the 5 changes"}, // rows 13 and 14: no pull request
+		{"repeated-labels", "1 row"},
+	} {
+		if !hasCaveat(v, c.code, c.text) {
+			t.Errorf("%s: no %s caveat that says %q: %+v", table, c.code, c.text, v.Caveats)
+		}
+	}
+
+	// A second labeller agrees on #3 and not on #6: one label per change, a
+	// tie left out, unless --labeller asks for one labeller's labels.
+	both := lead + "\n#3,meaningful,second\nacme/fixture#6,meaningful,second\n"
+	v = validate(both, "")
+	if v.Changes != 9 || v.Labellers != 2 || !hasCaveat(v, "several-labellers", "agreed on 1 of them; 1 change with no majority") {
+		t.Errorf("%s: two labellers give %d changes from %d labellers, caveats %+v; want 9 from 2, #6's tie left out",
+			table, v.Changes, v.Labellers, v.Caveats)
+	}
+	v = validate(both, "lead")
+	if i := slices.IndexFunc(v.Metrics, func(a report.MetricAUC) bool { return a.Metric == reviewsGiven.String() }); i < 0 ||
+		v.Metrics[i].N != 3 || v.Changes != 10 || !hasCaveat(v, "several-labellers", "the 2 rows") {
+		t.Errorf("%s: --labeller lead gives %+v, caveats %+v; want the lead's 10 changes, reviews_given@1 n 3, the second's 2 rows left out",
+			table, v.Metrics, v.Caveats)
 	}
 
 	// A "#" and digits name a pull request; every other "#" line is a
 	// comment, and a file of nothing else says so (KB-19).
-	_, err = app.Validate(t.Context(), s.read, app.ValidateRequest{RunID: s.run, Labels: []byte("# 3,meaningful\n#pr 4,routine\n"),
+	_, err := app.Validate(t.Context(), s.read, app.ValidateRequest{RunID: s.run, Labels: []byte("# 3,meaningful\n#pr 4,routine\n"),
 		LabelsName: "labels.csv"})
 	var usage *domain.UsageError
 	if !errors.As(err, &usage) || !strings.Contains(usage.Msg, "read as comments: 2") {
@@ -506,6 +536,16 @@ func reviewLabel(t *testing.T, s *scanned, commits map[string]string) {
 	}
 	if older != 6 || recent != 8 {
 		t.Errorf("%s: the sample holds %d changes from 90–365 days ago and %d from the last 90, want 6 and 8", table, older, recent)
+	}
+	// Another labeller's rows are theirs: #3 is not marked for "second".
+	second, err := app.Label(t.Context(), s.read, app.LabelRequest{RunID: s.run, N: 20, Seed: 1, Labels: []byte("#3,meaningful\n"),
+		Labeller: "second"})
+	if err != nil {
+		t.Fatalf("app.Label: %v", err)
+	}
+	if second.Labelled != 0 || second.OtherLabellers != 1 {
+		t.Errorf("%s: for labeller second, %d sampled changes are labelled and %d other labellers named; want 0 and 1",
+			table, second.Labelled, second.OtherLabellers)
 	}
 	four := sample(4, "")
 	for i, c := range four.Changes {

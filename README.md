@@ -95,11 +95,11 @@ The commands that store facts (`scan` and `sync github`) keep them under `STILLH
 A rank says that some people's changes last longer, simplify more or get more review than others'. Whether that matches what matters in your code is something only you can judge, so stillhere asks you:
 
 ```sh
-stillhere label        # 100 of the run's changes, one key each: m meaningful, r routine, n noise, s skip, q quit
+stillhere label        # about 100 of the run's changes, one key each: m meaningful, r routine, n noise, s skip, q quit
 stillhere validate     # per ranked metric, the AUC: how often a meaningful change scores above a routine one
 ```
 
-`label` shows each change without any metric value or author, appends every answer to `labels.csv` beside the facts database (outside your repositories: the labels judge colleagues' work), and resumes where you stopped. `label --sheet > sheet.csv` writes the same sample for a spreadsheet, which `validate --labels sheet.csv` reads back. An AUC of 0.5 is chance; a metric loses its beta mark at 0.7 or more on at least 50 labels. [docs/validation.md](docs/validation.md) has the rubric, worked examples from public repositories, and how each metric scores a change.
+`label` shows each change without any metric value or author, appends every answer to `labels.csv` beside the facts database (outside your repositories: the labels judge colleagues' work), resumes where you stopped, and asks until each ranked metric has the 50 meaningful or routine labels its check needs. `label --sheet > ~/.stillhere/sheet.csv` writes the same sample for a spreadsheet, which `validate --labels ~/.stillhere/sheet.csv` reads back; keep it out of your repositories too. An AUC of 0.5 is chance, and the bar is 0.7 or more on at least 50 labels. Clearing it tells you the metric tracks what you call meaningful in your code; the beta mark stillhere prints changes only when the metric's published validity result does, so report yours. [docs/validation.md](docs/validation.md) has the rubric, worked examples from public repositories, and how each metric scores a change.
 
 ## Use it from an agent (MCP)
 
