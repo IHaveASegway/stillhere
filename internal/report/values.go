@@ -412,7 +412,10 @@ const detailAIAssistedShare = "ai_assisted_share"
 // so a reader that must withhold one (the MCP server, by the run's decision
 // app.AIShares) withholds every copy of it; a metric that copies the share
 // under another key must be added here. The key is named whether or not
-// the value's Detail holds it.
+// the value's Detail holds it. A whole share's own Detail (ai_assisted@1's
+// cohort comparisons, docs/metrics.md#ai_assisted1) is no copy of a share,
+// but it can be one or two people's, so the MCP server sends a share it
+// shows without any of it (#87).
 func AIShareIn(v Value) (whole bool, key string) {
 	id, err := domain.ParseMetricID(v.Metric)
 	switch {

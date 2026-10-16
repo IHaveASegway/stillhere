@@ -74,12 +74,15 @@ type Config struct {
 // stdio transport has it, until the client closes in or ctx ends. Nothing
 // else is written to out. A line that is not a JSON-RPC message is answered
 // with JSON-RPC's error for it and skipped, rather than ending the
-// session. It closes the store when it returns.
+// session. When in ends, every call read before it is answered first
+// (#58). It closes the store when it returns.
 func Serve(ctx context.Context, cfg Config, in io.ReadCloser, out io.Writer) error {
 	s := newServer(cfg)
 	defer s.close()
 	w := &lockedWriter{w: out}
-	err := s.mcpServer().Run(ctx, &sdk.IOTransport{Reader: newLineGuard(in, w, s.log), Writer: nopCloser{w}})
+	guard := newLineGuard(ctx, in, w, s.log)
+	w.guard = guard
+	err := s.mcpServer().Run(ctx, &sdk.IOTransport{Reader: guard, Writer: nopCloser{w}})
 	if err != nil && ctx.Err() == nil && !errors.Is(err, io.EOF) {
 		return fmt.Errorf("mcp: %w", err)
 	}
@@ -105,6 +108,9 @@ type server struct {
 	store   *cachedStore // nil until Open succeeds
 	lastRun int64        // the run the previous answer read, for the run-changed caveat
 	budget  int          // answerBudget; a test lowers it
+	// schemas holds each tool's input schema, as the argument check reads
+	// it (args.go); filled when the tools are registered.
+	schemas map[string]argSchema
 }
 
 func newServer(cfg Config) *server {
@@ -113,7 +119,7 @@ func newServer(cfg Config) *server {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &server{cfg: cfg, log: log, slot: make(chan struct{}, 1), budget: answerBudget}
+	return &server{cfg: cfg, log: log, slot: make(chan struct{}, 1), budget: answerBudget, schemas: map[string]argSchema{}}
 }
 
 // close closes the store, if it was opened, once the call that holds the
@@ -134,6 +140,7 @@ func (s *server) mcpServer() *sdk.Server {
 	srv := sdk.NewServer(&sdk.Implementation{Name: "stillhere", Title: "stillhere", Version: s.cfg.Version},
 		&sdk.ServerOptions{Instructions: s.instructions(), Logger: s.log.With("component", "mcp-sdk")})
 	s.addTools(srv)
+	srv.AddReceivingMiddleware(s.checkArgs)
 	return srv
 }
 
@@ -164,7 +171,7 @@ func (s *server) instructions() string {
 	}
 	return `stillhere answers questions about the code of a platform (a group of git repositories) or one repository: what landed, what lasted (durable), what simplified the code, who knows a path, where knowledge is concentrated or has gone quiet, AI-assisted and bot share, and reviews given. Use its tools when the user asks who to ask or who should review some code, who wrote or owns it, how risky or concentrated an area is, what changed recently, whose work deserves recognition, or what a stillhere number means.
 
-Start with overview (empty scope lists the platforms and repositories), then person, who_knows, changes, explain, highlights, identity_candidates, metrics, and diff when source is allowed. Pass names as the reports print them; ids from an earlier answer work too.
+Start with overview (empty scope lists the platforms and repositories, each with scope_arg, the exact string to pass as scope), then person, who_knows, changes, explain, highlights, identity_candidates, metrics, and diff when source is allowed. Pass names as the reports print them; ids from an earlier answer work too. When a caveat says identities are unmerged, identity_candidates lists them: say the numbers may move once the user merges them.
 
 Answers come from ` + source + `. Analysis is offline, so a stale clone gives a stale answer. Every answer carries provenance (run id, as-of time, HEAD SHAs, metric@version) and caveats: repeat them with the numbers. Lists are paged or cut to their first rows, with their totals. Ranks are 95% intervals: people whose intervals overlap are not ordered, and people below a metric's minimum sample are listed, not ranked. Knowledge concentration is not a truck factor. AI-assisted shares are lower bounds. stillhere measures properties of changes, not a person's value: never use it for performance or pay decisions.
 
@@ -245,6 +252,81 @@ func (c *call) resolver(ctx context.Context) (*resolver, error) {
 	return &resolver{names: c.names, emails: c.s.cfg.AllowEmails}, nil
 }
 
+// scope resolves a scope argument against the call's run; a miss says
+// which stored run holds it (elsewhere).
+func (c *call) scope(ctx context.Context, query string) (domain.Scope, error) {
+	r, err := c.resolver(ctx)
+	if err != nil {
+		return domain.Scope{}, err
+	}
+	sc, err := r.scope(query)
+	return sc, c.elsewhere(ctx, err)
+}
+
+// repo resolves a repository argument against the call's run; a miss says
+// which stored run holds it (elsewhere).
+func (c *call) repo(ctx context.Context, query string) (app.NamedRepo, error) {
+	r, err := c.resolver(ctx)
+	if err != nil {
+		return app.NamedRepo{}, err
+	}
+	rp, err := r.repo(query)
+	return rp, c.elsewhere(ctx, err)
+}
+
+// elsewhere adds to a scope or a repository the run does not hold (a
+// miss) the newest other stored run that holds it, and how the user serves
+// that run (MC-17): without --run the server reads the latest scan, so a
+// quick scan of one repository hides a platform scanned before it, and only
+// the user can point the server back at it. Where that run holds several
+// scopes of the name, as go-git/go-git holds a group and a repository, the
+// hint lists each with the scope_arg that names it there: the served run's
+// index cannot give it, so the agent has only the name the user typed. Any
+// other error, and a miss no stored run holds, is returned as it is.
+func (c *call) elsewhere(ctx context.Context, err error) error {
+	var m *miss
+	if !errors.As(err, &m) {
+		return err
+	}
+	d, derr := c.deps(ctx)
+	if derr != nil {
+		return err
+	}
+	runs, rerr := app.StoredRuns(ctx, d)
+	if rerr != nil {
+		c.s.log.Warn("listing the stored runs for a scope the run lacks", "error", rerr)
+		return err
+	}
+	served := fmt.Sprintf("this server reads the latest scan, run %d", c.run())
+	if c.s.cfg.RunID != 0 {
+		served = fmt.Sprintf("this server is pinned to run %d (--run)", c.run())
+	}
+	query := m.query
+	if m.repo {
+		query = repoQuery(m.query)
+	}
+	for _, sr := range runs {
+		if sr.Run.ID == c.run() {
+			continue
+		}
+		other := &resolver{names: &app.Names{Run: sr.Run, Groups: sr.Groups, Repos: sr.Repos}}
+		found := other.scopes(query)
+		var held string
+		switch len(found) {
+		case 0:
+			continue
+		case 1:
+			held = other.describeScope(found[0])
+		default:
+			held = fmt.Sprintf("%d scopes of that name: %s", len(found), other.choices(found))
+		}
+		return &domain.UsageError{Msg: fmt.Sprintf("%s Run %d (as of %s) holds %s. But %s: the user can restart "+
+			"stillhere mcp with --run %d to read that run, or scan it again.",
+			m.msg, sr.Run.ID, sr.Run.Now.UTC().Format(time.RFC3339), held, served, sr.Run.ID)}
+	}
+	return err
+}
+
 // pinned explains a run the server cannot read when --run pinned it: the
 // agent cannot change the server's flags, so the error says what the user
 // does instead.
@@ -321,7 +403,7 @@ func (s *server) build(ctx context.Context, c *call, f format, narrow string,
 		w = newWithholder(c.names)
 	}
 	for {
-		v, err := r(&shaper{f: f, names: c.names})
+		v, err := r(&shaper{f: f, names: c.names, w: w})
 		if err != nil {
 			return nil, 0, err
 		}
@@ -353,10 +435,6 @@ func (s *server) finish(v any) int64 {
 	if t, ok := v.(interface{ end() *tail }); ok {
 		t.end().Withheld = s.withheld()
 		caveats = &t.end().Caveats
-	}
-	if o, ok := v.(*identitiesOut); ok {
-		o.Withheld = s.withheld()
-		caveats = &o.Caveats
 	}
 	if p, ok := v.(interface{ provenance() *report.Provenance }); ok {
 		run = p.provenance().RunID

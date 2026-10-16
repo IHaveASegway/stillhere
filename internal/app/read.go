@@ -638,6 +638,7 @@ func WhoKnows(ctx context.Context, d Deps, r WhoKnowsRequest) (*report.WhoKnows,
 	} else if c, ok := whoKnowsNoRole(s.facts, prefix, repo, len(w.Repos)); ok {
 		w.Caveats = append(w.Caveats, c)
 	}
+	whoKnowsArea(w, s.values, prefix)
 	return w, nil
 }
 
@@ -701,6 +702,24 @@ func whoKnowsNoRole(fs *domain.FactSet, prefix, repo string, listed int) (report
 		"paths with one: this answer is empty because the policy leaves the path out, not because nobody knows it. "+
 		"'stillhere policy' prints the roles and the deny list; a role for it in stillhere.toml makes it count at the next scan.",
 		prefix, where, strings.Join(why, ", "), report.MetricWhoKnows)), true
+}
+
+// whoKnowsArea gives each repository of a who-knows answer the path's
+// knowledge loss and concentration, when the path is a top-level
+// directory: a scan stores both metrics for those areas (report.Areas reads
+// them), and computes them for no deeper path.
+func whoKnowsArea(w *report.WhoKnows, values []domain.MetricValue, prefix string) {
+	if prefix == "" || strings.Contains(prefix, "/") {
+		return
+	}
+	for i := range w.Repos {
+		for _, a := range report.Areas(values, w.Repos[i].Key) {
+			if a.Path == prefix+"/" {
+				w.Repos[i].Area = &a
+				break
+			}
+		}
+	}
 }
 
 // whoKnowsNoPathNames is how many repositories that hold the path a

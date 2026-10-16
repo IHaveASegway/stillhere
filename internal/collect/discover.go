@@ -747,6 +747,22 @@ func discoverConfig(ctx context.Context, git domain.GitRunner, dir string) (orig
 	return origin, partial, nil
 }
 
+// LacksObjects reports whether err is git failing because a partial clone
+// lacks an object the command needs: analysis never fetches
+// (GIT_NO_LAZY_FETCH, git-invocation.md), so git warns "lazy fetching
+// disabled" and fails with "could not fetch <oid> from promisor remote"
+// (verified on git 2.50.1). Any other failure in a partial clone, such as a
+// clone that moved since its scan ("cannot change to <dir>"), is not this.
+// collect reads git's words in one place, so a use case decides by this
+// and never matches git's text itself.
+func LacksObjects(err error) bool {
+	var ge *domain.GitError
+	if !errors.As(err, &ge) {
+		return false
+	}
+	return strings.Contains(ge.Stderr, "lazy fetching disabled") || strings.Contains(ge.Stderr, "from promisor remote")
+}
+
 // discoverTrue reads a boolean config value as git does: a key with no value
 // is true; false, no, off, the empty string and integer zero are false; and
 // true, yes, on and any other integer are true. A value git rejects, such as

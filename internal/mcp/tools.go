@@ -79,9 +79,11 @@ func (c common) format(limit, rows, detailedRows int) (format, int64, error) {
 	return f, run, err
 }
 
-// tool registers one tool with its typed handler.
-func tool[In any](srv *sdk.Server, name, title, description string, in json.RawMessage,
+// tool registers one tool with its typed handler, and its schema with the
+// server's argument check (args.go).
+func tool[In any](s *server, srv *sdk.Server, name, title, description string, in json.RawMessage,
 	h func(context.Context, In) *sdk.CallToolResult) {
+	s.schemas[name] = parseArgSchema(name, in)
 	sdk.AddTool(srv, &sdk.Tool{Name: name, Title: title, Description: description, InputSchema: in, Annotations: readOnly(title)},
 		func(ctx context.Context, _ *sdk.CallToolRequest, args In) (*sdk.CallToolResult, any, error) {
 			return h(ctx, args), nil, nil
@@ -89,12 +91,14 @@ func tool[In any](srv *sdk.Server, name, title, description string, in json.RawM
 }
 
 func (s *server) addTools(srv *sdk.Server) {
-	tool(srv, "overview", "Platform or repository overview",
+	tool(s, srv, "overview", "Platform or repository overview",
 		"Overview of a platform (a group of repositories), one repository, or the whole run, from the latest stillhere scan: "+
 			"how old and how big the code is, who it is made of (surviving prod lines per person, their majority files, "+
 			"breadth and recent landings), knowledge concentration (not a truck factor) and knowledge loss to people who went "+
-			"quiet, the AI-assisted share (a lower bound) and the bot share, and what landed in the week. Start here: an empty "+
-			"scope lists every platform and repository, paged. rank adds a ranked metric's table (durable, simplifying or "+
+			"quiet, the AI-assisted share (a lower bound) and the bot share, and what landed in the week; for one repository, "+
+			"also its areas (top-level directories) with their knowledge loss, concentration and lines, largest first. Start "+
+			"here: an empty scope lists every platform and repository, paged, each with scope_arg, the exact string to pass "+
+			"as scope (group:NAME where a repository shares the group's name). rank adds a ranked metric's table (durable, simplifying or "+
 			"reviews_given): 95% rank intervals, where people whose intervals overlap are not ordered and people below the "+
 			"minimum sample are listed, not ranked. Every answer has provenance (run, as-of, HEAD SHAs, metric@version) and "+
 			"caveats; say them with the numbers."+untrusted,
@@ -102,7 +106,7 @@ func (s *server) addTools(srv *sdk.Server) {
 			`"rank": {"type": "string", "description": "A ranked metric to add its rank table for the scope, such as durable, simplifying or reviews_given; metrics lists them."}`,
 			propFormat, propLimit, propCursor),
 		s.overview)
-	tool(srv, "person", "What a person's changes did",
+	tool(s, srv, "person", "What a person's changes did",
 		"What one person's changes did, from the latest scan: surviving prod lines and majority files (depth), the "+
 			"repositories they hold code in (breadth), landings and recent work, reviews given when GitHub was synced, and their "+
 			"place in each ranked metric's table as a 95% rank interval with its sample size. Pass name as the reports print it "+
@@ -115,10 +119,12 @@ func (s *server) addTools(srv *sdk.Server) {
 			`"name": {"type": "string", "description": "The person's display name, an id (p-…) or email from an earlier answer, or a GitHub login (@name, any case); empty for the user the server runs for."}`,
 			propFormat),
 		s.person)
-	tool(srv, "who_knows", "Who knows this code",
+	tool(s, srv, "who_knows", "Who knows this code",
 		"Who knows the code under a path, per repository: majority owners (people credited with at least half of a file's "+
 			"surviving lines), the top five authors of surviving prod lines, recent landers and recent reviewers (the last 90 "+
-			"days; reviewers only in repositories whose GitHub data the run read, an empty list elsewhere) and bots apart. "+
+			"days; reviewers only in repositories whose GitHub data the run read, an empty list elsewhere) and bots apart; "+
+			"for a top-level directory, also its area: knowledge loss, people gone quiet and concentration, as overview's "+
+			"areas give them (null for a deeper path). "+
 			"A routing answer for who to ask or who should review, not a rank. path is repo-relative, any prefix down to one "+
 			"file, or absolute inside a clone the scan read; repo narrows it to one repository, and without it every "+
 			"repository with code under the path is listed, paged."+untrusted,
@@ -127,54 +133,61 @@ func (s *server) addTools(srv *sdk.Server) {
 			`"repo": {"type": "string", "description": "A repository by name or key; empty searches every repository of the run."}`,
 			propFormat, propLimit, propCursor),
 		s.whoKnows)
-	tool(srv, "changes", "What landed",
+	tool(s, srv, "changes", "What landed",
 		"What landed: the changes (first-parent landings of each default branch) in a scope since a date, newest first, "+
 			"with the people credited, merges, reverts, and each person's clusters in durable@1 (lines still here of lines "+
 			"added, for changes 90 to 365 days old) and simplifying@1 (lines removed, the last 90 days). since is a date "+
 			"(2026-09-01), an RFC 3339 time or Nd for N days before the run's as-of; the default is the policy's week. person "+
-			"keeps the changes that credit one person. Commit subjects only with --allow-source; the AI-assisted tag only on "+
-			"the user's own entries (--me). Paged."+untrusted,
+			"keeps the changes that credit one person; leave it out for everyone's, and pass it empty for the user the server "+
+			"runs for (--me). Commit subjects only with --allow-source; the AI-assisted tag only on the user's own entries "+
+			"(--me). Paged."+untrusted,
 		schema(nil, propScope,
 			`"since": {"type": "string", "description": "The start of the window: YYYY-MM-DD, an RFC 3339 time, or Nd (such as 30d); default the policy's week. The run's history covers 365 days."}`,
-			`"person": {"type": "string", "description": "Only the changes that credit this person: a display name or an id (p-…)."}`,
+			`"person": {"type": "string", "description": "Only the changes that credit this person: a display name, an id (p-…) or a GitHub login (@name); empty for the user the server runs for (--me); left out for everyone."}`,
 			propFormat, propLimit, propCursor),
 		s.changes)
-	tool(srv, "explain", "The facts behind a number",
+	tool(s, srv, "explain", "The facts behind a number",
 		"The facts behind one number: a metric's values for a subject in every scope it was computed in, and for a ranked "+
 			"metric about a person, each change it counted with its contribution, so a number can be traced to its commits. "+
 			"metric is an id such as durable@1, or a bare name for the latest version (metrics lists them). subject_kind is "+
 			"person (default), repo, group or area; for an area, subject is the repository and path its top-level directory. "+
+			"A repository or a group may be passed as overview's scope_arg gives it (repo:NAME, group:NAME). "+
 			"A metric about a kind of subject it has no values about is refused with the calls that answer instead: the "+
 			"ranked metrics (durable, simplifying, reviews_given) are about people, and overview with rank gives a "+
 			"repository's or a group's table of them; who_knows is computed per path by the who_knows tool, never stored. "+
-			"ai_assisted about a person is refused: a person's own share is on their own page (person, empty name). Changes "+
-			"are paged; commit subjects only with --allow-source."+untrusted,
+			"ai_assisted about a person is refused: a person's own share is on their own page (person, empty name); about a "+
+			"repository or a group it is the share alone, without the comparisons of AI-assisted landings with the rest, "+
+			"which can be one or two people's. Changes are paged; commit subjects only with --allow-source."+untrusted,
 		schema([]string{"metric"},
 			`"metric": {"type": "string", "description": "A metric id such as durable@1, or a name such as durable for its latest version."}`,
-			`"subject": {"type": "string", "description": "Who or what the number is about: a person's name or id, a repository, or a group; empty for the user the server runs for."}`,
+			`"subject": {"type": "string", "description": "Who or what the number is about: a person's name or id, a repository, or a group (a name, or overview's scope_arg); empty for the user the server runs for."}`,
 			`"subject_kind": {"type": "string", "enum": ["person", "repo", "group", "area"], "description": "What subject names; person when empty."}`,
 			`"path": {"type": "string", "description": "For subject_kind area: the repository's top-level directory, such as src."}`,
 			propFormat, propLimit, propCursor),
 		s.explain)
-	tool(srv, "highlights", "Highlights for recognition",
+	tool(s, srv, "highlights", "Highlights for recognition",
 		"Highlights of a period, for recognition: per ranked metric the top tier, everyone whose 95% rank interval reaches "+
 			"first place (not ordered among themselves), counted, and named only when they are at most a third of the "+
-			"table, since otherwise no one stands out; the cohort changes whose lines lasted the most (durable@1, "+
+			"table or their intervals lie above everyone else's, since otherwise no one stands out; the cohort changes "+
+			"whose lines lasted the most (durable@1, "+
 			"changes 90 to 365 days old, whatever the period); and the period's largest removals of prod lines that were not "+
 			"reverted (simplifying@1). Rule-based picks from the metrics, never a score of a person."+untrusted,
 		schema(nil,
 			`"period": {"type": "string", "enum": ["week", "month", "quarter"], "description": "The period the removals are picked from, ending at the run's as-of; month when empty."}`,
 			propScope, propFormat),
 		s.highlights)
-	tool(srv, "identity_candidates", "Possible duplicate identities",
-		"Possible duplicate identities in the latest scan: emails that look like one person, each with its evidence (the "+
-			"rules that link them, a confidence, and how each rule can be wrong). stillhere never applies one: a person reviews "+
-			"and commits the .mailmap, which stays the only identity store. With --allow-emails each candidate carries its "+
+	tool(s, srv, "identity_candidates", "Possible duplicate identities",
+		"Possible duplicate identities in the latest scan: emails that look like one person, most confident first, each "+
+			"with the rules that link them and a confidence (detailed adds each rule's evidence; rules says how each can be "+
+			"wrong). Unmerged identities split one person's numbers, and can make knowledge loss look larger: an "+
+			"unmerged-identities caveat sends you here. stillhere never applies one: a person reviews and commits the "+
+			".mailmap, which stays the only identity store, and scans again. With --allow-emails each candidate carries its "+
 			"suggested .mailmap lines (mailmap), each commented out unless high-confidence evidence backs it; without it the emails are ids "+
-			"(p-…) and the lines are left out, so the user runs 'stillhere identities --format mailmap' locally for them."+untrusted,
-		schema(nil, propScope),
+			"(p-…) and the lines are left out, so the user runs 'stillhere identities --format mailmap' locally for them. "+
+			"Paged."+untrusted,
+		schema(nil, propScope, propFormat, propLimit, propCursor),
 		s.identities)
-	tool(srv, "metrics", "Metric definitions",
+	tool(s, srv, "metrics", "Metric definitions",
 		"The metric registry: every metric@version with the question it answers and whether it is ranked; detailed, or "+
 			"metric for one, adds its unit, eligibility rule, blind spots, how it can be gamed, its fixture oracle and its "+
 			"validity. Read a metric's definition before explaining one of its numbers.",
@@ -182,7 +195,7 @@ func (s *server) addTools(srv *sdk.Server) {
 			`"metric": {"type": "string", "description": "One metric id or name, for its whole definition."}`,
 			propFormat),
 		s.metrics)
-	tool(srv, "diff", "Source diff of a change",
+	tool(s, srv, "diff", "Source diff of a change",
 		"The source diff of one change (a landing) against its first parent, for its files that have a role; lockfiles, "+
 			"vendored and generated files are listed and left out. Only when the user started the server with "+
 			"--allow-source, because a diff sends source code to the model provider; otherwise it refuses and says how to "+
@@ -204,7 +217,10 @@ const (
 	changesLimit, changesRows, changesDetailedRows    = 20, 10, 50
 	explainLimit, explainRows, explainDetailedRows    = 25, 10, 50
 	highlightRows, highlightDetailedRows              = 10, 50
-	diffFiles                                         = 200
+	// identity_candidates: candidates per page, then the repositories of
+	// each address.
+	identitiesLimit, identitiesRows, identitiesDetailedRows = 20, 3, 10
+	diffFiles                                               = 200
 )
 
 // What each tool's agent can ask for instead when even the smallest answer
@@ -237,7 +253,7 @@ func (s *server) overview(ctx context.Context, in overviewIn) *sdk.CallToolResul
 		if err != nil {
 			return nil, err
 		}
-		sc, err := r.scope(in.Scope)
+		sc, err := c.scope(ctx, in.Scope)
 		if err != nil {
 			return nil, err
 		}
@@ -366,7 +382,7 @@ func (s *server) whoKnows(ctx context.Context, in whoKnowsIn) *sdk.CallToolResul
 		}
 		var repo app.NamedRepo
 		if strings.TrimSpace(in.Repo) != "" {
-			if repo, err = r.repo(in.Repo); err != nil {
+			if repo, err = c.repo(ctx, in.Repo); err != nil {
 				return nil, err
 			}
 		}
@@ -401,9 +417,12 @@ func (s *server) whoKnows(ctx context.Context, in whoKnowsIn) *sdk.CallToolResul
 }
 
 type changesIn struct {
-	Scope  string `json:"scope"`
-	Since  string `json:"since"`
-	Person string `json:"person"`
+	Scope string `json:"scope"`
+	Since string `json:"since"`
+	// Person is nil when the call names no one: every change. An empty
+	// name is the user the server runs for (--me), as everywhere a person
+	// is named (docs/spec/mcp.md, "Resolving names").
+	Person *string `json:"person"`
 	common
 }
 
@@ -417,7 +436,7 @@ func (s *server) changes(ctx context.Context, in changesIn) *sdk.CallToolResult 
 		if err != nil {
 			return nil, err
 		}
-		sc, err := r.scope(in.Scope)
+		sc, err := c.scope(ctx, in.Scope)
 		if err != nil {
 			return nil, err
 		}
@@ -428,9 +447,13 @@ func (s *server) changes(ctx context.Context, in changesIn) *sdk.CallToolResult 
 		req := app.ChangesRequest{RunID: c.run(), Scope: sc, Since: since, Me: s.cfg.Me, Titles: s.cfg.AllowSource}
 		var caveat *report.Caveat
 		var who string
-		if strings.TrimSpace(in.Person) != "" {
+		if in.Person != nil {
+			if strings.TrimSpace(*in.Person) == "" && s.cfg.Me == "" {
+				return nil, &domain.UsageError{Msg: "an empty person is the user the server runs for, and this server runs " +
+					"without --me: leave person out for everyone's changes, or name the person"}
+			}
 			var p app.NamedPerson
-			if p, caveat, err = r.person(in.Person); err != nil {
+			if p, caveat, err = s.whom(ctx, c, *in.Person); err != nil {
 				return nil, err
 			}
 			req.Person, who = p.Key, r.named(p)
@@ -520,7 +543,7 @@ func (s *server) explain(ctx context.Context, in explainIn) *sdk.CallToolResult 
 			}
 			subject, who = domain.Subject{Kind: domain.SubjectPerson, Key: p.Key}, r.named(p)
 		case domain.SubjectRepo, domain.SubjectArea:
-			rp, err := r.repo(in.Subject)
+			rp, err := c.repo(ctx, in.Subject)
 			if err != nil {
 				return nil, err
 			}
@@ -538,7 +561,8 @@ func (s *server) explain(ctx context.Context, in explainIn) *sdk.CallToolResult 
 				return nil, err
 			}
 		case domain.SubjectGroup:
-			sc, err := r.scope("group:" + in.Subject)
+			// A group's name, or its scope_arg as overview gives it.
+			sc, err := c.scope(ctx, groupQuery(in.Subject))
 			if err != nil {
 				return nil, err
 			}
@@ -616,7 +640,7 @@ func (s *server) highlights(ctx context.Context, in highlightsIn) *sdk.CallToolR
 		if err != nil {
 			return nil, err
 		}
-		sc, err := r.scope(in.Scope)
+		sc, err := c.scope(ctx, in.Scope)
 		if err != nil {
 			return nil, err
 		}
@@ -636,15 +660,16 @@ func (s *server) highlights(ctx context.Context, in highlightsIn) *sdk.CallToolR
 
 type identitiesIn struct {
 	Scope string `json:"scope"`
+	common
 }
 
 func (s *server) identities(ctx context.Context, in identitiesIn) *sdk.CallToolResult {
-	return s.answer(ctx, "identity_candidates", format{}, narrowIdentities, func(ctx context.Context, c *call) (render, error) {
-		r, err := c.resolver(ctx)
-		if err != nil {
-			return nil, err
-		}
-		sc, err := r.scope(in.Scope)
+	f, cursorRun, err := in.format(identitiesLimit, identitiesRows, identitiesDetailedRows)
+	if err != nil {
+		return s.toolError(err, nil)
+	}
+	return s.answer(ctx, "identity_candidates", f, narrowIdentities, func(ctx context.Context, c *call) (render, error) {
+		sc, err := c.scope(ctx, in.Scope)
 		if err != nil {
 			return nil, err
 		}
@@ -658,9 +683,10 @@ func (s *server) identities(ctx context.Context, in identitiesIn) *sdk.CallToolR
 		if err != nil {
 			return nil, err
 		}
-		return func(sh *shaper) (any, error) {
-			return &identitiesOut{Provenance: sh.f.provenance(ids.Provenance, newNamed()), Identities: ids}, nil
-		}, nil
+		if err := checkCursor(cursorRun, ids.Provenance.RunID); err != nil {
+			return nil, err
+		}
+		return func(sh *shaper) (any, error) { return sh.identitiesAnswer(ids), nil }, nil
 	})
 }
 
@@ -703,13 +729,10 @@ func (s *server) diff(ctx context.Context, in diffIn) *sdk.CallToolResult {
 		if s.cfg.Git == nil {
 			return nil, errors.New("mcp: the diff tool has no git runner")
 		}
-		r, err := c.resolver(ctx)
-		if err != nil {
-			return nil, err
-		}
 		var repo app.NamedRepo
+		var err error
 		if strings.TrimSpace(in.Repo) != "" {
-			if repo, err = r.repo(in.Repo); err != nil {
+			if repo, err = c.repo(ctx, in.Repo); err != nil {
 				return nil, err
 			}
 		}

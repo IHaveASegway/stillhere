@@ -23,6 +23,12 @@ type FactStore interface {
 	// LatestRun returns the newest complete or partial run of the kind, or
 	// ErrNotFound.
 	LatestRun(ctx context.Context, kind RunKind) (Run, error)
+	// Runs returns the complete and partial runs of the kind, newest first
+	// (by id, as LatestRun orders them), each with its groups and
+	// repositories and none of its other facts: what a reader names the
+	// stored runs by, to say which one holds a scope the run it reads does
+	// not (MC-17). None is an empty list, not ErrNotFound.
+	Runs(ctx context.Context, kind RunKind) ([]RunScopes, error)
 	// LoadFacts returns a complete or partial run's facts exactly as they
 	// were put, or ErrNotFound.
 	LoadFacts(ctx context.Context, runID int64) (*FactSet, error)

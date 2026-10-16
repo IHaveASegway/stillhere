@@ -129,6 +129,20 @@ func TestStoreRoundTrip(t *testing.T) {
 		if _, err := s.LatestRun(ctx, domain.RunKindSync); !errors.Is(err, domain.ErrNotFound) {
 			t.Errorf("LatestRun(sync) = %v, want ErrNotFound", err)
 		}
+		// Runs (MC-17): the run with its groups and repositories as
+		// LoadFacts gives them, and none of another kind.
+		runs, err := s.Runs(ctx, domain.RunKindScan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantScopes := domain.RunScopes{Run: wantRun, Groups: want.Groups}
+		for _, f := range want.Repos {
+			wantScopes.Repos = append(wantScopes.Repos, f.Repo)
+		}
+		wantEqual(t, "Runs", []domain.RunScopes{wantScopes}, runs)
+		if runs, err := s.Runs(ctx, domain.RunKindSync); err != nil || len(runs) != 0 {
+			t.Errorf("Runs(sync) = %v, %v; want none", runs, err)
+		}
 	})
 
 	t.Run("LoadFacts returns the facts as put", func(t *testing.T) {

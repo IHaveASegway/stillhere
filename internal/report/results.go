@@ -162,6 +162,12 @@ type WhoKnowsRepo struct {
 	People         *int           `json:"people"`          // humans holding prod lines under the path
 	PeopleInactive *int           `json:"people_inactive"` // of them, those gone quiet
 	Concentration  *Concentration `json:"concentration"`
+	// Area is the path's knowledge_loss@1 and knowledge_concentration@1 as
+	// one row of Areas, the one mapping of them (#106): the stored values of
+	// a path that is a top-level directory, the areas a scan stores; nil
+	// for any other path, and where the run holds no value for the
+	// directory (no line a person holds there, or no line facts).
+	Area *Area `json:"area"`
 }
 
 // Knower is one person's knowledge of a path. Email is a reviewer's

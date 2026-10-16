@@ -108,11 +108,13 @@ func TestMCPTools(t *testing.T) {
 		// one paged list.
 		var run struct {
 			Overviews []struct {
-				Scope  report.Scope  `json:"scope"`
-				Totals report.Totals `json:"totals"`
+				Scope    report.Scope  `json:"scope"`
+				ScopeArg string        `json:"scope_arg"`
+				Totals   report.Totals `json:"totals"`
 			} `json:"overviews"`
 			Repos []struct {
-				Name string `json:"name"`
+				Name     string `json:"name"`
+				ScopeArg string `json:"scope_arg"`
 			} `json:"repos"`
 			Page     page     `json:"page"`
 			Withheld []string `json:"withheld"`
@@ -125,6 +127,16 @@ func TestMCPTools(t *testing.T) {
 		if len(run.Repos) != 1 || run.Repos[0].Name != "fixture" || run.Page.Total != 3 || run.Page.NextCursor == nil {
 			t.Fatalf("first page %+v of %+v, want the group, fixture and a cursor to the third of 3", run.Repos, run.Page)
 		}
+		// Each scope of the index carries the exact string that names it
+		// (MC-4), which the next call can pass as it is.
+		if run.Overviews[0].ScopeArg != "group:platform" || run.Repos[0].ScopeArg != "fixture" {
+			t.Errorf("the index's scope_arg: group %q, fixture %q; want group:platform and fixture",
+				run.Overviews[0].ScopeArg, run.Repos[0].ScopeArg)
+		}
+		ask(t, "overview", map[string]any{"scope": run.Overviews[0].ScopeArg})
+		// So does explain's group subject, which takes the group's scope_arg
+		// as overview gives it.
+		ask(t, "explain", map[string]any{"metric": "knowledge_loss", "subject": run.Overviews[0].ScopeArg, "subject_kind": "group"})
 		if !slices.Equal(run.Withheld, []string{"emails", "source"}) {
 			t.Errorf("withheld %v, want emails and source", run.Withheld)
 		}
@@ -139,11 +151,19 @@ func TestMCPTools(t *testing.T) {
 		// oracle, knowledge_loss@1).
 		var repo struct {
 			head
-			Repos []report.Repo `json:"repos"`
+			Repos      []report.Repo  `json:"repos"`
+			Areas      *[]report.Area `json:"areas"`
+			AreasTotal *int           `json:"areas_total"`
 		}
 		decode(t, ask(t, "overview", map[string]any{"scope": "fixture"}), &repo)
 		if len(repo.Repos) != 1 || repo.Repos[0].StillHere == nil {
 			t.Fatalf("overview(fixture) gave %d repositories, want the fixture's card and tables", len(repo.Repos))
+		}
+		// The fixture's prod lines are all at its root, which is no area
+		// (SPEC, knowledge_loss@1): a repository answer lists its areas,
+		// here none (#106).
+		if repo.Areas == nil || len(*repo.Areas) != 0 || repo.AreasTotal == nil || *repo.AreasTotal != 0 {
+			t.Errorf("overview(fixture) areas %v of %v, want [] of 0", repo.Areas, repo.AreasTotal)
 		}
 		r := repo.Repos[0]
 		got := map[string][2]int{}
@@ -210,6 +230,22 @@ func TestMCPTools(t *testing.T) {
 		text := refused(t, "overview", map[string]any{"scope": "nowhere"})
 		if !strings.Contains(text, `"platform"`) || !strings.Contains(text, `"sibling"`) {
 			t.Errorf("an unknown scope's error does not list the run's scopes, quoted: %s", text)
+		}
+		// An argument the tool's schema refuses is refused with what to
+		// pass, not the schema validator's words (MC-9).
+		for _, c := range []struct {
+			tool string
+			args map[string]any
+			want string
+		}{
+			{"overview", map[string]any{"limit": 1000}, "limit is a whole number from 1 to 100, not 1000; pass limit: 100"},
+			{"overview", map[string]any{"bogus": 1}, `has no argument "bogus": it takes cursor, limit, rank, response_format, scope`},
+			{"explain", map[string]any{"metric": "durable", "subject_kind": "bogus"}, `"bogus" is not one of person, repo, group, area`},
+			{"explain", map[string]any{}, "explain needs metric: A metric id"},
+		} {
+			if text := refused(t, c.tool, c.args); !strings.Contains(text, c.want) || strings.Contains(text, "validating") {
+				t.Errorf("%s(%v) was refused with %q, want %q", c.tool, c.args, text, c.want)
+			}
 		}
 		// A hint in a use case's error names this server's tools, never a
 		// command the agent cannot run (#69).
@@ -347,6 +383,25 @@ func TestMCPTools(t *testing.T) {
 		if !slices.Equal(got, []string{"|Bob Builder", "Bob Builder|Cara Dev"}) {
 			t.Errorf("Bob's changes this week (merged by|person) %v, want delta, then the merge of Cara's feature", got)
 		}
+		// An empty person is the user the server runs for, Lena, as
+		// everywhere a person is named (MC-5); left out, it is everyone.
+		var all, mine struct {
+			Person  string        `json:"person"`
+			Changes []changeBrief `json:"changes"`
+		}
+		decode(t, ask(t, "changes", map[string]any{"scope": "sibling", "since": "365d", "limit": 100}), &all)
+		decode(t, ask(t, "changes", map[string]any{"scope": "sibling", "since": "365d", "limit": 100, "person": ""}), &mine)
+		lenas := slices.DeleteFunc(slices.Clone(all.Changes), func(ch changeBrief) bool {
+			return ch.MergedBy != "Lena Lead" && !slices.ContainsFunc(ch.People, func(p personBrief) bool { return p.Name == "Lena Lead" })
+		})
+		if mine.Person != "Lena Lead" || len(mine.Changes) == 0 || len(mine.Changes) != len(lenas) || len(lenas) == len(all.Changes) {
+			t.Errorf("changes(person: \"\") gave %d changes for %q, want Lena Lead's %d of the sibling's %d",
+				len(mine.Changes), mine.Person, len(lenas), len(all.Changes))
+		}
+		lead := connect(t, Config{Open: openDB(db), Version: "test"}, 0)
+		if text, isErr := callTool(t, lead, "changes", map[string]any{"person": ""}); !isErr || !strings.Contains(text, "leave person out") {
+			t.Errorf("changes(person: \"\") without --me answered %q, want to leave person out", text)
+		}
 	})
 
 	t.Run("explain", func(t *testing.T) {
@@ -383,6 +438,35 @@ func TestMCPTools(t *testing.T) {
 		decode(t, ask(t, "explain", map[string]any{"metric": "ai_assisted", "subject": "sibling", "subject_kind": "repo"}), &e)
 		if len(e.Values) != 1 || !hasCaveat(e.Caveats, "ai-lower-bound", "") {
 			t.Errorf("explain(ai_assisted, sibling) %+v with caveats %v, want the sibling's share, a lower bound", e.Values, e.Caveats)
+		}
+		// The share leaves without its detail, the cohort comparisons the
+		// metric computes beside it, which can be one or two people's (#87),
+		// and says so. The sibling's stored value holds all six, so nothing
+		// here passes because the metric left them out.
+		st, err := sqlite.OpenReadOnly(ctx, db)
+		if err != nil {
+			t.Fatal(err)
+		}
+		le, err := app.Explain(ctx, app.Deps{Store: st}, app.ExplainRequest{Metric: domain.MetricID{Name: "ai_assisted", Version: 1},
+			Subject: domain.Subject{Kind: domain.SubjectRepo, Key: e.Values[0].Scope.Key}})
+		if cerr := st.Close(); err == nil {
+			err = cerr
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, k := range []string{"durable_ai", "durable_other", "durable_ai_n", "durable_other_n", "reverted_ai", "reverted_other"} {
+			if _, ok := le.Values[0].Detail[k]; !ok {
+				t.Errorf("the sibling's stored ai_assisted@1 detail %v lacks %s", le.Values[0].Detail, k)
+			}
+		}
+		for _, v := range e.Values {
+			if len(v.Detail) != 0 {
+				t.Errorf("explain(ai_assisted, sibling) sends the share's detail %v, want none", v.Detail)
+			}
+		}
+		if !hasCaveat(e.Caveats, "ai-detail-withheld", "cohort comparisons") {
+			t.Errorf("explain(ai_assisted, sibling) caveats %v, want ai-detail-withheld", e.Caveats)
 		}
 		// A metric about a kind of subject it holds no value about is no
 		// empty answer but a refusal that says which calls answer instead,
@@ -634,7 +718,19 @@ func TestMCPTools(t *testing.T) {
 		if m := next(); m["id"] != 2.0 || m["result"] == nil {
 			t.Errorf("the call after the stray line was answered %v, want metrics' answer", m)
 		}
+		// An id with neither a method nor a result or an error is no message
+		// (MC-10): the SDK alone would drop it without a word.
+		send(`{"jsonrpc":"2.0","id":"x"}`)
+		if m := next(); m["id"] != nil || m["error"] == nil || m["error"].(map[string]any)["code"] != -32600.0 {
+			t.Errorf("an id with no method was answered %v, want an invalid request (-32600) with a null id", m)
+		}
+		// A call read before stdin closes is answered before the server
+		// ends (#58), as a client that pipes its requests expects.
+		send(`{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"metrics","arguments":{"metric":"durable"}}}`)
 		_ = inW.Close()
+		if m := next(); m["id"] != 3.0 || m["result"] == nil {
+			t.Errorf("the call read before stdin closed was answered %v, want metrics' answer", m)
+		}
 		if err := <-done; err != nil {
 			t.Errorf("Serve ended with %v after stdin closed, want nil", err)
 		}
@@ -730,6 +826,53 @@ func TestMCPTools(t *testing.T) {
 			t.Errorf("identity_candidates failed: %s", text)
 		} else if e := leak(text); e != "" {
 			t.Errorf("identity_candidates holds %q without --allow-emails: %s", e, text)
+		}
+		// The candidates are paged, as every list tool's main list is
+		// (#58): concise rows without the rules' evidence, which detailed
+		// adds, and a cursor that leads to the rest.
+		type idsPage struct {
+			Candidates []map[string]any `json:"candidates"`
+			Page       page             `json:"page"`
+		}
+		var p1, p2, det idsPage
+		decode(t, ask(t, "identity_candidates", map[string]any{"limit": 1}), &p1)
+		if len(p1.Candidates) != 1 || p1.Page.Total < 2 || p1.Page.NextCursor == nil || p1.Candidates[0]["links"] != nil {
+			t.Fatalf("identity_candidates(limit: 1) %+v, want one concise candidate of two or more, and a cursor", p1)
+		}
+		decode(t, ask(t, "identity_candidates", map[string]any{"limit": 1, "cursor": *p1.Page.NextCursor}), &p2)
+		if len(p2.Candidates) != 1 || p2.Page.Offset != 1 || reflect.DeepEqual(p1.Candidates, p2.Candidates) {
+			t.Errorf("identity_candidates' second page %+v, want the next candidate", p2)
+		}
+		decode(t, ask(t, "identity_candidates", map[string]any{"limit": 1, "response_format": "detailed"}), &det)
+		if len(det.Candidates) != 1 || det.Candidates[0]["links"] == nil {
+			t.Errorf("identity_candidates detailed %+v, want the candidate with its links", det)
+		}
+
+		// A repository's areas (#106): odd's prod lines are all under src/,
+		// so its one area holds the repository's own knowledge loss.
+		var oa struct {
+			Repos      []report.Repo `json:"repos"`
+			Areas      []report.Area `json:"areas"`
+			AreasTotal int           `json:"areas_total"`
+		}
+		decode(t, ask(t, "overview", map[string]any{"scope": "odd"}), &oa)
+		if kl := oa.Repos[0].Card.KnowledgeLoss; len(oa.Areas) != 1 || oa.AreasTotal != 1 || oa.Areas[0].Path != "src/" ||
+			kl == nil || oa.Areas[0].KnowledgeLoss == nil || *oa.Areas[0].KnowledgeLoss != *kl ||
+			oa.Areas[0].Lines != int(kl.Den) || oa.Areas[0].Concentration == nil {
+			t.Errorf("overview(odd) areas %+v of %d, want src/ alone, with the repository's knowledge loss %+v and a concentration",
+				oa.Areas, oa.AreasTotal, kl)
+		}
+		// who_knows of that directory carries the same row, and of a deeper
+		// path, for which a scan stores none, no row.
+		var wa whoKnowsOut
+		decode(t, ask(t, "who_knows", map[string]any{"path": "src/", "repo": "odd"}), &wa)
+		if len(wa.Repos) != 1 || len(oa.Areas) == 0 || wa.Repos[0].Area == nil || !reflect.DeepEqual(*wa.Repos[0].Area, oa.Areas[0]) {
+			t.Errorf("who_knows(src/, odd) area %+v, want overview's %+v", wa.Repos, oa.Areas)
+		}
+		var wd whoKnowsOut
+		decode(t, ask(t, "who_knows", map[string]any{"path": "src/pins", "repo": "odd"}), &wd)
+		if len(wd.Repos) != 1 || wd.Repos[0].Area != nil {
+			t.Errorf("who_knows(src/pins, odd) area %+v, want none: no scan stores a deeper path's", wd.Repos)
 		}
 
 		// A path with a version pin in it is the repository's path, which
@@ -900,6 +1043,17 @@ func TestMCPTools(t *testing.T) {
 		}
 		if string(b) != string(w) {
 			t.Errorf("the egress filter gave\n%s\nwant\n%s", b, w)
+		}
+		// A diff whose patch the filter will rewrite says so where the code
+		// is (MC-18); a version pin is no address, and a server that lets
+		// emails leave rewrites nothing.
+		patch := &app.DiffAnswer{Patch: "+author = 'Jane Smith <jane@example.org>'\n+pin = 'lodash@4.17.21'\n"}
+		f := format{limit: diffFiles, rows: minRows}
+		if d := (&shaper{f: f, w: newWithholder(nil)}).diffAnswer(patch); !hasCaveat(d.Caveats, "patch-emails", "1 email address") {
+			t.Errorf("a diff of a patch with one address carries %v, want patch-emails counting it", d.Caveats)
+		}
+		if d := (&shaper{f: f}).diffAnswer(patch); hasCaveat(d.Caveats, "patch-emails", "") {
+			t.Errorf("a diff with emails allowed carries %v, want no patch-emails", d.Caveats)
 		}
 	})
 
@@ -1171,6 +1325,115 @@ func TestMCPTools(t *testing.T) {
 		}
 		copied(t, cs, "ai", "group", nil)
 		copied(t, cs, "lone", "repo", nil)
+	})
+
+	// A third scan, of one repository of two people in a group of its name
+	// (as go-git/go-git is), becomes the latest run. A scope only an earlier
+	// run holds is refused with the run that holds it and how the user
+	// serves it (MC-17), and a bare name that run holds twice with each
+	// scope_arg there. Ann's removal of 50 lines and Bo's of one line in
+	// each of ten weeks give simplifying@1 a table of two whose intervals do
+	// not meet, Ann 1-1 and Bo 2-2 (the bootstrap resamples weeks, and Ann
+	// removes more in every one), so its top tier stands out although it is
+	// half the table (MC-16).
+	t.Run("a third run", func(t *testing.T) {
+		org := filepath.Join(t.TempDir(), "pair")
+		pair := filepath.Join(org, "pair")
+		commits := []testCommit{
+			{"Ann Apart", "ann@pair.example", "2026-07-10", "add a", "a.py", numbered("a", 600)},
+			{"Bo Behind", "bo@pair.example", "2026-07-10", "add b", "b.py", numbered("b", 40)},
+		}
+		for i := range 10 {
+			day := time.Date(2026, time.July, 12, 0, 0, 0, 0, time.UTC).AddDate(0, 0, 7*i).Format(time.DateOnly)
+			commits = append(commits,
+				testCommit{"Ann Apart", "ann@pair.example", day, "trim a", "a.py", numbered("a", 550-50*i)},
+				testCommit{"Bo Behind", "bo@pair.example", day, "trim b", "b.py", numbered("b", 39-i)})
+		}
+		buildRepo(t, pair, commits)
+		scan(t, db, mailmap, domain.ScopeGroup, org)
+		emails = append(emails, runEmails(t, db, 3)...)
+
+		text := refused(t, "overview", map[string]any{"scope": "platform"})
+		for _, want := range []string{`no group or repository of run 3`, `Run 2 (as of 2026-10-07T00:00:00Z) holds group "platform"`,
+			"this server reads the latest scan, run 3", "--run 2"} {
+			if !strings.Contains(text, want) {
+				t.Errorf("overview(platform) of run 3 was refused with %q, want %q", text, want)
+			}
+		}
+		if text := refused(t, "who_knows", map[string]any{"path": "", "repo": "odd"}); !strings.Contains(text, `Run 2 (as of`) ||
+			!strings.Contains(text, `holds repository "odd"`) {
+			t.Errorf("who_knows(repo: odd) of run 3 was refused with %q, want run 2 named as holding it", text)
+		}
+		pinned := connect(t, Config{Open: openDB(db), RunID: 2, Version: "test"}, 0)
+		text, isErr := callTool(t, pinned, "overview", map[string]any{"scope": "pair"})
+		for _, want := range []string{`Run 3 (as of 2026-10-07T00:00:00Z) holds 2 scopes of that name`,
+			`group "pair", passed as "group:pair"`, `passed as "repo:pair"`, "this server is pinned to run 2 (--run)", "--run 3"} {
+			if !isErr || !strings.Contains(text, want) {
+				t.Errorf("overview(pair) pinned to run 2 answered %q, want a refusal with %q", text, want)
+			}
+		}
+
+		var h highlightsOut
+		decode(t, ask(t, "highlights", map[string]any{"period": "quarter"}), &h)
+		i := slices.IndexFunc(h.TopTier, func(tt app.TopTier) bool { return tt.Metric == "simplifying@1" })
+		if i < 0 || h.TopTier[i].Of != 2 || h.TopTier[i].PeopleTotal != 1 || len(h.TopTier[i].People) != 1 ||
+			h.TopTier[i].People[0].Name != "Ann Apart" || h.TopTier[i].People[0].RankHi != 1 {
+			t.Errorf("highlights' simplifying@1 tiers %+v, want Ann Apart named, 1-1 of 2", h.TopTier)
+		}
+		if hasCaveat(h.Caveats, "no-standout", "simplifying@1") {
+			t.Errorf("highlights say no one stands out in simplifying@1, where Ann's interval lies above Bo's: %v", h.Caveats)
+		}
+	})
+
+	// A shallow clone's boundary and a partial clone's landings cannot be
+	// diffed offline, and diff says why rather than send a whole tree as a
+	// change (RB-5) or blame a rewritten history (RB-8).
+	t.Run("shallow and partial clones", func(t *testing.T) {
+		clones := fixture.CloneHealth(t, "https://github.com/example/partial.git")
+		cdb := filepath.Join(t.TempDir(), "clones.db")
+		cgit := scan(t, cdb, "", domain.ScopeGroup, clones.Shallow, clones.Partial)
+		ss := connect(t, Config{Open: openDB(cdb), Git: cgit, AllowSource: true, AllowEmails: true, Version: "test"}, 0)
+		for _, c := range []struct{ repo, want string }{
+			{filepath.Base(clones.Shallow), "shallow clone ends: the clone does not hold its parent"},
+			{filepath.Base(clones.Partial), "a partial clone (made with --filter)"},
+		} {
+			var ch struct {
+				Changes []changeBrief `json:"changes"`
+			}
+			text, _ := callTool(t, ss, "changes", map[string]any{"scope": c.repo, "since": "365d"})
+			decode(t, text, &ch)
+			if len(ch.Changes) == 0 {
+				t.Fatalf("changes(%s) is empty: %s", c.repo, text)
+			}
+			text, isErr := callTool(t, ss, "diff", map[string]any{"change": ch.Changes[0].Landing, "repo": c.repo})
+			if !isErr || !strings.Contains(text, c.want) || strings.Contains(text, "rewritten") {
+				t.Errorf("diff of %s's newest landing answered %q, want a refusal saying %q", c.repo, text, c.want)
+			}
+			// Without line facts its areas are unknown, not none (MET-4).
+			var o map[string]any
+			text, _ = callTool(t, ss, "overview", map[string]any{"scope": c.repo})
+			decode(t, text, &o)
+			if a, ok := o["areas"]; !ok || a != nil || o["areas_total"] != nil {
+				t.Errorf("overview(%s) areas %v (present %v) of %v, want null of null", c.repo, a, ok, o["areas_total"])
+			}
+		}
+		// A partial clone moved since its scan fails for that reason, which
+		// no fetch fixes, so diff says so rather than blame its contents.
+		if err := os.Rename(clones.Partial, clones.Partial+"-moved"); err != nil {
+			t.Fatal(err)
+		}
+		var ch struct {
+			Changes []changeBrief `json:"changes"`
+		}
+		text, _ := callTool(t, ss, "changes", map[string]any{"scope": filepath.Base(clones.Partial), "since": "365d"})
+		decode(t, text, &ch)
+		if len(ch.Changes) == 0 {
+			t.Fatalf("changes of the partial clone is empty: %s", text)
+		}
+		text, isErr := callTool(t, ss, "diff", map[string]any{"change": ch.Changes[0].Landing, "repo": filepath.Base(clones.Partial)})
+		if !isErr || !strings.Contains(text, "may have moved") || strings.Contains(text, "partial clone") {
+			t.Errorf("diff in a partial clone moved since its scan answered %q, want that it may have moved", text)
+		}
 	})
 }
 
