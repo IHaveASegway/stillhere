@@ -573,14 +573,14 @@ func (l *loader) blameErrors() error {
 		})
 }
 
-// aliases reads the emails git's mailmap rewrote (migration 6, #53).
+// aliases reads the emails git's mailmap rewrote (#53, repo_aliases).
 func (l *loader) aliases() error {
 	return l.each("repo_aliases",
-		`SELECT repo_id, seq, email, canonical FROM repo_aliases WHERE `+ofRun+` ORDER BY repo_id, seq`,
+		`SELECT repo_id, seq, email, name, canonical FROM repo_aliases WHERE `+ofRun+` ORDER BY repo_id, seq`,
 		func(rows *sql.Rows) error {
 			var repo, seq int64
 			var a domain.Alias
-			if err := rows.Scan(&repo, &seq, &a.Email, &a.Canonical); err != nil {
+			if err := rows.Scan(&repo, &seq, &a.Email, &a.Name, &a.Canonical); err != nil {
 				return err
 			}
 			f, err := l.repo(repo)

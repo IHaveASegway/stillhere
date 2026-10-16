@@ -335,8 +335,8 @@ type Concentration struct {
 // identity_candidates_high, if_merged and if_all_merged.
 type ConcentrationIfMerged struct {
 	Candidates  int `json:"candidates"`   // identity candidates with an address among the people holding lines in the scope
-	High        int `json:"high"`         // of them, the high ones, whose .mailmap lines the mailmap form writes uncommented
-	HighAuthors int `json:"high_authors"` // authors in the prefix with the high candidates merged
+	High        int `json:"high"`         // of them, those with high-confidence lines (a high candidate, or a weaker one's high set), which the mailmap form writes uncommented
+	HighAuthors int `json:"high_authors"` // authors in the prefix with the high-confidence lines merged
 	AllAuthors  int `json:"all_authors"`  // with every candidate merged
 }
 
@@ -359,11 +359,11 @@ type Share struct {
 // if_merged_num and if_all_merged_num, over the share's own Den, which
 // merging people leaves as it is. The overview of every repository adds
 // its repositories' up, so a candidate holding lines in two of them counts
-// in Candidates twice; the lines add up exactly.
+// in Candidates and High twice; the lines add up exactly.
 type ShareIfMerged struct {
 	Candidates int     `json:"candidates"` // identity candidates with an address among the people holding lines in the scope
-	High       int     `json:"high"`       // of them, the high ones, whose .mailmap lines the mailmap form writes uncommented
-	HighNum    float64 `json:"high_num"`   // Num with the high candidates merged
+	High       int     `json:"high"`       // of them, those with high-confidence lines (a high candidate, or a weaker one's high set), which the mailmap form writes uncommented
+	HighNum    float64 `json:"high_num"`   // Num with the high-confidence lines merged
 	HighValue  float64 `json:"high_value"` // HighNum / Den
 	AllNum     float64 `json:"all_num"`    // Num with every candidate merged: the most an unmerged identity can move it
 	AllValue   float64 `json:"all_value"`  // AllNum / Den

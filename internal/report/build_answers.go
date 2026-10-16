@@ -109,12 +109,12 @@ func explainCandidates(values []domain.MetricValue, cmds Commands) (Caveat, bool
 		switch v.Metric.String() {
 		case MetricKnowledgeLoss:
 			s := &Share{Metric: MetricKnowledgeLoss, Num: v.Num, Den: v.Den, Value: v.Value, IfMerged: shareIfMerged(v)}
-			if c, ok := candidatesCaveat(s, nil, false, cmds); ok {
+			if c, ok := candidatesCaveat(s, nil, 0, cmds); ok {
 				return c, true
 			}
 		case MetricConcentration:
 			conc := &Concentration{Metric: MetricConcentration, AuthorsInPrefix: count(v.Value), IfMerged: concentrationIfMerged(v)}
-			if c, ok := candidatesCaveat(nil, conc, false, cmds); ok {
+			if c, ok := candidatesCaveat(nil, conc, 0, cmds); ok {
 				return c, true
 			}
 		}

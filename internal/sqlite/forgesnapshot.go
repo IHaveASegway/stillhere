@@ -20,7 +20,7 @@ import (
 
 // PutRunForge records, for a running run, its forge repositories as the
 // replica listed them, every pull request of them it read, whole, and the
-// commit-to-account links of their older pull requests (migration 6, #103),
+// commit-to-account links of their older pull requests (#103),
 // replacing any it recorded before. A pull request or a link of a
 // repository that is not among repos is an error. The rows are deleted
 // with the run (ON DELETE CASCADE), by retention or as a crash's leftover.

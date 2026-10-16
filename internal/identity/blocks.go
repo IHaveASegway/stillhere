@@ -61,6 +61,9 @@ func Blocks(fs *domain.FactSet, who *Directory) map[string]string {
 		for _, login := range who.accounts[a.Email] {
 			keys = append(keys, key{"forge", login})
 		}
+		if a.forge != "" { // a noreply address's own login, when the run links that login (candForge)
+			keys = append(keys, key{"forge", a.forge})
+		}
 		for _, k := range keys {
 			if k.value == "" {
 				continue

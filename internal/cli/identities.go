@@ -25,9 +25,12 @@ shared display name, a shared local part, one GitHub account, or a hand-off
 (one address stopped as another started in the same files, which is only ever
 a guess). stillhere applies none of them: git's .mailmap is the only identity
 store, and a wrong line merges two people into one who does not exist.
+GitHub's own links from commits to accounts count only once 'stillhere sync
+github' has copied the pull requests and a scan has read them: without them,
+few candidates are high.
 
 --format mailmap prints the suggested .mailmap lines with the evidence as
-comments, for a person to review. Only a match with evidence the display
+comments, for a person to review. Only a line with evidence the display
 name does not explain (one GitHub account, or a local part not made from the
 name) is written as a line; every other one is commented out, since two
 people of one name look like one person with two addresses. The text and

@@ -346,19 +346,24 @@ func sharedNames(who People, emails map[string]bool, cmds Commands) (Caveat, boo
 // candidatesCaveat is the unmerged-identities caveat (#104) of a section
 // that shows knowledge_loss@1 or knowledge_concentration@1 (loss, conc;
 // either may be nil) while identity candidates hold lines in its scope, as
-// their values' Detail counts them (ShareIfMerged, ConcentrationIfMerged).
-// Both metrics count each address as a person, and their activity is the
-// whole run's, so an older address of someone active elsewhere holds lines
-// that look gone, with or without a display name two addresses share,
-// which is all sharedNames sees. The caveat goes where the number is
-// (#48): on a card, an overview and explain of either metric, at every
-// scope, an area's included. It says how far the number moves with the
-// candidates merged, the high ones and every one, so a reader can state a
-// range rather than a point (#104's sensitivity), and where the .mailmap
-// lines are. perRepo says the section adds its repositories' values up
-// (the overview of every repository), so a candidate is counted once per
-// repository it holds lines in.
-func candidatesCaveat(loss *Share, conc *Concentration, perRepo bool, cmds Commands) (Caveat, bool) {
+// their values' Detail counts them (ShareIfMerged, ConcentrationIfMerged),
+// and merging them would move one of the numbers. Both metrics count each
+// address as a person, and their activity is the whole run's, so an older
+// address of someone active elsewhere holds lines that look gone, with or
+// without a display name two addresses share, which is all sharedNames
+// sees. The caveat goes where the number is (#48): on a card, an overview
+// and explain of either metric, at every scope, an area's included. It
+// says how far the number moves with the candidates merged, their
+// high-confidence lines and every one whole, so a reader can state a range
+// rather than a point (#104's sensitivity), and where the .mailmap lines
+// are. A section where merging moves neither number gets no caveat: its
+// if_merged fields say so, and a page that told the reader to merge for
+// nothing would bury the caveats that matter (SR-14). repos is how many
+// repositories the section adds up (the overview of every repository), 0
+// for one value: a candidate is counted once per repository it holds lines
+// in, so the count is said to be per repository, and the high ones are not
+// counted at all.
+func candidatesCaveat(loss *Share, conc *Concentration, repos int, cmds Commands) (Caveat, bool) {
 	var n, high int
 	if loss != nil && loss.IfMerged != nil {
 		n, high = loss.IfMerged.Candidates, loss.IfMerged.High
@@ -366,46 +371,62 @@ func candidatesCaveat(loss *Share, conc *Concentration, perRepo bool, cmds Comma
 	if conc != nil && conc.IfMerged != nil && n == 0 {
 		n, high = conc.IfMerged.Candidates, conc.IfMerged.High
 	}
-	if n == 0 {
+	lossMoves := loss != nil && loss.IfMerged != nil && (loss.IfMerged.HighNum != loss.Num || loss.IfMerged.AllNum != loss.Num)
+	concMoves := conc != nil && conc.IfMerged != nil &&
+		(conc.IfMerged.HighAuthors != conc.AuthorsInPrefix || conc.IfMerged.AllAuthors != conc.AuthorsInPrefix)
+	if n == 0 || !lossMoves && !concMoves {
 		return Caveat{}, false
 	}
 	cmds = CommandsOr(cmds)
 	lead := plural(n, "identity candidate holds", "identity candidates hold") + " lines here"
-	if perRepo {
+	if repos > 1 {
 		lead = "Identity candidates hold lines in these repositories (" + grouped(n) +
 			", counted once in each repository where they hold lines)"
 	}
 	var b strings.Builder
 	b.WriteString(lead + ": addresses that may be one person, which these numbers count apart, so an older address " +
 		"of someone still active can hold lines that look gone.")
-	merged := "every one merged"
+	whole := "every one merged"
 	if n == 1 {
-		merged = "it merged"
+		whole = "it merged"
 	}
+	// The high-confidence lines' value is said apart from every
+	// candidate's unless it is the same and every candidate has them, when
+	// it says nothing more.
+	withHigh := func(sameAsAll bool) bool { return high > 0 && (high < n || !sameAsAll) }
 	if loss != nil && loss.IfMerged != nil {
 		m := loss.IfMerged
-		b.WriteString(" Knowledge loss is " + percent(loss.Value) + " as the run keys people")
-		if high > 0 && high < n {
-			b.WriteString(", " + percent(m.HighValue) + " with the " + plural(high, "high-confidence one", "high-confidence ones") + " merged")
+		switch {
+		case !lossMoves:
+			b.WriteString(" Knowledge loss is " + percent(loss.Value) + " either way.")
+		default:
+			b.WriteString(" Knowledge loss is " + percent(loss.Value) + " as the run keys people")
+			if withHigh(m.HighNum == m.AllNum) {
+				b.WriteString(", " + percent(m.HighValue) + " with the high-confidence lines merged")
+			}
+			b.WriteString(" and " + percent(m.AllValue) + " with " + whole + ".")
 		}
-		b.WriteString(" and " + percent(m.AllValue) + " with " + merged + ".")
 	}
 	if conc != nil && conc.IfMerged != nil {
 		m := conc.IfMerged
-		b.WriteString(" Majority-owner concentration is " + plural(conc.AuthorsInPrefix, "author", "authors") + " as keyed")
-		if high > 0 && high < n {
-			b.WriteString(", " + grouped(m.HighAuthors) + " with the high-confidence ones merged")
+		switch {
+		case !concMoves:
+			b.WriteString(" Majority-owner concentration is " + plural(conc.AuthorsInPrefix, "author", "authors") +
+				" either way.")
+		default:
+			b.WriteString(" Majority-owner concentration is " + plural(conc.AuthorsInPrefix, "author", "authors") + " as keyed")
+			if withHigh(m.HighAuthors == m.AllAuthors) {
+				b.WriteString(", " + grouped(m.HighAuthors) + " with the high-confidence lines merged")
+			}
+			b.WriteString(" and " + grouped(m.AllAuthors) + " with " + whole + ".")
 		}
-		b.WriteString(" and " + grouped(m.AllAuthors) + " with " + merged + ".")
 	}
-	conf := "none of them is high-confidence, so every line is commented out"
+	conf := "the high-confidence lines are written as lines, any others commented out"
 	switch {
-	case high == n && n == 1:
-		conf = "it is high-confidence, so its lines are written as lines"
-	case high == n:
-		conf = "all of them are high-confidence, so their lines are written as lines"
-	case high > 0:
-		conf = "the high-confidence ones as lines, the others commented out"
+	case high == 0 && n == 1:
+		conf = "it has no high-confidence line, so its lines are commented out"
+	case high == 0:
+		conf = "none of them has a high-confidence line, so every line is commented out"
 	}
 	b.WriteString(" " + cmds.Identities() + " lists them with the evidence for each, and the .mailmap lines are in " +
 		cmds.Mailmap() + " (" + conf + "); a line takes effect at the next scan.")

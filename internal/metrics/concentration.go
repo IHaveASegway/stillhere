@@ -24,7 +24,8 @@ func (knowledgeConcentrationV1) Definition() Definition {
 			"lines descending, email ascending, and walk until the running sum of majority_files is at least files_with_majority / 2. " +
 			"Detail: files_with_majority (each file once, even with two owners), bots_in_prefix, prod_files; and, when identity " +
 			"candidates hold lines in the area, identity_candidates, identity_candidates_high, and if_merged and if_all_merged, " +
-			"authors_in_prefix with the high candidates and with every candidate merged into one person each.",
+			"authors_in_prefix with the high-confidence lines (identity.Candidate.High) and with every candidate merged into " +
+			"one person each.",
 		Ranked:      false,
 		Subjects:    []string{domain.SubjectRepo, domain.SubjectArea, domain.SubjectGroup},
 		Eligibility: "Not ranked: it describes code, not people.",

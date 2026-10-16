@@ -180,9 +180,9 @@ func putRepoLists(ctx context.Context, tx *sql.Tx, id int64, f *domain.RepoFacts
 	for i, e := range f.BlameErrors {
 		blameErrors.add(id, i, e.Path, e.Message)
 	}
-	aliases := newInserter(ctx, tx, "repo_aliases", "repo_id", "seq", "email", "canonical")
+	aliases := newInserter(ctx, tx, "repo_aliases", "repo_id", "seq", "email", "name", "canonical")
 	for i, a := range f.Aliases {
-		aliases.add(id, i, a.Email, a.Canonical)
+		aliases.add(id, i, a.Email, a.Name, a.Canonical)
 	}
 	return closeAll(warnings, paths, changes, reverts, revs, blameErrors, aliases)
 }

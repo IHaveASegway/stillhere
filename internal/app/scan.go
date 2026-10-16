@@ -332,12 +332,16 @@ func runForge(repos []domain.RepoFacts, replica *domain.ForgeFacts) (*domain.For
 	// The older pull requests' links to accounts, which no metric reads and
 	// identity's same-forge-account rule does (#103): GitHub's attribution
 	// of an address does not age, so a run keeps it beside the pull
-	// requests in its window, as ADR 0011 widens what a scan reads.
+	// requests in its window, as ADR 0011 widens what a scan reads; one
+	// link for each repository, address and account (identity.KeptLinks),
+	// so what a run keeps is bounded by the people its history shows.
+	var links []domain.ForgeLink
 	for _, l := range replica.Links {
 		if len(join[l.Repo]) > 0 {
-			own.Links = append(own.Links, l)
+			links = append(links, l)
 		}
 	}
+	own.Links = identity.KeptLinks(&domain.FactSet{Repos: repos}, links)
 	// The order ForgeFacts documents, which RunForge reads back: repositories
 	// as the replica sorted them, watermarks by repository, pull requests by
 	// repository, then number, as the replica sorted them.

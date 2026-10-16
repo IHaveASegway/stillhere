@@ -9,8 +9,10 @@
 -- the go-chi organization's replica, the window's pull requests make 2
 -- identity candidates high, every synced one 8. So a run also keeps,
 -- of the pull requests outside its window, only their commits' links (the
--- pull request's own commits and its merge commit, distinct): about 40
--- bytes per commit, not the whole pull request. ADR 0011's "Revisit if"
+-- pull request's own commits and its merge commit), one for each
+-- repository, address and account the rule reads (identity.KeptLinks):
+-- 134 bytes a link, a few hundred links a run, not the whole pull request
+-- and not one link per commit, which would grow with the replica's age. ADR 0011's "Revisit if"
 -- asks for exactly this: widen what a scan reads, rather than read the
 -- replica from a stored run. A run stored before this migration has none,
 -- so its identity candidates rest on its window's pull requests alone.
@@ -21,9 +23,11 @@
 -- and git, which applies one line per commit and never follows a chain,
 -- then merges only part of the person. A run now keeps what git rewrote
 -- (stillhere never parses a mailmap): each email a commit or a
--- Co-authored-by trailer was written with, with the canonical email git
--- gave it, when the two differ, read from the history's and the blamed
--- commits' %ae beside %aE and from git check-mailmap. The identities
+-- Co-authored-by trailer was written with, and the name beside it, with the
+-- canonical email git gave it, when the two emails differ, read from the
+-- history's and the blamed commits' %an and %ae beside %aN and %aE and from
+-- git check-mailmap. The name is kept because git prefers a line that
+-- matches a commit's name and email over one that matches its email alone. The identities
 -- answer reads them to write the lines git needs, and to leave out a line
 -- git already applies. A run stored before this migration has none.
 
@@ -41,6 +45,7 @@ CREATE TABLE repo_aliases (
     repo_id   INTEGER NOT NULL REFERENCES run_repos (id) ON DELETE CASCADE,
     seq       INTEGER NOT NULL,
     email     TEXT    NOT NULL,  -- Alias.Email: as a commit or a trailer wrote it, lowercased
+    name      TEXT    NOT NULL,  -- Alias.Name: the name written beside it, as written; '' for none
     canonical TEXT    NOT NULL,  -- Alias.Canonical: the email git's mailmap gave it, lowercased
     PRIMARY KEY (repo_id, seq)
 ) STRICT, WITHOUT ROWID;

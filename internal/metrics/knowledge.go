@@ -24,8 +24,8 @@ func (knowledgeLossV1) Definition() Definition {
 			"the branch lands, or when they submitted a review (approved, changes requested or commented) in the window on any " +
 			"pull request of the scanned repositories, open, closed or merged, in the GitHub data the run read. Detail: people " +
 			"(humans holding lines), people_inactive; and, when identity candidates hold lines in the area, identity_candidates, " +
-			"identity_candidates_high, and if_merged_num and if_all_merged_num, Num with the high candidates and with every " +
-			"candidate merged into one person each.",
+			"identity_candidates_high, and if_merged_num and if_all_merged_num, Num with the high-confidence lines " +
+			"(identity.Candidate.High) and with every candidate merged into one person each.",
 		Ratio:       true,
 		Ranked:      false,
 		Forge:       true,

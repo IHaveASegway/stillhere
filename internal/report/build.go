@@ -291,7 +291,7 @@ func (b *builder) card(rf *domain.RepoFacts, still *StillHere) RepoCard {
 	// print those once, at the top of the report.
 	c.Caveats = append([]Caveat{notFetched()}, stripRepos(repoCaveats(rf))...)
 	c.Caveats = append(c.Caveats, b.forgeSectionCaveats([]*domain.RepoFacts{rf}, used)...)
-	if cv, ok := candidatesCaveat(c.KnowledgeLoss, c.Concentration, false, b.in.Commands); ok {
+	if cv, ok := candidatesCaveat(c.KnowledgeLoss, c.Concentration, 0, b.in.Commands); ok {
 		c.Caveats = withCaveat(c.Caveats, cv)
 	}
 	if c.AIAssisted != nil {
@@ -354,7 +354,11 @@ func (b *builder) overview(scope domain.Scope, members []*domain.RepoFacts) Over
 	o.Caveats = append(b.scopeCaveats(members, scope, o.AIAssisted != nil), b.forgeSectionCaveats(members, used)...)
 	// knowledge_loss@1 has no value about every repository, whose overview
 	// adds its repositories' up (share).
-	if cv, ok := candidatesCaveat(o.KnowledgeLoss, o.Concentration, scope.Kind == domain.ScopeAll, b.in.Commands); ok {
+	summed := 0
+	if scope.Kind == domain.ScopeAll {
+		summed = len(members)
+	}
+	if cv, ok := candidatesCaveat(o.KnowledgeLoss, o.Concentration, summed, b.in.Commands); ok {
 		o.Caveats = withCaveat(o.Caveats, cv)
 	}
 	return o

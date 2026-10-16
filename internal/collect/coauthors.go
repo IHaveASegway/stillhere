@@ -117,26 +117,26 @@ func coAuthorContact(value string) (domain.Person, bool) {
 
 // aliasSet gathers what git's mailmap rewrote while a collector read a
 // repository (#53, domain.Alias): each email a commit or a trailer was
-// written with, with the canonical email git gave it. A nil set gathers
-// nothing.
+// written with, the name written beside it, and the canonical email git
+// gave it. A nil set gathers nothing.
 type aliasSet map[domain.Alias]bool
 
-// add records that git gave the email written the canonical email
+// add records that git gave written's email the canonical email
 // canonical, unless the two are one, or either is empty.
-func (s aliasSet) add(written, canonical string) {
-	written, canonical = strings.ToLower(strings.TrimSpace(written)), strings.ToLower(strings.TrimSpace(canonical))
-	if s != nil && written != "" && canonical != "" && written != canonical {
-		s[domain.Alias{Email: written, Canonical: canonical}] = true
+func (s aliasSet) add(written domain.Person, canonical string) {
+	email, canonical := strings.ToLower(strings.TrimSpace(written.Email)), strings.ToLower(strings.TrimSpace(canonical))
+	if s != nil && email != "" && canonical != "" && email != canonical {
+		s[domain.Alias{Email: email, Name: strings.TrimSpace(written.Name), Canonical: canonical}] = true
 	}
 }
 
-// sorted returns the set by Email, then Canonical; nil when empty.
+// sorted returns the set by Email, Name, then Canonical; nil when empty.
 func (s aliasSet) sorted() []domain.Alias {
 	return MergeAliases(slices.Collect(maps.Keys(s)))
 }
 
 // MergeAliases returns the aliases of several collectors (History's and
-// Blame's) as RepoFacts.Aliases holds them: sorted by Email, then
+// Blame's) as RepoFacts.Aliases holds them: sorted by Email, Name, then
 // Canonical, each once; nil when there are none.
 func MergeAliases(lists ...[]domain.Alias) []domain.Alias {
 	var out []domain.Alias
@@ -147,7 +147,7 @@ func MergeAliases(lists ...[]domain.Alias) []domain.Alias {
 		return nil
 	}
 	slices.SortFunc(out, func(a, b domain.Alias) int {
-		return cmp.Or(strings.Compare(a.Email, b.Email), strings.Compare(a.Canonical, b.Canonical))
+		return cmp.Or(strings.Compare(a.Email, b.Email), strings.Compare(a.Name, b.Name), strings.Compare(a.Canonical, b.Canonical))
 	})
 	return slices.Compact(out)
 }
@@ -206,7 +206,7 @@ func coAuthorCanonical(ctx context.Context, git domain.GitRunner, repo domain.Re
 			p.Email = strings.ToLower(p.Email)
 			canonical[lines[i]] = p
 			if written, ok := coAuthorContact(lines[i]); ok {
-				aliases.add(written.Email, p.Email)
+				aliases.add(written, p.Email)
 			}
 		}
 	}

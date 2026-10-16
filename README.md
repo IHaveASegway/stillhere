@@ -77,7 +77,7 @@ stillhere sync github --org acme                    # mirrors, pull requests and
 stillhere scan ~/.stillhere/mirrors/acme            # then scan the mirrors sync keeps
 ```
 
-One person who committed from several addresses counts as several people, and an old address of someone still active looks like knowledge that left. `report` says so where the numbers are: knowledge loss and concentration carry an `unmerged-identities` caveat with the range (as keyed, with the high-confidence candidates merged, with every one merged). To merge them, review and add the suggested lines, then scan again; the high ones, such as two addresses GitHub attributes to one account after `sync github`, are written as lines and the rest commented out:
+One person who committed from several addresses counts as several people, and an old address of someone still active looks like knowledge that left. `report` says so where the numbers are: knowledge loss and concentration carry an `unmerged-identities` caveat with the range (as keyed, with the high-confidence lines merged, with every candidate merged) wherever merging would move them. To merge them, review and add the suggested lines, then scan again; the high-confidence ones, such as two addresses GitHub attributes to one account after `sync github`, are written as lines and the rest commented out:
 
 ```sh
 stillhere identities                                # the candidates, with the evidence for each

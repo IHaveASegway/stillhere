@@ -170,7 +170,7 @@ func (s *server) addTools(srv *sdk.Server) {
 		"Possible duplicate identities in the latest scan: emails that look like one person, each with its evidence (the "+
 			"rules that link them, a confidence, and how each rule can be wrong). stillhere never applies one: a person reviews "+
 			"and commits the .mailmap, which stays the only identity store. With --allow-emails each candidate carries its "+
-			"suggested .mailmap lines (mailmap), commented out unless the candidate is high; without it the emails are ids "+
+			"suggested .mailmap lines (mailmap), each commented out unless high-confidence evidence backs it; without it the emails are ids "+
 			"(p-…) and the lines are left out, so the user runs 'stillhere identities --format mailmap' locally for them."+untrusted,
 		schema(nil, propScope),
 		s.identities)

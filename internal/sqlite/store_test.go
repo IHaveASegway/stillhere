@@ -504,7 +504,7 @@ func sampleFacts(run domain.Run) *domain.FactSet {
 				},
 				BlameErrors: []domain.FileError{{Path: "big.go", Message: "git blame: timed out after 2m0s"}},
 				Aliases: []domain.Alias{
-					{Email: "ada@old.example", Canonical: "ada@example.com"},
+					{Email: "ada@old.example", Name: "Ada Old", Canonical: "ada@example.com"},
 					{Email: "pia@laptop.local", Canonical: "pia@example.com"},
 				},
 			},
