@@ -24,12 +24,17 @@ func (whoKnowsV1) Definition() Definition {
 	return Definition{
 		ID:       whoKnowsID,
 		Question: "Who knows the code under this path?",
-		Unit: "Computed per query (who-knows PATH), never stored by a scan. Per repository: one value about the path (subject " +
-			"repo for the whole repository, else area \"<repo key>:<file>\" or \"<repo key>:<dir>/\") whose Value is its prod " +
-			"lines, with Detail prod_files and files_with_majority; and one value per person listed, whose Value is their prod " +
+		Unit: "Computed per query (who-knows PATH), never stored by a scan. It counts the path's prod lines, or, under a " +
+			"path that holds no surviving prod line, the lines of every other role that has some there (test, doc, iac, ...), " +
+			"so a test or doc directory is answered for its own lines rather than as nobody's. Per repository: one value about " +
+			"the path (subject repo for the whole repository, else area \"<repo key>:<file>\" or \"<repo key>:<dir>/\") whose " +
+			"Value is its counted lines, with Detail prod_files, files_with_majority and, when other roles are counted, " +
+			"<role>_files for each, or, when prod lines are counted and other roles hold lines there too, " +
+			"uncounted_<role>_lines and uncounted_<role>_files for each, the lines the answer leaves out; and one value per " +
+			"person listed, whose Value is their counted " +
 			"lines under the path, with Detail majority_files (files under the path they hold at least half of), recent_landings " +
 			"(landings in [now - 90d, now) in which a non-merge commit credited to them changed non-blank lines on a path with a " +
-			"role under the path, ignore-revs commits excluded), top_author (1 to 5, by prod lines then email, when they are " +
+			"role under the path, ignore-revs commits excluded), top_author (1 to 5, by counted lines then email, when they are " +
 			"one of the top five) and, when the run has GitHub data for the repository, recent_reviews (merged pull requests " +
 			"authored by someone else whose landings changed the path as recent_landings counts a change, on which they " +
 			"submitted a review, approved, changes requested or commented, in [now - 90d, now)). A person is listed when any " +
@@ -131,21 +136,52 @@ func whoKnows(v *view, reviews *reviewsIndex, r *repoView, prefix string, w doma
 	}
 	people := make(map[string]*person)
 	files, withMajority, lines := 0, 0, 0
+	tally := func(fs []*fileView) {
+		for _, f := range fs {
+			files++
+			lines += f.total
+			if len(f.owners) > 0 {
+				withMajority++
+			}
+			for email, n := range f.byPerson {
+				lookup(people, email).lines += n
+			}
+			for _, email := range f.owners {
+				people[email].majority++
+			}
+		}
+	}
+	var prod []*fileView
 	for _, f := range r.files {
-		if !under(f.path) {
-			continue
+		if under(f.path) {
+			prod = append(prod, f)
 		}
-		files++
-		lines += f.total
-		if len(f.owners) > 0 {
-			withMajority++
+	}
+	tally(prod)
+	prodFiles := files
+	byRole := map[domain.Role]int{} // the other roles' files counted, when the path holds no prod line
+	// The other roles' lines and files a path with prod lines leaves out,
+	// which the path value names (uncounted_<role>_lines and _files), so an
+	// answer of a docs/ that holds one prod file says it counted 53 lines of
+	// its 2,744 (wave 10's review: werkzeug's docs/conf.py).
+	uncounted := map[domain.Role][2]int{}
+	if lines > 0 {
+		for _, f := range r.roleFiles(under) {
+			u := uncounted[r.role[f.path]]
+			uncounted[r.role[f.path]] = [2]int{u[0] + f.total, u[1] + 1}
 		}
-		for email, n := range f.byPerson {
-			lookup(people, email).lines += n
+	}
+	if lines == 0 {
+		// No surviving prod line under the path: its tests, docs or build
+		// files are what is known there, so the answer counts their lines,
+		// which blame read as it read the prod ones, rather than say no one
+		// knows it.
+		other := r.roleFiles(under)
+		for _, f := range other {
+			byRole[r.role[f.path]]++
 		}
-		for _, email := range f.owners {
-			people[email].majority++
-		}
+		files, withMajority = 0, 0
+		tally(other)
 	}
 	// Recent landers are activity: every landing seen in w counts, however
 	// much of w the history covers (repoView.covers).
@@ -208,10 +244,18 @@ func whoKnows(v *view, reviews *reviewsIndex, r *repoView, prefix string, w doma
 	}
 
 	scope := domain.Scope{Kind: domain.ScopeRepo, Key: r.key}
-	out := []domain.MetricValue{count(whoKnowsID, scope, pathSubject(r, prefix), w, lines, 0, map[string]float64{
-		"prod_files":          float64(files),
+	pathDetail := map[string]float64{
+		"prod_files":          float64(prodFiles),
 		"files_with_majority": float64(withMajority),
-	})}
+	}
+	for role, n := range byRole {
+		pathDetail[string(role)+"_files"] = float64(n)
+	}
+	for role, u := range uncounted {
+		pathDetail["uncounted_"+string(role)+"_lines"] = float64(u[0])
+		pathDetail["uncounted_"+string(role)+"_files"] = float64(u[1])
+	}
+	out := []domain.MetricValue{count(whoKnowsID, scope, pathSubject(r, prefix), w, lines, 0, pathDetail)}
 	for email, p := range people {
 		if p.majority == 0 && p.landings == 0 && p.top == 0 && p.reviews == 0 {
 			continue
@@ -230,6 +274,33 @@ func whoKnows(v *view, reviews *reviewsIndex, r *repoView, prefix string, w doma
 		}
 		out = append(out, count(whoKnowsID, scope, personSubject(email), w, p.lines, 0, detail))
 	}
+	return out
+}
+
+// roleFiles returns the files under a path whose role is neither prod nor
+// none, each with who holds its surviving lines and its majority owners,
+// from blame's rows as indexLines builds the prod files: who_knows@1 of a
+// path that holds no prod line counts them. Sorted by path.
+func (r *repoView) roleFiles(under func(string) bool) []*fileView {
+	byPath := map[string]*fileView{}
+	for _, o := range r.owners {
+		if o.role == domain.RoleProd || !under(o.path) {
+			continue
+		}
+		f := byPath[o.path]
+		if f == nil {
+			f = &fileView{path: o.path, byPerson: map[string]int{}}
+			byPath[o.path] = f
+		}
+		f.total += o.lines
+		f.byPerson[o.credit] += o.lines
+	}
+	out := make([]*fileView, 0, len(byPath))
+	for _, f := range byPath {
+		f.owners = majorityOwners(f.byPerson, f.total)
+		out = append(out, f)
+	}
+	slices.SortFunc(out, func(a, b *fileView) int { return cmp.Compare(a.path, b.path) })
 	return out
 }
 

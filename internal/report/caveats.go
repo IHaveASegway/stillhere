@@ -18,22 +18,25 @@ import (
 
 // The caveat codes. Codes that a collector's warning already has keep it.
 const (
-	codeNotFetched    = "not-fetched"
-	codeFailed        = "failed"
-	codeShallow       = "shallow-clone"
-	codePartial       = "partial-clone"
-	codeShallowWindow = "shallow-window"
-	codeBlameErrors   = "blame-errors"
-	codeBinary        = "binary-changes" // #64: prod changes git took for binary, whose lines no change metric counts
-	codeInlineTests   = "inline-tests"   // a repository's warning: Rust unit tests inside prod files, which count as prod
-	codeNoIgnoreRevs  = "no-ignore-revs"
-	codeExcluded      = "excluded-repo"
-	codeDuplicate     = "duplicate-repo" // a repository's warning: another clone of its remote was skipped
-	codePathFailed    = "path-failed"
-	codeIdentities    = "unmerged-identities"
-	codeNoValues      = "no-values"
-	codeAILowerBound  = "ai-lower-bound"
-	codeValidity      = "validity"
+	codeNotFetched     = "not-fetched"
+	codeFailed         = "failed"
+	codeShallow        = "shallow-clone"
+	codePartial        = "partial-clone"
+	codeShallowWindow  = "shallow-window"
+	codeBlameErrors    = "blame-errors"
+	codeBinary         = "binary-changes" // #64: prod changes git took for binary, whose lines no change metric counts
+	codeInlineTests    = "inline-tests"   // a repository's warning: Rust unit tests inside prod files, which count as prod
+	codeNoIgnoreRevs   = "no-ignore-revs"
+	codeExcluded       = "excluded-repo"
+	codeDuplicate      = "duplicate-repo" // a repository's warning: another clone of its remote was skipped
+	codePathFailed     = "path-failed"
+	codeIdentities     = "unmerged-identities"
+	codeGoingQuiet     = "going-quiet"     // knowledge_loss@1's going_quiet: people holding lines here who go quiet within 30 days
+	codeOtherRoles     = "other-roles"     // who_knows@1 counted test, doc or other non-prod lines: the path holds no prod line
+	codeUncountedRoles = "uncounted-roles" // who_knows@1 counted prod lines where other roles hold more lines, which it left out
+	codeNoValues       = "no-values"
+	codeAILowerBound   = "ai-lower-bound"
+	codeValidity       = "validity"
 	// codeHeadAfterNow (#70) is a repository's warning, whose message names
 	// the commit the run read and the landings after --now, so it is that
 	// repository's caveat as it stands; summaries words it for several.
@@ -389,6 +392,41 @@ func sharedNames(who People, emails map[string]bool, cmds Commands) (Caveat, boo
 		Code: codeIdentities,
 		Message: msg + joinNames(named) + ". If the emails of a name are one person, a .mailmap line merges them: " +
 			identitiesHint(cmds),
+	}, true
+}
+
+// goingQuietCaveat is the going-quiet caveat of a section that shows
+// knowledge_loss@1 while people holding lines in its scope are within 30
+// days of the 180-day line (Share.GoingQuiet): the number is about to jump,
+// and a lead wants to see it coming, not read it after it has (round 2's
+// knowledge cliff: a top holder's 20,377 lines would move a repository from
+// 34% to 89%). It names no one, since a caveat is one sentence for every
+// format: the section lists them with its knowledge loss
+// (ShareGoingQuiet.Holders), where each page names people its own way.
+// repos is how many repositories the section adds up, as for
+// candidatesCaveat.
+func goingQuietCaveat(loss *Share, repos int) (Caveat, bool) {
+	if loss == nil || loss.GoingQuiet == nil {
+		return Caveat{}, false
+	}
+	q := loss.GoingQuiet
+	who, hold, goes := plural(q.People, "person", "people"), "holds", "goes"
+	if q.People != 1 {
+		hold, goes = "hold", "go"
+	}
+	if repos > 1 {
+		who += " (counted once in each repository where they hold lines)"
+	}
+	then, now := percents(q.Value, loss.Value)
+	listed := ""
+	if q.Holders != nil && len(*q.Holders) > 0 {
+		listed = " They are listed with the knowledge loss, under going quiet."
+	}
+	return Caveat{
+		Code: codeGoingQuiet,
+		Message: fmt.Sprintf("%s who %s %s lines here %s quiet within 30 days unless they land, review, open a pull "+
+			"request or commit to a branch: knowledge loss would then be %s (%s of %s), up from %s (%s).%s", who, hold,
+			grouped(int(q.Lines)), goes, then, grouped(int(q.Num)), grouped(int(loss.Den)), now, grouped(int(loss.Num)), listed),
 	}, true
 }
 

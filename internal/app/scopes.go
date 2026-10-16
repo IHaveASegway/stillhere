@@ -7,21 +7,22 @@ import (
 	"strings"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
-	"github.com/IHaveASegway/stillhere/internal/redact"
 )
 
 // A reader names repositories and groups as the reports print them: a
 // repository by its name ("click"), its key (its remote, as JSON gives it),
-// or GROUP/NAME, and a group by its name; a prefix, repo: or group:, says
+// GROUP/NAME, or its origin as OWNER/NAME or a remote URL (MatchRepos), and
+// a group by its name; a prefix, repo: or group:, says
 // which kind of scope a name is, where a group and a repository share one
 // (go-git/go-git). FindScopes is the one finder of those names, which the
 // MCP server's scope arguments and the command line's explain both resolve
 // through, so a name an answer prints resolves the same way on either.
 
 // FindScopes returns the scopes a non-empty argument names in a run's
-// vocabulary (n): its groups by name, and its repositories by key, by the
-// scrubbed form of a remote pasted with credentials, by name, or by
-// GROUP/NAME, each name compared without case. A "repo:" or "group:"
+// vocabulary (n): its groups by name, and its repositories as MatchRepos
+// matches them (a key, the scrubbed form of a remote pasted with
+// credentials, a name, GROUP/NAME, OWNER/NAME or a remote URL), each name
+// compared without case. A "repo:" or "group:"
 // prefix, in any case, keeps one kind. Of several found, one spelt exactly
 // as asked wins, so "API" and "api" can each be named. Groups come first,
 // then repositories, in the run's order.
@@ -40,7 +41,7 @@ func FindScopes(n *Names, query string) []domain.Scope {
 		}
 	}
 	if kind != domain.ScopeGroup {
-		for _, rp := range reposNamed(n, q) {
+		for _, rp := range MatchRepos(n.Repos, q) {
 			found = append(found, domain.Scope{Kind: domain.ScopeRepo, Key: rp.Key})
 		}
 	}
@@ -50,34 +51,6 @@ func FindScopes(n *Names, query string) []domain.Scope {
 		})
 		if len(exact) == 1 {
 			found = exact
-		}
-	}
-	return found
-}
-
-// reposNamed finds the repositories a name or key names: a key, the
-// scrubbed form of a remote pasted with its credentials, a name, or
-// GROUP/NAME.
-func reposNamed(n *Names, q string) []NamedRepo {
-	scrubbed := redact.URL(q)
-	for _, rp := range n.Repos {
-		if rp.Key == q || rp.Key == scrubbed {
-			return []NamedRepo{rp}
-		}
-	}
-	var found []NamedRepo
-	for _, rp := range n.Repos {
-		if strings.EqualFold(rp.Name, q) {
-			found = append(found, rp)
-		}
-	}
-	if len(found) == 0 {
-		if group, name, ok := strings.Cut(q, "/"); ok {
-			for _, rp := range n.Repos {
-				if rp.Group != "" && strings.EqualFold(rp.Group, group) && strings.EqualFold(rp.Name, name) {
-					found = append(found, rp)
-				}
-			}
 		}
 	}
 	return found

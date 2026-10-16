@@ -5,6 +5,7 @@ import (
 	"math"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
 )
@@ -50,8 +51,10 @@ const (
 	detailRecentLandings    = "recent_landings"
 	detailTopAuthor         = "top_author" // a top author's place, 1 to 5
 	detailProdFiles         = "prod_files"
-	detailPeople            = "people"    // surviving@1 about a repository or group: humans with surviving prod lines; knowledge_loss@1: humans holding lines
-	detailBotShare          = "bot_share" // surviving@1 about a repository or group: bot-held lines over prod lines
+	detailFilesSuffix       = "_files"     // who_knows@1 about a path: <role>_files for each other role counted under a path with no prod line
+	detailUncounted         = "uncounted_" // who_knows@1 about a path with prod lines: uncounted_<role>_lines and uncounted_<role>_files, what it leaves out
+	detailPeople            = "people"     // surviving@1 about a repository or group: humans with surviving prod lines; knowledge_loss@1: humans holding lines
+	detailBotShare          = "bot_share"  // surviving@1 about a repository or group: bot-held lines over prod lines
 	// knowledge_loss@1 and knowledge_concentration@1 (#104), present when
 	// identity candidates hold lines in the area: how many, the high ones,
 	// and the value with them merged (the high ones, every one).
@@ -62,6 +65,10 @@ const (
 	detailIfMerged       = "if_merged"         // knowledge_concentration@1's authors_in_prefix
 	detailIfAllMerged    = "if_all_merged"     // knowledge_concentration@1's authors_in_prefix
 	detailPeopleInactive = "people_inactive"
+	// knowledge_loss@1: the lines and the people of Den who go quiet within
+	// 30 days unless they are active again.
+	detailGoingQuietNum    = "going_quiet_num"
+	detailGoingQuietPeople = "going_quiet_people"
 )
 
 // shareOf reads one value of a ratio metric as a Share, with
@@ -70,7 +77,43 @@ const (
 // an area's row (Areas) and a who-knows answer's path share, so each shows
 // the same range the unmerged-identities caveat states.
 func shareOf(metric string, v domain.MetricValue) *Share {
-	return &Share{Metric: metric, Num: v.Num, Den: v.Den, Value: v.Value, IfMerged: shareIfMerged(v)}
+	return &Share{Metric: metric, Num: v.Num, Den: v.Den, Value: v.Value, IfMerged: shareIfMerged(v),
+		GoingQuiet: shareGoingQuiet(v.Detail[detailGoingQuietPeople], v.Detail[detailGoingQuietNum], v.Num, v.Den)}
+}
+
+// shareGoingQuiet reads knowledge_loss@1's going_quiet detail, a value's
+// or a sum of several: nil when no one holding lines goes quiet within 30
+// days, which a share of another metric, or of a run stored before the
+// detail, reads as too.
+func shareGoingQuiet(people, lines, num, den float64) *ShareGoingQuiet {
+	if people == 0 || den == 0 {
+		return nil
+	}
+	return &ShareGoingQuiet{People: count(people), Lines: lines, Num: num + lines, Value: (num + lines) / den}
+}
+
+// activityNone is a person's last activity when the run's activity is
+// known and holds none of theirs in the 365-day history window.
+const activityNone = "none"
+
+// lastActive is a person's last activity as a page shows it, from the
+// run's (Input.Activity): nil, activityNone, nil, false when the run holds
+// none of theirs, and nil, "" when the reader cannot tell (no activity).
+func lastActive(acts map[string]domain.Activity, email string) (*time.Time, string, *int, bool) {
+	if acts == nil {
+		return nil, "", nil, false
+	}
+	a, ok := acts[email]
+	if !ok {
+		return nil, activityNone, nil, false
+	}
+	at := a.Time
+	var quiet *int
+	if a.QuietIn >= 0 {
+		n := a.QuietIn
+		quiet = &n
+	}
+	return &at, a.Kind, quiet, a.GoingQuiet
 }
 
 // shareIfMerged reads knowledge_loss@1's identity detail (#104): nil when

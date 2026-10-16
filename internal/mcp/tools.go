@@ -72,7 +72,7 @@ func (c common) format(limit, rows, detailedRows int) (format, int64, error) {
 		f.rows, f.allHeads = detailedRows, true
 	}
 	if c.Limit > 0 {
-		f.limit = min(c.Limit, maxLimit)
+		f.limit, f.asked = min(c.Limit, maxLimit), c.Limit
 	}
 	run, offset, err := parseCursor(c.Cursor)
 	f.offset = offset
@@ -95,7 +95,8 @@ func (s *server) addTools(srv *sdk.Server) {
 		"Overview of a platform (a group of repositories), one repository, or the whole run, from the latest stillhere scan: "+
 			"how old and how big the code is, who it is made of (surviving prod lines per person, their majority files, "+
 			"breadth and recent landings), knowledge concentration (not a truck factor) and knowledge loss to people who went "+
-			"quiet, the AI-assisted share (a lower bound) and the bot share, and what landed in the week; for one repository, "+
+			"quiet, with who goes quiet within 30 days (knowledge_loss.going_quiet.holders), the AI-assisted share (a lower "+
+			"bound) and the bot share, and what landed in the week; for one repository, "+
 			"also its areas (top-level directories) with their knowledge loss, concentration and lines, largest first. Start "+
 			"here: an empty scope lists every platform and repository, paged, each with scope_arg, the exact string to pass "+
 			"as scope (group:NAME where a repository shares the group's name). rank adds a ranked metric's table (durable, simplifying or "+
@@ -122,15 +123,18 @@ func (s *server) addTools(srv *sdk.Server) {
 	tool(s, srv, "who_knows", "Who knows this code",
 		"Who knows the code under a path, per repository: majority owners (people credited with at least half of a file's "+
 			"surviving lines), the top five authors of surviving prod lines, recent landers and recent reviewers (the last 90 "+
-			"days; reviewers only in repositories whose GitHub data the run read, an empty list elsewhere) and bots apart; "+
-			"for a top-level directory, also its area: knowledge loss, people gone quiet and concentration, as overview's "+
-			"areas give them (null for a deeper path). "+
+			"days; reviewers only in repositories whose GitHub data the run read, an empty list elsewhere) and bots apart, "+
+			"each person with last_active and quiet_in_days (their last landing, review, pull request or commit on any "+
+			"branch, and the days left before knowledge loss counts them as gone quiet); a path with no prod line, such as "+
+			"tests or docs, is answered for its own lines (roles says which), and one with prod lines names the other lines it "+
+			"leaves out (uncounted); and the path's knowledge loss, people gone "+
+			"quiet and concentration (a top-level directory's match overview's areas). "+
 			"A routing answer for who to ask or who should review, not a rank. path is repo-relative, any prefix down to one "+
 			"file, or absolute inside a clone the scan read; repo narrows it to one repository, and without it every "+
 			"repository with code under the path is listed, paged."+untrusted,
 		schema(nil,
 			`"path": {"type": "string", "description": "A repo-relative path prefix, such as src/payments or a file, or an absolute path inside a scanned clone; empty for the whole repository."}`,
-			`"repo": {"type": "string", "description": "A repository by name or key; empty searches every repository of the run."}`,
+			`"repo": {"type": "string", "description": "A repository by name, GROUP/NAME, OWNER/NAME, remote URL or key; empty searches every repository of the run."}`,
 			propFormat, propLimit, propCursor),
 		s.whoKnows)
 	tool(s, srv, "changes", "What landed",
@@ -183,7 +187,8 @@ func (s *server) addTools(srv *sdk.Server) {
 			propScope, propFormat),
 		s.highlights)
 	tool(s, srv, "identity_candidates", "Possible duplicate identities",
-		"Possible duplicate identities in the latest scan: emails that look like one person, most confident first, each "+
+		"Possible duplicate identities in the latest scan: emails that look like one person, most confident first and the "+
+			"hand-off guesses last (guesses counts them), each "+
 			"with the rules that link them and a confidence (detailed adds each rule's evidence; rules says how each can be "+
 			"wrong). Unmerged identities split one person's numbers, and can make knowledge loss look larger: an "+
 			"unmerged-identities caveat sends you here. stillhere never applies one: a person reviews and commits the "+

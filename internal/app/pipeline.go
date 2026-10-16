@@ -282,6 +282,7 @@ func collectRepo(ctx context.Context, d Deps, job repoJob, opt collectOptions) (
 		Warnings:    repoWarnings(repo, job.warnings, asOf, h.Warnings),
 		FirstCommit: h.FirstCommit, History: opt.window,
 		Commits: h.Commits, Landings: h.Landings, Changes: h.Changes, Reverts: h.Reverts, Aliases: h.Aliases,
+		RefCommits: h.RefCommits,
 	}
 	// A partial clone is classified too: its tree lists every path at HEAD
 	// with lazy fetch off, and where its blobs are absent, ClassifyPaths

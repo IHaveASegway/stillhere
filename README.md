@@ -21,8 +21,10 @@ stillhere is one static binary for macOS, Linux and Windows, on amd64 and arm64.
 No release is tagged yet. Until the first one, install from source with Go 1.27 or newer, either with `go install`, which needs no checkout:
 
 ```sh
-go install github.com/IHaveASegway/stillhere/cmd/stillhere@latest   # the newest commit on main
+go install github.com/IHaveASegway/stillhere/cmd/stillhere@main     # the newest commit on main
 ```
+
+`@main` asks for the branch's newest commit. `@latest` would too, before a tag exists, but through the Go module proxy (proxy.golang.org, the default `GOPROXY`) it resolves to the commit the proxy last saw, which can lag a fresh push by minutes to hours (round 2 got a build six merges behind). Whether `go install` goes through the proxy at all is `go env GOPROXY` and `go env GONOPROXY`: a module that `GONOPROXY` (or `GOPRIVATE`, when `GONOPROXY` is unset) matches is fetched from GitHub directly, and `GOPROXY=direct go install …@main` does so once. `stillhere version` prints the commit a binary was built from.
 
 `go install` puts the binary in `$(go env GOBIN)` when that is set, else in `$(go env GOPATH)/bin` (`~/go/bin` by default). Or build it from a checkout, which also stamps the commit and the build date into `stillhere version`:
 
@@ -88,7 +90,7 @@ To keep a history, scan instead: `scan` records a run in facts.db (history, blam
 ```sh
 stillhere scan ~/src/acme                           # record a run: the default branch of each repository
 stillhere report --rank durable@1                   # the run as a report, with durable@1's rank table
-stillhere who-knows services/billing                # who knows the code under a path
+stillhere who-knows services/billing                # who knows the code under a path, and when each was last active
 stillhere paths --skipped                           # which paths a run left out, and the rule that decided each
 stillhere explain durable@1 --person "Ada Example"  # the changes behind one person's value: a name, @login, id or email
 stillhere explain review_coverage --repo api        # each change behind a repository's number: reviewed, not, or left out and why
@@ -110,6 +112,10 @@ stillhere identities                                         # the candidates, w
 stillhere identities --format mailmap >> ~/acme.mailmap      # review, uncomment what you know to be one person
 stillhere --mailmap ~/acme.mailmap scan ~/src/acme           # the merges take effect at the next scan
 ```
+
+Run `identities` again after the first `sync github`: GitHub's links arrive with it and make most of the high-confidence lines. Hand-off guesses are listed last, and in text only with `--all`.
+
+Knowledge loss counts someone as gone quiet after 180 days without a landing, a review, a pull request opened or pushed to, or a commit on any branch or tag of the clone, across every repository of the scan, so a repository scanned alone can read higher than in its organization's scan. Every page shows each holder's last activity, and a card names the people holding lines who are within 30 days of the line ("going quiet within 30 days"), with a `going-quiet` caveat that says what knowledge loss becomes once they cross it.
 
 In Docker, mount the repositories and run as the user who owns them, because git refuses to read a repository that belongs to someone else ("dubious ownership"):
 

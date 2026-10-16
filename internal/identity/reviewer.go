@@ -52,10 +52,13 @@ func CanonicalKey(key string) string {
 }
 
 // Reviewer returns who a forge account is in this run. A login is a person
-// when a commit the forge attributes to it, one of a pull request's commits
-// or its merge commit, is in the run's history: the person is the run's own
-// mailmapped author of that commit, the one with the most such commits,
-// then the smallest email. So git's mailmap stays the only identity store
+// when GitHub attributes to it a commit whose address the run shows (#117:
+// forgeLinkReader, the one reading of a link): one of a pull request's
+// commits or its merge commit, or a link of an older pull request or of an
+// author email of the history (ForgeFacts.Links); the person is the run's
+// own mailmapped author of that commit, history or blamed, else the email
+// GitHub read when the facts show that address, the one with the most such
+// commits, then the smallest email. So git's mailmap stays the only identity store
 // (docs/spec/git-invocation.md#identity-mailmap-and-bots), and a login the
 // forge resolved from an address the mailmap folds into another lands on
 // the canonical one. Any other login is the subject "@login" (ADR 0004),
@@ -135,30 +138,29 @@ func appAccount(key string) bool {
 }
 
 // reviewerLogins links each login of the fact set's GitHub data, folded
-// (foldLogin), to the person Reviewer says it is: the run's author of the
-// commits the forge attributes to it, counting each commit once, the most
-// commits winning, then the smallest email. It returns nil without GitHub
+// (foldLogin), to the person Reviewer says it is: the run's address of the
+// commits the forge attributes to it, as forgeLinkReader reads a link, over
+// every link the run holds (the pull requests' own commits and merge
+// commits, and the links of older pull requests and of the history's
+// author emails, ForgeFacts.Links), counting each commit once, the most
+// commits winning, then the smallest email. #117: one reading of a link
+// for every use, so a login the same-forge-account rule ties to an address
+// is that address's person here too, and a maintainer whose only commits
+// are older than the synced pull requests, or reached the branch outside
+// any, is not "@login" while they review. It returns nil without GitHub
 // data.
 func reviewerLogins(fs *domain.FactSet) map[string]string {
 	if fs == nil || fs.Forge == nil {
 		return nil
 	}
-	author := map[string]string{} // SHA → the run's canonical author email
-	for i := range fs.Repos {
-		for j := range fs.Repos[i].Commits {
-			if c := &fs.Repos[i].Commits[j]; c.Author.Email != "" {
-				author[c.SHA] = canonical(c.Author.Email)
-			}
-		}
-	}
+	read := forgeLinkReader(fs)
 	type vote struct{ login, sha string }
 	seen := map[vote]bool{}
 	votes := map[string]map[string]int{} // folded login → email → distinct commits
-	forgeCommits(fs, false, func(c domain.ForgeCommit) {
-		email, ok := author[c.SHA]
-		login := foldLogin(c.AuthorLogin)
+	forgeCommits(fs, true, func(c domain.ForgeCommit) {
+		email, login, ok := read(c)
 		v := vote{login, c.SHA}
-		if login == "" || !ok || seen[v] {
+		if !ok || seen[v] {
 			return
 		}
 		seen[v] = true
@@ -187,9 +189,9 @@ func reviewerLogins(fs *domain.FactSet) map[string]string {
 // set's GitHub data holds: each one's own commits and its merge commit, in
 // the replica's order; and, with older too, the links the run kept of its
 // older pull requests (ForgeFacts.Links). It is the one walk over the
-// forge's commit-to-account links: Reviewer's rule (reviewerLogins) reads
-// the pull requests, and the same-forge-account rule (forgeAccounts) every
-// link, since GitHub's attribution of an address does not age.
+// forge's commit-to-account links: Reviewer's rule (reviewerLogins) and
+// the same-forge-account rule (forgeAccounts) both read every link (#117),
+// since GitHub's attribution of an address does not age.
 func forgeCommits(fs *domain.FactSet, older bool, fn func(c domain.ForgeCommit)) {
 	if fs == nil || fs.Forge == nil {
 		return
@@ -242,9 +244,9 @@ func forgeAccounts(fs *domain.FactSet) map[string][]string {
 }
 
 // forgeLinkReader returns the one reading of a forge commit's link that
-// the same-forge-account rule, Blocks and KeptLinks share: the run's
-// address it names and the account, folded, or false when it counts for
-// nothing.
+// Reviewer (#117), the same-forge-account rule, Blocks and KeptLinks share:
+// the run's address it names and the account, folded, or false when it
+// counts for nothing.
 //
 // A link names the run's own address of its commit: the mailmapped author
 // git gave the SHA in the history, or in a blamed commit older than the

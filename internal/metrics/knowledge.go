@@ -5,12 +5,17 @@ import (
 )
 
 // knowledgeLossV1 is knowledge_loss@1: the share of an area's surviving prod
-// lines held by people who have had neither a landing nor a submitted review
-// anywhere in the scanned organization for 180 days. Knowledge is held by
-// people, so lines credited to bots are in neither part of the share.
+// lines held by people who have had no activity anywhere in the scanned
+// organization for 180 days: no landing, review, pull request or commit on
+// any ref of a clone (activity.go). Knowledge is held by people, so lines
+// credited to bots are in neither part of the share.
 type knowledgeLossV1 struct{}
 
 var knowledgeLossID = domain.MetricID{Name: "knowledge_loss", Version: 1}
+
+// detailGoingQuietNum is knowledge_loss@1's Detail of the lines whose people
+// go quiet within 30 days, which every value has since wave 10 (Corrected).
+const detailGoingQuietNum = "going_quiet_num"
 
 // Definition returns knowledge_loss@1's catalog entry.
 func (knowledgeLossV1) Definition() Definition {
@@ -21,21 +26,29 @@ func (knowledgeLossV1) Definition() Definition {
 			"group (subject group): Den is the surviving prod lines credited to people (bots excluded), Num the part credited to " +
 			"people with no activity in [now - 180d, now) in any scanned repository. A person has had activity when a commit " +
 			"credited to them, merge commits included, is in a landing in the window, so a side-branch author is active when " +
-			"the branch lands, or when they submitted a review (approved, changes requested or commented) in the window on any " +
-			"pull request of the scanned repositories, open, closed or merged, in the GitHub data the run read. Detail: people " +
-			"(humans holding lines), people_inactive; and, when identity candidates hold lines in the area, identity_candidates, " +
-			"identity_candidates_high, and if_merged_num and if_all_merged_num, Num with the high-confidence lines " +
-			"(identity.Candidate.High) and with every candidate merged into one person each.",
+			"the branch lands; when they submitted a review (approved, changes requested or commented) in the window on any " +
+			"pull request of the scanned repositories, open, closed or merged, in the GitHub data the run read; when they " +
+			"opened a pull request there in the window, or a commit of theirs on one of their own pull requests, which the " +
+			"clone holds, was written in it (its author time; an update by anyone else is not theirs); or when a commit " +
+			"credited to them on another ref of a clone, a branch, a remote-tracking branch or a tag, was written in the " +
+			"window (its author time, committed before now). A GitHub account is the person the run links its login to " +
+			"(identity.Directory.Reviewer). Detail: people (humans holding lines), people_inactive, going_quiet_num and " +
+			"going_quiet_people (the lines and the people of Den whose last activity is between 150 and 180 days before " +
+			"now: they cross the line within 30 days unless they are active again); and, when identity candidates hold " +
+			"lines in the area, identity_candidates, identity_candidates_high, and if_merged_num and if_all_merged_num, " +
+			"Num with the high-confidence lines (identity.Candidate.High) and with every candidate merged into one person each.",
 		Ratio:       true,
 		Ranked:      false,
 		Forge:       true,
 		Subjects:    []string{domain.SubjectRepo, domain.SubjectArea, domain.SubjectGroup},
 		Eligibility: "Not ranked: it describes code, not people.",
-		BlindSpots: "People who moved to repositories outside the scan look gone. Mailmap gaps split one person in two and can make " +
-			"either half look gone. Reviews count only on the pull requests of repositories whose GitHub data the run read, and " +
-			"only for a reviewer the run links to an email (a login whose commits are in the run): a reviewer shown as @login " +
-			"holds no line. Blame's blind spots apply.",
-		Gaming:   "Not a target for people; a quiet expert who lands one trivial change, or submits one review, resets their clock.",
+		BlindSpots: "People who moved to repositories outside the scan look gone, and so does work on a fork's branch, " +
+			"which no clone of the scan holds. Mailmap gaps split one person in two and can make either half look gone: a " +
+			"commit on another branch counts for the address it was written with. Reviews and pull requests count only in " +
+			"repositories whose GitHub data the run read, and only for an account the run links to an address (a login " +
+			"GitHub attributes a commit of the run's to): an account shown as @login holds no line. Without GitHub data " +
+			"the value counts landings and commits on the clone's refs only. Blame's blind spots apply.",
+		Gaming:   "Not a target for people; a quiet expert who lands one trivial change, submits one review, opens a pull request or pushes a commit to any branch resets their clock.",
 		Oracle:   "testdata/fixture/SPEC.md#knowledge_loss1-main-fixture and #reviews-in-knowledge_loss1-and-who_knows1-main-fixture",
 		Validity: knowledgeLossValidity,
 	}
@@ -52,10 +65,10 @@ func (m knowledgeLossV1) Compute(in *Input) ([]domain.MetricValue, error) { retu
 
 func (knowledgeLossV1) compute(v *view) ([]domain.MetricValue, error) {
 	w := v.window(activityDays, 0)
-	active := knowledgeActive(v, w)
+	active, last := knowledgeActive(v, w)
 	var out []domain.MetricValue
 	add := func(s domain.Scope, sub domain.Subject, files []*fileView) {
-		if val, ok := knowledgeLoss(v, active, s, sub, w, files); ok {
+		if val, ok := knowledgeLoss(v, active, last, s, sub, w, files); ok {
 			out = append(out, val)
 		}
 	}
@@ -81,17 +94,19 @@ func (knowledgeLossV1) compute(v *view) ([]domain.MetricValue, error) {
 }
 
 // knowledgeActive returns the people knowledge_loss@1 counts as active in
-// w, anywhere in the view: credited with a commit of a landing in w
-// (view.active), or the author of a review submitted in w. A review is
-// activity as a landing is (docs/metrics.md#knowledge_loss1-per-area):
-// someone who reviewed has not gone quiet. Only a reviewer linked to an
-// email can hold lines, so only they change a value.
-func knowledgeActive(v *view, w domain.Window) map[string]bool {
-	active := v.active(w)
-	for email := range v.reviews().active(w) {
-		active[email] = true
+// w, anywhere in the view, with each person's last activity: those whose
+// last activity (view.lastActivity, the one rule) is in w. w ends at Now
+// and starts inside the history window, so a person is active exactly when
+// something they did falls in w.
+func knowledgeActive(v *view, w domain.Window) (map[string]bool, map[string]domain.Activity) {
+	last := v.lastActivity()
+	active := make(map[string]bool, len(last))
+	for email, a := range last {
+		if w.Contains(a.Time) {
+			active[email] = true
+		}
 	}
-	return active
+	return active, last
 }
 
 // PathKnowledge answers knowledge_loss@1 and knowledge_concentration@1 for
@@ -130,7 +145,7 @@ func PathKnowledge(in *Input, repo, prefix string) ([]domain.MetricValue, error)
 	clean := cleanPrefix(prefix)
 	under := underPrefix(clean)
 	w := v.window(activityDays, 0)
-	active := knowledgeActive(v, w)
+	active, last := knowledgeActive(v, w)
 	var out []domain.MetricValue
 	for _, r := range v.repos {
 		if (key != "" && r.key != key) || !r.lines {
@@ -143,7 +158,7 @@ func PathKnowledge(in *Input, repo, prefix string) ([]domain.MetricValue, error)
 			}
 		}
 		scope, sub := domain.Scope{Kind: domain.ScopeRepo, Key: r.key}, pathSubject(r, clean)
-		if val, ok := knowledgeLoss(v, active, scope, sub, w, files); ok {
+		if val, ok := knowledgeLoss(v, active, last, scope, sub, w, files); ok {
 			out = append(out, val)
 		}
 		if val, ok := concentration(v, scope, sub, files); ok {
@@ -155,17 +170,43 @@ func PathKnowledge(in *Input, repo, prefix string) ([]domain.MetricValue, error)
 
 // knowledgeLoss computes the share over files. ok is false when no person
 // holds a line there, which leaves a share of nothing.
-func knowledgeLoss(v *view, active map[string]bool, s domain.Scope, sub domain.Subject, w domain.Window, files []*fileView) (domain.MetricValue, bool) {
+func knowledgeLoss(v *view, active map[string]bool, last map[string]domain.Activity, s domain.Scope, sub domain.Subject,
+	w domain.Window, files []*fileView) (domain.MetricValue, bool) {
 	held, gone, people, inactive := lossCounts(v, active, files)
 	if held == 0 {
 		return domain.MetricValue{}, false
 	}
+	quietLines, quietPeople := goingQuiet(v, last, files)
 	detail := map[string]float64{
-		"people":          float64(people),
-		"people_inactive": float64(inactive),
+		"people":             float64(people),
+		"people_inactive":    float64(inactive),
+		detailGoingQuietNum:  float64(quietLines),
+		"going_quiet_people": float64(quietPeople),
 	}
 	v.lossIfMerged(detail, active, files) // #104: identities.go
 	return ratio(knowledgeLossID, s, sub, w, gone, held, 0, detail), true
+}
+
+// goingQuiet counts, over files, the lines held by people who are active
+// now but within goingQuietDays of the activity line (domain.Activity's
+// GoingQuiet, which view.quietIn sets), and those people: Num grows by
+// these lines within goingQuietDays unless they are active again. A page
+// warns of it before the line is crossed.
+func goingQuiet(v *view, last map[string]domain.Activity, files []*fileView) (lines, people int) {
+	seen := make(map[string]bool)
+	for _, f := range files {
+		for email, n := range f.byPerson {
+			if v.who.Bot(email) || !last[email].GoingQuiet {
+				continue
+			}
+			lines += n
+			if !seen[email] {
+				seen[email] = true
+				people++
+			}
+		}
+	}
+	return lines, people
 }
 
 // lossCounts counts, over files, the lines held by people (bots left out),

@@ -35,7 +35,12 @@ name does not explain (one GitHub account, or a local part not made from the
 name) is written as a line; every other one is commented out, since two
 people of one name look like one person with two addresses. The text and
 Markdown forms print no address and no part of one, and --format json gives
-the addresses. A line added to a .mailmap takes effect at the next scan.`,
+the addresses. A line added to a .mailmap takes effect at the next scan.
+
+Hand-off guesses are listed after the other candidates and counted apart,
+and text and Markdown list them only with --all: on an open-source
+repository most of them link unrelated people. JSON and the mailmap form,
+where their lines stay commented out, hold every candidate.`,
 		Args: usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if err := checkRun(run); err != nil {
@@ -67,5 +72,9 @@ the addresses. A line added to a .mailmap takes effect at the next scan.`,
 	}
 	cmd.Flags().StringVar(&format, "format", formatText, "output format: mailmap (suggested .mailmap lines), text, md or json")
 	addRunFlag(cmd, &run)
+	// identities prints every candidate but the guesses, so its --all is
+	// not the other commands' first-10-rows cut (wave 10's review).
+	cmd.Flags().BoolVar(&e.all, "all", false,
+		"also list the hand-off guesses in text and Markdown (JSON and the mailmap form always hold them)")
 	return cmd
 }

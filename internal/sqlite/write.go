@@ -187,7 +187,8 @@ func putRepoLists(ctx context.Context, tx *sql.Tx, id int64, f *domain.RepoFacts
 	return closeAll(warnings, paths, changes, reverts, revs, blameErrors, aliases)
 }
 
-// putCommits writes the commits with their parents and co-authors.
+// putCommits writes the commits with their parents and co-authors, and the
+// commits on the repository's other refs with theirs (migration 10).
 func putCommits(ctx context.Context, tx *sql.Tx, id int64, f *domain.RepoFacts) error {
 	commits := newInserter(ctx, tx, "commits", "repo_id", "seq", "sha", "author_name", "author_email",
 		"author_time", "commit_time", "subject", "patch_id")
@@ -204,7 +205,17 @@ func putCommits(ctx context.Context, tx *sql.Tx, id int64, f *domain.RepoFacts) 
 			coAuthors.add(id, i, j, a.Name, a.Email)
 		}
 	}
-	return closeAll(commits, parents, coAuthors)
+	refs := newInserter(ctx, tx, "ref_commits", "repo_id", "seq", "sha", "author_name", "author_email",
+		"author_time", "commit_time")
+	refCoAuthors := newInserter(ctx, tx, "ref_commit_coauthors", "repo_id", "commit_seq", "seq", "name", "email")
+	for i := range f.RefCommits {
+		c := &f.RefCommits[i]
+		refs.add(id, i, c.SHA, c.Author.Name, c.Author.Email, refs.time(c.AuthorTime), refs.time(c.CommitTime))
+		for j, a := range c.CoAuthors {
+			refCoAuthors.add(id, i, j, a.Name, a.Email)
+		}
+	}
+	return closeAll(commits, parents, coAuthors, refs, refCoAuthors)
 }
 
 // putLandings writes the landings and the landing map.

@@ -18,7 +18,8 @@ value: never use it for performance or pay decisions, and say so if asked to.
 | How is this platform or repository doing? Who is its code made of? | `overview(scope)`; empty scope first, to list the platforms and repositories with the `scope_arg` to pass for each |
 | Where in this repository has knowledge gone quiet, or rests with few people? | `overview(scope: R)`: its `areas`, the top-level directories with their knowledge loss, concentration and lines, largest first |
 | Who ranks where on a metric, in this platform or repository? | `overview(scope, rank: "durable")`: one ranked metric's table per call (`durable`, `simplifying` or `reviews_given`); `metrics()` lists the ranked ones |
-| Who should I ask about, or who should review, this path? | `who_knows(path, repo)`: majority owners, top authors, recent landers and recent reviewers; an absolute path inside a scanned clone works |
+| Who should I ask about, or who should review, this path? | `who_knows(path, repo)`: majority owners, top authors, recent landers and recent reviewers, each with when they were last active; an absolute path inside a scanned clone works, and so does a test or docs directory, answered for its own lines (`roles`) |
+| Who is about to go quiet? Will knowledge loss jump? | `overview(scope: R)` or `overview(scope: G)`: `knowledge_loss.going_quiet`, its `holders` (who, their lines, `quiet_in_days`, the soonest first) and the share once they have gone quiet; a table's rows rarely show them, since they hold few lines |
 | What did a person's changes do? Where do they rank? | `person(name)`; an empty name is the user, whose answer alone holds their own AI-assisted share |
 | What landed this week, or since a date? What did X ship? | `changes(scope, since, person)`; leave `person` out for everyone, pass it empty for the user |
 | Why is this number what it is? Which changes produced it? | `explain(metric, subject, subject_kind)`, then `metrics(metric)` for its definition |
@@ -38,10 +39,12 @@ their logins: call again with the id, and if they look like one person, mention
 `identity_candidates`. Follow each error's instruction: it names the call that
 answers instead. Prefer `response_format: "concise"`; ask for `detailed` only
 for the fields you need. A list is paged at 10 to 25 items: when you need all
-of it (every change of a quarter, every repository of a platform, every
-identity candidate), pass `limit: 100`, the most a page holds, and follow
-`cursor` from there, which costs far fewer calls and tokens than paging at the
-default.
+of it (every change of a quarter, every repository of a platform), pass
+`limit: 100`, the most a page holds, and follow `cursor` from there, which
+costs far fewer calls and tokens than paging at the default. Every answer is
+cut to fit its size, so a page of large items holds fewer than asked:
+`page.note` then says so, and `identity_candidates`, whose candidates are
+large, holds about 25 a page whatever the limit; follow `cursor`.
 
 `explain`'s `subject_kind` says what `subject` names: `person` (the default),
 `repo`, `group`, or `area` (`subject` the repository, `path` its top-level
@@ -196,7 +199,9 @@ gives it.
 2. **The group.** `overview(scope: G, limit: 100)`: its size, who its code is
    made of, concentration and knowledge loss, the AI-assisted and bot shares,
    what landed in the week, and one row per repository. Note its caveats,
-   `unmerged-identities` first.
+   `unmerged-identities` first, then `going-quiet`: people about to cross
+   the 180-day line, named in `knowledge_loss.going_quiet.holders`, and the
+   share once they have.
 3. **Its repositories.** For the two or three that hold most of the prod lines,
    and any the user named: `overview(scope: R)`, with `R` its `scope_arg`: the
    card and tables whole, and its `areas`, largest first.
@@ -204,7 +209,9 @@ gives it.
    (`knowledge_loss.num`) or the fewest authors holding their files
    (`concentration.authors_in_prefix`): `who_knows(path: AREA, repo: R)`, its
    majority owners against its recent landers and reviewers, which is who holds
-   the code against who works on it now; its `knowledge_loss`, `people`,
+   the code against who works on it now, and each holder's `last_active`
+   (what they did last: a landing, a review, a pull request, a commit on a
+   branch) and `quiet_in_days`; its `knowledge_loss`, `people`,
    `people_inactive` and `concentration` are the path's own, for any path, so
    a top-level directory's match its row of `areas` and a dominant area can
    be followed down (`who_knows(path: "pkg/sync", repo: R)`).
@@ -235,7 +242,9 @@ gives it.
    `reviews_given`'s table: one person giving most reviews, or merging most
    landings, is a gate, which no ownership number shows.
 7. **Identities.** `identity_candidates(scope: G, limit: 100)`, following
-   `cursor`: addresses that may be one person, most confident first. Unmerged
+   `cursor`: addresses that may be one person, most confident first, the
+   hand-off guesses last (`guesses` counts them: the first `page.total` less
+   `guesses` are the candidates a user's terminal lists). Unmerged
    identities split one person's numbers and make knowledge loss look larger.
    When a knowledge number carries `unmerged-identities`, say it may be
    overstated, and when the answer also gives the number with the
@@ -245,7 +254,9 @@ gives it.
    in another is there: every candidate the scope's caveat counts, and those
    whose addresses there hold no surviving line. A high one (GitHub
    attributes both addresses to one account, `same-forge-account`) is near
-   certain; a medium or low one needs the user's word, except its addresses
+   certain, but say so when an address `names_differ`: a name change, or a
+   mailbox several people share, which only the user can tell apart (its
+   `names` are the names it is written with); a medium or low one needs the user's word, except its addresses
    marked `high`, whose lines are as sure. Knowledge loss and concentration
    count each address apart, so state them as a range: their `if_merged` (and
    the `unmerged-identities` caveat, present when merging moves a number)
@@ -255,7 +266,10 @@ gives it.
    The fix is the user's: `stillhere identities --format mailmap >>
    ~/acme.mailmap` (appended, outside the repositories: uncommented lines are
    high-confidence, and the user uncomments the others they know), then
-   `stillhere --mailmap ~/acme.mailmap scan ...` again.
+   `stillhere --mailmap ~/acme.mailmap scan ...` again; after a first
+   `stillhere sync github`, run it once more, since GitHub's links make most
+   of the high-confidence lines. Hand-off guesses come last and are rarely
+   right on an open-source repository: mention them only if asked.
 8. **Before you explain a number**, `metrics(metric: M)` for its definition, then
    `explain(metric, subject, subject_kind)` for a number worth tracing;
    `changes(scope: G, since: "90d", limit: 100)` when the user asks what landed.

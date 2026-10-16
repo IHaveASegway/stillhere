@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql"
 	"errors"
+	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -51,6 +52,7 @@ func reviewAt(month time.Month, day, hour int) time.Time {
 func reviewOracles(t *testing.T) {
 	t.Run("merge methods", func(t *testing.T) { t.Parallel(); reviewMergeMethods(t) })
 	t.Run("merge back", func(t *testing.T) { t.Parallel(); reviewMergeBack(t) })
+	t.Run("activity off the default branch", func(t *testing.T) { t.Parallel(); reviewActivity(t) })
 	repo := fixture.Main(t)
 	setOrigin(t, repo, reviewRepo.Key)
 	commits := reviewCommits(t, repo)
@@ -663,6 +665,11 @@ func reviewPulls(commits map[string]string) []domain.PullRequest {
 		merged(6, "erin", reviewAt(time.October, 4, 9), reviewAt(time.October, 6, 16), landed(reviewAt(time.October, 6, 16), "erin"),
 			[]domain.ForgeCommit{unlanded("6", "erin"), unlanded("7", "erin")},
 			review("PRR_6a", "Zoe", domain.ReviewApproved, reviewAt(time.October, 5, 8))),
+		// Wave 10: hank's own pull request, opened before the activity
+		// window and updated in it by someone else's comment: an update is
+		// no activity of its author's, so Hank stays quiet.
+		{ID: "PR_8", Repo: reviewRepo.ID, Number: 8, Title: "t8", Author: user("hank"), State: domain.PullOpen,
+			BaseBranch: "main", Created: reviewAt(time.March, 1, 9), Updated: reviewAt(time.September, 15, 10)},
 		// #107: reviewed only by its author, a bot and, after its merge,
 		// bob, so review_coverage@1 counts it unreviewed.
 		merged(7, "ivy", reviewAt(time.October, 5, 9), reviewAt(time.October, 6, 19), landed(reviewAt(time.October, 6, 19), "ivy"),
@@ -1013,6 +1020,148 @@ func reviewLabel(t *testing.T, s *scanned, commits map[string]string) {
 				shortSHA(c.Change), shortSHA(all.Changes[i].Change))
 		}
 	}
+}
+
+// reviewActivity checks SPEC's "Activity off the default branch (main
+// fixture, wave 10)": knowledge_loss@1 counts a commit on another ref of
+// the clone and a pull request its author opened or pushed their own
+// commit to, through GitHub's links of the history's emails (#117), and a
+// card says who goes quiet within 30 days and when each holder was last
+// active.
+func reviewActivity(t *testing.T) {
+	const table = "SPEC activity off the default branch"
+	repo := fixture.Main(t)
+	setOrigin(t, repo, reviewRepo.Key)
+	commits := reviewCommits(t, repo)
+	row5, row6 := commits[rfc3339(reviewAt(time.January, 6, 12))], commits[rfc3339(reviewAt(time.January, 7, 12))]
+	refs := reviewRefs(t, repo, []reviewRefCommit{
+		{"refs/heads/release-1", "Hank Split <hank@laptop.example>", reviewAt(time.September, 20, 12), row6, "release.py"},
+		{"refs/heads/old-work", "Gina Split <gina@example.com>", reviewAt(time.April, 20, 12), row5, "old_work.py"},
+		{"refs/tags/later", "Gina Split <gina@example.com>", time.Date(2026, time.October, 8, 12, 0, 0, 0, time.UTC), row5, "later.py"},
+	})
+	release := refs["refs/heads/release-1"]
+	pr := domain.PullRequest{ID: "PR_8", Repo: reviewRepo.ID, Number: 8, Title: "release", Author: domain.ForgeUser{Login: "hank"},
+		State: domain.PullOpen, BaseBranch: "main", Created: reviewAt(time.March, 20, 9), Updated: reviewAt(time.September, 20, 13),
+		Commits: []domain.ForgeCommit{{SHA: release, AuthorEmail: "hank@laptop.example", AuthorLogin: "hank"}}}
+	s := scan(t, fixture.Mailmap(t), nil, app.ScanRequest{Paths: []string{repo}, Now: fixture.Now}, func(st *sqlite.Store) {
+		reviewSeed(t, st, reviewRepo, []domain.PullRequest{pr}, reviewAt(time.September, 20, 13))
+		// The links pass's answer for Hank's history address (forge_links):
+		// no pull request of the replica holds a commit of the run's that
+		// ties the login hank to him.
+		if err := st.PutForgeLinks(t.Context(), reviewRepo.ID, []domain.ForgeCommit{
+			{SHA: row6, AuthorEmail: "hank@example.com", AuthorLogin: "hank"}}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	r := onlyRepo(t, s.model)
+	// Gina is active through her commit on old-work, Hank through his
+	// pull request: nobody holding a line has gone quiet. Gina's activity is
+	// 170 days old, so her 2 lines go quiet within 30 days.
+	checkShare(t, table+", knowledge_loss@1", r.Card.KnowledgeLoss, 0, 34)
+	// The card names who goes quiet (wave 10's review: a count alone sent
+	// the reader to rows a page cuts), and its caveat says where.
+	gina := report.QuietHolder{Email: "gina@example.com", Name: "Gina Split", Lines: 2,
+		LastActive: reviewAt(time.April, 20, 12), LastActivity: domain.ActivityCommit, QuietInDays: 10}
+	if q := r.Card.KnowledgeLoss.GoingQuiet; q == nil || q.People != 1 || q.Lines != 2 || q.Num != 2 || q.Value != 2.0/34 ||
+		q.Holders == nil || !slices.Equal(*q.Holders, []report.QuietHolder{gina}) {
+		t.Errorf("%s: going_quiet %+v, want 1 person, 2 lines, 2 / 34, Gina's holding them", table, q)
+	}
+	if !slices.ContainsFunc(r.Card.Caveats, func(c report.Caveat) bool {
+		return c.Code == "going-quiet" && strings.Contains(c.Message, "1 person who holds 2 lines here goes quiet within 30 days") &&
+			strings.Contains(c.Message, "would then be 5.9% (2 of 34), up from 0.0% (0). They are listed with the knowledge loss")
+	}) {
+		t.Errorf("%s: the card's caveats %+v, want a going-quiet caveat", table, r.Card.Caveats)
+	}
+	// Text prints the days left whole, in the still-here table and in the
+	// card's list (wave 10's review: a table cut "quiet in 24d" to "qu…").
+	text := string(render(t, s.model).text)
+	for _, want := range []string{"going quiet within 30 days: Gina Split 2 lines (quiet in 10 days)", "  quiet in 10d"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("%s: the text report has no %q:\n%s", table, want, text)
+		}
+	}
+	type active struct {
+		at    string
+		kind  string
+		quiet int
+		going bool
+	}
+	got := map[string]active{}
+	for _, row := range r.StillHere.Humans {
+		if row.LastActive != nil && row.QuietInDays != nil {
+			got[row.Email] = active{rfc3339(*row.LastActive), row.LastActivity, *row.QuietInDays, row.GoingQuiet}
+		}
+	}
+	for email, want := range map[string]active{
+		"gina@example.com": {"2026-04-20T12:00:00Z", domain.ActivityCommit, 10, true},
+		"hank@example.com": {"2026-09-20T12:00:00Z", domain.ActivityPullRequest, 163, false},
+	} {
+		if got[email] != want {
+			t.Errorf("%s: %s last active %+v, want %+v", table, email, got[email], want)
+		}
+	}
+	// --repo takes the repository as a browser's address bar or a shell's
+	// completion gives it too: the URL without its scheme, a trailing slash
+	// (wave 10's review).
+	for _, arg := range []string{"git.example.test/acme/fixture", "acme/fixture/", "https://git.example.test/acme/fixture/"} {
+		if w, err := app.WhoKnows(t.Context(), s.read, app.WhoKnowsRequest{RunID: s.run, Path: "split.py", Repo: arg}); err != nil ||
+			w.Repo != reviewRepo.Key {
+			t.Errorf("%s: who-knows split.py --repo %s: %v; want the repository", table, arg, err)
+		}
+	}
+	// The run keeps the other refs' commits made before --now: not the tag's,
+	// dated after it.
+	fs, err := s.store.LoadFacts(t.Context(), s.run)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var kept []string
+	for _, c := range fs.Repos[0].RefCommits {
+		kept = append(kept, c.SHA)
+	}
+	if want := []string{refs["refs/heads/old-work"], release}; !slices.Equal(kept, slices.Sorted(slices.Values(want))) {
+		t.Errorf("%s: the run keeps the other refs' commits %v, want %v", table, kept, want)
+	}
+}
+
+// reviewRefCommit is one commit fast-import writes on a ref of its own:
+// the ref, the author and committer as git writes them, when, the commit
+// it follows, and the one-line file it adds.
+type reviewRefCommit struct {
+	ref, author string
+	at          time.Time
+	from, file  string
+}
+
+// reviewRefs writes each commit on its ref with git fast-import, through
+// the runner the scans use, and returns each ref's commit.
+func reviewRefs(t *testing.T, repo string, commits []reviewRefCommit) map[string]string {
+	t.Helper()
+	git, err := gitcli.New(t.Context(), gitcli.Config{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stream strings.Builder
+	for _, c := range commits {
+		when := fmt.Sprintf("%d +0000", c.at.Unix())
+		msg := "add " + c.file + "\n"
+		body := "x = 1\n"
+		fmt.Fprintf(&stream, "commit %s\nauthor %s %s\ncommitter %s %s\ndata %d\n%sfrom %s\nM 100644 inline %s\ndata %d\n%s\n",
+			c.ref, c.author, when, c.author, when, len(msg), msg, c.from, c.file, len(body), body)
+	}
+	if _, err := git.Run(t.Context(), domain.GitCmd{Dir: repo, Args: []string{"fast-import", "--quiet"},
+		Stdin: strings.NewReader(stream.String())}); err != nil {
+		t.Fatalf("git fast-import: %v", err)
+	}
+	out := map[string]string{}
+	for _, c := range commits {
+		sha, err := git.Run(t.Context(), domain.GitCmd{Dir: repo, Args: []string{"rev-parse", c.ref}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		out[c.ref] = strings.TrimSpace(string(sha))
+	}
+	return out
 }
 
 // deref is a pointer's value for a message, or NaN for nil.

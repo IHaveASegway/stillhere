@@ -38,6 +38,7 @@ const (
 	cohortTo        = 90
 	recentDays      = 90  // simplifying@1 window and who_knows@1 recent landers
 	activityDays    = 180 // knowledge_loss@1 activity
+	goingQuietDays  = 30  // knowledge_loss@1's going_quiet: people within this many days of the activity line
 	yearDays        = 365 // landings_365d, ai_assisted@1
 	minClusters     = 10  // eligibility of both ranked metrics
 	simplifyingNet  = -20 // a landing is simplifying when its net is at most this
@@ -596,7 +597,7 @@ func majorityOwners(byPerson map[string]int, total int) []string {
 // window when the history holds no boundary commit, as when the boundary
 // is dated after --now, since then nothing places it.
 //
-// Activity needs no coverage (view.active, landings_365d, who_knows@1's
+// Activity needs no coverage (view.lastActivity, landings_365d, who_knows@1's
 // recent landers): a landing seen in a window proves activity however much
 // history is missing, so it counts wherever it is seen.
 func (r *repoView) covers(w domain.Window) bool {
@@ -643,28 +644,6 @@ func (v *view) window(from, to int) domain.Window {
 		Since: v.now.Add(-time.Duration(from) * day),
 		Until: v.now.Add(-time.Duration(to) * day),
 	}
-}
-
-// active returns the people credited with any commit, merge commits
-// included, in a landing within w, in any repository of the view: "has had
-// a landing" in docs/metrics.md. Through the landing map, a side-branch
-// author is active when the branch lands, whoever merged it. Every landing
-// seen in w counts, whether or not the history covers all of w: skipping a
-// repository whose history is short would report its active people as
-// gone.
-func (v *view) active(w domain.Window) map[string]bool {
-	out := make(map[string]bool)
-	for _, r := range v.repos {
-		for _, l := range r.landings {
-			if !w.Contains(l.time) {
-				continue
-			}
-			for _, c := range l.commits {
-				out[c.credit] = true
-			}
-		}
-	}
-	return out
 }
 
 // personKey identifies one person's value in one scope.

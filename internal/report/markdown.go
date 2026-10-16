@@ -120,6 +120,9 @@ func mdOverview(p *printer, m *Model, o *Overview) {
 	if line := shareLine(o.KnowledgeLoss, o.AIAssisted, o.BotShare); line != "" {
 		p.line("- " + mdText(line))
 	}
+	if line := goingQuietText(p, o.KnowledgeLoss, mdText); line != "" {
+		p.line("- Going quiet within 30 days: " + line)
+	}
 	if o.ReviewCoverage != nil {
 		p.line("- " + mdText(coverageText(o.ReviewCoverage, t.Repos)))
 	}
@@ -161,9 +164,17 @@ func mdPeople(p *printer, t *StillHere) {
 	}
 	cols := []column{{head: "Person"}, {head: "Prod lines", right: true}, {head: "Majority files", right: true},
 		{head: "Repos", right: true}, {head: "Landings 365d", right: true}}
+	activity := activityShown(t.Humans)
+	if activity {
+		cols = append(cols, column{head: "Last active"})
+	}
 	row := func(r StillHereRow) []string {
-		return []string{p.person(r.Email, r.Name, r.NameWithheld, mdText), grouped(r.ProdNonblankLines),
+		cells := []string{p.person(r.Email, r.Name, r.NameWithheld, mdText), grouped(r.ProdNonblankLines),
 			grouped(r.MajorityFiles), grouped(r.Repos), grouped(r.Landings365d)}
+		if activity {
+			cells = append(cells, mdText(activityCell(r.LastActive, r.LastActivity, r.QuietInDays, r.GoingQuiet, false)))
+		}
+		return cells
 	}
 	mdWithBots(p, cols, t.Humans, t.Bots, row)
 }
@@ -175,10 +186,19 @@ func mdStillHere(p *printer, t *StillHere) {
 		return
 	}
 	cols := []column{{head: "Person"}, {head: "Prod lines", right: true}, {head: "Majority files", right: true},
-		{head: "Landings 365d", right: true}, {head: "Other roles"}}
+		{head: "Landings 365d", right: true}}
+	activity := activityShown(t.Humans)
+	if activity {
+		cols = append(cols, column{head: "Last active"})
+	}
+	cols = append(cols, column{head: "Other roles"})
 	row := func(r StillHereRow) []string {
-		return []string{p.person(r.Email, r.Name, r.NameWithheld, mdText), grouped(r.ProdNonblankLines),
-			grouped(r.MajorityFiles), grouped(r.Landings365d), mdText(otherRoles(r.LinesByRole))}
+		cells := []string{p.person(r.Email, r.Name, r.NameWithheld, mdText), grouped(r.ProdNonblankLines),
+			grouped(r.MajorityFiles), grouped(r.Landings365d)}
+		if activity {
+			cells = append(cells, mdText(activityCell(r.LastActive, r.LastActivity, r.QuietInDays, r.GoingQuiet, false)))
+		}
+		return append(cells, mdText(otherRoles(r.LinesByRole)))
 	}
 	mdWithBots(p, cols, t.Humans, t.Bots, row)
 }
@@ -325,12 +345,15 @@ func mdCard(p *printer, m *Model, r *Repo) {
 		var who []string
 		for _, a := range c.MadeOf {
 			who = append(who, fmt.Sprintf("%s %s (%s)", p.person(a.Email, a.Name, a.NameWithheld, mdText),
-				grouped(a.ProdLines), percent(a.Share)))
+				grouped(a.ProdLines), mdText(madeOfDetail(a))))
 		}
 		p.line("- Made of " + strings.Join(who, ", "))
 	}
 	if line := shareLine(c.KnowledgeLoss, c.AIAssisted, c.BotShare); line != "" {
 		p.line("- " + mdText(line))
+	}
+	if line := goingQuietText(p, c.KnowledgeLoss, mdText); line != "" {
+		p.line("- Going quiet within 30 days: " + line)
 	}
 	if c.ReviewCoverage != nil {
 		p.line("- " + mdText(coverageText(c.ReviewCoverage, 1)))

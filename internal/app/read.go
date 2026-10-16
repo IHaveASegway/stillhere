@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/IHaveASegway/stillhere/internal/classify"
 	"github.com/IHaveASegway/stillhere/internal/domain"
 	"github.com/IHaveASegway/stillhere/internal/identity"
 	"github.com/IHaveASegway/stillhere/internal/metrics"
@@ -112,7 +113,7 @@ func load(ctx context.Context, d Deps, runID int64) (*stored, error) {
 	// After the run's GitHub data: it links forge logins to the run's people.
 	s.who = identity.New(s.facts, p)
 	s.candidates = sync.OnceValue(func() []identity.Candidate { return identity.Candidates(s.facts, s.who).Candidates })
-	computed, corrected, err := s.computeUnstored()
+	computed, corrected, lacks, err := s.computeUnstored()
 	if err != nil {
 		return nil, err
 	}
@@ -124,41 +125,12 @@ func load(ctx context.Context, d Deps, runID int64) (*stored, error) {
 		d.Log.Info("a stillhere before these metrics' corrections stored the run: their values were computed again "+
 			"from its facts, by the corrected definitions", "run", run.ID, "metrics", strings.Join(corrected, ", "))
 	}
-	return s, nil
-}
-
-// correctedShapes names each correction in place, before the first release
-// (docs/metrics.md: "before the first release, so the version stays N"),
-// that a stored value shows by its data: the Detail key every value of the
-// metric about a subject of that kind ("" for any) has carried since. A
-// value without it was stored by a stillhere before the correction, by
-// the old definition, so the run's readers compute the metric again from
-// its facts (computeUnstored), as they compute one the run holds no value
-// of; otherwise a page would show the old value beside what the new rule
-// lists, as explain's review_coverage@1 share above its changes. An old
-// run is told by its data, not by a version (docs/spec/codebase.md#run-model).
-var correctedShapes = []struct {
-	metric domain.MetricID
-	kind   string // the subject kind whose values carry key; "" for every kind
-	key    string
-}{
-	// wave 10: changes, not landings, which explain lists (reviewCoverageItems)
-	{domain.MetricID{Name: "review_coverage", Version: 1}, "", "via_other_branch"},
-	// wave 10: landings_365d by landed@2's credit, the merges a person made apart
-	{domain.MetricID{Name: "surviving", Version: 1}, domain.SubjectPerson, "merged_365d"},
-}
-
-// storedBeforeCorrection reports whether v lacks the Detail key a
-// correction of its metric added (correctedShapes).
-func storedBeforeCorrection(v domain.MetricValue) bool {
-	for _, c := range correctedShapes {
-		if v.Metric == c.metric && (c.kind == "" || v.Subject.Kind == c.kind) {
-			if _, ok := v.Detail[c.key]; !ok {
-				return true
-			}
-		}
+	if len(lacks) > 0 {
+		d.Log.Warn("the run was stored before stillhere kept facts that corrected metrics count: their values were "+
+			"computed again from the facts it kept, so the ones it lacks count for no one: scan again",
+			"run", run.ID, "lacks", strings.Join(lacks, "; "))
 	}
-	return false
+	return s, nil
 }
 
 // withForge returns a stored run's facts with the GitHub data the run kept
@@ -203,39 +175,53 @@ func withForge(ctx context.Context, d Deps, run domain.Run, fs *domain.FactSet) 
 // stored the run, as landed@2 and review_coverage@1 are for a run stored
 // before #108 and #107, whose report would otherwise print "nothing landed"
 // over a run full of landings. It does the same for a metric whose stored
-// values a correction in place made old (storedBeforeCorrection): it drops
-// them, computes the metric again, and returns its id in corrected. The
-// old run is told by its data, not by a version: a metric's function over
-// the same inputs gives what a scan by this binary stores, as rankAll
+// values a correction in place made old (metrics.Corrected, the one list):
+// it drops them, computes the metric again, and returns its id in
+// corrected, and in lacks what the run never kept that the corrected
+// definition counts (a run stored before activity off the default branch
+// kept no commit of another ref), so the log says to scan again. Without
+// it a page would show the old value beside what the new rule lists:
+// explain's review_coverage@1 share above its changes, or a knowledge loss
+// of 100% beside each holder's last activity and who-knows' 29.8%. The old
+// run is told by its data, not by a version: a metric's function over the
+// same inputs gives what a scan by this binary stores, as rankAll
 // bootstraps a rank table the run did not store
 // (docs/spec/codebase.md#run-model), so the answer is the same every time
 // it is read. A metric that reads GitHub data is not computed for a run
-// that read none, whose value is absent by definition (an old value of it
-// then stands, with no list beside it), and one that produced no value
-// when it was stored is computed again, to nothing.
-func (s *stored) computeUnstored() (computed, corrected []string, err error) {
+// that read none, whose value is absent by definition, and its old values
+// stand, with no list beside them, when the run read GitHub data but kept
+// none (stored.unkept); one that produced no value when it was stored is
+// computed again, to nothing.
+func (s *stored) computeUnstored() (computed, corrected, lacks []string, err error) {
 	held := map[domain.MetricID]bool{}
-	stale := map[domain.MetricID]bool{}
 	for _, v := range s.values {
 		held[v.Metric] = true
-		if storedBeforeCorrection(v) {
-			stale[v.Metric] = true
+	}
+	stale := map[domain.MetricID]string{} // what the run lacks for the correction, "" for nothing
+	for _, c := range metrics.Corrected(s.values) {
+		for _, id := range append([]domain.MetricID{c.Metric}, c.With...) {
+			stale[id] = c.Lacks
 		}
 	}
 	var added []domain.MetricValue
 	for _, m := range metrics.All() {
 		def := m.Definition()
-		if (held[def.ID] && !stale[def.ID]) || len(def.Subjects) == 0 || (def.Forge && s.facts.Forge == nil) {
+		_, old := stale[def.ID]
+		noForge := def.Forge && s.facts.Forge == nil && (!old || s.unkept)
+		if (held[def.ID] && !old) || len(def.Subjects) == 0 || noForge {
 			delete(stale, def.ID)
 			continue
 		}
 		values, err := m.Compute(s.input())
 		if err != nil {
-			return nil, nil, fmt.Errorf("computing %s over run %d's facts: %w", def.ID, s.run.ID, err)
+			return nil, nil, nil, fmt.Errorf("computing %s over run %d's facts: %w", def.ID, s.run.ID, err)
 		}
 		switch {
-		case stale[def.ID]:
+		case old:
 			corrected = append(corrected, def.ID.String())
+			if stale[def.ID] != "" {
+				lacks = append(lacks, def.ID.String()+": "+stale[def.ID])
+			}
 		case len(values) > 0:
 			computed = append(computed, def.ID.String())
 		}
@@ -244,13 +230,13 @@ func (s *stored) computeUnstored() (computed, corrected []string, err error) {
 	if len(added) > 0 || len(stale) > 0 {
 		// A copy, and in the store's order, metric by metric: a store may
 		// hand every reader the same slice (the MCP server caches it).
-		s.values = slices.DeleteFunc(slices.Clone(s.values), func(v domain.MetricValue) bool { return stale[v.Metric] })
+		s.values = slices.DeleteFunc(slices.Clone(s.values), func(v domain.MetricValue) bool { _, old := stale[v.Metric]; return old })
 		s.values = append(s.values, added...)
 		slices.SortStableFunc(s.values, func(a, b domain.MetricValue) int {
 			return cmp.Or(cmp.Compare(a.Metric.Name, b.Metric.Name), cmp.Compare(a.Metric.Version, b.Metric.Version))
 		})
 	}
-	return computed, corrected, nil
+	return computed, corrected, lacks, nil
 }
 
 // canonicalKeys upcasts the person keys of a run stored before #69, whose
@@ -444,12 +430,17 @@ func buildReport(ctx context.Context, d Deps, r ReportRequest, scanRanks bool) (
 	if !s.run.Started.IsZero() && !s.run.Finished.IsZero() {
 		timings.TotalMS = s.run.Finished.Sub(s.run.Started).Milliseconds()
 	}
+	activity, err := metrics.LastActivity(s.input())
+	if err != nil {
+		return nil, nil, fmt.Errorf("computing last activity: %w", err)
+	}
 	run := s.run
 	return report.Build(&report.Input{
 		Kind: report.KindScan, Tool: d.Version, Run: &run, Facts: s.facts, Policy: s.policy, Who: s.who,
 		Values: s.values, Ranks: sets,
 		Landed:  report.Landed{Days: s.policy.Week.Days, Sort: s.policy.Week.Sort},
 		History: historyOf(s.facts), Timings: timings, Scope: s.scope(), Forge: s.forge, Commands: d.Commands,
+		Activity: activity,
 	}), s, nil
 }
 
@@ -783,7 +774,10 @@ func WhoKnows(ctx context.Context, d Deps, r WhoKnowsRequest) (*report.WhoKnows,
 	if err != nil {
 		return nil, err
 	}
-	repo, err := repoKey(s.facts, r.Repo, s.run.ID)
+	// --repo names a repository as the reader names one: a key, a name as
+	// a card heads it, OWNER/NAME or a remote URL (MatchRepos, the one rule
+	// the MCP server's repo argument matches by too).
+	repo, err := repoArg(s.facts, s.run.ID, r.Repo)
 	if err != nil {
 		return nil, err
 	}
@@ -797,6 +791,12 @@ func WhoKnows(ctx context.Context, d Deps, r WhoKnowsRequest) (*report.WhoKnows,
 	values, err := metrics.WhoKnows(s.input(), repo, prefix)
 	if err != nil {
 		return nil, fmt.Errorf("computing %s: %w", report.MetricWhoKnows, err)
+	}
+	// Each person's last activity, by knowledge_loss@1's rule, which every
+	// person the answer lists shows beside what they know.
+	activity, err := metrics.LastActivity(s.input())
+	if err != nil {
+		return nil, fmt.Errorf("computing last activity: %w", err)
 	}
 	// The path's knowledge loss and concentration, by the computation a
 	// scan stores per top-level directory, for any path (#105).
@@ -814,11 +814,11 @@ func WhoKnows(ctx context.Context, d Deps, r WhoKnowsRequest) (*report.WhoKnows,
 	run := s.run
 	w := report.NewWhoKnows(&report.WhoKnowsInput{
 		Run: &run, Facts: underPrefix(s.facts, prefix, repo), Who: s.who, Path: prefix, Repo: repo, Values: values,
-		Knowledge: knowledge, Forge: forge, Commands: d.Commands,
+		Knowledge: knowledge, Forge: forge, Commands: d.Commands, Activity: activity,
 	})
 	if c, ok := whoKnowsNoPath(s.facts, prefix, repo, run.ID); ok {
 		w.Caveats = append(w.Caveats, c)
-	} else if c, ok := whoKnowsNoRole(s.facts, prefix, repo, len(w.Repos)); ok {
+	} else if c, ok := whoKnowsNoRole(s.facts, s.policy, prefix, repo, len(w.Repos)); ok {
 		w.Caveats = append(w.Caveats, c)
 	}
 	return w, nil
@@ -831,14 +831,31 @@ func WhoKnows(ctx context.Context, d Deps, r WhoKnowsRequest) (*report.WhoKnows,
 // its deny list denies. who_knows@1 counts only paths with a role, so the
 // answer is empty because the policy leaves the path out, not because
 // nobody knows it; "nobody" would say the second. It counts the
-// repositories and the reasons the classifier gave, and names the command
-// that prints the policy.
-func whoKnowsNoRole(fs *domain.FactSet, prefix, repo string, listed int) (report.Caveat, bool) {
+// repositories and the reasons the classifier gave, as the run stored
+// them (domain.PathClass.Skip), and says for each reason what would make
+// the path count, since each takes a different change: a role for an
+// unclassified path; for a denied one, a role does nothing (a deny wins
+// over every role, spec/classification.md), so either the deny pattern of
+// the run's policy that matches it (policy.Paths.Denies) is to be removed,
+// or both linguist attributes are to be turned off for it in
+// .gitattributes, which un-denies a path whatever pattern matches it, and
+// is the one change when no pattern matches, since an attribute denied it;
+// for a generated header, linguist-generated turned off; for one too big, a
+// larger [blame] max_bytes, but only where the path's name would give it a
+// role (classify.Role): a .png too big has none either way, so a larger
+// limit alone changes nothing (wave 10's review). The run's policy says
+// where those changes go: under the packaged one, which no file holds, the
+// advice starts with 'stillhere policy > stillhere.toml'. The pattern
+// itself is not named: the run stores which skip a path got, not which
+// rule gave it (the classify lane's rule source, 'stillhere paths', says).
+func whoKnowsNoRole(fs *domain.FactSet, p *policy.Policy, prefix, repo string, listed int) (report.Caveat, bool) {
 	if prefix == "" || listed > 0 {
 		return report.Caveat{}, false
 	}
 	holding := 0
 	reasons := map[domain.Skip]int{}
+	byPattern, byAttribute := 0, 0 // denied paths, by the run's deny list and by a linguist attribute
+	bigNamed := 0                  // paths too big that a role would count, which a larger [blame] max_bytes counts
 	for i := range fs.Repos {
 		rf := &fs.Repos[i]
 		if rf.Status != domain.RepoStatusOK || (repo != "" && rf.Repo.Key != repo) {
@@ -854,6 +871,14 @@ func whoKnowsNoRole(fs *domain.FactSet, prefix, repo string, listed int) (report
 			}
 			found = true
 			reasons[pc.Skip]++
+			switch {
+			case pc.Skip == domain.SkipDeniedPath && p != nil && p.Paths.Denies(pc.Path):
+				byPattern++
+			case pc.Skip == domain.SkipDeniedPath:
+				byAttribute++
+			case pc.Skip == domain.SkipTooBig && p != nil && classify.Role(p, pc.Path) != "":
+				bigNamed++
+			}
 		}
 		if found {
 			holding++
@@ -862,28 +887,73 @@ func whoKnowsNoRole(fs *domain.FactSet, prefix, repo string, listed int) (report
 	if holding == 0 {
 		return report.Caveat{}, false
 	}
-	var why []string
-	for _, s := range []struct {
-		skip  domain.Skip
-		label string
-	}{{domain.SkipUnclassified, "unclassified"}, {domain.SkipDeniedPath, "denied"},
-		{domain.SkipGeneratedHeader, "generated"}, {domain.SkipTooBig, "too big"}} {
-		if n := reasons[s.skip]; n > 0 {
-			path := "paths"
-			if n == 1 {
-				path = "path"
-			}
-			why = append(why, fmt.Sprintf("%d %s %s", n, path, s.label))
+	var why, fix []string
+	count := func(n int, label string) string {
+		path := "paths"
+		if n == 1 {
+			path = "path"
+		}
+		return fmt.Sprintf("%d %s %s", n, path, label)
+	}
+	if n := reasons[domain.SkipUnclassified]; n > 0 {
+		why = append(why, count(n, "unclassified"))
+		fix = append(fix, "an unclassified path counts once stillhere.toml gives it a role")
+	}
+	// Both attributes off un-deny a path whatever pattern matches it
+	// (classification.md, .gitattributes): one off while the other is on
+	// leaves it denied.
+	const undeny = "-linguist-vendored -linguist-generated for it in .gitattributes, which un-denies a path whatever " +
+		"the deny list says"
+	if n := reasons[domain.SkipDeniedPath]; n > 0 {
+		why = append(why, count(n, "denied"))
+		switch {
+		case byPattern > 0 && byAttribute > 0:
+			fix = append(fix, "a denied path counts only once nothing denies it, since a deny wins over every role: "+
+				"a pattern of the run's deny list denies some, so remove it from stillhere.toml's [paths] deny, and a "+
+				"linguist-vendored or linguist-generated attribute the others; or set "+undeny)
+		case byPattern > 0:
+			fix = append(fix, "a denied path counts only once nothing denies it, since a deny wins over every role: "+
+				"a pattern of the run's deny list matches it, so remove that pattern from stillhere.toml's [paths] deny, "+
+				"or set "+undeny)
+		default:
+			fix = append(fix, "a denied path counts only once nothing denies it, since a deny wins over every role: "+
+				"no pattern of the run's deny list matches it, so a linguist-vendored or linguist-generated attribute "+
+				"in .gitattributes does; set "+undeny)
+		}
+	}
+	if n := reasons[domain.SkipGeneratedHeader]; n > 0 {
+		why = append(why, count(n, "generated"))
+		fix = append(fix, "a path whose first lines say it is generated counts once .gitattributes sets "+
+			"linguist-generated=false for it")
+	}
+	if n := reasons[domain.SkipTooBig]; n > 0 {
+		why = append(why, count(n, "too big"))
+		switch bigNamed {
+		case n:
+			fix = append(fix, "a path too big to blame counts once stillhere.toml's [blame] max_bytes is larger than it")
+		case 0:
+			fix = append(fix, "a path too big to blame would have no role either, its name matching no role rule, so it "+
+				"counts only once stillhere.toml gives it a role and its [blame] max_bytes is larger than it")
+		default:
+			fix = append(fix, "a path too big to blame counts once stillhere.toml's [blame] max_bytes is larger than it, "+
+				"and one whose name matches no role rule only once it gives that one a role too")
 		}
 	}
 	where := "1 repository"
 	if holding > 1 {
 		where = fmt.Sprintf("%d repositories", holding)
 	}
+	policyFile := "'stillhere policy' prints the roles and the deny list"
+	if p != nil && p.Packaged() {
+		// No file holds the packaged policy, so there is nothing to edit
+		// until one is written out (wave 10's review).
+		policyFile = "'stillhere policy' prints the roles and the deny list; the run used the packaged policy, so write " +
+			"it out to change it, 'stillhere policy > stillhere.toml'"
+	}
 	return report.NoValuesCaveat(fmt.Sprintf("%q is in %s, but no path there has a role (%s), and %s counts only "+
 		"paths with one: this answer is empty because the policy leaves the path out, not because nobody knows it. "+
-		"'stillhere policy' prints the roles and the deny list; a role for it in stillhere.toml makes it count at the next scan.",
-		prefix, where, strings.Join(why, ", "), report.MetricWhoKnows)), true
+		"%s; at the next scan, %s.",
+		prefix, where, strings.Join(why, ", "), report.MetricWhoKnows, policyFile, strings.Join(fix, "; "))), true
 }
 
 // whoKnowsNoPathNames is how many repositories that hold the path a
@@ -994,23 +1064,6 @@ func holdsPath(rf *domain.RepoFacts, prefix string) bool {
 		}
 	}
 	return false
-}
-
-// repoKey checks a --repo filter against a run's repositories, for
-// who-knows and paths alike: the key itself, or a remote pasted with its
-// credentials, which names its scrubbed key. The error quotes only the
-// scrubbed form: it is printed and may be logged
-// (docs/spec/git-invocation.md#url-scrubbing).
-func repoKey(fs *domain.FactSet, repo string, runID int64) (string, error) {
-	if repo == "" || hasRepo(fs, repo) {
-		return repo, nil
-	}
-	repo = redact.URL(repo)
-	if hasRepo(fs, repo) {
-		return repo, nil
-	}
-	return "", &domain.UsageError{Msg: fmt.Sprintf(
-		"--repo %q is not a repository of run %d: it takes a repository key, as 'stillhere report --format json' lists them", repo, runID)}
 }
 
 func hasRepo(fs *domain.FactSet, key string) bool {

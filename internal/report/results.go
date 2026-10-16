@@ -201,14 +201,24 @@ func (w *WhoKnows) runAddresses() []string { return w.addrs }
 
 // WhoKnowsRepo is who knows the path in one repository.
 type WhoKnowsRepo struct {
-	Repo              string   `json:"repo"` // name
-	Key               string   `json:"key"`
-	Lines             int      `json:"lines"`               // surviving prod non-blank lines under the path
-	ProdFiles         int      `json:"prod_files"`          // prod files under the path
-	FilesWithMajority int      `json:"files_with_majority"` // of those, files with a majority owner
-	MajorityOwners    []Knower `json:"majority_owners"`     // hold at least half the lines of a file under the path
-	TopAuthors        []Knower `json:"top_authors"`         // up to five, by prod lines under the path, then email
-	RecentLanders     []Knower `json:"recent_landers"`      // credited with a change under the path in the last 90 days
+	Repo              string `json:"repo"` // name
+	Key               string `json:"key"`
+	Lines             int    `json:"lines"`               // surviving non-blank lines under the path of the roles counted (Roles)
+	ProdFiles         int    `json:"prod_files"`          // prod files under the path
+	FilesWithMajority int    `json:"files_with_majority"` // of the files counted, those with a majority owner
+	// Roles are the roles whose lines the answer counts: ["prod"], or,
+	// under a path that holds no surviving prod line, the other roles that
+	// hold some there (who_knows@1: a tests/ or docs/ directory is answered
+	// for its own lines), sorted; Files is how many files of those roles.
+	Roles []string `json:"roles"`
+	Files int      `json:"files"`
+	// Uncounted is, where the answer counts prod lines, the lines of each
+	// other role the path holds too, which it leaves out (who_knows@1's
+	// uncounted_<role>_lines and _files), by role; [] when there are none.
+	Uncounted      []RoleLines `json:"uncounted"`
+	MajorityOwners []Knower    `json:"majority_owners"` // hold at least half the lines of a file under the path
+	TopAuthors     []Knower    `json:"top_authors"`     // up to five, by prod lines under the path, then email
+	RecentLanders  []Knower    `json:"recent_landers"`  // credited with a change under the path in the last 90 days
 	// RecentReviewers reviewed, in the last 90 days, a merged pull request
 	// that changed the path, by the GitHub data the run read: [] also when
 	// the run has none for the repository, which provenance.forge then does
@@ -226,16 +236,29 @@ type WhoKnowsRepo struct {
 	Concentration  *Concentration `json:"concentration"`
 }
 
+// RoleLines is a role's surviving lines and the files that hold them.
+type RoleLines struct {
+	Role  string `json:"role"`
+	Lines int    `json:"lines"`
+	Files int    `json:"files"`
+}
+
 // Knower is one person's knowledge of a path. Email is a reviewer's
 // "@login" when the run cannot link the login to an email.
 type Knower struct {
 	Email          string `json:"email"`
 	Name           string `json:"name"`            // as StillHereRow's
 	NameWithheld   bool   `json:"name_withheld"`   // as StillHereRow's
-	Lines          int    `json:"lines"`           // surviving prod non-blank lines under the path
+	Lines          int    `json:"lines"`           // surviving non-blank lines under the path, of the roles the answer counts (WhoKnowsRepo.Roles)
 	MajorityFiles  int    `json:"majority_files"`  // files under the path where the person is a majority owner
 	RecentLandings int    `json:"recent_landings"` // landings in the last 90 days that changed the path
 	RecentReviews  int    `json:"recent_reviews"`  // pull requests that changed the path, reviewed in the last 90 days
+	// The person's last activity in the run, as a still-here row's
+	// (StillHereRow.LastActive and the rest).
+	LastActive   *time.Time `json:"last_active"`
+	LastActivity string     `json:"last_activity"`
+	QuietInDays  *int       `json:"quiet_in_days"`
+	GoingQuiet   bool       `json:"going_quiet"`
 }
 
 // Me is one person's own page: every value and rank interval the run holds

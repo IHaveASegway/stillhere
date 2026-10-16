@@ -113,7 +113,14 @@ func (p *printer) wrapped(first, rest, text string) {
 type column struct {
 	head  string
 	right bool // numbers: right-aligned, so magnitudes line up
-	keep  bool // a short code or key the reader matches, such as an outcome: never cut, as numbers are not
+	// keep: a short text column a cut would make unreadable: a code or key
+	// the reader matches, such as an outcome, or a person's last activity,
+	// whose days left are its point. Never cut, as numbers are not.
+	keep bool
+	// first: a column of detail the table can lose before the rest, such
+	// as a person's other roles: it is cut down to minCell before any
+	// other column loses a character, so names stay whole.
+	first bool
 }
 
 // minCell is the narrowest a text column is cut to.
@@ -122,12 +129,13 @@ const minCell = 8
 // textTable prints rows under the column heads, padded with spaces: names
 // left-aligned and numbers right-aligned, two spaces apart. text/tabwriter
 // aligns every column one way, which is why this does not use it. While
-// the table is wider than maxWidth, the widest left-aligned column (names,
-// titles, details) loses one character of width, never going below
-// minCell: the cut falls on the text with most to spare and evens out
-// across several wide columns, and cut cells end in "…". Numbers and the
-// columns marked keep are never cut. Only a table whose other text columns
-// are all at minCell can still be too wide. Cells must already be clean.
+// the table is wider than maxWidth, a column marked first, then the widest
+// left-aligned column (names, titles, details), loses one character of
+// width, never going below minCell: the cut falls on the text with most to
+// spare and evens out across several wide columns, and cut cells end in
+// "…". Numbers and columns marked keep are never cut. Only a table whose
+// other text columns are all at minCell can still be too wide. Cells must
+// already be clean.
 func (p *printer) textTable(indent string, cols []column, rows [][]string) {
 	widths := make([]int, len(cols))
 	for i, c := range cols {
@@ -144,9 +152,14 @@ func (p *printer) textTable(indent string, cols []column, rows [][]string) {
 	}
 	for over := total - maxWidth; over > 0; over-- {
 		cut := -1
-		for i, c := range cols {
-			if !c.right && !c.keep && widths[i] > minCell && (cut < 0 || widths[i] > widths[cut]) {
-				cut = i
+		for _, first := range []bool{true, false} {
+			for i, c := range cols {
+				if !c.right && !c.keep && (c.first || !first) && widths[i] > minCell && (cut < 0 || widths[i] > widths[cut]) {
+					cut = i
+				}
+			}
+			if cut >= 0 {
+				break
 			}
 		}
 		if cut < 0 {
@@ -321,6 +334,19 @@ func number(f float64) string {
 // percent formats a share in [0, 1] with one decimal: 0.1176 is "11.8%".
 func percent(f float64) string {
 	return strconv.FormatFloat(100*f, 'f', 1, 64) + "%"
+}
+
+// percents formats two shares that a sentence compares, "37.2%" and
+// "37.0%", with as many more decimals, up to three, as it takes for two
+// different shares to read differently: "37.24%, up from 37.20%", never
+// "37.2%, up from 37.2%". Equal shares print alike.
+func percents(a, b float64) (string, string) {
+	for prec := 1; ; prec++ {
+		x, y := strconv.FormatFloat(100*a, 'f', prec, 64), strconv.FormatFloat(100*b, 'f', prec, 64)
+		if x != y || a == b || prec == 4 {
+			return x + "%", y + "%"
+		}
+	}
 }
 
 // percent0 formats a share as a whole percentage, for rank estimates whose

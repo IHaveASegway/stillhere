@@ -525,6 +525,11 @@ func sampleFacts(run domain.Run) *domain.FactSet {
 					{Email: "ada@old.example", Name: "Ada Old", Canonical: "ada@example.com"},
 					{Email: "pia@laptop.local", Canonical: "pia@example.com"},
 				},
+				// The other refs' commits (migration 10): who and when, with co-authors.
+				RefCommits: []domain.Commit{
+					{SHA: sha('c'), Author: bob, AuthorTime: day(20), CommitTime: day(19)},
+					{SHA: sha('d'), Author: claude, AuthorTime: day(5), CommitTime: day(5), CoAuthors: []domain.Person{pia}},
+				},
 			},
 			{
 				Repo:   domain.Repo{Key: "local:empty", Name: "empty", Path: "/src/empty", Bare: true, Partial: true},

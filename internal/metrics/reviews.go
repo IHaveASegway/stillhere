@@ -50,7 +50,7 @@ func (reviewsGiven) Definition() Definition {
 			"bots (an app account, or a [bots] match) are listed and never ranked",
 		BlindSpots: "reviews of pull requests that were closed unmerged or are still open; dismissed reviews; " +
 			"conversation comments outside a review; pairing and reviews outside GitHub; " +
-			"a reviewer with no commit in the run shows as @login, apart from their email; " +
+			"a reviewer GitHub links to no address the run shows (no commit of theirs, nor an address the links pass answered for) shows as @login, apart from their email; " +
 			"pull requests of a repository the run did not scan, scanned through a host alias, or failed to collect",
 		Gaming: "rubber-stamp approvals, which the share of approvals with no comment shows next to the count; " +
 			"reviewing many trivial pull requests, such as dependency bumps",
@@ -494,43 +494,6 @@ func asOfMark(wm domain.ForgeWatermark) time.Time {
 		return wm.Synced
 	}
 	return wm.Updated
-}
-
-// active returns the people, by canonical email, who submitted a review
-// (reviewsSubmitted) in w on any pull request of the view's forge
-// repositories, whatever its state, their own pull requests included:
-// knowledge_loss@1's review activity, which asks only whether someone is
-// still around, and a reply in a review thread of one's own pull request,
-// which GitHub records as a review, says they are. A reviewer the run
-// cannot link to an email ("@login") holds no line, so it is left out, and
-// so is an app account: identity.LoginKey tells them apart, the one rule
-// for what a login is, so a person whose canonical email has an empty
-// local part ("@example.com") is a person here too. It is nil without
-// GitHub data.
-func (x *reviewsIndex) active(w domain.Window) map[string]bool {
-	if x == nil {
-		return nil
-	}
-	var out map[string]bool
-	for i := range x.pulls {
-		p := &x.pulls[i]
-		if len(x.join[p.Repo]) == 0 {
-			continue
-		}
-		for j := range p.Reviews {
-			r := &p.Reviews[j]
-			if !reviewsSubmitted(r) || r.Author.Login == "" || !w.Contains(r.Submitted) {
-				continue
-			}
-			if s := x.who.Reviewer(r.Author); !identity.LoginKey(s.Key) {
-				if out == nil {
-					out = map[string]bool{}
-				}
-				out[s.Key] = true
-			}
-		}
-	}
-	return out
 }
 
 // reviewsLanded is one merged pull request of a repository, with the

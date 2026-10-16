@@ -194,6 +194,10 @@ func identityForge(t *testing.T, table string) {
 	if got, want := describeCandidates(id.Candidates), describeWant([]identityCandidate{identAdaForge, identGinaHank}, reviewRepo.Key); got != want {
 		t.Errorf("%s, same-forge-account: candidates\n%s\nwant\n%s", table, got, want)
 	}
+	// Gina → Hank is a guess, last and counted apart, in JSON too (wave 10).
+	if id.Guesses != 1 {
+		t.Errorf("%s, same-forge-account: guesses %d, want 1, Gina → Hank", table, id.Guesses)
+	}
 	var out bytes.Buffer
 	if err := report.Mailmap(&out, id); err != nil {
 		t.Fatal(err)
@@ -363,9 +367,13 @@ func identityRepos(t *testing.T, table string) {
 		t.Fatalf("app.Identities: %v", err)
 	}
 	const repoOne, repoTwo = "local:one", "https://git.example.test/acme/two.git"
-	want := `medium guess=false commented=true rules=same-forge-account name="Alice Ng"
-  alice@x.example "Alice Ng" other 1/0 2026-08-20T12:00:00Z 2026-08-20T12:00:00Z canonical=true high=false [` + repoTwo + `]
-  ngroe@shared.example "Bob Roe" other 2/0 2026-08-21T12:00:00Z 2026-08-22T12:00:00Z canonical=false high=false [` + repoTwo + `]
+	// Wave 10: GitHub's link is high for an address whose names differ too
+	// (a name change looks like a mailbox two people share), so Alice's
+	// candidate is high, its line written, and its evidence says the names
+	// differ and names the account.
+	want := `high guess=false commented=false rules=same-forge-account name="Alice Ng"
+  alice@x.example "Alice Ng" other 1/0 2026-08-20T12:00:00Z 2026-08-20T12:00:00Z canonical=true high=true [` + repoTwo + `]
+  ngroe@shared.example "Bob Roe" other 2/0 2026-08-21T12:00:00Z 2026-08-22T12:00:00Z canonical=false high=true [` + repoTwo + `]
 medium guess=false commented=false rules=same-name,same-local-part,same-forge-account name="Kim Lee"
   kim@home.example "Kim Lee" other 3/0 2026-08-01T12:00:00Z 2026-08-03T12:00:00Z canonical=false high=true [` + repoTwo + `]
   4242+kimlee@users.noreply.github.com "Kim Lee" noreply 0/1 2026-08-04T12:00:00Z 2026-08-04T12:00:00Z canonical=false high=true [` + repoTwo + `]
@@ -388,7 +396,7 @@ medium guess=false commented=true rules=same-name,same-local-part name="Pat Doe"
 		}
 	}
 	wantLines := map[string][]string{
-		"Alice Ng": {"# Alice Ng <alice@x.example> <ngroe@shared.example>"},
+		"Alice Ng": {"Alice Ng <alice@x.example> <ngroe@shared.example>"},
 		"Kim Lee": {
 			"Kim Lee <kim@corp.example> <kim@home.example>",
 			"Kim Lee <kim@corp.example> <4242+kimlee@users.noreply.github.com>",
@@ -398,6 +406,32 @@ medium guess=false commented=true rules=same-name,same-local-part name="Pat Doe"
 	}
 	if !reflect.DeepEqual(lines, wantLines) {
 		t.Errorf("%s: mailmap lines %q, want %q", table, lines, wantLines)
+	}
+	// The link names its account only where the login gives no address
+	// away: alice is alice@x.example's local part, so it is withheld.
+	if alice := id.Candidates[0]; len(alice.Links) != 1 || alice.Links[0].Login != "" || !alice.Links[0].LoginWithheld ||
+		alice.Addresses[0].NamesDiffer || alice.Addresses[0].Names != nil || !alice.Addresses[1].NamesDiffer ||
+		!slices.Equal(alice.Addresses[1].Names, []string{"Alice Ng", "Bob Roe"}) || alice.Addresses[1].NamesWithheld != 0 {
+		t.Errorf("%s: Alice's link %+v and addresses %+v, want the login withheld and said to be, and the second address's "+
+			"names differing, Alice Ng and Bob Roe", table, alice.Links, alice.Addresses)
+	}
+	// The evidence names what it asks the reviewer to check, and why the
+	// login is not printed (wave 10's review); the mailmap form, made of
+	// the addresses, prints the login; no candidate here is a guess.
+	text := strings.Join(strings.Fields(string(render(t, id).text)), " ")
+	var mm bytes.Buffer
+	if err := report.Mailmap(&mm, id); err != nil {
+		t.Fatal(err)
+	}
+	mailmap := strings.Join(strings.Fields(mm.String()), " ")
+	for _, want := range []string{"address 2 is written with several names: Alice Ng and Bob Roe",
+		"one account, whose login is withheld as the local part of an address"} {
+		if !strings.Contains(text, want) {
+			t.Errorf("%s: the text answer has no %q:\n%s", table, want, text)
+		}
+	}
+	if !strings.Contains(mailmap, "one account, @alice") || id.Guesses != 0 {
+		t.Errorf("%s: guesses %d, mailmap form:\n%s\nwant no guess and @alice in the evidence", table, id.Guesses, mailmap)
 	}
 	if got := checkMailmap(t, two, "Pat Doe <pat@new.example> <pat@old.example>\n", "<pat@old.example>"); got != "Pat Doe <pat@new.example>" {
 		t.Errorf("%s: git check-mailmap <pat@old.example> in two with Pat's line = %q, want Pat Doe <pat@new.example>", table, got)
@@ -441,11 +475,11 @@ medium guess=false commented=true rules=same-name,same-local-part name="Pat Doe"
 	if c1 == nil || c2 == nil {
 		t.Fatalf("%s: the report has cards for %v", table, slices.Collect(maps.Keys(cards)))
 	}
-	wantLoss := report.ShareIfMerged{Candidates: 3, High: 1, HighNum: 8, HighValue: 8.0 / 34, AllNum: 0, AllValue: 0}
+	wantLoss := report.ShareIfMerged{Candidates: 3, High: 2, HighNum: 8, HighValue: 8.0 / 34, AllNum: 0, AllValue: 0}
 	if l := c2.KnowledgeLoss; l == nil || l.Num != 8 || l.Den != 34 || l.IfMerged == nil || *l.IfMerged != wantLoss {
 		t.Errorf("%s: two's knowledge_loss@1 is %+v, want 8 / 34 with if_merged %+v", table, l, wantLoss)
 	}
-	wantConc := report.ConcentrationIfMerged{Candidates: 3, High: 1, HighAuthors: 2, AllAuthors: 1}
+	wantConc := report.ConcentrationIfMerged{Candidates: 3, High: 2, HighAuthors: 2, AllAuthors: 1}
 	if c := c2.Concentration; c == nil || c.AuthorsInPrefix != 3 || c.IfMerged == nil || *c.IfMerged != wantConc {
 		t.Errorf("%s: two's knowledge_concentration@1 is %+v, want 3 authors with if_merged %+v", table, c, wantConc)
 	}

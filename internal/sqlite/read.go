@@ -181,7 +181,7 @@ func (l *loader) load() error {
 	for _, step := range []func() error{
 		l.groups, l.groupRepos, l.runWarnings, l.repoRows, l.repoWarnings, l.paths, l.commits, l.parents,
 		l.commitCoAuthors, l.landings, l.landingCommits, l.changes, l.reverts, l.owners, l.ownerCoAuthors,
-		l.ignoreRevs, l.blameErrors, l.aliases,
+		l.ignoreRevs, l.blameErrors, l.aliases, l.refCommits, l.refCommitCoAuthors,
 	} {
 		if err := step(); err != nil {
 			return err
@@ -636,6 +636,64 @@ func (l *loader) aliases() error {
 				return err
 			}
 			f.Aliases = append(f.Aliases, a)
+			return nil
+		})
+}
+
+// refCommits reads the commits on the repository's other refs
+// (migration 10, RepoFacts.RefCommits): who wrote each, and when.
+func (l *loader) refCommits() error {
+	return l.each("ref_commits", `
+		SELECT repo_id, seq, sha, author_name, author_email, author_time, commit_time
+		FROM ref_commits WHERE `+ofRun+` ORDER BY repo_id, seq`,
+		func(rows *sql.Rows) error {
+			var repo, seq int64
+			var c domain.Commit
+			var authored, committed sql.NullString
+			if err := rows.Scan(&repo, &seq, &c.SHA, &c.Author.Name, &c.Author.Email, &authored, &committed); err != nil {
+				return err
+			}
+			var err error
+			if c.AuthorTime, err = decodeTime(authored); err != nil {
+				return err
+			}
+			if c.CommitTime, err = decodeTime(committed); err != nil {
+				return err
+			}
+			f, err := l.repo(repo)
+			if err != nil {
+				return err
+			}
+			if err := position(seq, len(f.RefCommits)); err != nil {
+				return err
+			}
+			f.RefCommits = append(f.RefCommits, c)
+			return nil
+		})
+}
+
+func (l *loader) refCommitCoAuthors() error {
+	return l.each("ref_commit_coauthors", `
+		SELECT repo_id, commit_seq, seq, name, email
+		FROM ref_commit_coauthors WHERE `+ofRun+` ORDER BY repo_id, commit_seq, seq`,
+		func(rows *sql.Rows) error {
+			var repo, commit, seq int64
+			var p domain.Person
+			if err := rows.Scan(&repo, &commit, &seq, &p.Name, &p.Email); err != nil {
+				return err
+			}
+			f, err := l.repo(repo)
+			if err != nil {
+				return err
+			}
+			c, err := item(f.RefCommits, commit)
+			if err != nil {
+				return err
+			}
+			if err := position(seq, len(c.CoAuthors)); err != nil {
+				return err
+			}
+			c.CoAuthors = append(c.CoAuthors, p)
 			return nil
 		})
 }

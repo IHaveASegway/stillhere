@@ -524,6 +524,86 @@ func TestCloneHealth(t *testing.T) {
 			t.Errorf("a lazy fetch under the Sync profile never reached the fake promisor, so the assertion above proves nothing")
 		}
 	})
+
+	// Wave 10's review: the commits on other refs are one input of one
+	// metric, so a broken ref costs that input at most, never the
+	// repository's other facts, which scanned fine before other refs were
+	// read.
+	t.Run("a ref History cannot read costs only the other refs' commits", func(t *testing.T) {
+		ctx := t.Context()
+		full := wantRepos[2]
+		window := domain.Window{Since: fixture.Now.AddDate(0, 0, -365), Until: fixture.Now}
+		history := func() *HistoryFacts {
+			t.Helper()
+			h, err := History(ctx, git, full, HistoryOptions{Window: window, Mode: HistoryScan})
+			if err != nil {
+				t.Fatalf("History on the full clone: %v", err)
+			}
+			return h
+		}
+		gitDir := strings.TrimSpace(string(healthGit(t, git, full.Path, "", "rev-parse", "--absolute-git-dir")))
+		ref := func(name, sha string) {
+			t.Helper()
+			path := filepath.Join(gitDir, filepath.FromSlash(name))
+			if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(sha+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		before := history()
+		// A branch with one commit Head does not hold, and a remote-tracking
+		// ref left pointing at an object the clone does not have: git skips
+		// the second, as it does for any command that lists refs.
+		when := fmt.Sprintf("%d +0000", fixture.Now.AddDate(0, 0, -10).Unix())
+		stream := fmt.Sprintf("commit refs/heads/side\nauthor Side Dev <side@example.com> %s\ncommitter Side Dev <side@example.com> %s\n"+
+			"data 5\nside\nfrom %s\nM 100644 inline side.py\ndata 6\nx = 1\n\n", when, when, main)
+		if _, err := git.Run(ctx, domain.GitCmd{Dir: full.Path, Args: []string{"fast-import", "--quiet"}, Stdin: strings.NewReader(stream)}); err != nil {
+			t.Fatalf("git fast-import: %v", err)
+		}
+		side := strings.TrimSpace(string(healthGit(t, git, full.Path, "", "rev-parse", "refs/heads/side")))
+		ref("refs/remotes/origin/pruned", strings.Repeat("1", 40))
+		h := history()
+		var got, want []string
+		for _, c := range h.RefCommits {
+			got = append(got, c.SHA)
+		}
+		for _, c := range before.RefCommits {
+			want = append(want, c.SHA)
+		}
+		want = slices.Sorted(slices.Values(append(want, side)))
+		if !slices.Equal(got, want) || h.Warnings != nil ||
+			!reflect.DeepEqual(h.Commits, before.Commits) || !reflect.DeepEqual(h.Landings, before.Landings) {
+			t.Errorf("with a ref to a missing object: other refs' commits %v, warnings %v; want %v, the side branch's commit "+
+				"among them, no warning, and Head's facts as before", got, h.Warnings, want)
+		}
+		// A branch whose commit names a parent the clone does not have:
+		// git cannot walk it, so the other refs' commits are lost with a
+		// warning, and nothing else is.
+		tree := strings.TrimSpace(string(healthGit(t, git, full.Path, "", "hash-object", "-t", "tree", "-w", "--stdin")))
+		body := fmt.Sprintf("tree %s\nparent %s\nauthor Cut Off <cut@example.com> %s\ncommitter Cut Off <cut@example.com> %s\n\ncut\n",
+			tree, strings.Repeat("2", 40), when, when)
+		corrupt := strings.TrimSpace(string(healthGit(t, git, full.Path, body, "hash-object", "-t", "commit", "-w", "--literally", "--stdin")))
+		ref("refs/heads/cut-off", corrupt)
+		h = history()
+		if h.RefCommits != nil || len(h.Warnings) != 1 || h.Warnings[0].Code != WarnOtherRefs || h.Warnings[0].Repo != full.Key ||
+			!strings.Contains(h.Warnings[0].Message, "git log exited 128") || strings.Contains(h.Warnings[0].Message, "cut-off") ||
+			!reflect.DeepEqual(h.Commits, before.Commits) || !reflect.DeepEqual(h.Landings, before.Landings) || !h.FirstCommit.Equal(before.FirstCommit) {
+			t.Errorf("with a ref git cannot walk: other refs' commits %+v, warnings %+v; want none, one %s warning naming no ref, "+
+				"and Head's facts as before", h.RefCommits, h.Warnings, WarnOtherRefs)
+		}
+	})
+}
+
+// healthGit runs git in dir with stdin and stops the test if it fails.
+func healthGit(t *testing.T, git domain.GitRunner, dir, stdin string, args ...string) []byte {
+	t.Helper()
+	out, err := git.Run(t.Context(), domain.GitCmd{Dir: dir, Args: args, Stdin: strings.NewReader(stdin)})
+	if err != nil {
+		t.Fatalf("git %s: %v", strings.Join(args, " "), err)
+	}
+	return out
 }
 
 // discoverInterrupt is the real git runner with a user who presses Ctrl-C as

@@ -47,7 +47,7 @@ func Paths(ctx context.Context, d Deps, r PathsRequest) (*report.Paths, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading run %d's facts: %w", run.ID, err)
 	}
-	repo, err := repoKey(fs, r.Repo, run.ID)
+	repo, err := repoArg(fs, run.ID, r.Repo)
 	if err != nil {
 		return nil, err
 	}

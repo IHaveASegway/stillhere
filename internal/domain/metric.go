@@ -144,6 +144,29 @@ type Trace struct {
 	Changes  []TracedChange  // by repository, the unreviewed in Den first, then by time
 }
 
+// Activity is a person's last activity in a run, by knowledge_loss@1's
+// rule (metrics.LastActivity): the newest of their landings, reviews,
+// pull requests opened or pushed to, and commits on any ref of the clone,
+// in the history window before Now.
+type Activity struct {
+	Time time.Time
+	Kind string // ActivityLanding, ActivityReview, ActivityPullRequest or ActivityCommit
+	// QuietIn is how many whole days are left at Now before 180 days have
+	// passed since Time, when knowledge_loss@1 starts to count the person as
+	// gone quiet; -1 once they have. GoingQuiet: within 30 days of it, which
+	// knowledge_loss@1's going_quiet detail counts.
+	QuietIn    int
+	GoingQuiet bool
+}
+
+// The kinds of activity, in the order a tie at one instant is told by.
+const (
+	ActivityLanding     = "landing"      // a commit credited to them reached the default branch in a landing
+	ActivityReview      = "review"       // a review they submitted on GitHub
+	ActivityPullRequest = "pull_request" // a pull request they opened, or one of theirs they pushed a commit of their own to
+	ActivityCommit      = "commit"       // a commit credited to them on another ref of the clone: a branch or a tag
+)
+
 // TracedLanding is one landing a landed value counts for the person, or in
 // a scope's totals.
 type TracedLanding struct {

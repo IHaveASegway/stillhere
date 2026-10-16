@@ -32,6 +32,12 @@ type Input struct {
 	// Commands is how the report's sentences name the commands they send
 	// the reader to; nil: the command line's.
 	Commands Commands
+	// Activity is each person's last activity in the run, by
+	// knowledge_loss@1's rule (metrics.LastActivity), which the still-here
+	// rows and a card's people show: when, what, and how many days are left
+	// before the person goes quiet. nil for week, and when the reader
+	// cannot tell: no page then shows one.
+	Activity map[string]domain.Activity
 }
 
 // Landed is how the landed window was set: by the command line, or by the
@@ -262,7 +268,8 @@ func (b *builder) card(rf *domain.RepoFacts, still *StillHere) RepoCard {
 			if r.ProdNonblankLines > 0 && len(c.MadeOf) < 5 {
 				c.MadeOf = append(c.MadeOf, Author{
 					Email: r.Email, Name: r.Name, NameWithheld: r.NameWithheld, ProdLines: r.ProdNonblankLines,
-					Share: float64(r.ProdNonblankLines) / float64(total),
+					Share:      float64(r.ProdNonblankLines) / float64(total),
+					LastActive: r.LastActive, LastActivity: r.LastActivity, QuietInDays: r.QuietInDays, GoingQuiet: r.GoingQuiet,
 				})
 			}
 		}
@@ -284,6 +291,7 @@ func (b *builder) card(rf *domain.RepoFacts, still *StillHere) RepoCard {
 	}
 	if c.KnowledgeLoss = b.share(MetricKnowledgeLoss, scope, nil); c.KnowledgeLoss != nil {
 		used = append(used, MetricKnowledgeLoss)
+		quietHolders(c.KnowledgeLoss, still)
 	}
 	if c.AIAssisted = b.share(MetricAIAssisted, scope, nil); c.AIAssisted != nil {
 		used = append(used, MetricAIAssisted)
@@ -309,6 +317,9 @@ func (b *builder) card(rf *domain.RepoFacts, still *StillHere) RepoCard {
 	c.Caveats = append(c.Caveats, b.forgeSectionCaveats([]*domain.RepoFacts{rf}, used)...)
 	if cv, ok := candidatesCaveat(c.KnowledgeLoss, c.Concentration, 0, b.in.Commands); ok {
 		c.Caveats = withCaveat(c.Caveats, cv)
+	}
+	if cv, ok := goingQuietCaveat(c.KnowledgeLoss, 0); ok {
+		c.Caveats = append(c.Caveats, cv)
 	}
 	if c.AIAssisted != nil {
 		c.Caveats = append(c.Caveats, aiLowerBound())
@@ -346,6 +357,7 @@ func (b *builder) overview(scope domain.Scope, members []*domain.RepoFacts) Over
 	}
 	if o.KnowledgeLoss = b.share(MetricKnowledgeLoss, scope, members); o.KnowledgeLoss != nil {
 		used = append(used, MetricKnowledgeLoss)
+		quietHolders(o.KnowledgeLoss, o.People)
 	}
 	if o.AIAssisted = b.share(MetricAIAssisted, scope, members); o.AIAssisted != nil {
 		used = append(used, MetricAIAssisted)
@@ -388,6 +400,9 @@ func (b *builder) overview(scope domain.Scope, members []*domain.RepoFacts) Over
 	}
 	if cv, ok := candidatesCaveat(o.KnowledgeLoss, o.Concentration, summed, b.in.Commands); ok {
 		o.Caveats = withCaveat(o.Caveats, cv)
+	}
+	if cv, ok := goingQuietCaveat(o.KnowledgeLoss, summed); ok {
+		o.Caveats = append(o.Caveats, cv)
 	}
 	return o
 }
@@ -562,6 +577,10 @@ func (b *builder) stillHere(scope domain.Scope, blamed int) *StillHere {
 			Landings365d:      count(v.Detail[detailLandings365d]),
 			Merged365d:        count(v.Detail[detailMerged365d]),
 		}
+		if !row.Bot {
+			// A bot's activity is no one's: knowledge_loss@1 leaves its lines out.
+			row.LastActive, row.LastActivity, row.QuietInDays, row.GoingQuiet = lastActive(b.in.Activity, email)
+		}
 		if row.Bot {
 			t.Bots = append(t.Bots, row)
 		} else {
@@ -641,6 +660,7 @@ func (b *builder) share(metric string, scope domain.Scope, members []*domain.Rep
 	s := Share{Metric: metric}
 	found, merged := false, false
 	var sum *ShareIfMerged
+	var quietPeople, quietLines float64
 	for _, rf := range members {
 		if v, ok := b.ix.aggregate(metric, domain.Scope{Kind: domain.ScopeRepo, Key: rf.Repo.Key}); ok {
 			s.Num += v.Num
@@ -649,12 +669,15 @@ func (b *builder) share(metric string, scope domain.Scope, members []*domain.Rep
 			part := shareIfMerged(v)
 			merged = merged || part != nil
 			sum = addIfMerged(sum, part, v.Num)
+			quietPeople += v.Detail[detailGoingQuietPeople]
+			quietLines += v.Detail[detailGoingQuietNum]
 		}
 	}
 	if !found || s.Den == 0 {
 		return nil
 	}
 	s.Value = s.Num / s.Den
+	s.GoingQuiet = shareGoingQuiet(quietPeople, quietLines, s.Num, s.Den)
 	if merged {
 		// The lines add up exactly, as Num does: activity and the
 		// candidates are the run's, whichever repository holds the lines.
@@ -662,6 +685,31 @@ func (b *builder) share(metric string, scope domain.Scope, members []*domain.Rep
 		s.IfMerged = sum
 	}
 	return &s
+}
+
+// quietHolders names the people knowledge_loss@1's going_quiet counts in a
+// section (loss.GoingQuiet.Holders): its still-here rows, which hold the
+// scope's surviving prod lines person by person, whose last activity is
+// within 30 days of the line (StillHereRow.GoingQuiet, from the run's
+// activity, metrics.LastActivity, which the metric's detail reads too). It
+// selects rows; it counts nothing the metric did not. Nothing without
+// rows or a going-quiet share.
+func quietHolders(loss *Share, still *StillHere) {
+	if loss == nil || loss.GoingQuiet == nil || still == nil {
+		return
+	}
+	out := []QuietHolder{}
+	for _, r := range still.Humans {
+		if !r.GoingQuiet || r.ProdNonblankLines == 0 || r.LastActive == nil || r.QuietInDays == nil {
+			continue
+		}
+		out = append(out, QuietHolder{Email: r.Email, Name: r.Name, NameWithheld: r.NameWithheld,
+			Lines: r.ProdNonblankLines, LastActive: *r.LastActive, LastActivity: r.LastActivity, QuietInDays: *r.QuietInDays})
+	}
+	slices.SortFunc(out, func(a, b QuietHolder) int {
+		return cmp.Or(cmp.Compare(a.QuietInDays, b.QuietInDays), cmp.Compare(b.Lines, a.Lines), cmp.Compare(a.Email, b.Email))
+	})
+	loss.GoingQuiet.Holders = &out
 }
 
 // population reads what surviving@1 says about a scope's code as a whole:
