@@ -22,7 +22,7 @@ func provenanceText(pv Provenance) string {
 		s = fmt.Sprintf("run %d · %s", pv.RunID, s)
 	}
 	if pv.Policy != "" {
-		s += " · policy " + short12(pv.Policy)
+		s += " · policy " + short12(pv.Policy) + revisionText(pv.PolicyRevision)
 	}
 	if forgeDated(pv) {
 		s += forgeAsOf(pv.Forge)

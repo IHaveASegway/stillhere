@@ -81,7 +81,7 @@ stillhere help week
 
 `week` prints what landed on each repository's default branch: one row per person with their landings (a merged branch counts for the people who wrote it), commits, lines added, lines added to production code and the merges they landed, with bots in a table of their own. Text and Markdown print the first 10 rows of each table; `--all` prints every row. Each `PATH` is a repository (a work tree or a bare mirror) or a group: a directory whose immediate children are repositories. `week` reads only what is already cloned and stores nothing; fetch first for fresh numbers.
 
-Two files in the current directory change the answer when present. `.mailmap` folds one person's addresses into one identity (`--mailmap FILE` names another). `stillhere.toml` replaces the packaged policy as a whole: which paths count as production code, which authors are bots (`--policy FILE` names another). To start one, `stillhere policy > stillhere.toml` writes the packaged policy out as a complete file.
+Two files in the current directory change the answer when present. `.mailmap` folds one person's addresses into one identity (`--mailmap FILE` names another). `stillhere.toml` replaces the packaged policy as a whole: which paths count as production code, which authors are bots (`--policy FILE` names another). To start one, `stillhere policy > stillhere.toml` writes the packaged policy out as a complete file. The packaged policy counts as production code neither example code (`examples/`), benchmarks (`benches/`, `benchmarks/`), documentation tooling (`docs/`) nor build, packaging and CI tooling (`build/`, `scripts/`, `vite.config.ts`, `setup.py`, `.github/`), except Go code, which keeps its role under `docs/`, `build/` and `script/` because in Go a directory is a package, and after a scan `stillhere paths` lists every path with its role and the rule that gave it, so you can check what counts on your own layout ([classification.md](docs/spec/classification.md#what-counts-as-product-code-revision-3)).
 
 To keep a history, scan instead: `scan` records a run in facts.db (history, blame, metrics and ranks), and the read commands answer from the latest run, or from `--run ID`, without touching the repositories again.
 
@@ -89,6 +89,7 @@ To keep a history, scan instead: `scan` records a run in facts.db (history, blam
 stillhere scan ~/src/acme                           # record a run: the default branch of each repository
 stillhere report --rank durable@1                   # the run as a report, with durable@1's rank table
 stillhere who-knows services/billing                # who knows the code under a path
+stillhere paths --skipped                           # which paths a run left out, and the rule that decided each
 stillhere explain durable@1 --person "Ada Example"  # the changes behind one person's value: a name, @login, id or email
 stillhere me --email you@example.com                # your own page
 stillhere identities --format mailmap               # .mailmap suggestions with their evidence, never applied

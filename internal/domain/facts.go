@@ -1,6 +1,10 @@
 package domain
 
-import "time"
+import (
+	"slices"
+	"strings"
+	"time"
+)
 
 // Repo is one repository as discovered for a run.
 type Repo struct {
@@ -59,6 +63,25 @@ const (
 	RoleMigration Role = "migration"
 	RoleSeed      Role = "seed"
 )
+
+// Roles are the classifier's roles, in the order messages list them: the
+// one list that a policy's role names and the paths command's --role are
+// checked against.
+func Roles() []Role {
+	return []Role{RoleProd, RoleSQL, RoleMarkup, RoleIaC, RoleDoc, RoleTest, RoleMigration, RoleSeed}
+}
+
+// Known reports whether r is one of Roles.
+func (r Role) Known() bool { return slices.Contains(Roles(), r) }
+
+// RoleList names Roles for a message: "prod, sql, markup, ...".
+func RoleList() string {
+	names := make([]string, 0, len(Roles()))
+	for _, r := range Roles() {
+		names = append(names, string(r))
+	}
+	return strings.Join(names, ", ")
+}
 
 // Skip is the reason the classifier dropped a path
 // (docs/spec/classification.md#order). A skipped path adds nothing to any

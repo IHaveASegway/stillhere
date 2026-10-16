@@ -16,8 +16,8 @@
 #   - lib/linguist/vendor.yml. Its patterns are valid RE2 already (Linguist's
 #     script/check-regex-compatibility checks each one against Go's engine,
 #     and its allowlist of exceptions is empty), so they are copied
-#     unchanged, with their comments. Two are left out on purpose; they stay
-#     in place as comments, and the last section gives the reason.
+#     unchanged, with their comments. Six are left out on purpose; they
+#     stay in place as comments, and the last section gives the reason.
 #   - lib/linguist/generated.rb: the rules that read only the path. Ruby
 #     regexp literals lose their delimiters, /i becomes (?i) and \/ becomes
 #     /. go_vendor? uses lookaround, which RE2 lacks, and is rewritten
@@ -296,7 +296,7 @@
 # (^|/)env/      LEFT OUT: see "Left out on purpose" at the end of this file
 
 # Fabric
-(^|/)fabfile\.py$
+# (^|/)fabfile\.py$  LEFT OUT: see "Left out on purpose" at the end of this file
 
 # WAF
 (^|/)waf$
@@ -428,19 +428,19 @@
 (^|/)\.google_apis/
 
 # Jenkins Pipeline
-(^|/)Jenkinsfile$
+# (^|/)Jenkinsfile$  LEFT OUT: see "Left out on purpose" at the end of this file
 
 # Gitpod
 (^|/)\.gitpod\.Dockerfile$
 
 # GitHub.com
-(^|/)\.github/
+# (^|/)\.github/    LEFT OUT: see "Left out on purpose" at the end of this file
 
 # obsidian.md settings
 (^|/)\.obsidian/
 
 # teamcity CI configuration
-(^|/)\.teamcity/
+# (^|/)\.teamcity/  LEFT OUT: see "Left out on purpose" at the end of this file
 
 # XVBA dependencies
 (^|/)xvba_modules/
@@ -592,26 +592,31 @@ Pipfile\.lock
 # differently
 ########################################################################
 
-# Single segments, each as (^|/)<segment>(/|$), so the segment can be the
-# whole path, the first part, or a later one, and a longer name such as
-# vendored/ or builder/ is not a match.
-(^|/)node_modules(/|$)
-(^|/)vendor(/|$)
-(^|/)dist(/|$)
-(^|/)coverage(/|$)
-(^|/)\.next(/|$)
-(^|/)out(/|$)
-(^|/)third_party(/|$)
-(^|/)__pycache__(/|$)
-(^|/)\.venv(/|$)
-(^|/)venv(/|$)
+# Dependency, build output and cache directories.
+# Each is a single directory segment, (^|/)<segment>/, so the directory can
+# be the first part of the path or a later one, a longer name such as
+# vendored/ or builder/ is not a match, and neither is a file of that name:
+# scripts/coverage, a shell script beside scripts/test, is no coverage
+# output (policy revision 3, 2026-10-16; until then each ended (/|$), which
+# also took a file whose whole name was the segment).
+(^|/)node_modules/
+(^|/)vendor/
+(^|/)dist/
+(^|/)coverage/
+(^|/)\.next/
+(^|/)out/
+(^|/)third_party/
+(^|/)__pycache__/
+(^|/)\.venv/
+(^|/)venv/
 
-# Two consecutive segments, in one pattern: comparing one path component
-# with "bootstrap/cache" never matches bootstrap/cache/config.php. These are
-# Laravel's generated directories: bootstrap/cache, and in storage/ the
-# compiled Blade views, caches, sessions and logs.
-(^|/)bootstrap/cache(/|$)
-(^|/)storage/(framework|logs)(/|$)
+# Laravel's generated directories.
+# bootstrap/cache, and in storage/ the compiled Blade views, caches,
+# sessions and logs: two consecutive segments, in one pattern, since
+# comparing one path component with "bootstrap/cache" never matches
+# bootstrap/cache/config.php.
+(^|/)bootstrap/cache/
+(^|/)storage/(framework|logs)/
 
 # Lock and sum files that Linguist leaves to its language data
 (^|/)go\.sum$
@@ -638,20 +643,20 @@ _pb\.(js|ts|rb)$
 \.(pb|grpc)\.swift$
 
 # Mock and generated-code directories
-(^|/)mocks?(/|$)
-(^|/)gen(/|$)
-(^|/)generated(/|$)
+(^|/)mocks?/
+(^|/)gen/
+(^|/)generated/
 
 # Generated PHP under protobuf output: protoc writes PHP metadata classes
 # under GPBMetadata/
-(?i)(^|/)gpbmetadata(/|$)
+(?i)(^|/)gpbmetadata/
 
 ########################################################################
 # Left out on purpose
 ########################################################################
 #
-# Two vendor.yml rules stay commented out in section 1. Each matches a
-# directory name that commonly holds a team's own code. Linguist only drops
+# Six vendor.yml rules stay commented out in section 1. The first two
+# match a directory name that commonly holds a team's own code. Linguist only drops
 # such files from a repository's language bar; stillhere would silently drop
 # their authors' lines from every ownership, durability and knowledge
 # number. A repository that does keep third-party code there can say so with
@@ -664,6 +669,27 @@ _pb\.(js|ts|rb)$
 # (^|/)env/    "django". An env/ package or env/ configuration is
 #              first-party code. Virtual environments are denied as venv
 #              and .venv in section 3.
+#
+# The other four match continuous integration's configuration and a
+# team's deployment tasks, which are its own infrastructure: the packaged
+# policy gives them the iac role, as it does a Makefile or a Dockerfile, so
+# who wrote and who knows the release, test and deployment automation can
+# be answered (policy revision 3, 2026-10-16). Linguist drops these files
+# from a language bar only.
+#
+# (^|/)\.github/     "GitHub.com". Workflows and actions are iac, and so is
+#                    code under .github/, which only CI runs; issue,
+#                    discussion and pull request templates and FUNDING.yml
+#                    are doc ([[roles.path]] in default.toml). The bundles an
+#                    action commits (dist/, node_modules/) stay denied by
+#                    their own rules.
+# (^|/)Jenkinsfile$  "Jenkins Pipeline": iac by its name.
+# (^|/)\.teamcity/   "teamcity CI configuration": its Kotlin DSL (.kts) and
+#                    XML are iac by their extensions, and code there by a
+#                    path rule, as under .github/.
+# (^|/)fabfile\.py$  "Fabric": a project's Fabric tasks, which deploy and
+#                    release it, as a Makefile's targets do; iac by a
+#                    [[roles.path]] rule in default.toml.
 #
 # Two segments of stillhere's own are left out of section 3 for the same
 # reason; Linguist has neither. In a census of the 175,079 files with a

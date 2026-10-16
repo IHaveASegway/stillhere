@@ -277,6 +277,102 @@ func mainChangeOracles(t *testing.T) {
 		}
 	})
 
+	t.Run("paths", func(t *testing.T) {
+		// stillhere paths lists every path the run classified with the rule
+		// that decided it, from the run's own policy: service.py by its
+		// extension, the test file by the test-directory rule, notes.csv by
+		// no rule, and app.py, which only the history touched, marked so.
+		// --skipped and --role narrow the list, a prefix keeps what is
+		// under it, and --role with --skipped, or a role that is none, is a
+		// usage error.
+		ps, err := app.Paths(t.Context(), s.read, app.PathsRequest{RunID: s.run})
+		if err != nil {
+			t.Fatalf("app.Paths: %v", err)
+		}
+		if len(ps.Repos) != 1 || ps.PolicySource != "packaged policy" || ps.Provenance.RunID != s.run {
+			t.Fatalf("paths: %d repositories from %q in run %d", len(ps.Repos), ps.PolicySource, ps.Provenance.RunID)
+		}
+		// The packaged policy is named by its revision beside its hash.
+		if ps.Provenance.PolicyRevision != 3 {
+			t.Errorf("paths: policy revision %d, want the packaged revision 3", ps.Provenance.PolicyRevision)
+		}
+		repo := ps.Repos[0]
+		rows := map[string]report.PathRow{}
+		for _, row := range repo.Paths {
+			rows[row.Path] = row
+		}
+		if len(repo.Paths) != repo.Classified || repo.HistoryOnly < 1 {
+			t.Errorf("paths lists %d of %d classified paths, %d only in the history; want every path, app.py among them",
+				len(repo.Paths), repo.Classified, repo.HistoryOnly)
+		}
+		for _, c := range []struct {
+			path, role, skip, kind, where string
+			atHead                        bool
+		}{
+			{"service.py", "prod", "", "extension", "[roles.extensions] prod", true},
+			{"tests/test_service.py", "test", "", "path", "[[roles.path]] rule 2", true},
+			{"notes.csv", "", "unclassified", "none", "", true},
+			{"app.py", "prod", "", "extension", "[roles.extensions] prod", false},
+		} {
+			got, ok := rows[c.path]
+			if !ok || got.Role != c.role || got.Skip != c.skip || got.Rule.Kind != c.kind || got.Rule.Where != c.where ||
+				got.AtHead != c.atHead || got.Rule.Source == "" {
+				t.Errorf("paths %s = %+v, %v; want %s%s by %s %q, at HEAD %v", c.path, got, ok, c.role, c.skip, c.kind, c.where, c.atHead)
+			}
+		}
+		used := 0
+		for _, u := range ps.Rules {
+			used += u.Paths
+		}
+		if used != len(repo.Paths) {
+			t.Errorf("the rules legend counts %d paths, want the %d listed", used, len(repo.Paths))
+		}
+		skipped, err := app.Paths(t.Context(), s.read, app.PathsRequest{RunID: s.run, Skipped: true})
+		if err != nil || len(skipped.Repos) != 1 || len(skipped.Repos[0].Paths) == 0 {
+			t.Fatalf("paths --skipped: %v", err)
+		}
+		for _, row := range skipped.Repos[0].Paths {
+			if row.Skip == "" {
+				t.Errorf("paths --skipped lists %s, which has the role %s", row.Path, row.Role)
+			}
+		}
+		under, err := app.Paths(t.Context(), s.read, app.PathsRequest{RunID: s.run, Prefixes: []string{"./tests/"}, Role: "test"})
+		if err != nil || len(under.Repos) != 1 || len(under.Repos[0].Paths) == 0 {
+			t.Fatalf("paths --role test tests: %v", err)
+		}
+		for _, row := range under.Repos[0].Paths {
+			if row.Role != "test" || !strings.HasPrefix(row.Path, "tests/") {
+				t.Errorf("paths --role test tests lists %s (%s)", row.Path, row.Role)
+			}
+		}
+		// A PATH no repository holds, such as the absolute path a scan was
+		// given, lists nothing and says how the run writes its paths; one
+		// it holds says nothing of the kind.
+		if len(under.Caveats) > 0 && strings.Contains(fmt.Sprint(under.Caveats), "relative to its repository's root") {
+			t.Errorf("paths tests carries a no-path caveat: %+v", under.Caveats)
+		}
+		for _, pre := range []string{"/home/someone/fixture/src", "nowhere"} {
+			none, err := app.Paths(t.Context(), s.read, app.PathsRequest{RunID: s.run, Prefixes: []string{pre}})
+			if err != nil || len(none.Repos) != 1 || len(none.Repos[0].Paths) != 0 {
+				t.Fatalf("paths %s: %v", pre, err)
+			}
+			found := false
+			for _, c := range none.Caveats {
+				found = found || c.Code == "no-values" && strings.Contains(c.Message, strings.TrimPrefix(pre, "/")) && strings.Contains(c.Message, "relative to its repository's root")
+			}
+			if !found {
+				t.Errorf("paths %s: caveats %+v, want a no-values caveat naming it and how the run writes paths", pre, none.Caveats)
+			}
+		}
+		for _, bad := range []app.PathsRequest{{RunID: s.run, Role: "production"}, {RunID: s.run, Role: "prod", Skipped: true},
+			{RunID: s.run, Repo: "local:nowhere"}} {
+			var usage *domain.UsageError
+			if _, err := app.Paths(t.Context(), s.read, bad); !errors.As(err, &usage) {
+				t.Errorf("paths %+v: err = %v, want a usage error", bad, err)
+			}
+		}
+	})
+
 	t.Run("landed@2", func(t *testing.T) {
 		// SPEC, "landed@2 (main fixture)": Cara wrote Bob's merge (row 8),
 		// so it is her landing, with both of her commits' lines; Bob merged

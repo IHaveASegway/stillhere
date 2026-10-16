@@ -87,7 +87,7 @@ stillhere creates no second owner of any fact. Identity in particular stays with
 | Write | `scan` (later `backfill ownership`) | None | a run: history, authorship facts, metric values; an unwritable facts.db is refused before any git work |
 | Analysis | `week` | None | Nothing: it prints what landed |
 | Analysis | `policy` | None | Nothing: it prints the policy `week` and `scan` would use, as a complete file to edit |
-| Read | `report`, `me`, `explain`, `who-knows`, `identities`, `validate`, `label` | None | Nothing, except migrating a facts.db an older stillhere wrote; they never create one, so a mistyped `--db` is a usage error that names the path. `label` appends the user's labels to the labels file (beside facts.db unless `--labels` names another, 0600), user-owned input that `validate` reads ([validation.md](validation.md)) |
+| Read | `report`, `me`, `explain`, `who-knows`, `paths`, `identities`, `validate`, `label` | None | Nothing, except migrating a facts.db an older stillhere wrote; they never create one, so a mistyped `--db` is a usage error that names the path. `label` appends the user's labels to the labels file (beside facts.db unless `--labels` names another, 0600), user-owned input that `validate` reads ([validation.md](validation.md)) |
 | Read | `metrics` | None | Nothing |
 | Read | `serve` | GitHub at sign-in | Sessions, audit log |
 | Read | `mcp` | None (stdio) | Nothing: it opens facts.db read-only |

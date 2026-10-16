@@ -286,7 +286,12 @@ func count(f float64) int {
 }
 
 // grouped formats n with thousands separators: 2730000 is "2,730,000".
-func grouped(n int) string {
+func grouped(n int) string { return Grouped(n) }
+
+// Grouped writes n with thousands separators, as every page does: 37,329.
+// A use case that words a message a page prints uses it, so the message's
+// numbers read as the page's.
+func Grouped(n int) string {
 	s := strconv.Itoa(n)
 	neg := strings.HasPrefix(s, "-")
 	s = strings.TrimPrefix(s, "-")

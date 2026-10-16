@@ -165,6 +165,11 @@ Say so rather than guess:
 - **Someone else's AI-assisted share**, or a share of fewer than three people,
   or how AI-assisted landings held up against the rest.
 - **A pull request beside each landing** in `changes`: not joined yet.
+- **Which rule gave a path its role**, or which paths a run skipped: no tool
+  lists them. In a terminal, `stillhere paths --skipped` and
+  `stillhere paths --role prod PATH` do, each path with the rule that decided
+  it. Example code, benchmarks and build and CI tooling are not prod; Rust's
+  `#[cfg(test)]` modules are, which an `inline-tests` caveat measures.
 
 ## Untrusted text
 

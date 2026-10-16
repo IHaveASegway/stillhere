@@ -73,7 +73,7 @@ func Build(in *Input) *Model {
 		Kind:    in.Kind,
 		Tool:    Tool{Name: "stillhere", Version: in.Tool},
 		Now:     fs.Now,
-		Policy:  Policy{Version: fs.Policy.Version, SHA256: fs.Policy.SHA256},
+		Policy:  Policy{Version: fs.Policy.Version, SHA256: fs.Policy.SHA256, Revision: policy.PackagedRevision(fs.Policy.SHA256)},
 		Window:  b.landedWindow(),
 		History: intervalOf(in.History),
 		Timings: in.Timings,
@@ -809,7 +809,8 @@ func sameWindow(a, b domain.Window) bool {
 // provenance says where a section that covers repos and reads metrics comes
 // from.
 func (b *builder) provenance(repos []*domain.RepoFacts, metrics []string) Provenance {
-	p := Provenance{AsOf: b.in.Facts.Now, Policy: b.in.Facts.Policy.SHA256}
+	p := Provenance{AsOf: b.in.Facts.Now, Policy: b.in.Facts.Policy.SHA256,
+		PolicyRevision: policy.PackagedRevision(b.in.Facts.Policy.SHA256)}
 	if b.in.Run != nil {
 		p.RunID = b.in.Run.ID
 	}
@@ -910,6 +911,12 @@ func blamedProdLines(rf *domain.RepoFacts, keep func(path string) bool) int {
 	return n
 }
 
+// SurvivingProdLines is blamedProdLines over a whole repository: the lines
+// blame attributes on its prod paths at HEAD, for a use case that words a
+// message about them, such as the inline-tests warning a scan writes, which
+// states their share.
+func SurvivingProdLines(rf *domain.RepoFacts) int { return blamedProdLines(rf, nil) }
+
 // landingsOf counts a repository's landings in the landed window and in the
 // history window.
 func (b *builder) landingsOf(rf *domain.RepoFacts) Landings {
@@ -930,6 +937,9 @@ func (b *builder) landingsOf(rf *domain.RepoFacts) Landings {
 func skippedOf(paths []domain.PathClass) Skipped {
 	var s Skipped
 	for _, pc := range paths {
+		if pc.Skip != "" && !pc.AtHead {
+			s.HistoryOnly++
+		}
 		switch pc.Skip {
 		case domain.SkipDeniedPath:
 			s.DeniedPath++

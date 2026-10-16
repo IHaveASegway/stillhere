@@ -29,12 +29,16 @@ func (p *Policy) File() ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", p.Name, err)
 	}
-	if !strings.HasPrefix(p.Paths.Source, pathsFromPackage) {
+	if !p.Packaged() {
 		return slices.Clone(tomlText), nil
 	}
 	lines := strings.SplitAfter(string(tomlText), "\n")
 	var b strings.Builder
-	fmt.Fprintf(&b, fileHeader, p.SHA256)
+	revision := "the packaged policy"
+	if n := PackagedRevision(p.SHA256); n > 0 {
+		revision = fmt.Sprintf("revision %d of the packaged policy", n)
+	}
+	fmt.Fprintf(&b, fileHeader, revision, p.SHA256)
 	start := 0
 	for start < len(lines) && strings.HasPrefix(strings.TrimSpace(lines[start]), "#") {
 		start++ // the packaged policy's own header, which describes the packaged file
@@ -59,10 +63,11 @@ func (p *Policy) File() ([]byte, error) {
 }
 
 // fileHeader is the header comment of a packaged policy written out as a
-// file; the verb is the packaged policy's hash.
+// file; the verbs are the packaged policy's revision, as "revision 3 of
+// the packaged policy" (PackagedRevision), and its hash.
 const fileHeader = `# A stillhere policy: what a run counts, and how
-# (docs/spec/classification.md). 'stillhere policy' printed it from the
-# packaged policy whose hash is
+# (docs/spec/classification.md). 'stillhere policy' printed it from
+# %s, whose hash is
 #   sha256 %s
 # with [paths] deny written out in full from generated_paths.txt.
 #

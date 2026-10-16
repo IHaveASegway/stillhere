@@ -90,7 +90,14 @@ func summary(p *policy.Policy) string {
 		p.Version, p.Headline, p.Week, p.Blame, p.Bots.Fragments, p.AI.Version, p.AI.CoauthorEmails, p.AI.AgentAuthors)
 	fmt.Fprintf(&b, "extensions=%v names=%v\n", p.Roles.Extensions, p.Roles.Names)
 	for _, r := range p.Roles.Path {
-		fmt.Fprintf(&b, "rule %s %s %v\n", r.Role, r.Pattern, r.When)
+		fmt.Fprintf(&b, "rule %s %s %v", r.Role, r.Pattern, r.When)
+		if r.MaxBytes > 0 {
+			fmt.Fprintf(&b, " max_bytes=%d", r.MaxBytes)
+		}
+		if r.Note != "" {
+			fmt.Fprintf(&b, " note=%q", r.Note)
+		}
+		b.WriteString("\n")
 	}
 	fmt.Fprintf(&b, "paths=%s\n", p.Paths.Source)
 	for _, re := range p.Paths.Deny {
@@ -181,15 +188,55 @@ func TestPolicy(t *testing.T) {
 			// #102: GitHub Copilot's co-author addresses, one per app account.
 			`ai=2 ["noreply@anthropic.com" "aider@aider.chat" "175728472+copilot@users.noreply.github.com" ` +
 				`"198982749+copilot@users.noreply.github.com" "223556219+copilot@users.noreply.github.com"] ["copilot"]`,
-			`names=map[CMakeLists.txt:iac Containerfile:iac Dockerfile:iac Makefile:iac Procfile:iac]`,
-			"rule test (^|/)(tests|test|__tests__|spec|testing)(/|$) [prod sql markup iac]\n",
-			"rule migration (^|/)migrations(/|$) [prod]\n",
-			"rule seed (^|/)(seeders|factories|seeds|fixtures)(/|$) [prod sql]\n",
+			// Revision 3: Python's packaging files and a Jenkins pipeline are
+			// iac, and Jinja templates markup.
+			`names=map[CMakeLists.txt:iac Containerfile:iac Dockerfile:iac Jenkinsfile:iac MANIFEST.in:iac Makefile:iac ` +
+				`Pipfile:iac Procfile:iac setup.cfg:iac tox.ini:iac]`,
+			".j2:markup", ".jinja:markup", ".jinja2:markup",
+			// The rules in their order, each with its reason from the file's
+			// own comment (PathRule.Note), which is true of every path the
+			// rule decides: configuration and data under a test directory
+			// first, bounded by max_bytes, then test code, examples, the Go
+			// exception, benchmarks, docs, templates, migrations, seeds and
+			// tooling. The comment on all the rules, above the first
+			// header, is no rule's. Linguist's documentation directories
+			// count with a capital first letter, as Linguist reads them.
+			"rule test (^|/)(tests|test|__tests__|spec|testing)/ [iac] max_bytes=100000 " +
+				`note="Configuration and data under a test directory are test up to 100 KB"` + "\n" +
+				"rule test (^|/)(tests|test|__tests__|spec|testing)(/|$) [prod sql markup] " +
+				`note="Code under a test directory, of any size"` + "\n",
+			`rule doc (^|/)_?[Ee]xamples?/|^([Ss]amples?|[Dd]emos?)/ [prod sql markup iac] note="Example code documents the product; it is not the product"`,
+			`rule prod (^([Dd]ocs|build|script)/|(^|/)([Bb]ench|perf)/)(.*/)?[^/]+\.go$ [prod] note="Go packages keep their role"`,
+			"rule test (^|/)([Bb]enches|[Bb]enchmarks|[Bb]ench)/|^perf/|[._]bench\\.[^/.]+$|^bench\\.py$ [prod sql markup iac]",
+			"rule doc ^[Dd]ocs/ [prod sql markup iac]",
+			"rule migration (^|/)migrations(/|$) [prod]",
+			"rule seed (^|/)(seeders|factories|seeds|fixtures)(/|$) [prod sql]",
+			`rule iac (^|/)\.(github|circleci|buildkite|teamcity|gitlab)/ [prod] note="Continuous integration is infrastructure"`,
+			"rule iac ^(build|scripts?)/ [prod]",
 			"paths=package:generated_paths.txt\n",
 		} {
 			if !strings.Contains(got, want) {
 				t.Errorf("packaged policy lacks %q:\n%s", want, got)
 			}
+		}
+		if !p.Packaged() {
+			t.Errorf("the packaged policy is not Packaged")
+		}
+		// Every packaged policy has a revision a reader can name it by, so
+		// a change to default.toml or generated_paths.txt is not done until
+		// its hash is in revisions.go: a new revision, or the current one
+		// for a comment. Main's revision 2 stays known, and a policy file
+		// is no packaged revision.
+		if got := policy.PackagedRevision(p.SHA256); got != 3 {
+			t.Errorf("PackagedRevision(the packaged policy, %s) = %d, want 3: list the new hash in revisions.go", p.SHA256, got)
+		}
+		if got := policy.PackagedRevision("39f300454d59f2e104446379e1a827948728b146350f6d207d6d7f5f6deb48ba"); got != 2 {
+			t.Errorf("PackagedRevision(revision 2's hash) = %d, want 2", got)
+		}
+		if user, err := policy.Parse("stillhere.toml", []byte(userTOML(""))); err != nil {
+			t.Fatal(err)
+		} else if got := policy.PackagedRevision(user.SHA256); got != 0 {
+			t.Errorf("a policy file's revision = %d, want 0", got)
 		}
 		if p.Name != "package:default.toml" {
 			t.Errorf("Name = %q", p.Name)
@@ -255,7 +302,7 @@ func TestPolicy(t *testing.T) {
 			"node_modules/x/index.js", "vendor/lib.py", "dist/app.js", "coverage/lcov.info",
 			".next/cache.js", "out/main.js", "third_party/zlib/zlib.h", "pkg/__pycache__/m.py", ".venv/lib/x.py",
 			"venv/lib/x.py", "storage/framework/views/0a1b.php", "apps/web/storage/logs/laravel.log",
-			"bootstrap/cache/config.php", "go.sum", "web/app.min.js",
+			"bootstrap/cache/config.php", "go.sum", "web/app.min.js", "web/site.min.css",
 			"api/user.pb.go", "api/user_pb2.py", "internal/mocks/store.go", "gen/api.go", "GPBMetadata/User.php",
 			"package-lock.json", "yarn.lock", "Cargo.lock", "composer.lock", "Gemfile.lock", "poetry.lock",
 		} {
@@ -270,10 +317,46 @@ func TestPolicy(t *testing.T) {
 			"api/user.proto", "service.py", "internal/cache/lru.go", "internal/env/env.go",
 			"internal/storage/postgres.go", "storage/filesystem/dotgit/dotgit.go", "src/go/build/build.go",
 			"build/ci/release.sh", "builder/x.go", "vendored.go",
+			// Revision 3: a directory rule matches a directory only, never a
+			// file of that name, such as httpx's scripts/coverage beside
+			// scripts/test.
+			"scripts/coverage", "tools/vendor", "out", "bin/gen", "mocks",
+			// CI is the team's own infrastructure, and iac: Linguist's
+			// .github/, Jenkinsfile and .teamcity/ rules are left out.
+			".github/workflows/ci.yml", ".github/actions/perf/action.yml", "Jenkinsfile", ".teamcity/settings.kts",
+			// A project's Fabric tasks deploy it: iac, as a Makefile is, and
+			// Linguist's Fabric rule is left out with them.
+			"fabfile.py", "deploy/fabfile.py",
 		} {
 			if p.Paths.Denies(path) {
 				t.Errorf("the packaged deny list denies %s", path)
 			}
+		}
+		// Denying names the pattern Denies stops at and where the policy
+		// holds it: its line in the packaged list and its group's label, or
+		// its place in a policy file's [paths] deny.
+		d, ok := p.Paths.Denying("web/app.min.js")
+		if !ok || d.Pattern != `(\.|-)min\.(js|css)$` || d.Note != "Minified JavaScript and CSS" || d.Index < 1 ||
+			strings.TrimSpace(strings.Split(denyFile, "\n")[d.Line-1]) != d.Pattern {
+			t.Errorf("Denying(web/app.min.js) = %+v, %v; want the Linguist pattern on its own line, labelled", d, ok)
+		}
+		if d, ok := p.Paths.Denying("apps/web/bootstrap/cache/x.php"); !ok || d.Note != "Laravel's generated directories" {
+			t.Errorf("Denying(bootstrap/cache) = %+v, %v; want the section 3 label", d, ok)
+		}
+		// A group translated from generated.rb is labelled with the reason,
+		// not only its Ruby method's name.
+		if d, ok := p.Paths.Denying("Cargo.lock"); !ok || d.Note != "Linguist's generated.rb marks it generated (cargo_lock?)" {
+			t.Errorf("Denying(Cargo.lock) = %+v, %v; want generated.rb's label", d, ok)
+		}
+		if d, ok := p.Paths.Denying("service.py"); ok {
+			t.Errorf("Denying(service.py) = %+v, want none", d)
+		}
+		user, err := policy.Parse("stillhere.toml", []byte(userTOML("")))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if d, ok := user.Paths.Denying("web/app.min.js"); !ok || d != (policy.DenyRule{Pattern: `\.min\.js$`, Index: 2}) {
+			t.Errorf("a policy file's Denying(web/app.min.js) = %+v, %v; want [paths] deny pattern 2, with no line", d, ok)
 		}
 	})
 
@@ -297,6 +380,44 @@ func TestPolicy(t *testing.T) {
 		}
 		if p.Name != "stillhere.toml" || string(p.Source) != string(source(text, "")) || p.SHA256 != sha(p.Source) {
 			t.Errorf("Name %q, Source %q, SHA256 %s: want the length-prefixed file and its hash", p.Name, p.Source, p.SHA256)
+		}
+		if p.Packaged() {
+			t.Errorf("a policy file is Packaged")
+		}
+		// A path rule's max_bytes is optional, as when is, and so is its
+		// comment, which becomes its note.
+		bounded, err := policy.Parse("stillhere.toml", []byte(strings.Replace(text,
+			"[[roles.path]]\nrole = \"test\"\n", "[[roles.path]]\nrole = \"test\"\n# Test data. Big files are vectors.\nmax_bytes = 1000\n", 1)))
+		if err != nil {
+			t.Fatalf("Parse with max_bytes: %v", err)
+		}
+		if r := bounded.Roles.Path[0]; r.MaxBytes != 1000 || r.Note != "Test data" || bounded.Roles.Path[1].MaxBytes != 0 {
+			t.Errorf("max_bytes and note read as %+v and %+v", r, bounded.Roles.Path[1])
+		}
+		// A comment right above a rule's header is that rule's note, not
+		// the note of the table it sits in, whatever that table is; one a
+		// blank line parts from the header is no rule's.
+		for _, c := range []struct {
+			name, text string
+			want       [2]string
+		}{
+			{"above each header", strings.NewReplacer(
+				"[[roles.path]]\nrole = \"test\"", "# Generated clients are not product code.\n[[roles.path]]\nrole = \"test\"",
+				"[[roles.path]]\nrole = \"seed\"", "# Seed data: what a fresh database starts with.\n[[roles.path]] # seeds\nrole = \"seed\"",
+			).Replace(text), [2]string{"Generated clients are not product code", "Seed data"}},
+			{"under a comment on all the rules", strings.Replace(text,
+				"[[roles.path]]\nrole = \"test\"", "# Path rules: tried in order.\n#\n# Ours first.\n[[roles.path]]\nrole = \"test\"", 1),
+				[2]string{"Ours first", ""}},
+			{"parted by a blank line", strings.Replace(text,
+				"[[roles.path]]\nrole = \"seed\"", "# Every rule below.\n\n[[roles.path]]\nrole = \"seed\"", 1), [2]string{"", ""}},
+		} {
+			p, err := policy.Parse("stillhere.toml", []byte(c.text))
+			if err != nil {
+				t.Fatalf("%s: %v", c.name, err)
+			}
+			if got := [2]string{p.Roles.Path[0].Note, p.Roles.Path[1].Note}; got != c.want {
+				t.Errorf("%s: notes %q, want %q", c.name, got, c.want)
+			}
 		}
 	})
 
@@ -355,6 +476,7 @@ func TestPolicy(t *testing.T) {
 			{"'(^|/)vendor(/|$)'", "''", "empty pattern"},
 			{"pattern = '(^|/)tests(/|$)'", "pattern = '(?<!x)tests'", "[[roles.path]] rule 1"},
 			{"role = \"test\"", "role = \"tests\"", "role \"tests\" is not a role"},
+			{"role = \"test\"\n", "role = \"test\"\nmax_bytes = 0\n", "[[roles.path]] rule 1: max_bytes = 0: want 1 or more"},
 			{"when = [\"prod\"]", "when = [\"prod\", \"production\"]", "when \"production\" is not a role"},
 			{"days = 7", "Days = 7", "unknown key [week] Days"},
 			{"[blame]", "[hotspots]\nsince_days = 365\n[blame]", "unknown table [hotspots]"},

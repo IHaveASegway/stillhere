@@ -75,14 +75,37 @@ func textHeader(p *printer, m *Model) {
 	}
 }
 
-// policyText is "policy v1 0123456789ab · headline prod_nonblank_lines ·
-// stillhere 0.1.0".
+// policyText is "policy v1 0123456789ab (packaged revision 3) · headline
+// prod_nonblank_lines · stillhere 0.1.0".
 func policyText(m *Model, esc func(string) string) string {
-	s := fmt.Sprintf("policy v%d %s", m.Policy.Version, short12(m.Policy.SHA256))
+	s := fmt.Sprintf("policy v%d %s", m.Policy.Version, short12(m.Policy.SHA256)) + revisionText(m.Policy.Revision)
 	if m.Policy.Headline != "" {
 		s += " · headline " + esc(m.Policy.Headline)
 	}
 	return s + " · stillhere " + esc(m.Tool.Version)
+}
+
+// shellWord quotes s for a POSIX shell when it holds anything but the
+// characters a repository key usually has, so a command a page prints can
+// be pasted as it is.
+func shellWord(s string) string {
+	plain := func(r rune) bool {
+		return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || strings.ContainsRune("._/:@%+=,-", r)
+	}
+	safe := s != "" && !strings.ContainsFunc(s, func(r rune) bool { return !plain(r) })
+	if safe {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// revisionText is " (packaged revision 3)" for a packaged policy's
+// revision, printed after its hash, and "" for none.
+func revisionText(revision int) string {
+	if revision == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" (packaged revision %d)", revision)
 }
 
 // windowSummary is "landed window 2026-09-30 → 2026-10-07 UTC: 7 days
@@ -820,12 +843,27 @@ func cardFacts(m *Model, r *Repo) string {
 	return strings.Join(facts, " · ")
 }
 
-// skippedText is "skipped paths: 4 denied, ... · blame ignore-revs: root
-// (feedfacefeed, 1 commit)"; the ignore-revs part only when blame ran.
-func skippedText(r *Repo, code func(string) string) string {
+// skippedText is "skipped paths: 4 denied, ..., 1 of them only in the
+// history (stillhere paths --skipped --run 7 lists them) · blame
+// ignore-revs: root (feedfacefeed, 1 commit)": the counts cover the paths
+// the history touched as well as those at HEAD, which the line says when
+// any is not at HEAD; the command, only for a stored run, names that run,
+// so it lists the card's paths after a newer scan too, and the repository
+// when the run has several; the ignore-revs part only when blame ran.
+func skippedText(m *Model, r *Repo, code func(string) string) string {
 	s := r.Skipped
 	out := fmt.Sprintf("skipped paths: %d denied, %d too big, %d generated header, %d unclassified",
 		s.DeniedPath, s.TooBig, s.GeneratedHeader, s.Unclassified)
+	if s.HistoryOnly > 0 {
+		out += fmt.Sprintf(", %d of them only in the history", s.HistoryOnly)
+	}
+	if m.Kind == KindScan && m.Run != nil && s.DeniedPath+s.TooBig+s.GeneratedHeader+s.Unclassified > 0 {
+		cmd := fmt.Sprintf("stillhere paths --skipped --run %d", m.Run.ID)
+		if len(m.Repos) > 1 {
+			cmd += " --repo " + shellWord(r.Key)
+		}
+		out += " (" + code(cmd) + " lists them)"
+	}
 	if !r.LineFacts {
 		return out
 	}
@@ -857,7 +895,7 @@ func textCard(p *printer, m *Model, r *Repo) {
 	if c.Concentration != nil {
 		p.wrapped("  ", "  ", concentrationText(c.Concentration))
 	}
-	p.wrapped("  ", "  ", skippedText(r, clean))
+	p.wrapped("  ", "  ", skippedText(m, r, clean))
 	if len(c.Areas) > 0 {
 		p.blank()
 		p.line("  Areas: top-level directories, by the prod lines people hold there")

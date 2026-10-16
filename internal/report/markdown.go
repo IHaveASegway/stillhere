@@ -338,7 +338,7 @@ func mdCard(p *printer, m *Model, r *Repo) {
 	if c.Concentration != nil {
 		p.line("- " + mdText(concentrationText(c.Concentration)))
 	}
-	p.line("- " + skippedText(r, mdCode))
+	p.line("- " + skippedText(m, r, mdCode))
 	if len(c.Areas) > 0 {
 		p.blank()
 		p.line("### Areas")
