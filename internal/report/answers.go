@@ -575,24 +575,46 @@ func aucRow(a MetricAUC) []string {
 	auc := "—"
 	if a.AUC != nil {
 		auc = fmt.Sprintf("%.2f", *a.AUC)
+		if a.Lo != nil && a.Hi != nil {
+			auc += fmt.Sprintf(" (%.2f–%.2f)", *a.Lo, *a.Hi)
+		}
 	}
-	status := "meets the bar (AUC ≥ 0.7 on ≥ 50 labels)"
-	if a.Beta {
-		status = "beta"
-	}
-	return []string{a.Metric, auc, grouped(a.N), grouped(a.Meaningful), grouped(a.Routine), status}
+	return []string{a.Metric, auc, grouped(a.N), grouped(a.Meaningful), grouped(a.Routine), a.status()}
 }
 
+// status says whether the labels clear the bar, and when not, what is
+// short: short enough for a table cell.
+func (a MetricAUC) status() string {
+	switch {
+	case !a.Beta:
+		return "clears the bar"
+	case a.AUC == nil:
+		return "below: no AUC"
+	case a.N < BarLabels:
+		return fmt.Sprintf("below: n < %d", BarLabels)
+	}
+	return fmt.Sprintf("below: AUC < %.1f", BarAUC)
+}
+
+// validateBar says what the status column means.
+var validateBar = fmt.Sprintf("The bar: AUC ≥ %.1f on at least %d scored labels. Labels that clear it are evidence about the code "+
+	"they judge; the beta mark on stillhere's ranks changes only when a metric's published Validity line does "+
+	"(docs/validation.md).", BarAUC, BarLabels)
+
 func (v *Validation) summary() string {
-	return fmt.Sprintf("%s from %s: %d meaningful, %d routine, %d noise · %d not matched to a landing of the run",
-		plural(v.Labels, "labelled row", "labelled rows"), plural(v.Labellers, "labeller", "labellers"),
+	who := "no labeller named"
+	if v.Labellers > 0 {
+		who = "from " + plural(v.Labellers, "labeller", "labellers")
+	}
+	return fmt.Sprintf("%s, %s, label %s: %d meaningful, %d routine, %d noise · %d not matched to a change of the run",
+		plural(v.Labels, "labelled row", "labelled rows"), who, plural(v.Changes, "change", "changes"),
 		v.Meaningful, v.Routine, v.Noise, v.Unmatched)
 }
 
 func (v *Validation) writeText(p *printer) {
 	p.line("validate · " + provenanceText(v.Provenance))
 	p.wrapped("  ", "  ", v.summary())
-	p.line("  AUC: the chance a meaningful change scores above a routine one; 0.5 is chance")
+	p.wrapped("  ", "  ", "AUC: the chance a meaningful change scores above a routine one; 0.5 is chance; in parentheses, its 95% interval")
 	p.blank()
 	if len(v.Metrics) == 0 {
 		p.line("  no ranked metric scored a labelled change")
@@ -604,6 +626,8 @@ func (v *Validation) writeText(p *printer) {
 			rows = append(rows, aucRow(a))
 		}
 		p.textTable("  ", cols, rows)
+		p.blank()
+		p.wrapped("  ", "  ", validateBar)
 	}
 	textCaveats(p, "", "What could make this wrong", v.Caveats, false)
 }
@@ -613,7 +637,7 @@ func (v *Validation) writeMarkdown(p *printer) {
 	p.blank()
 	p.line("- " + provenanceText(v.Provenance))
 	p.line("- " + v.summary())
-	p.line("- AUC: the chance a meaningful change scores above a routine one; 0.5 is chance.")
+	p.line("- AUC: the chance a meaningful change scores above a routine one; 0.5 is chance. In parentheses, its 95% bootstrap interval.")
 	p.blank()
 	if len(v.Metrics) == 0 {
 		p.line("No ranked metric scored a labelled change.")
@@ -627,6 +651,8 @@ func (v *Validation) writeMarkdown(p *printer) {
 			rows = append(rows, row)
 		}
 		p.mdTable(cols, rows)
+		p.blank()
+		p.line(validateBar)
 	}
 	mdCaveats(p, "##", v.Caveats, false)
 }

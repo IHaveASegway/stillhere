@@ -55,7 +55,7 @@ func (durableV1) Definition() Definition {
 		Gaming: "Writing in stable, low-traffic code and avoiding risky areas. Load-bearing (M5) is the counterweight.",
 		Oracle: "testdata/fixture/SPEC.md#change-oracles-m1-testchangeoracles (main fixture and sibling) and " +
 			"testdata/fixture/SPEC.md#binary-files-fixturebinary (binary files, and text files moved across roles)",
-		Validity: "Unvalidated until the M2 labelled-sample check (stillhere validate, AUC >= 0.7 on at least 50 labelled changes).",
+		Validity: betaValidity,
 	}
 }
 
@@ -99,6 +99,11 @@ func (durableV1) Clusters(in *Input, scope domain.Scope) (RankInput, error) {
 	}.withData(v.who, rankData(durableClusters(v), func(k *cluster) rank.Cluster {
 		return rank.Cluster{Change: k.landing.sha, Num: float64(k.surviving), Den: float64(k.traced)}
 	})), nil
+}
+
+// scores names the changes durable@1's clusters measure (Scorer.Scores).
+func (durableV1) scores() string {
+	return "a change with a person's commit that added a prod line whose fate blame can tell, in a repository blame ran in"
 }
 
 // durableClusters returns the cohort's clusters that added a prod line

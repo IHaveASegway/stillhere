@@ -31,7 +31,11 @@ const (
 // last 90 days.
 type reviewsGiven struct{}
 
-var _ Ranked = reviewsGiven{}
+var (
+	_ Ranked         = reviewsGiven{}
+	_ changeMeasured = reviewsGiven{}
+	_ scoring        = reviewsGiven{}
+)
 
 // Definition returns reviews_given@1's catalog entry.
 func (reviewsGiven) Definition() Definition {
@@ -51,7 +55,7 @@ func (reviewsGiven) Definition() Definition {
 		Gaming: "rubber-stamp approvals, which the share of approvals with no comment shows next to the count; " +
 			"reviewing many trivial pull requests, such as dependency bumps",
 		Oracle:   "testdata/github/README.md#reviews_given1 (TestGitHubSync)",
-		Validity: "unvalidated until the M2 labelled-sample check",
+		Validity: betaValidity,
 	}
 }
 
@@ -150,6 +154,48 @@ func (m reviewsGiven) Clusters(in *Input, scope domain.Scope) (RankInput, error)
 		slices.SortFunc(cs, func(a, b rank.Cluster) int { return cmp.Compare(a.Change, b.Change) })
 	}
 	return ri.withData(in.who(), data), nil
+}
+
+// measureChanges is reviews_given@1's measure of a change (#77,
+// docs/metrics.md#validity-checks): the people other than its author who
+// submitted a review of its pull request that reviewsByOthers counts, bots
+// left out as its clusters leave them out, at any time before Now. The
+// window selects the change, by when it landed (Scorer.Score), not its
+// reviews, so a pull request merged early in the window keeps the reviews
+// it got before the window began. A pull request that no one else
+// reviewed is measured 0. A change that is no pull request of the run's
+// GitHub data is not measured: a direct push, a merge GitHub's API does
+// not list (a security advisory's "Merge commit from fork") and a pull
+// request a sync missed look alike in the replica, so a 0 there would read
+// a gap in the data as no review.
+func (reviewsGiven) measureChanges(in *Input) func(*Change) (float64, bool) {
+	if in == nil || in.Facts == nil || in.Facts.Forge == nil {
+		return func(*Change) (float64, bool) { return 0, false }
+	}
+	who, now := in.who(), in.Facts.Now
+	pulls := map[string]*domain.PullRequest{}
+	for i := range in.Facts.Forge.PullRequests {
+		p := &in.Facts.Forge.PullRequests[i]
+		pulls[p.ID] = p
+	}
+	return func(c *Change) (float64, bool) {
+		if c.Pull == nil || pulls[c.Pull.ID] == nil {
+			return 0, false
+		}
+		reviewers := map[domain.Subject]bool{}
+		reviewsByOthers(pulls[c.Pull.ID], domain.Window{Until: now}, who, func(_ *domain.Review, s domain.Subject) {
+			if !who.Bot(s.Key) {
+				reviewers[s] = true
+			}
+		})
+		return float64(len(reviewers)), true
+	}
+}
+
+// scores names the changes measureChanges measures.
+func (reviewsGiven) scores() string {
+	return "a pull request of the run's GitHub data, which a direct push, a merge GitHub's API does not list and a " +
+		"pull request the sync did not copy are not"
 }
 
 // reviewsGivenWindow is [now − 90 days, now).

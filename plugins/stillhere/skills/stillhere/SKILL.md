@@ -133,9 +133,12 @@ refused with the calls that answer instead.
   reviewers (the last 90 days) come only from repositories whose GitHub data the
   run read: elsewhere the list is empty, which says nothing about reviews, and
   `provenance.forge` does not list that repository.
-- **The ranked metrics are unvalidated** until the labelled-sample check; every
-  answer that shows their values, ranks or clusters carries a `validity` caveat
-  that says so: repeat it with the numbers.
+- **The ranked metrics are beta** until a lead's labels clear the bar (the
+  lead runs `stillhere label`, then `stillhere validate`; docs/validation.md);
+  every answer that shows their values, ranks or clusters carries a `validity`
+  caveat that says so: repeat it with the numbers. You cannot label for the
+  user: labels are a person's judgment of colleagues' work, and only a lead's
+  count.
 - Reviews appear only once the user has run `stillhere sync github` and scanned
   since. A `forge-incomplete` caveat means the last sync found pull requests on
   GitHub that the copy lacks: the review numbers it qualifies may be low. Say

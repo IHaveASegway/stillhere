@@ -520,8 +520,8 @@ func NewMe(in *MeInput) *Me {
 
 // ValidityCaveats says how far the ranked metrics among ms are validated,
 // for an answer that shows their values, ranks or clusters: each one's
-// validity note (MetricInfo.Validity), such as durable@1's "unvalidated
-// until the labelled-sample check". A caveat goes where the number it
+// validity note (MetricInfo.Validity), such as durable@1's "Beta: not yet
+// checked against a lead's labels". A caveat goes where the number it
 // qualifies is (#48), so every answer that shows a ranked metric's number
 // carries its note, not its rank table alone (#69). Metrics that share a
 // note share one caveat, which names them; a metric that is not ranked, or
@@ -568,6 +568,17 @@ func ForgeCaveats(run *domain.Run, fs *domain.FactSet, forge *ForgeRead, metrics
 		}
 	}
 	return out
+}
+
+// ForgeCaveatsAlone is ForgeCaveats for one metric that reads GitHub data,
+// as a section about that metric alone says them (forge-not-synced): even
+// in a run that read no GitHub data, so that validate and label can say
+// why reviews_given@1 scored nothing.
+func ForgeCaveatsAlone(run *domain.Run, fs *domain.FactSet, forge *ForgeRead, metric string) []Caveat {
+	if !forge.reads(metric) {
+		return nil
+	}
+	return answerBuilder(run, fs, forge).forgeCaveats(reposWith(fs, nil), metric, true)
 }
 
 // datedProvenance is the provenance of an answer over repos, whose GitHub

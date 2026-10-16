@@ -221,25 +221,41 @@ type MeRank struct {
 
 // Validation is how well each ranked metric separates the changes a person
 // labelled meaningful from those labelled routine
-// (docs/metrics.md#validity-checks).
+// (docs/metrics.md#validity-checks). A change counts once: one label per
+// change and labeller, the last row winning, and over several labellers
+// the label most of them gave.
 type Validation struct {
 	Provenance Provenance  `json:"provenance"`
-	Labels     int         `json:"labels"`     // labelled rows read
-	Labellers  int         `json:"labellers"`  // distinct labellers
-	Meaningful int         `json:"meaningful"` // rows labelled meaningful
+	Labels     int         `json:"labels"`     // labelled rows read (one labeller's, with --labeller)
+	Labellers  int         `json:"labellers"`  // distinct labellers named; rows that name none are no labeller's
+	Changes    int         `json:"changes"`    // the distinct changes of the run the rows label, each with one label
+	Meaningful int         `json:"meaningful"` // changes labelled meaningful
 	Routine    int         `json:"routine"`
 	Noise      int         `json:"noise"`     // read and left out of every AUC
-	Unmatched  int         `json:"unmatched"` // rows whose change is not a landing of the run, or is ambiguous
+	Unmatched  int         `json:"unmatched"` // rows that name no change of the run (a landing or a pull request), or several
 	Metrics    []MetricAUC `json:"metrics"`   // sorted by metric id
 	Caveats    []Caveat    `json:"caveats"`
 }
+
+// The bar a ranked metric's labels clear (product.md, ADR 0014): an AUC of
+// at least BarAUC on at least BarLabels of its scored labels.
+const (
+	BarAUC    = 0.7
+	BarLabels = 50
+)
 
 // MetricAUC is one metric's separation of the labelled changes.
 type MetricAUC struct {
 	Metric     string   `json:"metric"`
 	AUC        *float64 `json:"auc"` // 0.5 is chance; nil when no meaningful or no routine change was scored
-	N          int      `json:"n"`   // labelled changes the metric scored
+	Lo         *float64 `json:"lo"`  // 95% bootstrap interval of AUC (rank.AUCInterval), resampling changes; nil with AUC
+	Hi         *float64 `json:"hi"`
+	N          int      `json:"n"` // distinct labelled changes the metric scored, each at its own grain (metrics.Scorer)
 	Meaningful int      `json:"meaningful"`
 	Routine    int      `json:"routine"`
-	Beta       bool     `json:"beta"` // below AUC 0.7 or 50 scored labels: the metric stays marked beta
+	// Beta is true when these labels do not clear the bar (AUC 0.7 on 50
+	// scored labels). False says they clear it, which is evidence about the
+	// labelled code: the beta mark in stillhere's output changes only with
+	// the metric's published Validity line (ADR 0014).
+	Beta bool `json:"beta"`
 }

@@ -31,7 +31,7 @@ func (simplifyingV1) Definition() Definition {
 			"back later is not detected in v1.",
 		Gaming:   "Deleting then re-adding. Revert detection catches the plain case: neither the reverted landing nor the revert counts.",
 		Oracle:   "testdata/fixture/SPEC.md#change-oracles-m1-testchangeoracles (main fixture and sibling)",
-		Validity: "Unvalidated until the M2 labelled-sample check (stillhere validate, AUC >= 0.7 on at least 50 labelled changes).",
+		Validity: betaValidity,
 	}
 }
 
@@ -79,6 +79,13 @@ func (simplifyingV1) Clusters(in *Input, scope domain.Scope) (RankInput, error) 
 	}.withData(v.who, rankData(clusters, func(k *cluster) rank.Cluster {
 		return rank.Cluster{Change: k.landing.sha, Num: float64(k.removed), Block: w.Week(k.landing.time)}
 	})), nil
+}
+
+// scores names the changes simplifying@1's clusters measure
+// (Scorer.Scores).
+func (simplifyingV1) scores() string {
+	return "a change with a person's commit that is no merge, revert or reverted change, in a repository whose patches " +
+		"the scan read"
 }
 
 // simplifyingClusters returns the window's clusters and the landings among

@@ -7,6 +7,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/IHaveASegway/stillhere/internal/domain"
 	"github.com/IHaveASegway/stillhere/internal/rank"
 )
 
@@ -58,6 +59,32 @@ func TestAUC(t *testing.T) {
 		if got, want := rank.AUC(pos, neg), countPairs(pos, neg); got != want {
 			t.Fatalf("AUC(%v, %v) = %v, but counting every pair gives %v", pos, neg, got, want)
 		}
+	}
+
+	// Its 95% interval (validate prints it beside the AUC): a perfect
+	// separation leaves no replicate below 1, a sample holds its own AUC,
+	// the same labels give the same interval, in any order, and with no
+	// pair to compare both ends are 0.5, as the AUC is.
+	id := domain.MetricID{Name: "durable", Version: 1}
+	if lo, hi := rank.AUCInterval(id, []float64{5, 4}, []float64{3, 1, 2}); lo != 1 || hi != 1 {
+		t.Errorf("AUCInterval of a perfect separation is [%v, %v], want [1, 1]", lo, hi)
+	}
+	pos, neg := []float64{3, 2, 2, 5, 1, 4}, []float64{2, 1, 0, 4, 3}
+	lo, hi := rank.AUCInterval(id, pos, neg)
+	if auc := rank.AUC(pos, neg); lo > auc || hi < auc || lo >= hi {
+		t.Errorf("AUCInterval(%v, %v) is [%v, %v], which does not hold the AUC %v with some width", pos, neg, lo, hi, auc)
+	}
+	if lo2, hi2 := rank.AUCInterval(id, pos, neg); lo2 != lo || hi2 != hi {
+		t.Errorf("AUCInterval gives [%v, %v] and then [%v, %v] for the same labels", lo, hi, lo2, hi2)
+	}
+	rpos, rneg := slices.Clone(pos), slices.Clone(neg)
+	slices.Reverse(rpos)
+	slices.Reverse(rneg)
+	if lo2, hi2 := rank.AUCInterval(id, rpos, rneg); lo2 != lo || hi2 != hi {
+		t.Errorf("AUCInterval gives [%v, %v] for the labels and [%v, %v] for the same labels in reverse order", lo, hi, lo2, hi2)
+	}
+	if lo, hi := rank.AUCInterval(id, nil, neg); lo != 0.5 || hi != 0.5 {
+		t.Errorf("AUCInterval with no positives is [%v, %v], want [0.5, 0.5]", lo, hi)
 	}
 }
 
