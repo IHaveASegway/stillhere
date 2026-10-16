@@ -19,7 +19,7 @@ type Input struct {
 	Who     People               // display names and bots, over Facts
 	Values  []domain.MetricValue // every value computed over Facts
 	Ranks   []RankSet            // rank intervals for the metrics named by --rank, in the order named
-	Landed  Landed               // how the landed@1 window was set
+	Landed  Landed               // how the landed window (landed@2's, and landed@1's) was set
 	History domain.Window        // the landing window the history covers
 	Timings *Timings
 	// Scope is the rank scope a scan was given: domain.ScopeAll adds an
@@ -34,7 +34,7 @@ type Input struct {
 	Commands Commands
 }
 
-// Landed is how the landed@1 window was set: by the command line, or by the
+// Landed is how the landed window was set: by the command line, or by the
 // policy's [week] table.
 type Landed struct {
 	Days        int
@@ -100,11 +100,15 @@ func Build(in *Input) *Model {
 	for _, g := range b.groups {
 		m.Overviews = append(m.Overviews, b.overview(domain.Scope{Kind: domain.ScopeGroup, Key: g.Name}, b.members(g.Repos)))
 	}
+	for i := range m.Overviews {
+		m.Overviews[i].Repos = repoRows(m.Repos, b.scopeMembers(domain.Scope{Kind: m.Overviews[i].Scope.Kind, Key: m.Overviews[i].Scope.Key}))
+	}
 	for _, rs := range in.Ranks {
 		m.Ranks = append(m.Ranks, b.rankTable(rs))
 	}
 	m.Caveats = b.runCaveats(m)
 	m.Metrics = b.metricIDs()
+	m.addrs = runAddresses(in.Who)
 	return m
 }
 
@@ -284,6 +288,18 @@ func (b *builder) card(rf *domain.RepoFacts, still *StillHere) RepoCard {
 	if c.AIAssisted = b.share(MetricAIAssisted, scope, nil); c.AIAssisted != nil {
 		used = append(used, MetricAIAssisted)
 	}
+	if c.ReviewCoverage = b.reviewCoverage(scope); c.ReviewCoverage != nil {
+		used = append(used, MetricReviewCoverage)
+	}
+	for _, a := range Areas(b.in.Values, rf.Repo.Key) {
+		c.Areas = append(c.Areas, a)
+		if a.KnowledgeLoss != nil {
+			used = append(used, MetricKnowledgeLoss)
+		}
+		if a.Concentration != nil {
+			used = append(used, MetricConcentration)
+		}
+	}
 	b.use(used...)
 	c.Provenance = b.provenance([]*domain.RepoFacts{rf}, used)
 	// A card is read on its own (the MCP server hands one to an agent), so
@@ -331,6 +347,9 @@ func (b *builder) overview(scope domain.Scope, members []*domain.RepoFacts) Over
 	if o.AIAssisted = b.share(MetricAIAssisted, scope, members); o.AIAssisted != nil {
 		used = append(used, MetricAIAssisted)
 	}
+	if o.ReviewCoverage = b.reviewCoverage(scope); o.ReviewCoverage != nil {
+		used = append(used, MetricReviewCoverage)
+	}
 	bots := map[string]bool{}
 	if o.People != nil {
 		for _, r := range o.People.Bots {
@@ -340,7 +359,13 @@ func (b *builder) overview(scope domain.Scope, members []*domain.RepoFacts) Over
 		}
 	}
 	if o.Week != nil {
-		o.Totals.Landers = len(o.Week.Humans)
+		// A person whose only part is a merge they landed has a row with no
+		// landing of their own: landers are the people with one.
+		for _, r := range o.Week.Humans {
+			if r.Landings > 0 {
+				o.Totals.Landers++
+			}
+		}
 		for _, r := range o.Week.Bots {
 			bots[r.Email] = true
 		}
@@ -350,6 +375,35 @@ func (b *builder) overview(scope domain.Scope, members []*domain.RepoFacts) Over
 	o.Provenance = b.provenance(members, used)
 	o.Caveats = append(b.scopeCaveats(members, scope, o.AIAssisted != nil), b.forgeSectionCaveats(members, used)...)
 	return o
+}
+
+// repoRows lays out an overview's members on one line each (#105), from
+// the cards already built, in report order.
+func repoRows(repos []Repo, members []*domain.RepoFacts) []RepoRow {
+	in := make(map[string]bool, len(members))
+	for _, rf := range members {
+		in[rf.Repo.Key] = true
+	}
+	var out []RepoRow
+	for i := range repos {
+		r := &repos[i]
+		if !in[r.Key] {
+			continue
+		}
+		c := &r.Card
+		row := RepoRow{
+			Name: r.Name, Key: r.Key, Status: r.Status,
+			LandingsWindow: c.Landings.Window, LandingsHistory: c.Landings.History,
+			People: c.People, ProdLines: c.Size.ProdLines, KnowledgeLoss: c.KnowledgeLoss,
+			ReviewCoverage: c.ReviewCoverage, LastLanding: c.Landings.Last,
+		}
+		if c.Concentration != nil {
+			n := c.Concentration.AuthorsInPrefix
+			row.AuthorsInPrefix = &n
+		}
+		out = append(out, row)
+	}
+	return out
 }
 
 // members returns the run's repositories with the given keys, in report
@@ -401,17 +455,29 @@ func (b *builder) totals(members []*domain.RepoFacts) Totals {
 	return t
 }
 
-// weekTable reads landed@1 in a scope.
+// weekTable reads landed@2 in a scope (#108): each person's part, and the
+// scope's own totals, which its value about the repository, the group or
+// the whole run holds.
 func (b *builder) weekTable(scope domain.Scope) *WeekTable {
 	t := &WeekTable{}
+	if v, ok := b.ix.aggregate(MetricLanded, scope); ok {
+		lines, prod := landedLinesOf(v)
+		t.Total = &WeekTotal{
+			Landings: count(v.Value), Commits: count(v.Detail[detailCommits]), Merged: count(v.Detail[detailMerged]),
+			LinesAdded: lines, ProdLinesAdded: prod, LinesUnknown: count(v.Detail[detailLinesUnknown]),
+		}
+	}
 	for _, v := range b.ix.people(MetricLanded, scope) {
 		email := v.Subject.Key
 		name, withheld := b.person(email)
+		lines, prod := landedLinesOf(v)
 		row := WeekRow{
 			Email: email, Name: name, NameWithheld: withheld, Bot: b.bot(email),
-			Commits:        count(v.Value),
-			LinesAdded:     count(v.Detail[detailLinesAdded]),
-			ProdLinesAdded: count(v.Detail[detailProdLinesAdded]),
+			Landings:   count(v.Value),
+			Commits:    count(v.Detail[detailCommits]),
+			Merged:     count(v.Detail[detailMerged]),
+			LinesAdded: lines, ProdLinesAdded: prod,
+			LinesUnknown: count(v.Detail[detailLinesUnknown]),
 		}
 		if row.Bot {
 			t.Bots = append(t.Bots, row)
@@ -419,17 +485,42 @@ func (b *builder) weekTable(scope domain.Scope) *WeekTable {
 			t.Humans = append(t.Humans, row)
 		}
 	}
+	// The window's sort key, then landings, then email; unknown lines sort
+	// below every known count.
 	byCommits := b.in.Landed.Sort == "commits"
 	order := func(x, y WeekRow) int {
 		if byCommits {
-			return cmp.Or(cmp.Compare(y.Commits, x.Commits), cmp.Compare(x.Email, y.Email))
+			return cmp.Or(cmp.Compare(y.Commits, x.Commits), cmp.Compare(y.Landings, x.Landings), cmp.Compare(x.Email, y.Email))
 		}
-		return cmp.Or(cmp.Compare(y.LinesAdded, x.LinesAdded), cmp.Compare(x.Email, y.Email))
+		return cmp.Or(cmp.Compare(linesOr(y.LinesAdded), linesOr(x.LinesAdded)), cmp.Compare(y.Landings, x.Landings),
+			cmp.Compare(x.Email, y.Email))
 	}
 	slices.SortFunc(t.Humans, order)
 	slices.SortFunc(t.Bots, order)
 	b.use(MetricLanded)
 	return t
+}
+
+// landedLinesOf reads a landed@2 value's lines: nil when they are unknown,
+// which the metric says by leaving both keys out (#74).
+func landedLinesOf(v domain.MetricValue) (lines, prod *int) {
+	if n, ok := v.Detail[detailLinesAdded]; ok {
+		l := count(n)
+		lines = &l
+	}
+	if n, ok := v.Detail[detailProdLinesAdded]; ok {
+		p := count(n)
+		prod = &p
+	}
+	return lines, prod
+}
+
+// linesOr is a count of lines for sorting: an unknown one is -1.
+func linesOr(n *int) int {
+	if n == nil {
+		return -1
+	}
+	return *n
 }
 
 // stillHere reads surviving@1 in a scope.
@@ -475,12 +566,36 @@ func (b *builder) concentration(scope domain.Scope) *Concentration {
 	if !ok {
 		return nil
 	}
+	return concentrationOf(v)
+}
+
+// concentrationOf reads one knowledge_concentration@1 value: a scope's or an
+// area's.
+func concentrationOf(v domain.MetricValue) *Concentration {
 	return &Concentration{
 		Metric:            MetricConcentration,
 		FilesWithMajority: count(v.Detail[detailFilesWithMajority]),
 		AuthorsInPrefix:   count(v.Value),
 		BotsInPrefix:      count(v.Detail[detailBotsInPrefix]),
 		Label:             ConcentrationLabel,
+	}
+}
+
+// reviewCoverage reads review_coverage@1 about a scope as a whole: its
+// value about the repository, the group or the whole run (#107). nil when
+// the metric gave none, as without GitHub data for the scope.
+func (b *builder) reviewCoverage(scope domain.Scope) *ReviewCoverage {
+	v, ok := b.ix.aggregate(MetricReviewCoverage, scope)
+	if !ok {
+		return nil
+	}
+	return &ReviewCoverage{
+		Metric: MetricReviewCoverage, Window: intervalOf(v.Window), Num: v.Num, Den: v.Den, Value: v.Value,
+		ViaPullRequest:    count(v.Detail[detailViaPullRequest]),
+		Direct:            count(v.Detail[detailDirect]),
+		ApprovedNoComment: count(v.Detail[detailApprovedNoComment]),
+		BotLandings:       count(v.Detail[detailBotLandings]),
+		Repos:             count(v.Detail[detailRepos]),
 	}
 }
 
@@ -569,7 +684,22 @@ func (b *builder) rankTable(rs RankSet) RankTable {
 	t := RankTable{
 		Metric: rs.Metric.ID, Question: rs.Metric.Question,
 		Scope: scopeOf(rs.Scope), Window: intervalOf(rs.Window),
-		Percent: rs.Percent, MinN: rs.MinN,
+		Percent: rs.Percent, MinN: rs.MinN, Beside: rankBeside[rs.Metric.ID],
+	}
+	// beside is the person's value of the table's Beside key, from their
+	// value in the table's scope and window (PF-5).
+	beside := func(email string) *float64 {
+		if t.Beside == "" {
+			return nil
+		}
+		v, ok := b.ix.person(rs.Metric.ID, rs.Scope, email)
+		if !ok || !sameWindow(v.Window, rs.Window) {
+			return nil
+		}
+		if n, ok := v.Detail[t.Beside]; ok {
+			return &n
+		}
+		return nil
 	}
 	for _, ri := range rs.Intervals {
 		if ri.Subject.Kind != domain.SubjectPerson {
@@ -580,7 +710,7 @@ func (b *builder) rankTable(rs RankSet) RankTable {
 		row := RankRow{
 			Email: email, Name: name, NameWithheld: withheld,
 			RankLo: ri.RankLo, RankHi: ri.RankHi,
-			Estimate: ri.Estimate, Lo: ri.Lo, Hi: ri.Hi, N: ri.N,
+			Estimate: ri.Estimate, Lo: ri.Lo, Hi: ri.Hi, N: ri.N, Beside: beside(email),
 		}
 		switch {
 		case b.bot(email):
@@ -601,7 +731,7 @@ func (b *builder) rankTable(rs RankSet) RankTable {
 		if email := v.Subject.Key; b.bot(email) && !listed[email] && sameWindow(v.Window, rs.Window) {
 			name, withheld := b.person(email)
 			t.Bots = append(t.Bots, RankRow{Email: email, Name: name, NameWithheld: withheld,
-				Estimate: v.Value, Lo: v.Value, Hi: v.Value, N: v.N})
+				Estimate: v.Value, Lo: v.Value, Hi: v.Value, N: v.N, Beside: beside(email)})
 		}
 	}
 	slices.SortFunc(t.Ranked, func(x, y RankRow) int {
@@ -680,7 +810,9 @@ func (b *builder) forgeSectionCaveats(members []*domain.RepoFacts, used []string
 	for _, id := range slices.Compact(slices.Sorted(slices.Values(used))) {
 		if b.in.Forge.reads(id) {
 			out = append(out, b.forgeCaveats(members, id, false)...)
-			out = append(out, b.forgeElsewhere(others, id)...)
+			if forgeAnywhere[id] {
+				out = append(out, b.forgeElsewhere(others, id)...)
+			}
 		}
 	}
 	return out
@@ -751,6 +883,10 @@ func (b *builder) landingsOf(rf *domain.RepoFacts) Landings {
 	for _, ld := range rf.Landings {
 		if w.Contains(ld.Time) {
 			l.Window++
+		}
+		if l.Last == nil || ld.Time.After(*l.Last) {
+			t := ld.Time
+			l.Last = &t
 		}
 	}
 	return l

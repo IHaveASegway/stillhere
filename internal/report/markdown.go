@@ -46,7 +46,7 @@ func (m *Model) writeMarkdown(p *printer) {
 	}
 	p.line(title)
 	p.blank()
-	p.line("- As of " + day(m.Now) + " · " + policyText(m, mdText))
+	p.line("- As of " + dayUTC(m.Now) + " · " + policyText(m, mdText))
 	p.line("- " + windowSummary(m, mdText))
 	if m.Kind == KindScan {
 		p.line("- " + historySummary(m))
@@ -64,7 +64,9 @@ func (m *Model) writeMarkdown(p *printer) {
 	}
 	mdCaveats(p, "##", m.Caveats, false)
 	for i := range m.Overviews {
-		mdOverview(p, m, &m.Overviews[i])
+		if !m.repeats(&m.Overviews[i]) {
+			mdOverview(p, m, &m.Overviews[i])
+		}
 	}
 	for i := range m.Ranks {
 		mdRanks(p, "##", &m.Ranks[i])
@@ -118,8 +120,24 @@ func mdOverview(p *printer, m *Model, o *Overview) {
 	if line := shareLine(o.KnowledgeLoss, o.AIAssisted, o.BotShare); line != "" {
 		p.line("- " + mdText(line))
 	}
+	if o.ReviewCoverage != nil {
+		p.line("- " + mdText(coverageText(o.ReviewCoverage, t.Repos)))
+	}
 	if o.Concentration != nil {
 		p.line("- " + mdText(concentrationText(o.Concentration)))
+	}
+	if len(o.Repos) > 1 {
+		p.blank()
+		p.line("### Repositories")
+		p.blank()
+		legend := repoLegend(m, o.Repos)
+		p.line(mdText(strings.ToUpper(legend[:1]) + legend[1:] + "."))
+		p.blank()
+		cols, rows := repoTable(m, o.Repos, mdText)
+		for i := range cols {
+			cols[i].head = strings.ToUpper(cols[i].head[:1]) + cols[i].head[1:]
+		}
+		p.mdTable(cols, rows)
 	}
 	if o.People != nil {
 		p.blank()
@@ -157,10 +175,10 @@ func mdStillHere(p *printer, t *StillHere) {
 		return
 	}
 	cols := []column{{head: "Person"}, {head: "Prod lines", right: true}, {head: "Majority files", right: true},
-		{head: "Other roles"}}
+		{head: "Landings 365d", right: true}, {head: "Other roles"}}
 	row := func(r StillHereRow) []string {
 		return []string{p.person(r.Email, r.Name, r.NameWithheld, mdText), grouped(r.ProdNonblankLines),
-			grouped(r.MajorityFiles), mdText(otherRoles(r.LinesByRole))}
+			grouped(r.MajorityFiles), grouped(r.Landings365d), mdText(otherRoles(r.LinesByRole))}
 	}
 	mdWithBots(p, cols, t.Humans, t.Bots, row)
 }
@@ -174,27 +192,36 @@ func mdWeek(p *printer, level string, m *Model, t *WeekTable) {
 		p.line("Nothing landed in the window.")
 		return
 	}
-	p.line("Sorted by " + mdID(m.Window.Sort) + ". Lines added count numstat insertions, blank lines included, " +
+	if t.Total != nil {
+		p.line(weekTotalText(t.Total) + ".")
+		p.blank()
+	}
+	p.line("Sorted by " + mdID(m.Window.Sort) + ". A landing counts for each person who wrote one of its commits, so a " +
+		"merged branch counts for its authors. Lines added count their commits' numstat insertions, blank lines included, " +
 		"on paths that received a role; they are activity, not comparable to surviving lines.")
 	p.blank()
-	cols := []column{{head: "Person"}, {head: "Commits", right: true}, {head: "Lines added", right: true},
-		{head: "Prod lines added", right: true}}
-	row := func(r WeekRow) []string {
-		return []string{p.person(r.Email, r.Name, r.NameWithheld, mdText), grouped(r.Commits), grouped(r.LinesAdded),
-			grouped(r.ProdLinesAdded)}
+	cols, row := weekColumns(p, t, mdText)
+	for i := range cols {
+		cols[i].head = strings.ToUpper(cols[i].head[:1]) + cols[i].head[1:]
 	}
 	mdWithBots(p, cols, t.Humans, t.Bots, row)
 }
 
 // mdWithBots prints the humans' table, then the bots' under a label of
-// their own.
+// their own, the first pageRows of each, and counts the rest (SR-14).
 func mdWithBots[R any](p *printer, cols []column, humans, bots []R, row func(R) []string) {
+	humans, hiddenH := shown(p, humans, pageRows)
+	bots, hiddenB := shown(p, bots, pageRows)
 	var rows [][]string
 	for _, r := range humans {
 		rows = append(rows, row(r))
 	}
 	if len(rows) > 0 {
 		p.mdTable(cols, rows)
+	}
+	if s := moreText(hiddenH, "person", "people"); s != "" {
+		p.blank()
+		p.line(strings.ToUpper(s[:1]) + s[1:] + ".")
 	}
 	if len(bots) == 0 {
 		return
@@ -209,6 +236,10 @@ func mdWithBots[R any](p *printer, cols []column, humans, bots []R, row func(R) 
 		rows = append(rows, row(r))
 	}
 	p.mdTable(cols, rows)
+	if s := moreText(hiddenB, "bot", "bots"); s != "" {
+		p.blank()
+		p.line(strings.ToUpper(s[:1]) + s[1:] + ".")
+	}
 }
 
 func mdRanks(p *printer, level string, t *RankTable) {
@@ -223,24 +254,16 @@ func mdRanks(p *printer, level string, t *RankTable) {
 	if len(t.Ranked) == 0 && len(t.BelowMin) == 0 && len(t.Bots) == 0 {
 		p.line("Nobody has a value.")
 	} else {
-		cols := []column{{head: "#"}, {head: "Person"}, {head: mdText(metricName(t.Metric)), right: true},
-			{head: "95% interval", right: true}, {head: "n", right: true}}
-		name := func(r RankRow) string { return p.person(r.Email, r.Name, r.NameWithheld, mdText) }
-		var rows [][]string
-		for _, r := range t.Ranked {
-			rows = append(rows, []string{rankText(r.RankLo, r.RankHi), name(r), estimateText(r.Estimate, t.Percent),
-				intervalText(r.Lo, r.Hi, t.Percent), grouped(r.N)})
-		}
-		for _, r := range t.BelowMin {
-			rows = append(rows, []string{"—", name(r), "", "", grouped(r.N)})
-		}
-		for _, r := range t.Bots {
-			rows = append(rows, []string{"bot", name(r), estimateText(r.Estimate, t.Percent), "", grouped(r.N)})
-		}
+		cols, rows, notes := rankRows(p, t, mdText, true)
+		cols[1].head, cols[2].head = "Person", mdText(cols[2].head)
 		p.mdTable(cols, rows)
+		for _, n := range notes {
+			p.blank()
+			p.line(mdText(strings.ToUpper(n[:1]) + n[1:] + "."))
+		}
 	}
 	p.blank()
-	p.line(mdText(rankFooter(t)))
+	p.line(mdText(rankFooter(p, t)))
 	mdCaveats(p, level+"#", t.Caveats, true)
 }
 
@@ -305,8 +328,27 @@ func mdCard(p *printer, m *Model, r *Repo) {
 	if line := shareLine(c.KnowledgeLoss, c.AIAssisted, c.BotShare); line != "" {
 		p.line("- " + mdText(line))
 	}
+	if c.ReviewCoverage != nil {
+		p.line("- " + mdText(coverageText(c.ReviewCoverage, 1)))
+	}
 	if c.Concentration != nil {
 		p.line("- " + mdText(concentrationText(c.Concentration)))
 	}
 	p.line("- " + skippedText(r, mdCode))
+	if len(c.Areas) > 0 {
+		p.blank()
+		p.line("### Areas")
+		p.blank()
+		p.line("Top-level directories, by the prod lines people hold there.")
+		p.blank()
+		cols, rows, more := areaTable(p, c.Areas, mdCode)
+		for i := range cols {
+			cols[i].head = strings.ToUpper(cols[i].head[:1]) + cols[i].head[1:]
+		}
+		p.mdTable(cols, rows)
+		if more != "" {
+			p.blank()
+			p.line(strings.ToUpper(more[:1]) + more[1:] + ".")
+		}
+	}
 }

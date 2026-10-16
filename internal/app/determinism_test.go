@@ -438,4 +438,20 @@ func checkForgeRun(t *testing.T, s *scanned) {
 	}):
 		t.Errorf("the reviews_given@1 table's caveats %+v do not name the sibling as without GitHub data", table.Caveats)
 	}
+	// Beside each count, the table shows the share of approvals with no
+	// comment, the counterweight reviews_given@1's definition promises
+	// (PF-5): zed's one approval, of PR_1, has none.
+	if table != nil {
+		var zed *report.RankRow
+		for _, rows := range [][]report.RankRow{table.Ranked, table.BelowMin} {
+			for i := range rows {
+				if rows[i].Email == "@zed" {
+					zed = &rows[i]
+				}
+			}
+		}
+		if table.Beside != "no_comment_share" || zed == nil || zed.Beside == nil || *zed.Beside != 1 {
+			t.Errorf("the reviews_given@1 table shows %q beside the count and zed's row %+v, want no_comment_share 1", table.Beside, zed)
+		}
+	}
 }

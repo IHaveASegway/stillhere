@@ -256,6 +256,16 @@ func testOpenExisting(t *testing.T) {
 		t.Errorf("OpenExisting deleted the abandoned run %d: runs %v", abandoned, got)
 	}
 
+	// A reader that cannot write the directory, as on a read-only mount,
+	// reads the database read-only, the MCP server's open included, and
+	// never says it must write (#79): with no write-ahead log holding
+	// data, every commit is in the file. When the log holds commits, the
+	// reader cannot read them without the shared-memory file SQLite would
+	// make there, and the refusal says what to do.
+	if os.Geteuid() != 0 { // the superuser writes any directory
+		readOnlyDirectory(t, path, id)
+	}
+
 	// An empty file is a facts database before its first migration, as an
 	// older one is before its later ones: the reader migrates it.
 	empty := filepath.Join(dir, "empty.db")
@@ -600,6 +610,74 @@ func storedRuns(t *testing.T, raw *sql.DB) []string {
 }
 
 // openStore opens the store at path and closes it when the test ends.
+// readOnlyDirectory reads a copy of the facts database at path, whose
+// latest scan run is id, in a directory the test then makes read-only, and
+// one whose write-ahead log holds a commit.
+func readOnlyDirectory(t *testing.T, path string, id int64) {
+	t.Helper()
+	ctx := t.Context()
+	lock := func(dir string) {
+		if err := os.Chmod(dir, 0o555); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(dir, 0o755) })
+	}
+	copyFile := func(from, to string) {
+		data, err := os.ReadFile(from)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(to, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	clean := filepath.Join(t.TempDir(), "ro")
+	if err := os.Mkdir(clean, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	copyFile(path, filepath.Join(clean, "facts.db"))
+	lock(clean)
+	for name, open := range map[string]func(context.Context, string) (*sqlite.Store, error){
+		"OpenExisting": sqlite.OpenExisting, "OpenReadOnly": sqlite.OpenReadOnly,
+	} {
+		r, err := open(ctx, filepath.Join(clean, "facts.db"))
+		if err != nil {
+			t.Errorf("%s(a facts database in a read-only directory) = %v", name, err)
+			continue
+		}
+		if run, err := r.LatestRun(ctx, domain.RunKindScan); err != nil || run.ID != id {
+			t.Errorf("%s in a read-only directory: LatestRun = %d, %v; want run %d", name, run.ID, err, id)
+		}
+		_ = r.Close()
+	}
+	if entries, _ := os.ReadDir(clean); len(entries) != 1 {
+		t.Errorf("the read-only directory holds %d files after reading, want facts.db alone", len(entries))
+	}
+
+	// A commit left in the write-ahead log, as a writer that has not
+	// checkpointed leaves it: copied while the writer holds it open, with
+	// no shared-memory file beside it.
+	src := filepath.Join(t.TempDir(), "wal.db")
+	copyFile(path, src)
+	w := openRaw(t, src)
+	execRaw(t, w, `PRAGMA wal_autocheckpoint = 0`, `CREATE TABLE scratch (a)`)
+	walled := filepath.Join(t.TempDir(), "walled")
+	if err := os.Mkdir(walled, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	copyFile(src, filepath.Join(walled, "facts.db"))
+	copyFile(src+"-wal", filepath.Join(walled, "facts.db-wal"))
+	lock(walled)
+	var usage *domain.UsageError
+	if r, err := sqlite.OpenExisting(ctx, filepath.Join(walled, "facts.db")); !errors.As(err, &usage) ||
+		!strings.Contains(usage.Msg, "facts.db-wal") || strings.Contains(usage.Msg, "cannot be written:") {
+		if err == nil {
+			_ = r.Close()
+		}
+		t.Errorf("OpenExisting(a read-only directory whose log holds a commit) = %v, want a *domain.UsageError that names facts.db-wal", err)
+	}
+}
+
 func openStore(t *testing.T, path string) *sqlite.Store {
 	t.Helper()
 	s, err := sqlite.Open(t.Context(), path)

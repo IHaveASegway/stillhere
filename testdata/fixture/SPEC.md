@@ -1,6 +1,6 @@
 # Fixture repository and oracles
 
-Status: carried over from the 2026-10-07 plan, change oracles and the sibling fixture added 2026-10-14, regression guards added 2026-10-14 (#13), the binary-file guard 2026-10-14 (#54), with a rename History does not collect, a vendored file and a later text change added by its review 2026-10-15, its text twins and the main fixture as it stood at an earlier `--now` added 2026-10-15 (#70), `landed@2`, knowledge under any path, `review_coverage@1` with a seventh pull request, the binary-changes caveat and the partial and shallow clones added 2026-10-15 (#108, #107, #64, #74) · the week, still-here and change oracles run as `go test` in `internal/app` (`TestWeekOracle`, `TestStillHereOracle`, `TestChangeOracles`, `TestDeterminism`, #13), web escaping in M3
+Status: carried over from the 2026-10-07 plan, change oracles and the sibling fixture added 2026-10-14, regression guards added 2026-10-14 (#13), the binary-file guard 2026-10-14 (#54), with a rename History does not collect, a vendored file and a later text change added by its review 2026-10-15, its text twins and the main fixture as it stood at an earlier `--now` added 2026-10-15 (#70), `landed@2`, knowledge under any path, `review_coverage@1` with a seventh pull request, the binary-changes caveat and the partial and shallow clones added 2026-10-15 (#108, #107, #64, #74), the week oracle moved to `landed@2` and explain traces and roleless paths added 2026-10-15 (#108, #109, PF-8) · the week, still-here and change oracles run as `go test` in `internal/app` (`TestWeekOracle`, `TestStillHereOracle`, `TestChangeOracles`, `TestDeterminism`, #13), web escaping in M3
 
 `internal/fixture` builds this repository (`fixture.Main`), the [sibling fixture](#sibling-fixture) (`fixture.Sibling`), the [regression guards](#regression-guards-testchangeoracles)' three repositories (`fixture.Backdated`, `fixture.MergedRevert`, `fixture.Binary`), the [merge-methods guard](#merge-methods-fixturemergemethods) (`fixture.MergeMethods`) and the [discovery fixture](#discovery-fixture-testdiscover)'s repositories in temporary directories for `go test`. Every number below is an oracle: a change that moves one fails CI. Each oracle exists so that one specific wrong implementation fails, and that implementation is named next to it.
 
@@ -149,9 +149,30 @@ Wrong implementations this catches:
 
 ## Week oracle (M0, `TestWeekOracle`)
 
-`lines_added` counts numstat insertions, blank lines included, on any path that received a role. `prod_lines_added` is the `prod` subset. Assert the set of rows: the display order (`lines_added` descending, then email ascending) is not a rank.
+The week table reads `landed@2` since #108: a landing counts for each person credited with one of its non-merge commits, so its rows are [landed@2 (main fixture)](#landed2-main-fixture)'s. `lines_added` counts the numstat insertions of those commits, blank lines included, on any path that received a role. `prod_lines_added` is the `prod` subset. Assert the set of rows: the display order (`lines_added` descending, then landings, then email ascending) is not a rank.
 
-| Who | Email | Commits | lines_added | prod_lines_added |
+| Who | Email | Landings | `commits` | `merged` | lines_added | prod_lines_added |
+| --- | --- | --- | --- | --- | --- | --- |
+| Cara Dev | `cara@example.com` | 1 | 2 | 0 | 9 | 9 |
+| Bob Builder | `bob@example.com` | 1 | 1 | 1 | 2 | 2 |
+| Ivy Tester | `ivy@example.com` | 1 | 1 | 0 | 4 | 0 |
+| Frank & Sons | `frank@example.com` | 1 | 1 | 0 | 3 | 3 |
+| Ada Example | `ada@example.com` | 1 | 1 | 0 | 1 | 1 |
+| Dana Dev | `dana@example.com` | 1 | 1 | 0 | 1 | 1 |
+| Erin Editor | `erin@example.com` | 1 | 1 | 0 | 1 | 1 |
+| Jules Note | `jules@example.com` | 1 | 1 | 0 | 0 | 0 |
+| GitHub Copilot (bot table) | `copilot@bot.example` | 1 | 1 | 0 | 3 | 3 |
+| **The week's `total`** | | 9 | 10 | 1 | 24 | 20 |
+
+- **`--days 1`.** Against `[week].days = 7`, the report writes `window.days` 1, `days_from` `cli`, and `since` `2026-10-06T00:00:00Z`; an override the report ignores leaves `window.days` at 7. `history`, the window the run collected, equals `window`, as in every week report ([report-json.md](../../docs/spec/report-json.md#shape)): an override that reaches the report but not the collector leaves `history` at `[2026-09-30, 2026-10-07)`. The rows do not move: every week landing is on 2026-10-06, inside both windows.
+- **A week run without the landing map** (before #108): Cara has no row, and the total has 8 commits and 15 lines.
+- **`landed@1`'s credit, the landing commit's author** (`main` before #108): Bob has 2 landings and 11 lines, and Cara has no row: the [landed@1 table](#landed1-main-fixture).
+
+### landed@1 (main fixture)
+
+`landed@1`, the week table as M0 defined it, stays computed and stored (#108), and `TestChangeOracles` asserts its values in the repository's scope: a landing counts for the person its landing commit is credited to, with that commit's numstat insertions, a merge's first-parent diff included.
+
+| Who | Email | Landings | lines_added | prod_lines_added |
 | --- | --- | --- | --- | --- |
 | Bob Builder | `bob@example.com` | 2 | 11 | 11 |
 | Ivy Tester | `ivy@example.com` | 1 | 4 | 0 |
@@ -173,7 +194,6 @@ Why each row is what it is:
 - **Ivy, 4 and 0.** `tests/test_service.py` matches the segment pattern `(^|/)tests(/|$)`, but the substring `/tests/` does not occur in it. `notes.csv` is unclassified and adds 0, yet the commit still counts.
 - **Jules, 0.** A commit that touches only an unclassified path still makes a row.
 - **One Ada row.** Her in-window commit is authored as `ada@other.example` while `log.mailmap=false`. `%aN`/`%aE` give one row at `ada@example.com`; `%an`/`%ae` would give a second row.
-- **`--days 1`.** Against `[week].days = 7`, the report writes `window.days` 1, `days_from` `cli`, and `since` `2026-10-06T00:00:00Z`; an override the report ignores leaves `window.days` at 7. `history`, the window the run collected, equals `window`, as in every week report ([report-json.md](../../docs/spec/report-json.md#shape)): an override that reaches the report but not the collector leaves `history` at `[2026-09-30, 2026-10-07)`. The rows do not move: every week landing is on 2026-10-06, inside both windows.
 
 ## Still-here oracle (M1, `TestStillHereOracle`)
 
@@ -331,6 +351,34 @@ Wrong implementations this catches:
 - **No window on landers.** Gina and Hank appear as recent landers of `split.py`.
 - **Crediting the merger, or patching with `log --first-parent -p`.** Bob replaces Cara as the recent lander of `side.py`: with `--first-parent`, git gives row 8 its first-parent diff, which adds `side.py` and `side_week.py` as Bob's.
 - **Commit time instead of landing time.** `side.py` has no recent lander, because `e08df80` was written in February.
+
+Paths that hold no one's knowledge say why (#71, PF-8):
+
+| Path | Answer | Why |
+| --- | --- | --- |
+| `fixture/service.py` | missing, a `no-values` caveat: the run knows each path relative to its repository's root | a filesystem path, which names nothing in the repository |
+| `notes.csv` | empty, a `no-values` caveat: `"notes.csv" is in 1 repository, but no path there has a role (1 path unclassified)` | `notes.csv` has no role, and `who_knows@1` counts only paths with one |
+| `app.py` | a real "nobody" | renamed to `service.py` on 2026-01-05: a path the history knows, with role `prod`, no surviving line and no landing in 90 days |
+
+- **A path with no role answered "nobody"** (`main` before PF-8): `notes.csv` has no caveat.
+
+### Explain traces (main fixture)
+
+`explain` lists what a value of a metric that is not ranked is made of (#109), and the command line names the person as a page does (PF-7). Derived by hand from the History, the File contents and [Measured blame](#measured-blame) before code listed them:
+
+| Metric and person, as named | What explain lists |
+| --- | --- |
+| `landed@2`, "Cara Dev" | one landing, row 8, Bob's `Merge branch 'feature'`: 2 commits, 9 lines added, 9 prod |
+| `landed@1`, "bob" (by the start of a word, with a `name-match` caveat) | row 8, `Merge branch 'feature'`, 9 and 9 (its first-parent diff), then row 9, `add delta_bob_added`, 2 and 2 |
+| `surviving@1`, `ada@example.com` | 3 commits, most lines first: `init` 7 (`service.py`'s beta and alpha blocks, 4, through `-M`, and `new_name.py`'s `x`, `y` and `z`, 3, through Erin's rename), `add gamma_added_later` 2 (her second address, mailmapped), `add ada_week.py` 1: her 10 lines |
+| `majority_owner@1`, Ada's id (`p-` and 10 hex digits of the SHA-256 of `ada@example.com`) | `service.py` 6 of 8, `new_name.py` 3 of 4, `ada_week.py` 1 of 1 |
+| `landed@2`, "Gina Split" | no value, and a `no-values` caveat naming the week, `2026-09-30 → 2026-10-07 UTC`: her commits landed in January (#92) |
+| `landed@2`, "Cara Deb" | not found, suggesting "Cara Dev" |
+
+Wrong implementations this catches:
+
+- **A trace that counts what the value does not**: `surviving@1` with Ada's `test` lines gives `init` 9; `landed@1` traced by `landed@2`'s credit gives Bob row 9 alone, and Cara row 8.
+- **The CLI taking only an email** (`main` before PF-7): "Cara Dev" is refused.
 
 ### landed@2 (main fixture)
 

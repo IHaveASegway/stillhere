@@ -136,6 +136,8 @@ type ownerRow struct {
 	role   domain.Role
 	credit string
 	lines  int
+	commit string    // the blamed commit, for a trace (surviving@1)
+	at     time.Time // its author time, as blame gives it
 }
 
 // errNoFacts reports an Input that cannot be computed over.
@@ -401,7 +403,7 @@ func (r *repoView) indexLines(f *domain.RepoFacts, who *identity.Directory, untr
 			credit = who.Credit(o.Author, o.CoAuthors)
 			credits[o.Commit] = credit
 		}
-		r.owners = append(r.owners, ownerRow{path: o.Path, role: role, credit: credit, lines: o.Lines})
+		r.owners = append(r.owners, ownerRow{path: o.Path, role: role, credit: credit, lines: o.Lines, commit: o.Commit, at: o.AuthorTime})
 		if role != domain.RoleProd {
 			continue
 		}

@@ -45,7 +45,11 @@ type Identities struct {
 	Candidates []IdentityCandidate `json:"candidates"` // most confident first
 	Rules      []IdentityRule      `json:"rules"`      // every rule's definition, in order
 	Caveats    []Caveat            `json:"caveats"`
+
+	addrs []string // the run's addresses (#90); never encoded
 }
+
+func (id *Identities) runAddresses() []string { return id.addrs }
 
 // IdentityCandidate is a group of addresses that may belong to one person.
 type IdentityCandidate struct {
@@ -152,7 +156,7 @@ func NewIdentities(in *IdentitiesInput) *Identities {
 	if scope == (domain.Scope{}) {
 		scope = domain.Scope{Kind: domain.ScopeAll}
 	}
-	id := &Identities{Scope: scopeOf(scope)}
+	id := &Identities{Scope: scopeOf(scope), addrs: runAddresses(in.Who)}
 	fs := in.Facts
 	if fs == nil {
 		fs = &domain.FactSet{}

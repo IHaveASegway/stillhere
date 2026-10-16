@@ -1,13 +1,10 @@
 package mcp
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json/jsontext"
 	"encoding/json/v2"
 	"errors"
 	"math"
-	"strings"
 
 	"github.com/IHaveASegway/stillhere/internal/app"
 	"github.com/IHaveASegway/stillhere/internal/identity"
@@ -45,27 +42,13 @@ import (
 // replaces an address is this server's: the stable id below, where a page
 // prints a fixed label.
 
-// pseudonymPrefix starts every id that stands in for an email.
-const pseudonymPrefix = "p-"
-
-// pseudonym is the id that stands in for an email: "p-" and the first ten
-// hex digits of the SHA-256 of the canonical (lowercased) email. It is
-// stable, across answers, sessions and runs, so an agent can join two
-// answers on it and pass it back to person; it is not anonymous: anyone who
-// already holds an email can compute its id and confirm it. 40 bits keep
-// two people of one organisation apart.
-func pseudonym(email string) string {
-	sum := sha256.Sum256([]byte(strings.ToLower(strings.TrimSpace(email))))
-	return pseudonymPrefix + hex.EncodeToString(sum[:5])
-}
+// pseudonym is the id that stands in for an email (identity.Pseudonym):
+// stable, so an agent can join two answers on it and pass it back to
+// person, and the command line takes it too.
+func pseudonym(email string) string { return identity.Pseudonym(email) }
 
 // isPseudonym reports whether s has the form of a pseudonym.
-func isPseudonym(s string) bool {
-	if len(s) != len(pseudonymPrefix)+10 || !strings.HasPrefix(s, pseudonymPrefix) {
-		return false
-	}
-	return strings.Trim(s[len(pseudonymPrefix):], "0123456789abcdef") == ""
-}
+func isPseudonym(s string) bool { return identity.IsPseudonym(s) }
 
 // withholder replaces emails by their ids in what leaves the server. Its
 // vocabulary is the run's people; without one (an answer that reads no run)

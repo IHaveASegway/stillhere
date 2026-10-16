@@ -260,6 +260,20 @@ func reviewCheckCoverage(t *testing.T, oracle string, s *scanned, inRepo, inAll 
 	r := onlyRepo(t, s.model)
 	sameRows(t, oracle+" in the repository", rows(domain.Scope{Kind: domain.ScopeRepo, Key: r.Key}), inRepo)
 	sameRows(t, oracle+" in the run", rows(domain.Scope{Kind: domain.ScopeAll}), inAll)
+	// The report reads the same values onto the repository's card and the
+	// run's overview (#107).
+	shown := func(c *report.ReviewCoverage) reviewCoverageRow {
+		if c == nil {
+			return reviewCoverageRow{}
+		}
+		return reviewCoverageRow{int(c.Num), int(c.Den), c.ViaPullRequest, c.Direct, c.ApprovedNoComment, c.BotLandings, c.Repos}
+	}
+	if got, want := shown(r.Card.ReviewCoverage), inRepo["repo:"+r.Key]; got != want {
+		t.Errorf("%s: the card's review coverage %+v, want %+v", oracle, got, want)
+	}
+	if len(s.model.Overviews) != 1 || shown(s.model.Overviews[0].ReviewCoverage) != inAll["all:"] {
+		t.Errorf("%s: the overview of every repository does not show the run's review coverage %+v", oracle, inAll["all:"])
+	}
 }
 
 // reviewCheckReviewers compares an answer's recent reviewers in repository

@@ -79,15 +79,15 @@ func changeClusters(v *view, w domain.Window, needLines, dropReverted bool) []*c
 	return out
 }
 
-// rankData turns clusters into rank's input: each person's clusters, sorted
-// by change (then repository, for a SHA two scanned forks share). Bots are
-// never ranked, so they are left out; an empty result is nil.
-func rankData(v *view, clusters []*cluster, toRank func(*cluster) rank.Cluster) map[domain.Subject][]rank.Cluster {
+// rankData turns clusters into rank's input: each person's and each bot's
+// clusters, sorted by change (then repository, for a SHA two scanned forks
+// share); an empty result is nil. Bots are never ranked, and the ranking
+// use case leaves them out of the bootstrap; explain lists a bot's clusters
+// as anyone's (#75), since its values are in the report's bot tables.
+func rankData(clusters []*cluster, toRank func(*cluster) rank.Cluster) map[domain.Subject][]rank.Cluster {
 	byPerson := make(map[string][]*cluster)
 	for _, k := range clusters {
-		if !v.who.Bot(k.person) {
-			byPerson[k.person] = append(byPerson[k.person], k)
-		}
+		byPerson[k.person] = append(byPerson[k.person], k)
 	}
 	if len(byPerson) == 0 {
 		return nil

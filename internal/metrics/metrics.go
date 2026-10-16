@@ -139,8 +139,10 @@ type RankInput struct {
 	// clusters) and, for Sum, the number of week Blocks in Window.
 	// Replicates 0 means rank's default, B = 1000.
 	Options rank.Options
-	// Data holds each person's clusters, sorted by Change. Bots are never
-	// ranked, so they are not in it; nil when the scope has no clusters.
+	// Data holds each person's clusters, sorted by Change, a bot's
+	// included (#75): bots are never ranked, so the ranking use case leaves
+	// them out of rank.Intervals, while explain lists a bot's clusters as
+	// anyone's. nil when the scope has no clusters.
 	Data map[domain.Subject][]rank.Cluster
 }
 

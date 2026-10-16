@@ -27,7 +27,7 @@ prod_lines_added, and bots in a table of their own.
 Each PATH is a repository (a work tree or a bare mirror) or a group, a
 directory whose immediate children are repositories. week never fetches, so a
 stale clone gives a stale answer, and it stores nothing.`,
-		Args: usageArgs(cobra.MinimumNArgs(1)),
+		Args: pathsArgs,
 		RunE: func(cmd *cobra.Command, paths []string) error {
 			flags := cmd.Flags()
 			req := app.WeekRequest{
@@ -62,5 +62,6 @@ stale clone gives a stale answer, and it stores nothing.`,
 	f.StringVar(&sort, "week-sort", "", "row order: lines_added or commits (default the policy's [week] sort)")
 	addExcludeFlag(cmd, &exclude)
 	f.StringVar(&ignoreRevs, "ignore-revs-file", "", "accepted for symmetry with scan and ignored: git log has no such option")
+	e.addAllFlag(cmd)
 	return cmd
 }

@@ -161,6 +161,21 @@ func OpenExisting(ctx context.Context, path string) (*Store, error) {
 		return s, nil
 	}
 	err = errors.Join(err, s.Close())
+	if fi, serr := os.Stat(abs); serr == nil && fi.Mode().IsRegular() && unwritableHere(err) {
+		// A reader may not be able to write the file or its directory (a
+		// read-only mount, a team server's copy): it reads the file
+		// read-only instead, as the MCP server does, and never says it needs
+		// to write (#79).
+		ro, rerr := openReadOnly(ctx, abs, "sqlite.OpenExisting")
+		if rerr == nil {
+			return ro, nil
+		}
+		var usage *domain.UsageError
+		if errors.As(rerr, &usage) {
+			return nil, &domain.UsageError{Msg: abs + ": " + strings.TrimPrefix(usage.Msg, "sqlite.OpenExisting "+abs+": ")}
+		}
+		return nil, rerr
+	}
 	if resultCode(err) == sqlite3.SQLITE_CANTOPEN {
 		// SQLite says only that it could not open the file; say why, when
 		// it is the user's to fix.

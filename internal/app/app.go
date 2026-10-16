@@ -125,6 +125,11 @@ type ExplainRequest struct {
 	RunID   int64           // 0: the latest complete or partial scan run
 	Metric  domain.MetricID // Version 0 means the latest version
 	Subject domain.Subject  // a person's Key is the canonical email, lowercased
+	// Person, when set, names the subject, a person, as a reader names
+	// them: an email, a GitHub login, an id (p-…) or a display name, which
+	// the use case resolves against the run's people (FindPerson, PF-7);
+	// the command line sends it, and Subject is then ignored.
+	Person string
 }
 
 // WhoKnowsRequest asks who knows the code under a path.
@@ -136,8 +141,11 @@ type WhoKnowsRequest struct {
 
 // MeRequest asks for one person's own page.
 type MeRequest struct {
-	RunID int64  // 0: the latest complete or partial scan run
-	Email string // canonical email, lowercased; required: the command line has no default (me needs --email)
+	RunID int64 // 0: the latest complete or partial scan run
+	// Email names the person as a reader names them: their canonical email,
+	// a GitHub login, an id (p-…) or a display name (FindPerson, PF-7);
+	// required: the command line has no default (me needs --email).
+	Email string
 }
 
 // ValidateRequest asks how well each ranked metric separates changes a person

@@ -57,13 +57,15 @@ type Document interface {
 
 // Text renders d as plain text for a terminal, readable at 100 columns.
 // Untrusted text is printed with control characters escaped, and each
-// email address in it as "(address withheld)" (addresses.go).
-func Text(w io.Writer, d Document) error {
+// email address in it as "(address withheld)" (addresses.go). A table of
+// people prints its first rows and counts the rest unless opts ask for
+// every row (AllRows, SR-14).
+func Text(w io.Writer, d Document, opts ...Option) error {
 	d, err := page(d)
 	if err != nil {
 		return err
 	}
-	p := &printer{w: w}
+	p := newPrinter(w, opts)
 	d.writeText(p)
 	if p.err != nil {
 		return fmt.Errorf("report: write text: %w", p.err)
@@ -74,12 +76,12 @@ func Text(w io.Writer, d Document) error {
 // Markdown renders d as GitHub-flavoured Markdown, with untrusted text
 // escaped so it renders literally, and email addresses withheld as Text
 // withholds them.
-func Markdown(w io.Writer, d Document) error {
+func Markdown(w io.Writer, d Document, opts ...Option) error {
 	d, err := page(d)
 	if err != nil {
 		return err
 	}
-	p := &printer{w: w}
+	p := newPrinter(w, opts)
 	d.writeMarkdown(p)
 	if p.err != nil {
 		return fmt.Errorf("report: write Markdown: %w", p.err)
@@ -108,7 +110,7 @@ func JSON(w io.Writer, d Document) error {
 	if err != nil {
 		return fmt.Errorf("report: encode JSON: %w", err)
 	}
-	if doc, _, err = withholdAddresses(doc, indent); err != nil {
+	if doc, _, err = withholdAddresses(doc, knownOf(d), indent); err != nil {
 		return fmt.Errorf("report: withhold addresses: %w", err)
 	}
 	buf := bytes.NewBuffer(doc)
@@ -138,7 +140,7 @@ type Model struct {
 	Run       *Run        `json:"run"`       // the stored run; nil for week, and for a scan that stored nothing
 	Now       time.Time   `json:"now"`       // the as-of instant: --now
 	Policy    Policy      `json:"policy"`    // the policy the facts were collected under
-	Window    Window      `json:"window"`    // what "landed" means here: landed@1's window
+	Window    Window      `json:"window"`    // what "landed" means here: the window landed@2 (and landed@1) read
 	History   Interval    `json:"history"`   // the landing window the history covers (365 days for a scan)
 	Metrics   []string    `json:"metrics"`   // every metric@version the report's numbers come from, sorted
 	Groups    []Group     `json:"groups"`    // sorted by name
@@ -148,7 +150,11 @@ type Model struct {
 	Ranks     []RankTable `json:"ranks"`     // only for metrics named by --rank
 	Repos     []Repo      `json:"repos"`     // sorted by group, name and key
 	Timings   *Timings    `json:"timings"`   // wall-clock measurements: the only part two identical runs do not share
+
+	addrs []string // the run's addresses, which every format withholds in repository text (#90); never encoded
 }
+
+func (m *Model) runAddresses() []string { return m.addrs }
 
 // Tool names the binary that built a report.
 type Tool struct {
@@ -171,7 +177,8 @@ type Policy struct {
 	Headline string `json:"headline"` // the [headline] number, such as prod_nonblank_lines
 }
 
-// Window is the landed@1 window: what "landed" means in a report.
+// Window is the landed window, which landed@2 and landed@1 read: what
+// "landed" means in a report.
 type Window struct {
 	Days      int       `json:"days"`
 	DaysFrom  string    `json:"days_from"` // "cli" or "policy"
@@ -256,7 +263,51 @@ type Overview struct {
 	KnowledgeLoss *Share         `json:"knowledge_loss"` // the share of human-held prod lines whose people have gone quiet
 	AIAssisted    *Share         `json:"ai_assisted"`    // the share of landings tagged AI-assisted: a lower bound
 	BotShare      *Share         `json:"bot_share"`      // surviving@1: the share of surviving prod lines held by bots
-	Caveats       []Caveat       `json:"caveats"`
+	// ReviewCoverage is how much of what landed in the scope someone other
+	// than its author reviewed (#107); null without GitHub data.
+	ReviewCoverage *ReviewCoverage `json:"review_coverage"`
+	// Repos is one row per member repository (#105), the scope's
+	// repositories at a glance, in report order.
+	Repos   []RepoRow `json:"repos"`
+	Caveats []Caveat  `json:"caveats"`
+}
+
+// RepoRow is one repository of an overview on one line (#105): its card's
+// numbers, so a platform of many repositories reads as one table.
+type RepoRow struct {
+	Name            string          `json:"name"`
+	Key             string          `json:"key"`
+	Status          string          `json:"status"`           // ok or error
+	LandingsWindow  int             `json:"landings_window"`  // landings in the landed window
+	LandingsHistory int             `json:"landings_history"` // landings in the history window
+	People          *int            `json:"people"`           // the card's: humans with surviving prod lines
+	ProdLines       *int            `json:"prod_lines"`       // the card's size.prod_lines
+	KnowledgeLoss   *Share          `json:"knowledge_loss"`
+	AuthorsInPrefix *int            `json:"authors_in_prefix"` // the card's concentration
+	ReviewCoverage  *ReviewCoverage `json:"review_coverage"`
+	LastLanding     *time.Time      `json:"last_landing"` // the card's landings.last
+}
+
+// ReviewCoverage is review_coverage@1 about a repository, a group or the
+// whole run (#107): the share of its human-authored landings in the
+// window whose pull request someone other than its author reviewed before
+// it merged. It describes how a codebase's changes land, never a person.
+type ReviewCoverage struct {
+	Metric string   `json:"metric"`
+	Window Interval `json:"window"`
+	Num    float64  `json:"num"` // reviewed landings
+	Den    float64  `json:"den"` // human-authored landings
+	Value  float64  `json:"value"`
+	// ViaPullRequest counts the landings with a pull request; Den less it
+	// is Direct, landings with none, which no review can cover.
+	ViaPullRequest int `json:"via_pull_request"`
+	Direct         int `json:"direct"`
+	// ApprovedNoComment counts the reviewed landings whose only reviews
+	// were approvals with no text and no inline comment: rubber stamps
+	// count as reviews, so they are shown beside the share.
+	ApprovedNoComment int `json:"approved_no_comment"`
+	BotLandings       int `json:"bot_landings"` // a bot's landings, left out of Den
+	Repos             int `json:"repos"`        // the repositories with GitHub data it counts
 }
 
 // Totals are the sizes of a scope. The counts of paths and landings are
@@ -298,22 +349,48 @@ type StillHereRow struct {
 	Landings365d      int            `json:"landings_365d"`       // activity: landings credited in the last 365 days
 }
 
-// WeekTable is what landed in the window: landed@1. The numbers are
-// activity and are not comparable to surviving lines.
+// WeekTable is what landed in the window: landed@2, who wrote what landed
+// (#108). A landing counts for each person credited with one of its
+// non-merge commits, so a merged branch counts for its authors and a bot's
+// commits for the bot, whoever merged them. The numbers are activity and
+// are not comparable to surviving lines.
 type WeekTable struct {
-	Humans []WeekRow `json:"humans"` // by the window's sort key, descending, then email
-	Bots   []WeekRow `json:"bots"`
+	// Total is the scope's own numbers, each landing once, which the rows
+	// do not add up to: a landing that holds two people's commits is a
+	// row of each. null when landed@2 gave the scope no value.
+	Total  *WeekTotal `json:"total"`
+	Humans []WeekRow  `json:"humans"` // by the window's sort key, descending, then email
+	Bots   []WeekRow  `json:"bots"`
 }
 
-// WeekRow is one person's landings in the window.
+// WeekRow is one person's part of what landed in the window.
 type WeekRow struct {
-	Email          string `json:"email"`
-	Name           string `json:"name"`          // as StillHereRow's
-	NameWithheld   bool   `json:"name_withheld"` // as StillHereRow's
-	Bot            bool   `json:"bot"`
-	Commits        int    `json:"commits"`          // landings credited to the person
-	LinesAdded     int    `json:"lines_added"`      // numstat insertions, blank lines included, on paths with a role
-	ProdLinesAdded int    `json:"prod_lines_added"` // the prod subset
+	Email        string `json:"email"`
+	Name         string `json:"name"`          // as StillHereRow's
+	NameWithheld bool   `json:"name_withheld"` // as StillHereRow's
+	Bot          bool   `json:"bot"`
+	Landings     int    `json:"landings"` // landings that hold a non-merge commit credited to the person
+	Commits      int    `json:"commits"`  // those commits
+	Merged       int    `json:"merged"`   // merge landings whose landing commit is credited to the person
+	// LinesAdded is their commits' own numstat insertions, blank lines
+	// included, on paths with a role; null when no landing's lines are
+	// known (a partial clone's), never 0 (#74).
+	LinesAdded     *int `json:"lines_added"`
+	ProdLinesAdded *int `json:"prod_lines_added"` // the prod subset; null with LinesAdded
+	// LinesUnknown counts the landings whose lines are unknown, which the
+	// two lines fields leave out.
+	LinesUnknown int `json:"landings_lines_unknown"`
+}
+
+// WeekTotal is what landed in a scope in the window, each landing once:
+// landed@2's value about the repository, the group or the whole run.
+type WeekTotal struct {
+	Landings       int  `json:"landings"`
+	Commits        int  `json:"commits"` // the non-merge commits they hold
+	Merged         int  `json:"merged"`  // the merge landings among them
+	LinesAdded     *int `json:"lines_added"`
+	ProdLinesAdded *int `json:"prod_lines_added"`
+	LinesUnknown   int  `json:"landings_lines_unknown"`
 }
 
 // Concentration is knowledge_concentration@1: how few authors hold the
@@ -324,6 +401,21 @@ type Concentration struct {
 	AuthorsInPrefix   int    `json:"authors_in_prefix"`
 	BotsInPrefix      int    `json:"bots_in_prefix"`
 	Label             string `json:"label"` // always ConcentrationLabel
+}
+
+// Area is one top-level directory of a repository with the knowledge
+// numbers a scan stores about it, subject area (#106): where in a large
+// repository the knowledge has gone quiet or rests with few people.
+type Area struct {
+	Path string `json:"path"` // the directory, with its trailing slash
+	// Lines is knowledge_loss@1's Den: the surviving prod lines people hold
+	// there; 0 without its value (only bots hold lines there).
+	Lines          int            `json:"lines"`
+	KnowledgeLoss  *Share         `json:"knowledge_loss"`  // nil without its value
+	People         *int           `json:"people"`          // knowledge_loss@1: humans holding lines there
+	PeopleInactive *int           `json:"people_inactive"` // of them, those gone quiet
+	Concentration  *Concentration `json:"concentration"`   // nil without its value
+	ProdFiles      *int           `json:"prod_files"`      // knowledge_concentration@1: prod files there
 }
 
 // Share is a ratio with its parts, so a reader can see what it is a share
@@ -374,8 +466,14 @@ type RepoCard struct {
 	KnowledgeLoss *Share         `json:"knowledge_loss"`
 	AIAssisted    *Share         `json:"ai_assisted"`
 	BotShare      *Share         `json:"bot_share"`
-	Landings      Landings       `json:"landings"`
-	Caveats       []Caveat       `json:"caveats"`
+	// ReviewCoverage is how much of what landed someone other than its
+	// author reviewed (#107); null without GitHub data for the repository.
+	ReviewCoverage *ReviewCoverage `json:"review_coverage"`
+	// Areas are the repository's top-level directories with the knowledge
+	// numbers the scan stores about each, the largest first (Areas, #105).
+	Areas    []Area   `json:"areas"`
+	Landings Landings `json:"landings"`
+	Caveats  []Caveat `json:"caveats"`
 }
 
 // Age is how old a repository is.
@@ -405,8 +503,9 @@ type Author struct {
 
 // Landings counts a repository's landings.
 type Landings struct {
-	Window  int `json:"window"`  // in the landed window
-	History int `json:"history"` // in the history window
+	Window  int        `json:"window"`  // in the landed window
+	History int        `json:"history"` // in the history window
+	Last    *time.Time `json:"last"`    // the committer time of the newest one the history holds; null for none
 }
 
 // Errors holds each kind of per-file failure in exactly one list.
@@ -439,12 +538,17 @@ type IgnoreRevs struct {
 // eligible people, everyone below the minimum sample listed and not ranked,
 // and bots apart (ADR 0001).
 type RankTable struct {
-	Metric     string     `json:"metric"`
-	Question   string     `json:"question"`
-	Scope      Scope      `json:"scope"`
-	Window     Interval   `json:"window"`
-	Percent    bool       `json:"percent"` // a ratio: estimates print as percentages
-	MinN       int        `json:"min_n"`   // the eligibility threshold: clusters (changes) per person
+	Metric   string   `json:"metric"`
+	Question string   `json:"question"`
+	Scope    Scope    `json:"scope"`
+	Window   Interval `json:"window"`
+	Percent  bool     `json:"percent"` // a ratio: estimates print as percentages
+	MinN     int      `json:"min_n"`   // the eligibility threshold: clusters (changes) per person
+	// Beside names the Detail key of each person's value that the table
+	// shows beside the estimate, a counterweight the metric's definition
+	// promises next to it (PF-5: reviews_given@1's no_comment_share); ""
+	// for none.
+	Beside     string     `json:"beside"`
 	Provenance Provenance `json:"provenance"`
 	Ranked     []RankRow  `json:"ranked"`    // by rank interval
 	BelowMin   []RankRow  `json:"below_min"` // listed, not ranked
@@ -463,6 +567,9 @@ type RankRow struct {
 	Lo           float64 `json:"lo"` // 95% interval of the value; for bots, equal to Estimate
 	Hi           float64 `json:"hi"`
 	N            int     `json:"n"` // clusters: the person's changes the metric counted
+	// Beside is the person's value of the table's Beside key; null when
+	// the table names none or the value has none.
+	Beside *float64 `json:"beside"`
 }
 
 // Timings are wall-clock measurements of the run that built the report. They

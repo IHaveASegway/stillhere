@@ -172,11 +172,11 @@ func TestMCPTools(t *testing.T) {
 			!slices.Contains(pv.Metrics, "surviving@1") {
 			t.Errorf("fixture provenance %+v, want run 1, its HEAD, the digest and the metric versions", pv)
 		}
-		// metrics names every number's metric: the week table's landed@1
+		// metrics names every number's metric: the week table's landed@2
 		// beside the card's, and none the scan ranked, since no rank table
 		// was asked for.
-		if !slices.Contains(pv.Metrics, "landed@1") || slices.Contains(pv.Metrics, "durable@1") {
-			t.Errorf("fixture provenance metrics %v, want landed@1 and no durable@1", pv.Metrics)
+		if !slices.Contains(pv.Metrics, "landed@2") || slices.Contains(pv.Metrics, "durable@1") {
+			t.Errorf("fixture provenance metrics %v, want landed@2 and no durable@1", pv.Metrics)
 		}
 
 		// The sibling's surviving@1 credit, and the platform's durable@1

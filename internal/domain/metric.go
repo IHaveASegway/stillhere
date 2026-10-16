@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // MetricID names one version of one metric, such as durable@1. A change to
@@ -126,4 +127,47 @@ type RankInterval struct {
 	RankLo, RankHi int     // 95% interval of the rank; 0 when not eligible
 	N              int
 	Eligible       bool
+}
+
+// Trace is what one person's value of a metric that is not ranked is made
+// of (#109), so every number reaches the commits behind it: the landings
+// landed@1 and landed@2 count, the blamed commits whose lines surviving@1
+// sums, the files majority_owner@1 counts. A ranked metric's are its
+// clusters instead (metrics.Ranked). Each list is in the order a page
+// prints it.
+type Trace struct {
+	Window   Window          // the window the value reads; zero for a value at HEAD
+	Landings []TracedLanding // by repository, then time
+	Commits  []TracedCommit  // the most surviving lines first
+	Files    []TracedFile    // the most of the person's lines first
+}
+
+// TracedLanding is one landing a landed value counts for the person.
+type TracedLanding struct {
+	Repo    string // Repo.Key
+	SHA     string
+	Time    time.Time // committer time
+	Merge   bool
+	Commits int // the person's commits in it that the value counts: landed@2's non-merge ones, landed@1's landing commit
+	// Lines and ProdLines are the lines those commits added, numstat
+	// insertions on paths with a role and the prod subset; -1 when the
+	// history counted no numstat (a partial clone).
+	Lines, ProdLines int
+}
+
+// TracedCommit is one blamed commit whose prod lines at HEAD surviving@1
+// credits to the person.
+type TracedCommit struct {
+	Repo  string    // Repo.Key
+	SHA   string    // the blamed commit, which may be older than the history
+	Time  time.Time // its author time, as blame gives it
+	Lines int       // its non-blank prod lines at HEAD
+}
+
+// TracedFile is one prod file at HEAD the person holds at least half of.
+type TracedFile struct {
+	Repo  string // Repo.Key
+	Path  string
+	Lines int // the person's non-blank lines in it
+	Of    int // the file's non-blank lines
 }

@@ -15,7 +15,7 @@ Read this before touching code. It names every package, what it owns, what it ma
 | `internal/domain` | Fact types, metric value types, port interfaces, typed errors | core |
 | `internal/policy` | The policy model, embedded default policy and deny list, parsing, hashing | core |
 | `internal/classify` | The ordered path classifier | core |
-| `internal/identity` | Display names, bots, AI-assisted tags, who gets credit; identity candidates, suggested and never applied ([identities.md](identities.md)) | core |
+| `internal/identity` | Display names, bots, AI-assisted tags, who gets credit; the run's addresses and the ids that stand in for them (`Pseudonym`); identity candidates, suggested and never applied ([identities.md](identities.md)) | core |
 | `internal/metrics` | The metric registry and every metric version | core |
 | `internal/rank` | Cluster bootstrap, rank intervals, eligibility, AUC | core |
 | `internal/redact` | URL scrubbing and message truncation; the address rule, which finds email addresses in text and in a published document for every output (`address.go`) | core |
@@ -232,6 +232,18 @@ type RankInterval struct {
 	N              int
 	Eligible       bool
 }
+
+// #109: what one person's value of a metric that is not ranked is made of (metrics.Traced), so explain reaches the commits
+// behind every number; each list in the order a page prints it
+type Trace struct {
+	Window   Window          // the window the value reads; zero for a value at HEAD
+	Landings []TracedLanding // landed@1, landed@2: by repository, then time
+	Commits  []TracedCommit  // surviving@1: the blamed commits holding the person's prod lines at HEAD, most first
+	Files    []TracedFile    // majority_owner@1: the files they hold half of, most of their lines first
+}
+type TracedLanding struct { Repo, SHA string; Time time.Time; Merge bool; Commits, Lines, ProdLines int } // Lines -1: unknown (no numstat)
+type TracedCommit struct { Repo, SHA string; Time time.Time; Lines int }                                  // Time: author time, as blame gives it
+type TracedFile struct { Repo, Path string; Lines, Of int }
 ```
 
 Runs and errors:
@@ -547,6 +559,12 @@ func (d *Directory) Name(email string) string           // display name rule, sp
 func (d *Directory) Bot(email string) bool              // a [bots] fragment in the email or display name, or an [ai] agent: agents are never people (ADR 0007); a forge app account's "@login[bot]" too
 func (d *Directory) AIAssisted(c *domain.Commit) bool    // ADR 0007; only a commit credited to a human
 func (d *Directory) Credit(author domain.Person, coAuthors []domain.Person) string // the author, or an agent's first human co-author (ADR 0007); commits and blamed lines alike
+func (d *Directory) Addresses() []string // #90: every address the facts show someone by (authors and co-authors, of commits and of blamed commits), a bot's
+                                         // included, lowercased and sorted, logins left out: what every page withholds in repository text
+// identity/pseudonym.go (PF-7): the id that stands in for an email where an answer prints none, "p-" and the first 10 hex digits of
+// the SHA-256 of the canonical email; the MCP server sends it in place of every email, and both inbound adapters resolve it back
+func Pseudonym(email string) string
+func IsPseudonym(s string) bool
 // identity/reviewer.go (#38): the one rule for who a forge account is, which every metric that reads reviews asks. A login
 // is the run's mailmapped author of the commits FactSet.Forge attributes to it (a pull request's commits and merge commit
 // that are in the run's history; the most, then the smallest email), else "@login"; an app "@login[bot]"; no login, the zero Subject.
@@ -623,13 +641,20 @@ type Ranked interface {
 	Metric
 	Clusters(in *Input, scope domain.Scope) (RankInput, error)
 }
+// trace.go (#109): a metric that is not ranked whose value about a person names the facts it counted, by its own projection
+// and rule: landed@1 and landed@2 (the landings), surviving@1 (the blamed commits), majority_owner@1 (the files)
+type Traced interface {
+	Metric
+	Trace(in *Input, person string) (domain.Trace, error) // every repository of the run; an empty trace, with the window, for no value
+}
 // RankInput: the metric owns its window and eligibility (both are part of its versioned definition), and its kind
 // follows from its definition, so a caller ranks with rank.Intervals(def.ID, scope, ri.Window, def.RankKind(), ri.Data,
 // ri.Options) and restates nothing.
 type RankInput struct {
 	Window  domain.Window // the metric's window for Facts.Now (durable@1: [now-365d, now-90d)); joins ranks to MetricValue.Window
 	Options rank.Options  // MinN from the eligibility rule; Blocks for Sum; Replicates 0 = 1000
-	Data    map[domain.Subject][]rank.Cluster // each person's clusters, sorted by Change; bots left out; nil when empty
+	Data    map[domain.Subject][]rank.Cluster // each person's clusters, sorted by Change, a bot's included (#75: the ranking use case,
+	                                          // app.rankAll, leaves bots out of rank.Intervals; explain lists them); nil when empty
 }
 func All() []Metric                                    // stable order, docs/metrics.md's catalog's: the registry, one list (a new metric is one file plus one line at its place)
 func Lookup(id string) (Metric, error)                 // an unknown id is a *domain.UsageError
@@ -679,17 +704,24 @@ func AUC(pos, neg []float64) float64 // Mann-Whitney, a tie counting 1/2; 0.5 wh
 // number to the metric@version, subject, scope and Detail key it reads (spec/report-json.md#where-the-numbers-come-from).
 type Model struct{ /* stillhere.report/v1: overviews (per group; every repository with --scope all or without groups), repo cards, ranks, caveats and provenance on every section */ }
 type Document interface{ /* sealed: *Model, *Explain, *WhoKnows, *Me, *Validation, *Catalog, *Identities */ }
-func Text(w io.Writer, d Document) error     // a terminal: 100 columns, untrusted text escaped, no emails and no name that gives one away
-func Markdown(w io.Writer, d Document) error // GitHub-flavoured: untrusted text escaped, mentions and references unlinked, no emails, names that give one away or repository paths
+func Text(w io.Writer, d Document, opts ...Option) error     // a terminal: 100 columns, untrusted text escaped, no emails and no name that gives one away;
+                                                             // times say UTC (#79); each table's first 10 rows and a count of the rest (SR-14)
+func Markdown(w io.Writer, d Document, opts ...Option) error // GitHub-flavoured: untrusted text escaped, mentions and references unlinked, no emails, names that give one away or repository paths
+type Option func(*printer) // how Text and Markdown print; JSON holds every row
+func AllRows() Option      // every row of every table: the command line's --all
 func JSON(w io.Writer, d Document) error     // stable order; empty lists [] and maps {}, absent sections null; invalid UTF-8 as U+FFFD, NaN and ±Inf as null; written only when whole
 // addresses.go (#68): all three print an email only at the published shape's places for one (redact.Place.Email: email, a person
 // subject's key; text and Markdown print none of those), and every other address the redact rule finds, with the page's people as
 // its vocabulary, as "(address withheld)": a commit subject's, a git message's, a directory's. The model keeps the text, which the
 // MCP server withholds by its own operator; text and Markdown render a copy, decoded from the withheld JSON, when there is any.
+// #90: the vocabulary is the run's people, not the page's: Build, NewExplain, NewWhoKnows, NewMe and NewIdentities keep People.Addresses
+// in a field no format encodes, which the renderers read (an unexported knower interface), so a page withholds the address of a person
+// of the run who is not on it, a dotless domain's included, as the MCP server's egress does over app.Names.People
 func WholeRun(scope string, groups int) bool // a report holds the overview of every repository (scope all, or no groups): Build's rule,
                                              // which app.AIShares reads too, since only that overview shows the whole run's AI-assisted share
-type People interface{ Name(email string) string; Bot(email string) bool; Withheld(email string) bool; NameKey(email string) string } // *identity.Directory
-// implements it; NameKey (#69) is what every unmerged-identities caveat groups names by, the identities same-name rule's key
+type People interface{ Name(email string) string; Bot(email string) bool; Withheld(email string) bool; NameKey(email string) string;
+	Addresses() []string } // *identity.Directory implements it; NameKey (#69) is what every unmerged-identities caveat groups names by, the identities
+	                       // same-name rule's key; Addresses (#90) the run's addresses every page withholds
 // #52: every person row (still-here, week, rank, made_of, who-knows) and person Subject names the person one way in every
 // format, Name and NameWithheld from one call (names.go, personName): Name is the display name, the login as GitHub shows it
 // ("@Zoe", the key "@zoe", #69) for a GitHub account no commit links to an email (identity.LoginKey, ADR 0004), and "" when git recorded none or when the name gives
@@ -704,7 +736,7 @@ type Input struct {
 	Who        People
 	Values     []domain.MetricValue
 	Ranks      []RankSet // one per metric named by --rank and scope
-	Landed     Landed    // landed@1's days and sort, and whether the command line set them
+	Landed     Landed    // the landed window's days and sort (landed@2's, #108), and whether the command line set them
 	History    domain.Window
 	Timings    *Timings
 	Scope      string    // the scan's rank scope: domain.ScopeAll (or a run without groups) adds an overview of every repository
@@ -754,11 +786,22 @@ func AIShareIn(v Value) (whole bool, key string) // #68: where a value holds an 
                                                  // "ai_assisted_share" for surviving's copy of its scope's share; the one place, so a reader that withholds a share
                                                  // (the MCP server, by app.AIShares) withholds every copy of it
 type RankSet struct { Metric MetricInfo; Scope domain.Scope; Window domain.Window; Percent bool; MinN int; Intervals []domain.RankInterval } // bots left out; Percent: metrics.Definition.Ratio
+// The report's sections that are new in wave 9 (report-json.md#the-objects): the week table is landed@2's (#108), WeekTable{Total *WeekTotal;
+// Humans, Bots []WeekRow}, a row {Landings, Commits, Merged int; LinesAdded, ProdLinesAdded *int (nil: unknown); LinesUnknown int}; a card's and an
+// overview's ReviewCoverage *ReviewCoverage (#107, nil without GitHub data); an overview's Repos []RepoRow (#105, one line per member, read from
+// the cards); a card's Areas []Area (Areas, #105) and Landings.Last; a rank table's Beside, the Detail key it prints beside each estimate
+// (rankBeside in values.go: reviews_given@1's no_comment_share, PF-5), and each row's Beside value
+type Area struct { Path string; Lines int; KnowledgeLoss *Share; People, PeopleInactive *int; Concentration *Concentration; ProdFiles *int }
+func Areas(values []domain.MetricValue, repo string) []Area // #106: one repository's area values of knowledge_loss@1 and knowledge_concentration@1,
+                                  // a row per top-level directory, largest first (lines, then lines gone quiet, then path): the one mapping of them, which
+                                  // a card's areas and the MCP server's overview of a repository read
 func Build(in *Input) *Model
 // The read commands' answers live here too, so the renderers and the MCP server share one shape.
 // Each has Provenance (run id, as-of, policy, HEAD SHAs, metric@version, when the GitHub data was synced) and Caveats:
-type Explain struct { Provenance Provenance; Metric MetricInfo; Subject Subject; Values []Value; Changes []Change; Caveats []Caveat }
-type WhoKnows struct { Provenance Provenance; Path, Repo string; Repos []WhoKnowsRepo; Caveats []Caveat } // owners, top authors, recent landers and reviewers (#38), bots
+type Explain struct { Provenance Provenance; Metric MetricInfo; Subject Subject; Values []Value; Changes []Change;
+	Landings []ExplainLanding; Commits []ExplainCommit; Files []ExplainFile; Caveats []Caveat } // #109: a Traced metric's lists, a domain.Trace with names and subjects
+type WhoKnows struct { Provenance Provenance; Path, Repo string; Repos []WhoKnowsRepo; Caveats []Caveat } // owners, top authors, recent landers and reviewers (#38), bots;
+	// #105: each WhoKnowsRepo's KnowledgeLoss, People, PeopleInactive and Concentration, metrics.PathKnowledge over the path
 type Me struct { Provenance Provenance; Person Subject; Values []Value; Ranks []MeRank; Metrics []MetricInfo; Caveats []Caveat }
 // #66: Metrics are the definitions of the page's metrics (NewMe keeps them from MeInput.Metrics); text and Markdown print a value
 // as a share exactly when its metric's Ratio says so, as explain prints by its Metric's, so a share of den 1 is "100.0% (1 of 1)"
@@ -778,8 +821,9 @@ type IdentitiesInput struct { Run *domain.Run; Facts *domain.FactSet; Scope doma
 func NewIdentities(in *IdentitiesInput) *Identities // identity.Candidates' survey as an answer, with provenance (AnswerProvenance) and caveats (mailmap-at-scan)
 func Mailmap(w io.Writer, id *Identities) error    // the suggested .mailmap lines, evidence as # comments; every candidate's but a high one's commented out
 func MailmapLines(c IdentityCandidate) []string    // #69: one candidate's lines exactly as Mailmap writes them, which it writes through
-func NewExplain(in *ExplainInput) *Explain    // values, and a ranked metric's clusters per repository as changes
-func NewWhoKnows(in *WhoKnowsInput) *WhoKnows // who_knows@1's values under the path, as lists
+func NewExplain(in *ExplainInput) *Explain    // values, a ranked metric's clusters per repository as changes, and a Traced metric's
+                                              // trace (ExplainInput.Trace, #109); no value: a no-values caveat saying why, from ExplainInput.Window (#92)
+func NewWhoKnows(in *WhoKnowsInput) *WhoKnows // who_knows@1's values under the path, as lists, and the path's knowledge (WhoKnowsInput.Knowledge, #105)
 func NewMe(in *MeInput) *Me                   // the person's values and their row in each RankSet
 // For an answer app builds itself (the MCP server's, validate's) over every repository of fs:
 func AnswerProvenance(run *domain.Run, fs *domain.FactSet, forge *ForgeRead, metrics []string) Provenance // dated by forge, as every section is
@@ -806,6 +850,10 @@ func Advice(err error) string
 // SQLite (SQLITE_READONLY); nothing is created, migrated or cleaned up. A missing file, a directory, another program's
 // file, and a facts database older or newer than this binary are each a *domain.UsageError saying what to run.
 func OpenReadOnly(ctx context.Context, path string) (*Store, error)
+// #79: a reader in a directory it cannot write (a read-only mount), where SQLite refuses even a read-only open of a WAL-mode database for want
+// of its -shm file (SQLITE_READONLY_DIRECTORY), reads it read-only with immutable=1 when no -wal file holds data: OpenReadOnly, and OpenExisting
+// in place of its read-write open. A -wal that holds commits is a *domain.UsageError that says to make the directory writable or copy both
+// files; neither error says the reader must write
 
 // github (#14): domain.ForgeSource over GitHub's GraphQL API and git over HTTPS
 type Config struct {
@@ -859,9 +907,11 @@ type ScanRequest struct {
 	Scope          string   // domain.ScopeGroup or domain.ScopeAll
 }
 type ReportRequest struct { RunID int64; Rank []domain.MetricID }                 // RunID 0: the latest complete or partial scan run
-type ExplainRequest struct { RunID int64; Metric domain.MetricID; Subject domain.Subject } // the CLI sends a person; MCP any subject
+type ExplainRequest struct { RunID int64; Metric domain.MetricID; Subject domain.Subject; Person string } // MCP sends any subject; the CLI sends Person,
+	// a person as a reader names them (PF-7), which Explain resolves against the run's people (FindPerson)
 type WhoKnowsRequest struct { RunID int64; Path, Repo string }
-type MeRequest struct { RunID int64; Email string }                                // Email required: the CLI resolves no default (me needs --email)
+type MeRequest struct { RunID int64; Email string }                                // Email required: the CLI resolves no default (me needs --email); PF-7: any form
+                                                                                  // a reader names a person by, which Me resolves (FindPerson)
 type ValidateRequest struct { RunID int64; Labels []byte; LabelsName string }      // the CLI reads the file; app opens none
 type SyncRequest struct { Org, Mirrors string; IncludeArchived, IncludeForks bool; Now time.Time } // Now: read once by cli; stamps the run and ForgeWatermark.Synced.
                                                                                                   // #71: the run records every option scrubbed (redact.Scrub), as a scan does
@@ -929,6 +979,12 @@ type DiffRequest struct { RunID int64; Repo, Change, Path string; MaxBytes int }
 // TopTier: Of eligible people, PeopleTotal whose 95% rank interval reaches first place, People them by name unless
 // they are more than a third of Of (no one stands out: a no-standout caveat).
 func RunNames(ctx context.Context, d Deps, r NamesRequest) (*Names, error)
+// app/people.go (PF-7): the one rule for a person as a reader names them, which the MCP server's resolver and the command line's explain
+// and me both call: an id (identity.Pseudonym), an email, a GitHub login (Names' Logins, without case), or a display name without case, or by
+// the start of each word (a name-match caveat); two of one name a *domain.UsageError that lists them (by q.ID, else their ids); a miss wraps
+// domain.ErrNotFound and suggests near names
+type PersonQuery struct { ID func(NamedPerson) string; Again string; Commands report.Commands }
+func FindPerson(n *Names, query string, q PersonQuery) (NamedPerson, *report.Caveat, error)
 func Overview(ctx context.Context, d Deps, r OverviewRequest) (*OverviewAnswer, error) // report.Build's sections for one scope; Provenance.Metrics: every number's
 func Person(ctx context.Context, d Deps, r PersonRequest) (*report.Me, error) // Me without the AI-assisted share (ADR 0007); both build through one helper, so they cannot drift
 func Changes(ctx context.Context, d Deps, r ChangesRequest) (*ChangesAnswer, error) // landings with durable@1 and simplifying@1 clusters
@@ -950,7 +1006,9 @@ func Serve(ctx context.Context, cfg Config, in io.ReadCloser, out io.Writer) err
                                                                                    // a line on in that is no JSON-RPC message gets JSON-RPC's error and is skipped
 
 // cli
-type Build struct{ Version, Commit, Date string } // from -ldflags -X main.version, main.commit, main.date
+type Build struct{ Version, Commit, Date, Committed string } // from -ldflags -X main.version, main.commit, main.date; RB-13: what -ldflags leaves
+	// empty is read from the build information: vcs.revision and vcs.time (Committed, the commit's time, never the build's), or, for go install
+	// of a commit, the pseudo-version's SHA prefix and time
 func Execute(ctx context.Context, args []string, stdout, stderr io.Writer, build Build) int // the exit code
 
 // fixture (test support, never imported by production code; repositories in ../../testdata/fixture/SPEC.md)
@@ -1012,18 +1070,20 @@ Every `scan` is a **run**: a snapshot of facts at one set of HEADs, under one po
 
 Global flags: `--db` (default `$STILLHERE_HOME/facts.db`, where `STILLHERE_HOME` defaults to `~/.stillhere`), `--policy FILE`, `--mailmap FILE`, `--log-level`, `--format text|md|json` on every command that prints a report. The root command alone also takes `--version` (`-v`), which prints the first line of `version` (#71).
 
-`--db`, `sync github --mirrors` and `STILLHERE_HOME` take a local path. One that is a URL or holds a credential (`redact.Scrub` would change it) is a usage error, quoted scrubbed, before anything is created or recorded: it is a remote pasted into the wrong place, and as a path it would name a directory after its token, which a scan of that directory would store and print (#71).
+`--db`, `sync github --mirrors` and `STILLHERE_HOME` take a local path. One that is a URL or holds a credential (`redact.Scrub` would change it) is a usage error, quoted scrubbed, before anything is created or recorded: it is a remote pasted into the wrong place, and as a path it would name a directory after its token, which a scan of that directory would store and print (#71). A relative `STILLHERE_HOME` is a usage error too (RB-12): it would name another facts database in every directory a command runs in, as the XDG Base Directory specification rules for its own variables. `scan` and `sync` log the facts database they write, as an absolute path.
+
+The organisation mailmap, `--mailmap` or `./.mailmap`, is git's to read; the command line reads it once more, by git's `read_mailmap_line` rules, only to warn, with line numbers, about each line git will skip (no `<email>`, an unclosed `<`, an empty `<>`) or cut (text after the first `<email>` that holds no closed second one, which git drops, so the line renames the first address alone), and about a file that is not text (RB-17, `cli/mailmap.go`). It never fails a command.
 
 The policy is `--policy FILE`, else `./stillhere.toml`, else the packaged one, and the organisation mailmap `--mailmap FILE`, else `./.mailmap` (#71). The working directory is often a clone's root, so a file there may be the clone's: it must be a regular file, not a symbolic link (a link to `/dev/zero` would be read without end, one to a FIFO would hang), and the log says at info which one was used; a file a flag names may be a link. A policy file is read only up to 1 MiB.
 
 | Command | Reads | Writes | Milestone |
 | --- | --- | --- | --- |
-| `week PATH...` `[--now] [--days N] [--week-sort lines_added\|commits] [--exclude-repo GLOB]... [--ignore-revs-file F]` | git | nothing; `--ignore-revs-file` is accepted for symmetry with scan and ignored, with a warning: git log has no such option | M0 |
-| `scan PATH...` `[--now] [--jobs N] [--ignore-revs-file F] [--rank METRIC]... [--scope group\|all] [--exclude-repo GLOB]...` | git, the forge replica in facts.db | a run in facts.db, which it creates when missing and must be able to write: an unwritable file or directory is a usage error before any git work (#71) | M1 |
-| `report [--run ID] [--rank METRIC]...` | facts.db | nothing, but an older facts.db is migrated (#71) | M1 |
-| `explain METRIC --person EMAIL [--run ID]` | facts.db | nothing, but an older facts.db is migrated | M1 |
+| `week PATH...` `[--now] [--days N] [--week-sort lines_added\|commits] [--exclude-repo GLOB]... [--ignore-revs-file F] [--all]` | git | nothing; `--ignore-revs-file` is accepted for symmetry with scan and ignored, with a warning: git log has no such option | M0 |
+| `scan PATH...` `[--now] [--jobs N] [--ignore-revs-file F] [--rank METRIC]... [--scope group\|all] [--exclude-repo GLOB]... [--all]` | git, the forge replica in facts.db | a run in facts.db, which it creates when missing and must be able to write: an unwritable file or directory is a usage error before any git work (#71) | M1 |
+| `report [--run ID] [--rank METRIC]... [--all]` | facts.db | nothing, but an older facts.db is migrated (#71) | M1 |
+| `explain METRIC --person WHO [--run ID] [--all]` | facts.db | nothing, but an older facts.db is migrated; WHO is an email, `@login`, id or display name (PF-7) | M1 |
 | `who-knows PATH [--repo KEY] [--run ID]` | facts.db | nothing, but an older facts.db is migrated | M1 |
-| `me --email E [--run ID]` | facts.db | nothing, but an older facts.db is migrated | M2 |
+| `me --email WHO [--run ID]` (`--person` the same) | facts.db | nothing, but an older facts.db is migrated; WHO as for explain (PF-7) | M2 |
 | `metrics` | the registry | nothing | M1 |
 | `identities [--run ID] [--format mailmap\|text\|md\|json]` | facts.db | nothing, but an older facts.db is migrated | M2 (#26) |
 | `validate --labels FILE [--run ID]` | facts.db, a labels CSV | nothing, but an older facts.db is migrated | M2 |
@@ -1033,7 +1093,7 @@ The policy is `--policy FILE`, else `./stillhere.toml`, else the packaged one, a
 | `version` | | | M0 |
 | `completion bash\|zsh\|fish\|powershell` | | nothing: it prints the shell's completion script (cobra's own command; the release archives carry the bash, zsh and fish ones) | M0 |
 
-The read commands (`report` to `validate`) never create facts.db or its directory (`sqlite.OpenExisting`): a missing one is a usage error that names the path and says what to run, where a new, empty database would send the user to scan again after a mistyped `--db`. The one write they make is migrating a facts.db an older stillhere wrote, which they could not read otherwise.
+The read commands (`report` to `validate`) never create facts.db or its directory (`sqlite.OpenExisting`): a missing one is a usage error that names the path and says what to run, where a new, empty database would send the user to scan again after a mistyped `--db`. The one write they make is migrating a facts.db an older stillhere wrote, which they could not read otherwise. In a directory they cannot write they read it read-only, as the MCP server does (#79). A missing PATH of `week` or `scan` is said in stillhere's words, not cobra's (RB-19). `--all` on `report`, `scan`, `week` and `explain` prints every row of every table in text and Markdown, which otherwise print the first 10 of each and count the rest (SR-14).
 
 Exit codes are in [report-json.md](report-json.md#exit-codes): 0 when any repo produced facts, 1 when none did, 2 for a usage error, death by the signal (128 + n) when interrupted.
 
@@ -1087,10 +1147,10 @@ Tests sit at stable boundaries, so a refactor does not rewrite them (Kent Beck, 
 
 | Test | Package | Asserts |
 | --- | --- | --- |
-| `TestWeekOracle` | `app` | the week table in the fixture spec, people and bots apart, and the `--days 1` window against `[week] days = 7`: `window.days` 1, `days_from` `cli`, `since` `2026-10-06T00:00:00Z`, and `history`, the window the run collected, equal to it |
+| `TestWeekOracle` | `app` | the week table in the fixture spec, `landed@2`'s since #108, people and bots apart, with its total, and the `--days 1` window against `[week] days = 7`: `window.days` 1, `days_from` `cli`, `since` `2026-10-06T00:00:00Z`, and `history`, the window the run collected, equal to it |
 | `TestStillHereOracle` | `app` | the still-here table, people and bots apart, and the concentration walk |
-| `TestChangeOracles` | `app` | `durable@1` and `simplifying@1` per person and per landing, with their rank tables and eligibility, reverts and AI-assisted tags on both fixtures; `knowledge_loss@1` (and `explain` of it about a person refused with what answers instead, #69) and `who_knows@1` on the main fixture, where who-knows of a path no repository has is missing with a `no-values` caveat that states what the run holds, never "nobody" or one reader's advice (#71), and with a replica written by hand their reviews (#38): a reviewer who keeps an area's knowledge from counting as lost, with a comment on her own open pull request, recent reviewers of a path (one known only as `@login`, whose login two pull requests carry in two cases, one subject `@zoe` named `@Zoe` (#69); not the author, a bot, a review outside each window, or a squash read as a rebase), on the merge-methods guard a rebase merge's commits in one committer second and a squash that takes no other pull request's landing in its second, a stored run that a later sync leaves unchanged, and one whose keys kept a login's case (`@Zoe`, as a stillhere before #69 stored it) that `explain` reads as `@zoe`; `surviving@1` credit on the sibling, where an agent's blamed lines go to its human co-author; and the regression guards: a backdated first-parent commit hides no landing below it; a rebased one lands, and is dated, by its committer time, and is credited to its author; and a revert merged with `--no-ff` is linked to the merge landing, which neither change metric counts, while `surviving@1` keeps the lines the revert restored; and a change git takes for binary leaves both of `durable@1`'s sums, and `ai_assisted@1`'s cohort ratio, with the lines blamed to its commit from its path, through a rename the history never collected and from a path with no role, while its commit's other changes and the file's text commits, before and after its binary ones, keep theirs; and both sums classify a line by the path it had in its commit (#70), so text files moved onto `prod` paths from `vendor/`, `tests/` and a name with no role keep no line their commits did not add, a `prod` file moved into `tests/` keeps its lines and one moved under `vendor/`, which blame does not read, keeps none; a run reads each repository as it stood at `--now` (#70): the main fixture at `--now 2026-03-15` reads its newest landing before then, records it as its head with a `head-after-now` caveat, gives `knowledge_loss@1` 0 / 18, and renders as the same repository cut back to that commit does, while at a `--now` before its root commit it yields no facts and a `no-commit-before-now` warning, and the backdated guard at `--now 2026-07-01` reads its backdated commit and gives a `dated-after-now` caveat for the 1 landing below it dated after `--now`; and the identity candidates of each fixture, without its mailmap and with it, whose mailmap form changes nothing in `git check-mailmap` until its lines are uncommented; `landed@2` on the main fixture, per person with `commits` and `merged` and per scope, the repository's and the run's totals (#108); `metrics.PathKnowledge` of the main fixture's root, which equals its stored repository values, of two files, and of a prefix that is no whole segment (#105); `review_coverage@1` over the replica written by hand, with a seventh pull request reviewed only by its author, a bot and someone after its merge, and on the merge-methods guard (#107); the binary-file guard's `binary-changes` caveat, counting its 4 changes to `prod` files (#64); and missing facts (#74): a partial clone of the main fixture, alone and beside it, whose `landed@1` and `landed@2` have no lines and count its landings in `landings_lines_unknown`, and a shallow clone of the sibling whose boundary is older than `simplifying@1`'s window, which has the sibling's `simplifying@1` there and no `ai_assisted@1` value |
-| `TestDeterminism` | `app` | two scans of both fixtures as one group, into separate facts.db files, give byte-identical JSON without `timings`, and identical text and Markdown; `report` on the stored run reproduces the scan; `me` prints Gina's own AI-assisted share of 0 of 1 as `0.0% (0 of 1)`, by its metric's declaration, as `explain` prints a share (#66); a token planted in a URL given as a PATH, in its userinfo, query or fragment, which discovery refuses as holding a credential with one path-failed warning that quotes it scrubbed (#93), is in no byte of facts.db or its `-wal` and `-shm`, no rendering and no log line, nor one pasted into `sync github`'s `--org` or `--mirrors`, or into `--db`, each of which the command line refuses before a run begins with an error line that holds none and gives its reason, nor into `--org` and `--mirrors` of a sync run GitHub refused, which records its options scrubbed, nor given to `who-knows` as its PATH (#71); with the cli's Deps (the store as both ports) and a replica that holds the fixture's forge repository beside another organization's, the run keeps only its own repository's watermark, with its name and join, `reviews_given@1` counts its reviews in scope `all`, the group and the repository, a review 7 days before `Now` in week block 0 and one at the window's start in block 12, every value the run stores is about a kind of subject its metric declares (`metrics.Definition.Subjects`, which `explain` refuses every other kind by, #69), and `report` reproduces the scan after a later sync renamed the repository; and a repository written with `git fast-import` (#52), whose display names are a login, the same name on another address, an address, none twice, a label's shape, two bots', one name written two ways on two addresses and a default name on two (#69), gives the same bytes over two scans and `report`, labels included, the report's and who-knows' `unmerged-identities` caveat naming the name written two ways once, counting jdoe's and leaving the default out, no text or Markdown page (who-knows included) holding a local part a name would give away or a domain, two `(no name N)` labels and four `(name withheld N)`, the label-shaped name printed quoted, and JSON names withheld on both of jdoe's addresses and for the bot named by an address, not for `dependabot[bot]`; and a commit subject that names an address no one in the run has and jdoe's, which `explain` prints in text, Markdown and JSON with each address as `(address withheld)` (#68) |
+| `TestChangeOracles` | `app` | `durable@1` and `simplifying@1` per person and per landing, with their rank tables and eligibility, reverts and AI-assisted tags on both fixtures; `knowledge_loss@1` (and `explain` of it about a person refused with what answers instead, #69) and `who_knows@1` on the main fixture, where who-knows of a path no repository has is missing with a `no-values` caveat that states what the run holds, never "nobody" or one reader's advice (#71), and with a replica written by hand their reviews (#38): a reviewer who keeps an area's knowledge from counting as lost, with a comment on her own open pull request, recent reviewers of a path (one known only as `@login`, whose login two pull requests carry in two cases, one subject `@zoe` named `@Zoe` (#69); not the author, a bot, a review outside each window, or a squash read as a rebase), on the merge-methods guard a rebase merge's commits in one committer second and a squash that takes no other pull request's landing in its second, a stored run that a later sync leaves unchanged, and one whose keys kept a login's case (`@Zoe`, as a stillhere before #69 stored it) that `explain` reads as `@zoe`; `surviving@1` credit on the sibling, where an agent's blamed lines go to its human co-author; and the regression guards: a backdated first-parent commit hides no landing below it; a rebased one lands, and is dated, by its committer time, and is credited to its author; and a revert merged with `--no-ff` is linked to the merge landing, which neither change metric counts, while `surviving@1` keeps the lines the revert restored; and a change git takes for binary leaves both of `durable@1`'s sums, and `ai_assisted@1`'s cohort ratio, with the lines blamed to its commit from its path, through a rename the history never collected and from a path with no role, while its commit's other changes and the file's text commits, before and after its binary ones, keep theirs; and both sums classify a line by the path it had in its commit (#70), so text files moved onto `prod` paths from `vendor/`, `tests/` and a name with no role keep no line their commits did not add, a `prod` file moved into `tests/` keeps its lines and one moved under `vendor/`, which blame does not read, keeps none; a run reads each repository as it stood at `--now` (#70): the main fixture at `--now 2026-03-15` reads its newest landing before then, records it as its head with a `head-after-now` caveat, gives `knowledge_loss@1` 0 / 18, and renders as the same repository cut back to that commit does, while at a `--now` before its root commit it yields no facts and a `no-commit-before-now` warning, and the backdated guard at `--now 2026-07-01` reads its backdated commit and gives a `dated-after-now` caveat for the 1 landing below it dated after `--now`; and the identity candidates of each fixture, without its mailmap and with it, whose mailmap form changes nothing in `git check-mailmap` until its lines are uncommented; `landed@2` on the main fixture, per person with `commits` and `merged` and per scope, the repository's and the run's totals, and `landed@1`'s M0 table there (#108); `explain`'s traces (#109) of `landed@2`, `landed@1`, `surviving@1` and `majority_owner@1`, with the person named by a display name, the start of a word, an email and an id (PF-7), a value of the right kind the person has none of saying why (#92) and a misspelt name suggesting the right one; who-knows of `notes.csv`, present with no role, empty with a `no-values` caveat that says so (PF-8), and of `app.py`, a real "nobody"; `metrics.PathKnowledge` of the main fixture's root, which equals its stored repository values, of two files, and of a prefix that is no whole segment, and who-knows of `split.py` showing its knowledge loss and concentration (#105); `review_coverage@1` over the replica written by hand, with a seventh pull request reviewed only by its author, a bot and someone after its merge, and on the merge-methods guard, as stored and as the card and the overview show it (#107); the binary-file guard's `binary-changes` caveat, counting its 4 changes to `prod` files (#64); and missing facts (#74): a partial clone of the main fixture, alone and beside it, whose `landed@1` and `landed@2` have no lines and count its landings in `landings_lines_unknown`, and a shallow clone of the sibling whose boundary is older than `simplifying@1`'s window, which has the sibling's `simplifying@1` there and no `ai_assisted@1` value |
+| `TestDeterminism` | `app` | two scans of both fixtures as one group, into separate facts.db files, give byte-identical JSON without `timings`, and identical text and Markdown; `report` on the stored run reproduces the scan; `me` prints Gina's own AI-assisted share of 0 of 1 as `0.0% (0 of 1)`, by its metric's declaration, as `explain` prints a share (#66); a token planted in a URL given as a PATH, in its userinfo, query or fragment, which discovery refuses as holding a credential with one path-failed warning that quotes it scrubbed (#93), is in no byte of facts.db or its `-wal` and `-shm`, no rendering and no log line, nor one pasted into `sync github`'s `--org` or `--mirrors`, or into `--db`, each of which the command line refuses before a run begins with an error line that holds none and gives its reason, nor into `--org` and `--mirrors` of a sync run GitHub refused, which records its options scrubbed, nor given to `who-knows` as its PATH (#71); with the cli's Deps (the store as both ports) and a replica that holds the fixture's forge repository beside another organization's, the run keeps only its own repository's watermark, with its name and join, `reviews_given@1` counts its reviews in scope `all`, the group and the repository, a review 7 days before `Now` in week block 0 and one at the window's start in block 12, every value the run stores is about a kind of subject its metric declares (`metrics.Definition.Subjects`, which `explain` refuses every other kind by, #69), and `report` reproduces the scan after a later sync renamed the repository; and a repository written with `git fast-import` (#52), whose display names are a login, the same name on another address, an address, none twice, a label's shape, two bots', one name written two ways on two addresses and a default name on two (#69), gives the same bytes over two scans and `report`, labels included, the report's and who-knows' `unmerged-identities` caveat naming the name written two ways once, counting jdoe's and leaving the default out, no text or Markdown page (who-knows included) holding a local part a name would give away or a domain, two `(no name N)` labels and four `(name withheld N)`, the label-shaped name printed quoted, and JSON names withheld on both of jdoe's addresses and for the bot named by an address, not for `dependabot[bot]`; and a commit subject that names an address no one in the run has, jdoe's and, in a dotless domain, root's, who is on no page with it, which `explain` prints in text, Markdown and JSON with each address as `(address withheld)` (#68, #90); and the `reviews_given@1` rank table's `no_comment_share` beside each count, zed's 1 (PF-5) |
 | `TestDiscover` | `collect` | duplicates, bare repos, scp vs HTTPS remotes; a directory with no repository among its children is no group but a failure that says what to pass: two subdirectories that hold repositories, named before the work tree it is inside, and a symbolic link to a FIFO there is never opened (#71); a planted token appears in no output, and a repository named, or found in a group, under a directory whose name holds one fails with its path scrubbed, as holding a credential (#93) |
 | `TestCloneHealth` | `collect` | shallow and partial clones warn and lose only the facts they should |
 | `TestAttributes` | `collect` | `check-attr --source` on a work tree and a bare clone: the scanned commit's attributes, not the checked-out ones or `attr.tree`'s, matched case-sensitively under `core.ignorecase=true`; an empty value is on; an attribute that settles a generated header; a deleted path classified by Head's attributes; a header sniff that no attribute changes (`-diff`, `binary`, an uncommitted edit), with each of its rules, prose, a generator program and a generator script's string template that writes an rST comment (#70) that stay `prod`, a Haskell module whose generated header opens a `{-` comment, as proto-lens writes it, and the line-40 limit; a symbolic link and a submodule unclassified. History (scan) and Blame on the same pair, under the repository config that each pin of [git-invocation.md](git-invocation.md#repository-settings-that-change-facts) overrides: the same facts in both clones, and the expected ones, with no file binary although Head, the checkout and `attr.tree` each mark files `-diff`, a CRLF-to-LF rename followed, the indent heuristic's owner, a UTF-8 author name, a co-author, a root commit's diff, a gitlink's row and a decomposed path blamed; and no textconv driver or filter run |
@@ -1103,6 +1163,6 @@ Tests sit at stable boundaries, so a refactor does not rewrite them (Kent Beck, 
 | `TestRedact` | `redact` | no credential survives `URL`, `Scrub` or `Message` (userinfo, scp-like and malformed remotes, query strings and fragments, a URL given as a path and made absolute with any of those, quotes, the 180-rune cut); text that holds none is unchanged, a Windows path with a `#` included |
 | `TestRunner` | `gitcli` | per-user and system attributes change neither numstat nor `check-attr`; no askpass, signature or external diff program runs; an inherited `GIT_DIR` changes nothing; a timeout or cancellation kills git's process group and is reported as such even when the reader fails first on the truncated output; a helper that left the group cannot hold `Stream` |
 | `TestStoreRoundTrip` | `sqlite` | `LoadFacts(PutRepoFacts(x)) == x`, a zero loading as +0; `Run(id)` returns the run as begun and finished, policy source included; `RunWatermarks` returns the last `PutRunWatermarks` of the run, names and joins included, and a watermark that joins nothing is refused; `RunForge` returns the last `PutRunForge` of the run with its watermarks and its join (#38), and a pull request of a repository not the run's is refused; readers never see a running or failed run (`ErrNotFound`, `RunWatermarks` and `RunForge` included) |
-| `TestStoreLifecycle` | `sqlite` | `Open` creates a missing directory 0700 and files 0600, in WAL mode; it refuses another program's SQLite file, a file that is not SQLite and a newer facts database with a `UsageError`, without waiting for a held lock and leaving the file byte for byte, and a file or directory it cannot write with one that names it (#71); `OpenExisting` creates no directory or file for a missing path, refuses it with a `UsageError` that names it, refuses what `Open` refuses, reads what a writer wrote without deleting a run left running, and migrates an empty file (#71); first opens racing in separate processes all succeed; a run left running is deleted once its store has written nothing for a day, and not before; retention and `LatestRun` match a model of the run-model rule across gaps, year-long pauses, ties and backfills, and no table with a `run_id` keeps a row of a deleted run, the GitHub data a run kept included (#38) |
-| `TestGitHubSync` | `github` | recorded responses ([testdata/github](../../testdata/github/README.md)) become the expected repositories and pull request pages, through rate limits (a 403 with Retry-After, a nearly spent budget, and a spent budget and a secondary limit that GitHub reports inside a 200), a 502 and nested follow-ups; a mirror clones and fetches from a local git server that takes only the token, follows a rename by node id, moves to `.stale` and back, and never follows a redirect to another host; the token is in no fact, mirror file, log or error; the pages the passes return, stored through `sqlite.Open` and `PutForgePage`, come back from `LoadForge` as the last page that carried each pull request said, reviews in submission order, and from a `since` between the passes only the pull requests updated at or after it; `reviews_given@1` over what `LoadForge` returns matches its oracle in scope `all`, the group and the repository, another organization's repository and a failed one counting nowhere (M2) |
+| `TestStoreLifecycle` | `sqlite` | `Open` creates a missing directory 0700 and files 0600, in WAL mode; it refuses another program's SQLite file, a file that is not SQLite and a newer facts database with a `UsageError`, without waiting for a held lock and leaving the file byte for byte, and a file or directory it cannot write with one that names it (#71); `OpenExisting` creates no directory or file for a missing path, refuses it with a `UsageError` that names it, refuses what `Open` refuses, reads what a writer wrote without deleting a run left running, and migrates an empty file (#71); `OpenExisting` and `OpenReadOnly` read a facts database in a directory they cannot write, leaving no file there, and refuse one whose write-ahead log holds a commit with a `UsageError` that names the log (#79); first opens racing in separate processes all succeed; a run left running is deleted once its store has written nothing for a day, and not before; retention and `LatestRun` match a model of the run-model rule across gaps, year-long pauses, ties and backfills, and no table with a `run_id` keeps a row of a deleted run, the GitHub data a run kept included (#38) |
+| `TestGitHubSync` | `github` | recorded responses ([testdata/github](../../testdata/github/README.md)) become the expected repositories and pull request pages, through rate limits (a 403 with Retry-After, a nearly spent budget, and a spent budget and a secondary limit that GitHub reports inside a 200), a 502 and nested follow-ups; a mirror clones and fetches from a local git server that takes only the token, follows a rename by node id, moves to `.stale` and back, and never follows a redirect to another host; the token is in no fact, mirror file, log or error; the pages the passes return, stored through `sqlite.Open` and `PutForgePage`, come back from `LoadForge` as the last page that carried each pull request said, reviews in submission order, and from a `since` between the passes only the pull requests updated at or after it; `reviews_given@1` over what `LoadForge` returns matches its oracle in scope `all`, the group and the repository, another organization's repository and a failed one counting nowhere, the bots' clusters included, which ranking leaves out (#75) (M2) |
 | `TestMCPTools` | `mcp` | each tool through the SDK's in-memory client (M4); and AI-assisted shares that add up, against the local report's: no answer, alone or less another, gives back a withheld share, a group's, a repository's or with `--scope all` the whole run's, nor surviving@1's copy of it (`ai_assisted_share`), and one person's three unmerged addresses count as one (#68) |

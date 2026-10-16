@@ -52,7 +52,7 @@ func (landedV1) Definition() Definition {
 		BlindSpots: "A merged branch counts for the person who landed it, with the branch's lines; landed@2 credits its " +
 			"authors. Numstat counts blank lines and moves. Work that never lands on the default branch is invisible.",
 		Gaming:   "Splitting work into many small landings raises the count; generated or vendored code is denied, but a role-assigned bulk change still adds lines.",
-		Oracle:   "testdata/fixture/SPEC.md#week-oracle-m0-testweekoracle",
+		Oracle:   "testdata/fixture/SPEC.md#landed1-main-fixture",
 		Validity: "Context, never ranked: a count of what landed, which is exact by construction and says nothing about value.",
 	}
 }

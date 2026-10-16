@@ -36,5 +36,6 @@ only facts.db.`,
 	}
 	addRunFlag(cmd, &run)
 	addRankFlag(cmd, &ranks)
+	e.addAllFlag(cmd)
 	return cmd
 }

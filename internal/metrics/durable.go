@@ -96,7 +96,7 @@ func (durableV1) Clusters(in *Input, scope domain.Scope) (RankInput, error) {
 	return RankInput{
 		Window:  v.window(cohortFrom, cohortTo),
 		Options: rank.Options{MinN: minClusters},
-		Data: rankData(v, durableClusters(v), func(k *cluster) rank.Cluster {
+		Data: rankData(durableClusters(v), func(k *cluster) rank.Cluster {
 			return rank.Cluster{Change: k.landing.sha, Num: float64(k.surviving), Den: float64(k.traced)}
 		}),
 	}, nil

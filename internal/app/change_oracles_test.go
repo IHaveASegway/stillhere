@@ -6,11 +6,13 @@ import (
 	"maps"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/IHaveASegway/stillhere/internal/app"
 	"github.com/IHaveASegway/stillhere/internal/domain"
 	"github.com/IHaveASegway/stillhere/internal/fixture"
+	"github.com/IHaveASegway/stillhere/internal/identity"
 	"github.com/IHaveASegway/stillhere/internal/metrics"
 	"github.com/IHaveASegway/stillhere/internal/policy"
 	"github.com/IHaveASegway/stillhere/internal/report"
@@ -211,6 +213,17 @@ func mainChangeOracles(t *testing.T) {
 		if got := under("side"); len(got) != 0 {
 			t.Errorf("SPEC knowledge under side: %d values, want none: a prefix matches whole segments", len(got))
 		}
+		// who-knows shows the path's knowledge loss and concentration (#105),
+		// split.py's 4 of 4 lines held by its 2 people, both gone quiet.
+		w := s.whoKnows(t, "split.py")
+		if len(w.Repos) != 1 || w.Repos[0].KnowledgeLoss == nil || w.Repos[0].People == nil || w.Repos[0].Concentration == nil {
+			t.Fatalf("who-knows split.py: %+v, want one repository with its knowledge loss and concentration", w.Repos)
+		}
+		k := w.Repos[0]
+		if got := (known{int(k.KnowledgeLoss.Num), int(k.KnowledgeLoss.Den), *k.People, *k.PeopleInactive,
+			k.Concentration.AuthorsInPrefix, k.Concentration.FilesWithMajority}); got != (known{4, 4, 2, 2, 1, 1}) {
+			t.Errorf("SPEC knowledge under split.py, as who-knows shows it: %+v, want 4 / 4, 2 of 2 gone quiet, 1 author of 1 file", got)
+		}
 	})
 
 	t.Run("who_knows@1", func(t *testing.T) {
@@ -234,11 +247,16 @@ func mainChangeOracles(t *testing.T) {
 		// "nobody" (#71). The caveat states what the run holds, not one
 		// reader's advice: the MCP server's who_knows takes an absolute
 		// path that the command line does not. notes.csv is a path the run
-		// knows, which no one holds lines of or landed lately: that one is
-		// a real "nobody".
+		// knows with no role, which who_knows@1 does not count, so its
+		// answer is empty for that reason, which a no-values caveat says
+		// (PF-8). app.py, renamed to service.py in January, has a role and
+		// no surviving line, and no one landed it lately: a real "nobody".
 		noPath := fmt.Sprintf("Repository %s of run %d has no path under %q, so this answer is missing, not a real \"nobody\": "+
 			"the run knows each path relative to its repository's root, such as src or src/pay.go.", r.Name, s.run, "fixture/service.py")
-		for _, c := range []struct{ path, caveat string }{{"fixture/service.py", noPath}, {"notes.csv", ""}} {
+		noRole := `"notes.csv" is in 1 repository, but no path there has a role (1 path unclassified), and who_knows@1 counts only ` +
+			"paths with one: this answer is empty because the policy leaves the path out, not because nobody knows it. " +
+			"'stillhere policy' prints the roles and the deny list; a role for it in stillhere.toml makes it count at the next scan."
+		for _, c := range []struct{ path, caveat string }{{"fixture/service.py", noPath}, {"notes.csv", noRole}, {"app.py", ""}} {
 			w := s.whoKnows(t, c.path)
 			var noValues, want []string
 			for _, cv := range w.Caveats {
@@ -276,6 +294,113 @@ func mainChangeOracles(t *testing.T) {
 		checkLanded(t, "SPEC landed@2 (main fixture), the repository", s, landedV2, domain.Scope{Kind: domain.ScopeRepo, Key: r.Key}, inRepo)
 		want["all:"] = totals
 		checkLanded(t, "SPEC landed@2 (main fixture), the run", s, landedV2, domain.Scope{Kind: domain.ScopeAll}, want)
+		// SPEC, "landed@1 (main fixture)": the week table as M0 defined it,
+		// which landed@1 keeps (#108): Bob is credited with the merge he
+		// landed and its first-parent diff, Cara has no row.
+		checkLanded(t, "SPEC landed@1 (main fixture)", s, landedV1, domain.Scope{Kind: domain.ScopeRepo, Key: r.Key},
+			map[string]landedRow{
+				"bob@example.com":     {2, 0, 0, 11, 11, 0},
+				"ivy@example.com":     {1, 0, 0, 4, 0, 0},
+				"frank@example.com":   {1, 0, 0, 3, 3, 0},
+				"ada@example.com":     {1, 0, 0, 1, 1, 0},
+				"dana@example.com":    {1, 0, 0, 1, 1, 0},
+				"erin@example.com":    {1, 0, 0, 1, 1, 0},
+				"jules@example.com":   {1, 0, 0, 0, 0, 0},
+				"copilot@bot.example": {1, 0, 0, 3, 3, 0},
+			})
+	})
+
+	t.Run("explain traces and names", func(t *testing.T) {
+		// SPEC, "Explain traces (main fixture)" (#109): explain lists what a
+		// value that is not ranked is made of, and the command line names
+		// the person as a page does (PF-7): a display name, the start of
+		// each of its words, an email or an id.
+		explain := func(metric, who string) (*report.Explain, error) {
+			id, err := domain.ParseMetricID(metric)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return app.Explain(t.Context(), s.read, app.ExplainRequest{RunID: s.run, Metric: id, Person: who})
+		}
+		type landing struct {
+			title                string
+			merge                bool
+			commits, lines, prod int
+		}
+		landings := func(e *report.Explain) []landing {
+			var out []landing
+			for _, l := range e.Landings {
+				lines, prod := -1, -1
+				if l.LinesAdded != nil {
+					lines, prod = *l.LinesAdded, *l.ProdLinesAdded
+				}
+				out = append(out, landing{l.Title, l.Merge, l.Commits, lines, prod})
+			}
+			return out
+		}
+		// landed@2: Cara's one landing is Bob's merge of her branch, with
+		// both of her commits' lines.
+		e, err := explain("landed@2", "Cara Dev")
+		if err != nil {
+			t.Fatalf("explain landed@2 --person 'Cara Dev': %v", err)
+		}
+		if got, want := landings(e), []landing{{"Merge branch 'feature'", true, 2, 9, 9}}; !slices.Equal(got, want) {
+			t.Errorf("SPEC explain traces, landed@2 of Cara: landings %+v, want %+v", got, want)
+		}
+		// landed@1: Bob's two, the merge with its first-parent diff, and
+		// delta; "bob" matches Bob Builder by the start of a word, which a
+		// caveat says.
+		if e, err = explain("landed@1", "bob"); err != nil {
+			t.Fatalf("explain landed@1 --person bob: %v", err)
+		}
+		want := []landing{{"Merge branch 'feature'", true, 1, 9, 9}, {"add delta_bob_added", false, 1, 2, 2}}
+		if got := landings(e); !slices.Equal(got, want) || !slices.ContainsFunc(e.Caveats, func(c report.Caveat) bool { return c.Code == "name-match" }) {
+			t.Errorf("SPEC explain traces, landed@1 of bob: landings %+v and caveats %+v, want %+v and a name-match caveat", got, e.Caveats, want)
+		}
+		// surviving@1: Ada's 10 prod lines sit in three commits: the init
+		// commit's beta and alpha blocks in service.py (4, blame -M) and
+		// new_name.py's x, y and z (3, through Erin's rename), the gamma
+		// block from her second address (2) and ada_week.py (1).
+		if e, err = explain("surviving@1", "ada@example.com"); err != nil {
+			t.Fatalf("explain surviving@1 --person ada@example.com: %v", err)
+		}
+		type held struct {
+			what  string
+			lines int
+		}
+		var commits []held
+		for _, c := range e.Commits {
+			commits = append(commits, held{c.Title, c.Lines})
+		}
+		if want := []held{{"init", 7}, {"add gamma_added_later", 2}, {"add ada_week.py", 1}}; !slices.Equal(commits, want) {
+			t.Errorf("SPEC explain traces, surviving@1 of Ada: commits %+v, want %+v", commits, want)
+		}
+		// majority_owner@1: her three files, by her id as an MCP answer
+		// gives it.
+		if e, err = explain("majority_owner@1", identity.Pseudonym("ada@example.com")); err != nil {
+			t.Fatalf("explain majority_owner@1 --person <Ada's id>: %v", err)
+		}
+		var files []string
+		for _, f := range e.Files {
+			files = append(files, fmt.Sprintf("%s %d/%d", f.Path, f.Lines, f.Of))
+		}
+		if want := []string{"service.py 6/8", "new_name.py 3/4", "ada_week.py 1/1"}; !slices.Equal(files, want) {
+			t.Errorf("SPEC explain traces, majority_owner@1 of Ada: files %v, want %v", files, want)
+		}
+		// A value of the right kind the person has none of says why (#92):
+		// Gina's changes are January's, older than landed@2's week.
+		if e, err = explain("landed@2", "Gina Split"); err != nil {
+			t.Fatalf("explain landed@2 --person 'Gina Split': %v", err)
+		}
+		if len(e.Values) != 0 || !slices.ContainsFunc(e.Caveats, func(c report.Caveat) bool {
+			return c.Code == "no-values" && strings.Contains(c.Message, "2026-09-30 → 2026-10-07 UTC")
+		}) {
+			t.Errorf("SPEC explain traces, landed@2 of Gina: values %v and caveats %+v, want none and a no-values caveat naming the week", e.Values, e.Caveats)
+		}
+		// A name no one has is refused with near names; a miss is not found.
+		if _, err = explain("landed@2", "Cara Deb"); !errors.Is(err, domain.ErrNotFound) || !strings.Contains(err.Error(), `"Cara Dev"`) {
+			t.Errorf("explain landed@2 --person 'Cara Deb' gave %v, want not found, suggesting Cara Dev", err)
+		}
 	})
 
 	t.Run("AI-assisted tags and reverts", func(t *testing.T) {

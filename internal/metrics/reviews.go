@@ -123,7 +123,9 @@ func (m reviewsGiven) Compute(in *Input) ([]domain.MetricValue, error) {
 // Clusters returns one cluster per person and pull request reviewed, with
 // Num 1, in the window's week block (counted back from Now,
 // domain.Window.Week) of the person's first counted review of it, for
-// rank's week-block bootstrap. Bots get no clusters: they are never ranked.
+// rank's week-block bootstrap. A bot's are there too, as for every ranked
+// metric (#75): the ranking use case leaves bots out, and explain lists
+// them.
 func (m reviewsGiven) Clusters(in *Input, scope domain.Scope) (RankInput, error) {
 	if in == nil || in.Facts == nil {
 		return RankInput{}, errors.New("reviews_given@1: no facts to rank")
@@ -138,9 +140,6 @@ func (m reviewsGiven) Clusters(in *Input, scope domain.Scope) (RankInput, error)
 		return ri, nil
 	}
 	for _, r := range rv.inScope(scope) {
-		if r.bot {
-			continue
-		}
 		if ri.Data == nil {
 			ri.Data = map[domain.Subject][]rank.Cluster{}
 		}
@@ -172,7 +171,6 @@ type reviewsPull struct {
 	pull  string   // PullRequest.ID
 	repos []string // Repo.Key of the run's repositories that are its repository: one, unless the run scanned two clones of it
 	who   domain.Subject
-	bot   bool
 	first time.Time // the person's earliest counted review of it
 
 	reviews, comments, approvals, approvalsNoComment int
@@ -232,7 +230,7 @@ func newReviewsView(in *Input, scope domain.Scope) *reviewsView {
 		reviewsByOthers(p, rv.window, who, func(r *domain.Review, s domain.Subject) {
 			c := byPerson[s]
 			if c == nil {
-				c = &reviewsPull{pull: p.ID, repos: keys, who: s, bot: who.Bot(s.Key), first: r.Submitted}
+				c = &reviewsPull{pull: p.ID, repos: keys, who: s, first: r.Submitted}
 				byPerson[s] = c
 			}
 			if r.Submitted.Before(c.first) {

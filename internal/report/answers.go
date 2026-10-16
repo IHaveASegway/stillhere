@@ -16,7 +16,7 @@ import (
 // when the answer shows a number computed from GitHub data, when that data
 // was synced: "· GitHub data as of 2026-10-06".
 func provenanceText(pv Provenance) string {
-	s := "as of " + day(pv.AsOf)
+	s := "as of " + dayUTC(pv.AsOf)
 	if pv.RunID != 0 {
 		s = fmt.Sprintf("run %d · %s", pv.RunID, s)
 	}
@@ -89,19 +89,35 @@ func (e *Explain) writeText(p *printer) {
 	if len(e.Values) == 0 {
 		p.line("  no value in this run")
 	} else {
-		cols := []column{{head: "scope"}, {head: "window"}, {head: "value", right: true}, {head: "n", right: true}, {head: "detail"}}
+		// The detail is printed below the table, wrapped, rather than in a
+		// column a 100-column table would cut (PF-5): it holds the
+		// counterweights a definition promises beside the value.
+		cols := []column{{head: "scope"}, {head: "window"}, {head: "value", right: true}, {head: "n", right: true}}
 		var rows [][]string
+		var details [][2]string
 		for _, v := range e.Values {
-			rows = append(rows, []string{scopeText(v.Scope, clean, e.Provenance), windowText(v.Window), valueText(v, ratio), grouped(v.N), detailText(v.Detail, clean)})
+			scope := scopeText(v.Scope, clean, e.Provenance)
+			rows = append(rows, []string{scope, windowText(v.Window), valueText(v, ratio), grouped(v.N)})
+			if d := detailText(v.Detail, clean); d != "" {
+				details = append(details, [2]string{scope, d})
+			}
 		}
 		p.textTable("  ", cols, rows)
+		if len(details) > 0 {
+			p.blank()
+			p.line("  detail")
+			for _, d := range details {
+				p.wrapped("    "+d[0]+": ", "      ", d[1])
+			}
+		}
 	}
 	if len(e.Changes) > 0 {
 		p.blank()
 		p.linef("  The %s behind it, by repository and time", plural(len(e.Changes), "change", "changes"))
-		cols := []column{{head: "landing"}, {head: "repo"}, {head: "landed"}, {head: "num", right: true}, {head: "den", right: true}, {head: "title"}}
+		cols := []column{{head: "landing"}, {head: "repo"}, {head: "landed (UTC)"}, {head: "num", right: true}, {head: "den", right: true}, {head: "title"}}
 		var rows [][]string
-		for _, c := range e.Changes {
+		list, hidden := shown(p, e.Changes, pageRows)
+		for _, c := range list {
 			den := number(c.Den)
 			if c.Den == 0 {
 				den = ""
@@ -109,9 +125,75 @@ func (e *Explain) writeText(p *printer) {
 			rows = append(rows, []string{short(c.Landing), clean(c.Repo), day(c.Time), number(c.Num), den, clean(c.Title)})
 		}
 		p.textTable("    ", cols, rows)
+		if s := moreText(hidden, "change", "changes"); s != "" {
+			p.line("    " + s)
+		}
+	}
+	for _, t := range e.traceTables(p, clean, clean) {
+		p.blank()
+		p.line("  " + t.title)
+		p.textTable("    ", t.cols, t.rows)
+		if t.more != "" {
+			p.line("    " + t.more)
+		}
 	}
 	textDefinition(p, e.Metric)
 	textCaveats(p, "", "What could make this wrong", e.Caveats, false)
+}
+
+// traceTable is one list of what a value is made of (#109), laid out for
+// text or Markdown.
+type traceTable struct {
+	title string
+	cols  []column
+	rows  [][]string
+	more  string // counts the rows left out
+}
+
+// traceTables lays out an explanation's landings, commits and files: the
+// first pageRows of each, and a count of the rest. esc prints untrusted
+// text, code a SHA or a path.
+func (e *Explain) traceTables(p *printer, esc, code func(string) string) []traceTable {
+	var out []traceTable
+	if n := len(e.Landings); n > 0 {
+		t := traceTable{title: fmt.Sprintf("The %s behind it, by repository and time", plural(n, "landing", "landings")),
+			cols: []column{{head: "landing"}, {head: "repo"}, {head: "landed (UTC)"}, {head: "commits", right: true},
+				{head: "lines added", right: true}, {head: "prod lines added", right: true}, {head: "title"}}}
+		list, hidden := shown(p, e.Landings, pageRows)
+		for _, l := range list {
+			t.rows = append(t.rows, []string{code(short(l.Landing)), esc(l.Repo), day(l.Time), grouped(l.Commits),
+				knownCount(l.LinesAdded), knownCount(l.ProdLinesAdded), esc(l.Title)})
+		}
+		t.more = moreText(hidden, "landing", "landings")
+		out = append(out, t)
+	}
+	if n := len(e.Commits); n > 0 {
+		t := traceTable{title: fmt.Sprintf("The %s holding the lines, most first", plural(n, "commit", "commits")),
+			cols: []column{{head: "commit"}, {head: "repo"}, {head: "authored (UTC)"}, {head: "prod lines", right: true},
+				{head: "title"}}}
+		list, hidden := shown(p, e.Commits, pageRows)
+		for _, c := range list {
+			t.rows = append(t.rows, []string{code(short(c.Commit)), esc(c.Repo), day(c.Time), grouped(c.Lines), esc(c.Title)})
+		}
+		t.more = moreText(hidden, "commit", "commits")
+		out = append(out, t)
+	}
+	if n := len(e.Files); n > 0 {
+		t := traceTable{title: fmt.Sprintf("The %s, most lines first", plural(n, "file", "files")),
+			cols: []column{{head: "file"}, {head: "repo"}, {head: "lines", right: true}, {head: "of", right: true},
+				{head: "share", right: true}}}
+		list, hidden := shown(p, e.Files, pageRows)
+		for _, f := range list {
+			share := ""
+			if f.Of > 0 {
+				share = percent(float64(f.Lines) / float64(f.Of))
+			}
+			t.rows = append(t.rows, []string{code(f.Path), esc(f.Repo), grouped(f.Lines), grouped(f.Of), share})
+		}
+		t.more = moreText(hidden, "file", "files")
+		out = append(out, t)
+	}
+	return out
 }
 
 func textDefinition(p *printer, d MetricInfo) {
@@ -154,9 +236,16 @@ func (e *Explain) writeMarkdown(p *printer) {
 		p.blank()
 		p.line("## The " + plural(len(e.Changes), "change", "changes") + " behind it")
 		p.blank()
-		cols := []column{{head: "Landing"}, {head: "Repo"}, {head: "Landed"}, {head: "Num", right: true}, {head: "Den", right: true}, {head: "Title"}}
+		cols := []column{{head: "Landing"}, {head: "Repo"}, {head: "Landed (UTC)"}, {head: "Num", right: true}, {head: "Den", right: true}, {head: "Title"}}
 		var rows [][]string
-		for _, c := range e.Changes {
+		list, hidden := shown(p, e.Changes, pageRows)
+		defer func() {
+			if s := moreText(hidden, "change", "changes"); s != "" {
+				p.blank()
+				p.line(strings.ToUpper(s[:1]) + s[1:] + ".")
+			}
+		}()
+		for _, c := range list {
 			den := number(c.Den)
 			if c.Den == 0 {
 				den = ""
@@ -164,6 +253,19 @@ func (e *Explain) writeMarkdown(p *printer) {
 			rows = append(rows, []string{mdCode(short(c.Landing)), mdText(c.Repo), day(c.Time), number(c.Num), den, mdText(c.Title)})
 		}
 		p.mdTable(cols, rows)
+	}
+	for _, t := range e.traceTables(p, mdText, mdCode) {
+		p.blank()
+		p.line("## " + t.title)
+		p.blank()
+		for i := range t.cols {
+			t.cols[i].head = strings.ToUpper(t.cols[i].head[:1]) + t.cols[i].head[1:]
+		}
+		p.mdTable(t.cols, t.rows)
+		if t.more != "" {
+			p.blank()
+			p.line(strings.ToUpper(t.more[:1]) + t.more[1:] + ".")
+		}
 	}
 	mdDefinition(p, "##", e.Metric)
 	mdCaveats(p, "##", e.Caveats, false)
@@ -208,6 +310,19 @@ func (p *printer) knowers(ks []Knower, esc func(string) string, what func(Knower
 func pathTotals(r WhoKnowsRepo) string {
 	return fmt.Sprintf("%s surviving prod lines in %s, %d with a majority owner",
 		grouped(r.Lines), plural(r.ProdFiles, "prod file", "prod files"), r.FilesWithMajority)
+}
+
+// pathKnowledge is "55.1% (1,308 of 2,376 human-held lines) · 4 of 9 people
+// gone quiet": the path's knowledge loss (#105); "" without its value.
+func pathKnowledge(r WhoKnowsRepo) string {
+	if r.KnowledgeLoss == nil {
+		return ""
+	}
+	s := share(r.KnowledgeLoss, "human-held lines")
+	if r.People != nil && r.PeopleInactive != nil {
+		s += " · " + grouped(*r.PeopleInactive) + " of " + plural(*r.People, "person", "people") + " gone quiet"
+	}
+	return s
 }
 
 func ownerCount(k Knower) string { return "(" + plural(k.MajorityFiles, "file", "files") + ")" }
@@ -264,6 +379,12 @@ func (w *WhoKnows) writeText(p *printer) {
 	for _, r := range w.Repos {
 		p.blank()
 		p.wrapped("", "  ", "Repository "+clean(r.Repo)+" · "+pathTotals(r))
+		if k := pathKnowledge(r); k != "" {
+			p.wrapped("  knowledge loss   ", "                   ", k)
+		}
+		if r.Concentration != nil {
+			p.wrapped("  concentration    ", "                   ", strings.TrimPrefix(concentrationText(r.Concentration), "majority-owner concentration: "))
+		}
 		p.wrapped("  majority owners  ", "                   ", p.knowers(r.MajorityOwners, clean, ownerCount))
 		p.wrapped("  top authors      ", "                   ", p.knowers(r.TopAuthors, clean, lineCount))
 		p.wrapped("  recent landers   ", "                   ", p.knowers(r.RecentLanders, clean, landingCount))
@@ -300,6 +421,12 @@ func (w *WhoKnows) writeMarkdown(p *printer) {
 		p.line("## Repository " + mdText(r.Repo))
 		p.blank()
 		p.line("- " + pathTotals(r))
+		if k := pathKnowledge(r); k != "" {
+			p.line("- Knowledge loss: " + mdText(k))
+		}
+		if r.Concentration != nil {
+			p.line("- " + mdText(strings.ToUpper(concentrationText(r.Concentration)[:1])+concentrationText(r.Concentration)[1:]))
+		}
 		p.line("- Majority owners: " + p.knowers(r.MajorityOwners, mdText, ownerCount))
 		p.line("- Top authors: " + p.knowers(r.TopAuthors, mdText, lineCount))
 		p.line("- Recent landers: " + p.knowers(r.RecentLanders, mdText, landingCount))

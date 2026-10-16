@@ -273,7 +273,7 @@ func forgeAsOf(f *ForgeProvenance) string {
 	case f.AsOf == nil:
 		return " · GitHub data partly synced"
 	}
-	return " · GitHub data as of " + day(*f.AsOf)
+	return " · GitHub data as of " + dayUTC(*f.AsOf)
 }
 
 // forgeSummary is the report header's line about GitHub data, over every
@@ -308,7 +308,7 @@ func forgeSummary(m *Model) string {
 		return fmt.Sprintf("GitHub data partly synced: the first sync of %d of %s did not finish",
 			unsynced, plural(len(seen), "repository", "repositories"))
 	}
-	return "GitHub data as of " + day(*oldest) + ", the oldest sync of " + plural(len(seen), "repository", "repositories")
+	return "GitHub data as of " + dayUTC(*oldest) + ", the oldest sync of " + plural(len(seen), "repository", "repositories")
 }
 
 // sortedNames sorts repository names and drops repeats.

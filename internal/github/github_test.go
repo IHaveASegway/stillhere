@@ -515,8 +515,9 @@ func reviewsGivenOracle(t *testing.T, repos []domain.ForgeRepo, pages []domain.F
 	}
 	subject := func(key string) domain.Subject { return domain.Subject{Kind: domain.SubjectPerson, Key: key} }
 	// @renovate-approver is a User account that the [bots] fragment
-	// "renovate" makes a bot (identity.Directory.Bot), so it has values and
-	// no cluster. Each block is the week, counted back from Now, of the
+	// "renovate" makes a bot (identity.Directory.Bot): it has values and,
+	// as every bot since #75, the Copilot app included, its clusters, which
+	// the ranking use case leaves out (app.rankAll) and explain lists. Each block is the week, counted back from Now, of the
 	// person's first counted review (domain.Window.Week): no review is at a
 	// week's boundary, where ⌊(Now − t) / 7 days⌋ would give one block more.
 	cluster := func(pr string, block int) rank.Cluster { return rank.Cluster{Change: pr, Num: 1, Block: block} }
@@ -531,6 +532,10 @@ func reviewsGivenOracle(t *testing.T, repos []domain.ForgeRepo, pages []domain.F
 			subject("ada@example.com"):  {cluster("PR_02", 3), cluster("PR_03", 11), cluster("PR_05", 0)},
 			subject("bob@example.com"):  {cluster("PR_01", 8), cluster("PR_04", 2), cluster("PR_05", 0), cluster("PR_09", 2)},
 			subject("erin@example.com"): {cluster("PR_07", 9)},
+			// The bots' (#75): PRR_02d, on 2026-09-15, in week block 3, and
+			// the Copilot app's review of PR_04, in Bob's block.
+			subject("@renovate-approver"):                  {cluster("PR_02", 3)},
+			subject("@copilot-pull-request-reviewer[bot]"): {cluster("PR_04", 2)},
 		},
 	})
 }

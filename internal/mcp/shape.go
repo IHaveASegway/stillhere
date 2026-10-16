@@ -315,6 +315,9 @@ type overviewItem struct {
 	AIAssisted    *report.Share         `json:"ai_assisted"`
 	BotShare      *report.Share         `json:"bot_share"`
 	Caveats       []report.Caveat       `json:"caveats,omitzero"` // detailed only
+	// ReviewCoverage is review_coverage@1 about the scope (#107); null
+	// without GitHub data.
+	ReviewCoverage *report.ReviewCoverage `json:"review_coverage"`
 }
 
 // stillHereOut is surviving@1's rows for a scope, the first rows of each
@@ -391,7 +394,8 @@ func (s *shaper) overview(o report.Overview, n named) overviewItem {
 		Scope: o.Scope, Totals: o.Totals,
 		People: stillHereOf(o.People, f.rows), Week: weekOf(o.Week, f.rows),
 		Concentration: o.Concentration, KnowledgeLoss: o.KnowledgeLoss, BotShare: o.BotShare,
-		AIAssisted: s.share(o.AIAssisted, o.Scope, scopeName(o.Scope, "")),
+		AIAssisted:     s.share(o.AIAssisted, o.Scope, scopeName(o.Scope, "")),
+		ReviewCoverage: o.ReviewCoverage,
 	}
 	if f.detailed {
 		pv := f.provenance(o.Provenance, n)
@@ -419,6 +423,9 @@ type repoSummary struct {
 	BotShare      *report.Share   `json:"bot_share"`
 	Landings      report.Landings `json:"landings"`
 	Caveats       []string        `json:"caveats"` // the codes of its card's caveats beyond the standing ones; overview(scope=repo) says them in full
+	// ReviewCoverage is review_coverage@1 about the repository (#107);
+	// null without GitHub data for it.
+	ReviewCoverage *report.ReviewCoverage `json:"review_coverage"`
 }
 
 // madeOf is one of the people a repository is made of.
@@ -435,7 +442,7 @@ func (s *shaper) summary(r report.Repo) repoSummary {
 		Name: r.Name, Key: r.Key, Group: r.Group, Status: r.Status, Error: r.Error, LineFacts: r.LineFacts,
 		Size: c.Size, People: c.People, Bots: c.Bots,
 		KnowledgeLoss: c.KnowledgeLoss, AIAssisted: s.share(c.AIAssisted, sc, scopeName(sc, r.Name)), BotShare: c.BotShare,
-		Landings: c.Landings,
+		ReviewCoverage: c.ReviewCoverage, Landings: c.Landings,
 	}
 	if c.Age != nil {
 		days := c.Age.Days
@@ -476,6 +483,7 @@ func (s *shaper) repoDetail(r report.Repo) report.Repo {
 	sc := report.Scope{Kind: domain.ScopeRepo, Key: r.Key}
 	r.Card.AIAssisted = s.share(r.Card.AIAssisted, sc, scopeName(sc, r.Name))
 	r.Card.MadeOf, _ = cut(r.Card.MadeOf, rows)
+	r.Card.Areas, _ = cut(r.Card.Areas, rows)
 	r.Warnings, _ = cut(r.Warnings, rows)
 	r.Errors.Blame, _ = cut(r.Errors.Blame, rows)
 	r.IgnoreRevs.Revs, _ = cut(r.IgnoreRevs.Revs, rows)

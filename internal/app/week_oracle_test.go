@@ -8,27 +8,34 @@ import (
 	"github.com/IHaveASegway/stillhere/internal/report"
 )
 
-// weekRow is one row of SPEC's week table.
+// weekRow is one row of SPEC's week table: landings, commits, merged,
+// lines_added and prod_lines_added (-1 when null: unknown).
 type weekRow struct {
-	Name                                string
-	Commits, LinesAdded, ProdLinesAdded int
+	Name                                                  string
+	Landings, Commits, Merged, LinesAdded, ProdLinesAdded int
 }
 
 // The week table of testdata/fixture/SPEC.md ("Week oracle"), by email:
-// the people, then the bot table. Cara, Gina and Hank have no row.
+// the people, then the bot table, as landed@2 credits them (#108): Cara
+// wrote the branch Bob merged, so the merge is her landing with both of her
+// commits' lines, and Bob's row counts the one landing he wrote and the
+// merge. Gina and Hank have no row. The window's totals are each landing
+// once (weekTotal).
 var (
 	weekHumans = map[string]weekRow{
-		"bob@example.com":   {"Bob Builder", 2, 11, 11},
-		"ivy@example.com":   {"Ivy Tester", 1, 4, 0},
-		"frank@example.com": {"Frank & Sons", 1, 3, 3},
-		"ada@example.com":   {"Ada Example", 1, 1, 1},
-		"dana@example.com":  {"Dana Dev", 1, 1, 1},
-		"erin@example.com":  {"Erin Editor", 1, 1, 1},
-		"jules@example.com": {"Jules Note", 1, 0, 0},
+		"cara@example.com":  {"Cara Dev", 1, 2, 0, 9, 9},
+		"bob@example.com":   {"Bob Builder", 1, 1, 1, 2, 2},
+		"ivy@example.com":   {"Ivy Tester", 1, 1, 0, 4, 0},
+		"frank@example.com": {"Frank & Sons", 1, 1, 0, 3, 3},
+		"ada@example.com":   {"Ada Example", 1, 1, 0, 1, 1},
+		"dana@example.com":  {"Dana Dev", 1, 1, 0, 1, 1},
+		"erin@example.com":  {"Erin Editor", 1, 1, 0, 1, 1},
+		"jules@example.com": {"Jules Note", 1, 1, 0, 0, 0},
 	}
 	weekBots = map[string]weekRow{
-		"copilot@bot.example": {"GitHub Copilot", 1, 3, 3},
+		"copilot@bot.example": {"GitHub Copilot", 1, 1, 0, 3, 3},
 	}
+	weekTotal = weekRow{"", 9, 10, 1, 24, 20}
 )
 
 // TestWeekOracle checks the week oracle of testdata/fixture/SPEC.md through
@@ -105,16 +112,27 @@ func checkWeekTable(t *testing.T, where string, wt *report.WeekTable) {
 		t.Errorf("SPEC week oracle: %s has no week table", where)
 		return
 	}
+	lines := func(n *int) int {
+		if n == nil {
+			return -1
+		}
+		return *n
+	}
 	rows := func(list string, rs []report.WeekRow, bot bool) map[string]weekRow {
 		out := map[string]weekRow{}
 		for _, r := range rs {
 			if r.Bot != bot {
 				t.Errorf("SPEC week oracle: %s lists %s among the %s with bot %t", where, r.Email, list, r.Bot)
 			}
-			out[r.Email] = weekRow{r.Name, r.Commits, r.LinesAdded, r.ProdLinesAdded}
+			out[r.Email] = weekRow{r.Name, r.Landings, r.Commits, r.Merged, lines(r.LinesAdded), lines(r.ProdLinesAdded)}
 		}
 		return out
 	}
 	sameRows(t, "SPEC week oracle, people ("+where+")", rows("people", wt.Humans, false), weekHumans)
 	sameRows(t, "SPEC week oracle, bot table ("+where+")", rows("bots", wt.Bots, true), weekBots)
+	if tt := wt.Total; tt == nil {
+		t.Errorf("SPEC week oracle: %s has no totals", where)
+	} else if got := (weekRow{"", tt.Landings, tt.Commits, tt.Merged, lines(tt.LinesAdded), lines(tt.ProdLinesAdded)}); got != weekTotal {
+		t.Errorf("SPEC week oracle: %s totals %+v, want %+v", where, got, weekTotal)
+	}
 }

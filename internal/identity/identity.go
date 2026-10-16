@@ -15,6 +15,7 @@
 package identity
 
 import (
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -52,6 +53,8 @@ type Directory struct {
 	// The run's GitHub logins as people and pages see them (reviewer.go).
 	linked map[string][]string // canonical email → the folded logins Reviewer links to it, sorted (Logins)
 	forms  map[string]string   // forge login, folded → the login as GitHub last reported it (Name, Logins)
+
+	addresses []string // every address the facts show someone by, sorted (Addresses)
 }
 
 // kind is an identity's classification under the policy.
@@ -86,7 +89,48 @@ func New(fs *domain.FactSet, p *policy.Policy) *Directory {
 		}
 	}
 	d.locals = personLocals(fs, d) // after kinds: a bot's address is no person's
+	d.addresses = runAddresses(fs)
 	return d
+}
+
+// Addresses returns every address the fact set shows someone by, a bot's
+// included: commit authors and co-authors and the authors and co-authors
+// of blamed commits, canonical (lowercased) and sorted; nil for none. A
+// page withholds each of them wherever repository text holds it, a commit
+// subject's or a git message's, whether or not the person is on the page
+// (#90), as the MCP server's egress does over the run's people.
+func (d *Directory) Addresses() []string { return d.addresses }
+
+// runAddresses lists the addresses Addresses returns.
+func runAddresses(fs *domain.FactSet) []string {
+	if fs == nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	add := func(p domain.Person) {
+		if e := canonical(p.Email); e != "" && !LoginKey(e) {
+			seen[e] = true
+		}
+	}
+	for i := range fs.Repos {
+		r := &fs.Repos[i]
+		for j := range r.Commits {
+			add(r.Commits[j].Author)
+			for _, co := range r.Commits[j].CoAuthors {
+				add(co)
+			}
+		}
+		for j := range r.Owners {
+			add(r.Owners[j].Author)
+			for _, co := range r.Owners[j].CoAuthors {
+				add(co)
+			}
+		}
+	}
+	if len(seen) == 0 {
+		return nil
+	}
+	return slices.Sorted(maps.Keys(seen))
 }
 
 // Name returns the display name for a canonical email, or "" when the fact
