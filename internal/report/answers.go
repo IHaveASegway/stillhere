@@ -66,14 +66,25 @@ func windowText(w Interval) string {
 }
 
 // subject names what an answer is about: a person as the page names them
-// (printer.person), anything else by its kind and key.
-func (p *printer) subject(s Subject, esc func(string) string) string {
-	if s.Kind == domain.SubjectPerson {
+// (printer.person); a repository, a group or the whole run as scopeText
+// names a scope, a repository by its name where the provenance pairs it
+// with its key (pv); an area as its directory and repository; anything
+// else by its kind and key.
+func (p *printer) subject(s Subject, esc func(string) string, pv Provenance) string {
+	switch s.Kind {
+	case domain.SubjectPerson:
 		name := p.person(s.Key, s.Name, s.NameWithheld, esc)
 		if s.Bot {
 			name += " (bot)"
 		}
 		return name
+	case domain.SubjectRepo, domain.SubjectGroup, domain.SubjectAll:
+		// A scope's own subject has the scope's kind and key.
+		return scopeText(Scope{Kind: s.Kind, Key: s.Key}, esc, pv)
+	case domain.SubjectArea:
+		if i := strings.LastIndex(s.Key, ":"); i > 0 {
+			return "area " + esc(s.Key[i+1:]) + " of " + scopeText(Scope{Kind: domain.ScopeRepo, Key: s.Key[:i]}, esc, pv)
+		}
 	}
 	return s.Kind + " " + esc(s.Key)
 }
@@ -81,7 +92,7 @@ func (p *printer) subject(s Subject, esc func(string) string) string {
 // Explain.
 
 func (e *Explain) writeText(p *printer) {
-	p.wrapped("", "  ", "explain "+clean(e.Metric.ID)+" · "+p.subject(e.Subject, clean)+" · "+provenanceText(e.Provenance))
+	p.wrapped("", "  ", "explain "+clean(e.Metric.ID)+" · "+p.subject(e.Subject, clean, e.Provenance)+" · "+provenanceText(e.Provenance))
 	if e.Metric.Question != "" {
 		p.wrapped("  ", "  ", clean(e.Metric.Question))
 	}
@@ -291,7 +302,7 @@ func textDefinition(p *printer, d MetricInfo) {
 }
 
 func (e *Explain) writeMarkdown(p *printer) {
-	p.line("# explain " + mdID(e.Metric.ID) + " · " + p.subject(e.Subject, mdText))
+	p.line("# explain " + mdID(e.Metric.ID) + " · " + p.subject(e.Subject, mdText, e.Provenance))
 	p.blank()
 	p.line("- " + provenanceText(e.Provenance))
 	if e.Metric.Question != "" {
@@ -577,7 +588,7 @@ func metricHeading(id string, esc func(string) string) string {
 }
 
 func (m *Me) writeText(p *printer) {
-	p.wrapped("", "  ", "me · "+p.subject(m.Person, clean)+" · "+provenanceText(m.Provenance))
+	p.wrapped("", "  ", "me · "+p.subject(m.Person, clean, m.Provenance)+" · "+provenanceText(m.Provenance))
 	p.wrapped("  ", "  ", meIntro)
 	if len(m.Values) == 0 {
 		p.blank()
@@ -612,7 +623,7 @@ func (m *Me) writeText(p *printer) {
 }
 
 func (m *Me) writeMarkdown(p *printer) {
-	p.line("# " + p.subject(m.Person, mdText))
+	p.line("# " + p.subject(m.Person, mdText, m.Provenance))
 	p.blank()
 	p.line("- " + provenanceText(m.Provenance))
 	p.line("- " + strings.ToUpper(meIntro[:1]) + meIntro[1:] + ".")

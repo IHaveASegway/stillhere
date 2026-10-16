@@ -885,7 +885,7 @@ type Commands interface {
 	Mailmap() string                             // #104: those lines as lines: CLI "'stillhere identities --format mailmap'"; MCP the candidates' mailmap field
 	Report() string                              // a run's numbers per repository and group: CLI "'stillhere report'"
 	Ranks(metric string) string                  // a ranked metric's tables: CLI "'stillhere report --rank M'"
-	Explain(metric string, kinds []string) string // explain about one of kinds; "" when the reader cannot: the CLI asks about a person only
+	Explain(metric string, kinds []string) string // explain about one of kinds; "" when the reader cannot: the CLI by --person, --repo, --group or --area (wave 10)
 	WhoKnows() string                            // who knows a path, who_knows@1, which no scan stores: CLI "'stillhere who-knows PATH'"
 	OwnPage() string                             // a person's own page: CLI "'stillhere me --email EMAIL'"
 	PersonKeys() string                          // where the id or email of a person whose name every page withholds is: CLI the JSON report, MCP the id in every answer

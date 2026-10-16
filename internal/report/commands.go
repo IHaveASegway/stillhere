@@ -2,6 +2,7 @@ package report
 
 import (
 	"slices"
+	"strings"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
 )
@@ -63,12 +64,24 @@ func (CLI) Report() string { return "'stillhere report'" }
 // Ranks is the report command with --rank.
 func (CLI) Ranks(metric string) string { return "'stillhere report --rank " + metric + "'" }
 
-// Explain is the explain command, which names a person only.
+// Explain is the explain command about the kinds among kinds it takes a
+// flag for (wave 10): a person, a repository, a group or an area; "" for
+// none, the whole run's own numbers, which the report shows.
 func (CLI) Explain(metric string, kinds []string) string {
-	if slices.Contains(kinds, domain.SubjectPerson) {
-		return "'stillhere explain " + metric + " --person EMAIL'"
+	var flags []string
+	for _, k := range []struct{ kind, flag string }{{domain.SubjectPerson, "--person WHO"},
+		{domain.SubjectRepo, "--repo NAME"}, {domain.SubjectGroup, "--group NAME"}, {domain.SubjectArea, "--area REPO:DIR"}} {
+		if slices.Contains(kinds, k.kind) {
+			flags = append(flags, k.flag)
+		}
 	}
-	return ""
+	switch len(flags) {
+	case 0:
+		return ""
+	case 1:
+		return "'stillhere explain " + metric + " " + flags[0] + "'"
+	}
+	return "'stillhere explain " + metric + " " + flags[0] + "' (or " + strings.Join(flags[1:], ", ") + ")"
 }
 
 // WhoKnows is the who-knows command.
