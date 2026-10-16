@@ -177,27 +177,53 @@ type PullRequest struct {
 }
 
 // ForgeWatermark is how far the replica of one repository's pull requests
-// reaches.
+// reaches (ADR 0013). Its times are positions on the forge's clock that a
+// completed pass reached, never values read from the pull requests: the
+// order of the forge's list is the forge's, and a checkpoint derived from
+// the records in it drifts when the two disagree (#101).
 type ForgeWatermark struct {
 	Repo string // ForgeRepo.ID
-	// Updated: every pull request whose last update is earlier than Updated
-	// is in the replica, as of that update or a later one. Zero until the
-	// first page of the repository is stored. It never moves back.
+	// Updated: the last completed pass began at Updated, on the forge's
+	// clock, and read every pull request last updated from From until
+	// then, so the replica holds each one as of that update or a later one
+	// (while Missing is 0). Zero until a pass completes. A pass that stops
+	// halfway leaves it as it was, and it never moves back.
 	Updated time.Time
+	// From is the oldest last update the replica is complete from: the
+	// start of the history window, or of --since, that the last full pass
+	// read down to. Zero for a replica whose first pass read the whole
+	// list, as one stored before ADR 0013 did.
+	From time.Time
 	// Synced is the start of the last sync that brought the repository's
 	// pull requests up to date: the "as of" time pages show. Zero until one
 	// has.
 	Synced time.Time
+	// Missing is what the last completed sync's completeness check found
+	// (reconciliation): how many pull requests the forge counts as updated
+	// in the window that the replica does not hold. 0 when they match.
+	// While it is not 0, every sync reads the whole window again, and the
+	// pages of a run that read it say its GitHub data is incomplete.
+	Missing int
+	// Pending is true while pages of a pass that has not completed are
+	// stored: with Synced zero, the first sync of the repository stopped
+	// halfway, and the replica holds only the part it reached.
+	Pending bool
 }
 
-// ForgePage is one page of a repository's pull requests, with the watermark
-// the replica reaches once the page is stored. A sync stores each page and
-// its watermark in one transaction, so a sync that stops halfway resumes
-// from the last page it stored.
+// ForgePage is one page of a repository's pull requests. A sync stores each
+// page in one transaction, the watermark with the page that completes a
+// pass, so a pass that stops halfway leaves the watermark where it was and
+// the next sync reads the same range again: storing a pull request again
+// changes nothing (an idempotent upsert), so a rerun costs time, never a
+// hole.
 type ForgePage struct {
 	Repo         string        // ForgeRepo.ID
 	PullRequests []PullRequest // each complete: every label, review and commit; empty only on the last page of a pass
-	Updated      time.Time     // the new ForgeWatermark.Updated; never earlier than the one the pass started from
+	// Updated is zero on every page but the last of a pass that read its
+	// whole range, which carries the time the pass began on the forge's
+	// clock: the new ForgeWatermark.Updated. It never lowers the
+	// watermark.
+	Updated time.Time
 }
 
 // ForgeFacts is GitHub data as facts.db holds it: the repositories, their
@@ -254,7 +280,7 @@ type MirrorMove struct {
 const (
 	MirrorRenamed   = "renamed"   // its repository's owner or name changed: a rename, a transfer or a change of case
 	MirrorRestored  = "restored"  // its repository is listed again, so it is back from root/.stale
-	MirrorStale     = "stale"     // its repository is no longer listed: deleted, transferred away, or hidden from the token
+	MirrorStale     = "stale"     // its repository is not among those the sync mirrors: deleted, transferred away, hidden from the token, or left out (archived, a fork)
 	MirrorDuplicate = "duplicate" // a second mirror of a repository that has one at its path
 )
 
@@ -265,26 +291,63 @@ type ForgeSource interface {
 	// Repos lists the repositories an organization or user owns, sorted by
 	// Key. A login the forge does not know is a *UsageError.
 	Repos(ctx context.Context, owner string) ([]ForgeRepo, error)
+	// Repo looks up one repository by owner and name (#111), as Repos
+	// lists it. One the forge does not have, or does not show the token, is
+	// a *UsageError.
+	Repo(ctx context.Context, owner, name string) (ForgeRepo, error)
 	// ReconcileMirrors runs once per sync, before any mirror is fetched,
-	// with owner's whole listing (Repos, archived repositories, forks and
-	// empty ones included). A mirror carries its repository's node id, and
-	// that, never its path, says which repository it is: a mirror whose
-	// repository was renamed or transferred moves to the repository's new
-	// path, and a mirror under root/<owner> whose repository the listing no
-	// longer holds moves to root/.stale, outside every directory scan
-	// reads, until the repository is listed again. Otherwise scan would
-	// count a renamed repository twice, once under each name. It returns
-	// the moves, sorted by From; a move that failed carries its Err.
+	// with the repositories the sync mirrors. A mirror carries its
+	// repository's node id, and that, never its path, says which
+	// repository it is: a mirror whose repository was renamed or
+	// transferred moves to the repository's new path. When owner is the
+	// organization whose listing this is, a mirror under root/<owner> of a
+	// repository not in listed (deleted, transferred away, hidden from the
+	// token, or one the sync leaves out, such as an archived repository,
+	// #110) moves to root/.stale, outside every directory scan reads,
+	// until it is listed again. owner "" says listed is not an owner's
+	// whole listing (sync --repo), so no other mirror moves. Otherwise scan
+	// would count a renamed repository twice, once under each name. It
+	// returns the moves, sorted by From; a move that failed carries its
+	// Err.
 	ReconcileMirrors(ctx context.Context, owner string, listed []ForgeRepo, root string) ([]MirrorMove, error)
 	// Mirror creates the bare mirror of repo under root, or brings an
 	// existing one up to date, points its HEAD at repo.DefaultBranch, and
 	// returns its path (docs/spec/git-invocation.md#sync-commands-network).
 	Mirror(ctx context.Context, repo ForgeRepo, root string) (string, error)
 	// PullRequests calls put with every pull request of repo last updated
-	// at or after since, a page at a time, and returns put's first error.
-	// A zero since is the repository's first pass. Pages may repeat a pull
-	// request the replica already holds; storing one again changes nothing.
+	// at or after since, a page at a time, newest update first, and
+	// returns put's first error. A zero since reads the whole list. Pages
+	// may repeat a pull request the replica already holds; storing one
+	// again changes nothing. Only the last page of a pass that read down to
+	// since carries a watermark (ForgePage.Updated): a pass that stops
+	// halfway moves none.
 	PullRequests(ctx context.Context, repo ForgeRepo, since time.Time, put func(*ForgePage) error) error
+	// CountPullRequests is how many pull requests of repo the forge counts
+	// as last updated at or after from (zero: since its first) and settled
+	// before start, the time a completed pass began (ForgePage.Updated):
+	// the completeness check's other side (ADR 0013). One updated in the
+	// last minutes before start is left out, since the pass may have read it
+	// before that update. The forge may also leave out a few it hides from
+	// its count, so the count is a lower bound of what a complete replica
+	// holds.
+	CountPullRequests(ctx context.Context, repo ForgeRepo, from, start time.Time) (int, error)
+	// LinkAuthors asks the forge which account each author email of the
+	// mirror's history belongs to (#103's evidence, ADR 0013): every email
+	// a commit reachable from the mirror's HEAD was written with, but those
+	// skip holds, lowercased, each through one commit, its newest. It calls
+	// put with the answers a batch at a time, one ForgeCommit per email: the
+	// commit asked about, the email as git wrote it (lowercased) and the
+	// account's login, "" for an email the forge links to no account. An
+	// email whose commit the forge does not have is left out, to be asked
+	// again. A pass whose put fails, or that stops halfway, loses only the
+	// batches it had not handed over.
+	//
+	// The links are what identity's same-forge-account rule reads. The
+	// pull requests a sync reads hold links too, but only for the history
+	// window; the account of an email does not age, and asking per email,
+	// not per commit, costs one request per hundred emails, whatever the
+	// length of the history.
+	LinkAuthors(ctx context.Context, repo ForgeRepo, mirror string, skip map[string]bool, put func([]ForgeCommit) error) error
 }
 
 // ForgeStore is the port to the forge replica in facts.db: pull requests and
@@ -307,12 +370,39 @@ type ForgeStore interface {
 	// PutForgePage stores a page in one transaction: each pull request
 	// replaces what the replica held for it unless the replica's copy was
 	// updated later, so a page that a slower, overlapping sync read first
-	// cannot undo a newer one; and the repository's watermark rises to
-	// page.Updated (it never falls).
+	// cannot undo a newer one. A page with an Updated completes its pass:
+	// the repository's watermark rises to it (it never falls) and Pending
+	// clears; any other page sets Pending.
 	PutForgePage(ctx context.Context, page *ForgePage) error
 	// MarkForgeSynced records that the sync that started at `at` brought the
 	// repository's pull requests up to date.
 	MarkForgeSynced(ctx context.Context, repo string, at time.Time) error
+	// MarkForgeChecked records, in one transaction, what a sync that started
+	// at `at` and completed its passes found (ADR 0013): the replica is
+	// complete from `from` (ForgeWatermark.From), and the last completeness
+	// check that ran counted `missing` pull requests it lacks
+	// (ForgeWatermark.Missing): this sync's, or, when its check could not
+	// run, the one the replica already records. It marks the repository
+	// synced at `at`, as MarkForgeSynced does.
+	MarkForgeChecked(ctx context.Context, repo string, at, from time.Time, missing int) error
+	// MarkForgeMissing records a completeness check's shortfall alone, before
+	// the full pass that is to fill it in (ADR 0013): if that pass stops
+	// halfway or fails, the replica still says pull requests are missing,
+	// so a scan carries the caveat and the next sync reads the window again.
+	// Synced and From stay as they were.
+	MarkForgeMissing(ctx context.Context, repo string, missing int) error
+	// CountForgePulls is how many pull requests of the repository the
+	// replica holds as last updated at or after since (zero: all of them):
+	// the completeness check's own side.
+	CountForgePulls(ctx context.Context, repo string, since time.Time) (int, error)
+	// ForgeLinks returns the author emails of the repository the replica
+	// has asked the forge about (ForgeSource.LinkAuthors), each with the
+	// login of the account the forge links it to, "" for none. Empty when
+	// it has asked about none.
+	ForgeLinks(ctx context.Context, repo string) (map[string]string, error)
+	// PutForgeLinks upserts the repository's links by email, in one
+	// transaction: an email asked about again keeps the newer answer.
+	PutForgeLinks(ctx context.Context, repo string, links []ForgeCommit) error
 	// LoadForge returns the replica's repositories and watermarks, and every
 	// pull request last updated at or after since, sorted; nil when the
 	// replica holds no repository.

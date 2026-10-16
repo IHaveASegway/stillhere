@@ -95,7 +95,7 @@ func New(ctx context.Context, cfg Config) (*Runner, error) {
 			"git %s is older than %s, the oldest version stillhere supports: install git %s or newer",
 			version, floor, floor)}
 	}
-	r.version = version
+	r.version, r.major, r.minor = version, major, minor
 	return r, nil
 }
 

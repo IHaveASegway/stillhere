@@ -15,10 +15,11 @@
 // (docs/spec/git-invocation.md#credentials), so it is never in argv, a URL, a
 // config file, a log line, a fact or an error.
 //
-// GitHub asks API clients to send one request at a time, to slow down before
-// the hourly points run out, and to back off from secondary rate limits with
-// growing waits. A Source does all three whatever its caller's concurrency:
-// mirrors fetch in parallel, while API requests queue behind one gate.
+// GitHub asks API clients to avoid many concurrent requests, to slow down
+// before the hourly points run out, and to back off from secondary rate
+// limits with growing waits. A Source does all three whatever its caller's
+// concurrency: mirrors fetch in parallel, while API requests queue behind a
+// gate of three, and a rate limit one of them meets holds them all.
 package github
 
 import (
@@ -73,6 +74,18 @@ type Config struct {
 	// Sleep waits out a rate limit or a backoff. nil waits on a timer that
 	// ctx cancels; tests record the waits instead.
 	Sleep func(ctx context.Context, d time.Duration) error
+	// Clock reads the local clock, for the time since GitHub's last Date
+	// and for how long a rate limit holds every request. nil is time.Now;
+	// tests pass one that Sleep moves on.
+	Clock func() time.Time
+
+	// ChangedPaths says the git binary writes version 2 changed-path Bloom
+	// filters (git 2.46 and later): each mirror's commit-graph then gets
+	// them, which make blame several times faster (#56). Without, a mirror
+	// gets a commit-graph with no filters, because version 1 filters hash
+	// paths that are not ASCII differently on some platforms
+	// (docs/spec/git-invocation.md#sync-commands-network).
+	ChangedPaths bool
 }
 
 // Source is the GitHub adapter. It implements domain.ForgeSource and is safe
@@ -80,16 +93,19 @@ type Config struct {
 type Source struct {
 	api    *api.GraphQLClient
 	seen   *observer     // GitHub's clock, from the Date of the last response
-	gate   chan struct{} // holds one token per API request in flight: at most one
-	mu     sync.Mutex    // guards budget
+	gate   chan struct{} // holds one token per API request in flight: at most maxInFlight
+	mu     sync.Mutex    // guards budget and held
 	budget budget        // the rate-limit state GitHub last reported
+	held   time.Time     // on clock: until when a rate limit holds every request (hold)
 
-	git    domain.GitRunner
-	gitURL string       // base URL of clone URLs, without a trailing slash
-	creds  *credentials // the credential variables of network git commands
+	git          domain.GitRunner
+	gitURL       string       // base URL of clone URLs, without a trailing slash
+	creds        *credentials // the credential variables of network git commands
+	changedPaths bool         // Config.ChangedPaths
 
 	log   *slog.Logger
 	sleep func(context.Context, time.Duration) error
+	clock func() time.Time
 }
 
 var _ domain.ForgeSource = (*Source)(nil)
@@ -131,7 +147,11 @@ func New(ctx context.Context, cfg Config) (*Source, error) {
 	if userAgent == "" {
 		userAgent = "stillhere"
 	}
-	seen := &observer{base: transport}
+	clock := cfg.Clock
+	if clock == nil {
+		clock = time.Now
+	}
+	seen := &observer{base: transport, clock: clock}
 	client, err := api.NewGraphQLClient(api.ClientOptions{
 		Host:      host,
 		AuthToken: token,
@@ -158,15 +178,17 @@ func New(ctx context.Context, cfg Config) (*Source, error) {
 		sleeper = sleep
 	}
 	return &Source{
-		api:    client,
-		seen:   seen,
-		gate:   make(chan struct{}, 1),
-		budget: budget{remaining: -1},
-		git:    cfg.Git,
-		gitURL: gitURL,
-		creds:  newCredentials(gitURL, token),
-		log:    log,
-		sleep:  sleeper,
+		api:          client,
+		seen:         seen,
+		gate:         make(chan struct{}, maxInFlight),
+		budget:       budget{remaining: -1},
+		git:          cfg.Git,
+		gitURL:       gitURL,
+		creds:        newCredentials(gitURL, token),
+		changedPaths: cfg.ChangedPaths,
+		log:          log,
+		sleep:        sleeper,
+		clock:        clock,
 	}, nil
 }
 
@@ -261,11 +283,12 @@ func (*credentials) LogValue() slog.Value { return slog.StringValue(redacted) }
 // reports a spent budget and some secondary limits inside a 200, whose
 // headers go-gh does not keep.
 type observer struct {
-	base http.RoundTripper
+	base  http.RoundTripper
+	clock func() time.Time // the local clock: Config.Clock
 
 	mu   sync.Mutex
 	date time.Time   // the Date of the last response
-	at   time.Time   // when that response arrived, for the monotonic time since
+	at   time.Time   // when that response arrived on clock, for the monotonic time since
 	rate http.Header // the rate-limit headers of the last response; nil after a failed round trip
 }
 
@@ -283,7 +306,7 @@ func (o *observer) RoundTrip(req *http.Request) (*http.Response, error) {
 		return nil, err
 	}
 	if date, perr := http.ParseTime(resp.Header.Get("Date")); perr == nil {
-		o.date, o.at = date.UTC(), time.Now()
+		o.date, o.at = date.UTC(), o.clock()
 	}
 	for _, k := range rateHeaders {
 		if v := resp.Header.Get(k); v != "" {
@@ -313,5 +336,19 @@ func (o *observer) now() (t time.Time, ok bool) {
 	if o.date.IsZero() {
 		return time.Time{}, false
 	}
-	return o.date.Add(time.Since(o.at)), true
+	return o.date.Add(o.clock().Sub(o.at)), true
+}
+
+// passStart is when a pass begins on GitHub's clock (observer.now), to the
+// second below, which is the watermark a completed pass records: GitHub
+// compares it with its own updatedAt values, so the laptop's clock, which
+// may be minutes off, must not decide it. Before any response has given
+// GitHub's clock, it is the local clock: the overlap a later pass reads
+// below the watermark covers a small difference either way.
+func (s *Source) passStart() time.Time {
+	t, ok := s.seen.now()
+	if !ok {
+		t = s.clock()
+	}
+	return t.UTC().Truncate(time.Second)
 }

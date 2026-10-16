@@ -23,6 +23,10 @@ const (
 	cloneTimeout = time.Hour
 	fetchTimeout = 30 * time.Minute
 	localTimeout = time.Minute // config, symbolic-ref and the checks
+	// graphTimeout bounds commit-graph write, which reads every commit and,
+	// for changed-path filters, the diff of each one not yet in a graph: 10
+	// s for 30 repositories and 360,000 commits the first time (#56).
+	graphTimeout = 10 * time.Minute
 )
 
 // headRefspec is the only refspec a mirror fetches: its branches. A
@@ -106,6 +110,8 @@ func newCredentials(base, token string) *credentials {
 //	git -C <dir> config remote.origin.fetch +refs/heads/*:refs/heads/*
 //	git -C <dir> fetch --prune origin
 //	git -C <dir> symbolic-ref HEAD refs/heads/<default branch>
+//	git -C <dir> -c commitGraph.changedPathsVersion=2 commit-graph write --reachable --changed-paths
+//	                                              (git 2.46 and later; else without filters)
 //
 // A first clone goes into root/<owner>/.stillhere-clones and is renamed
 // into place only once complete and marked with repo's node id, so an
@@ -168,7 +174,35 @@ func (s *Source) Mirror(ctx context.Context, repo domain.ForgeRepo, root string)
 	if _, err := s.local(ctx, dir, "symbolic-ref", "HEAD", "refs/heads/"+repo.DefaultBranch); err != nil {
 		return "", err
 	}
+	s.writeCommitGraph(ctx, dir)
 	return dir, nil
+}
+
+// writeCommitGraph writes the mirror's commit-graph after the fetch (#56),
+// so a scan's blame and history walks read commits from git's own index
+// instead of parsing each object: a cold scan of 30 public repositories took
+// 297 s without one, 208 s with one and 104 s with changed-path Bloom
+// filters, which let blame skip the commits that did not touch its file,
+// for the same facts. It is git's file, which git keeps consistent and
+// invalidates; deleting it changes nothing but speed.
+//
+// Filters are written only as version 2 (git 2.46 and later, s.changedPaths):
+// version 1 hashed paths that are not ASCII differently on platforms whose
+// char is signed, so a mirror written on one and read on another could give
+// a path-limited walk a false "not touched". A failed write, such as a lock
+// another sync holds, is logged and the mirror is used without it.
+func (s *Source) writeCommitGraph(ctx context.Context, dir string) {
+	args := []string{"commit-graph", "write", "--reachable"}
+	if s.changedPaths {
+		args = []string{"-c", "commitGraph.changedPathsVersion=2", "commit-graph", "write", "--reachable", "--changed-paths"}
+	}
+	if _, err := s.git.Run(ctx, domain.GitCmd{Dir: dir, Args: args, Timeout: graphTimeout, Profile: domain.Sync}); err != nil {
+		if ctx.Err() != nil {
+			return
+		}
+		s.log.Warn("mirror: commit-graph not written; scans of it are slower", "mirror", redact.Scrub(dir),
+			"error", redact.Scrub(err.Error()))
+	}
 }
 
 // clone clones repo from url, bare, into ownerDir/<name>.git through a

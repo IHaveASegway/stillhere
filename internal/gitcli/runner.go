@@ -68,11 +68,12 @@ type Config struct {
 // domain.GitRunner and is safe for concurrent use: every field is read-only
 // after New.
 type Runner struct {
-	git     string   // absolute path of the git binary
-	mailmap string   // absolute path of the org mailmap, or ""
-	version string   // version token printed by git version, such as "2.50.1"
-	environ []string // the process environment without inherited GIT_* and askpass variables
-	log     *slog.Logger
+	git          string   // absolute path of the git binary
+	mailmap      string   // absolute path of the org mailmap, or ""
+	version      string   // version token printed by git version, such as "2.50.1"
+	major, minor int      // its first two numbers
+	environ      []string // the process environment without inherited GIT_* and askpass variables
+	log          *slog.Logger
 }
 
 var _ domain.GitRunner = (*Runner)(nil)
@@ -80,6 +81,13 @@ var _ domain.GitRunner = (*Runner)(nil)
 // Version returns the version git reported, such as "2.50.1" or
 // "2.44.0.windows.1".
 func (r *Runner) Version() string { return r.version }
+
+// AtLeast reports whether the git binary is major.minor or newer: what a
+// feature newer than the floor needs, such as version 2 changed-path
+// filters (2.46) in a mirror's commit-graph (#56).
+func (r *Runner) AtLeast(major, minor int) bool {
+	return r.major > major || r.major == major && r.minor >= minor
+}
 
 // Run runs one git command and returns its stdout. It buffers the whole
 // output, so it is for small outputs; use Stream for log -p and blame.

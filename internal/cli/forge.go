@@ -24,5 +24,9 @@ func (e *env) forgeSource(ctx context.Context) (domain.ForgeSource, error) {
 		Git:       git,
 		Logger:    e.log,
 		UserAgent: "stillhere/" + e.build.Version,
+		// Version 2 changed-path filters, the only ones a mirror gets, need
+		// git 2.46 (#56); the floor is 2.45, whose mirrors get a
+		// commit-graph without them.
+		ChangedPaths: git.AtLeast(2, 46),
 	})
 }

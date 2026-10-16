@@ -18,8 +18,9 @@ import (
 
 // The caveat codes of GitHub data.
 const (
-	codeForgeNotSynced = "forge-not-synced" // the section's repositories have no GitHub data, or only part of it
-	codePullsNotListed = "pulls-not-listed" // explain: the changes behind a value are pull requests, which it does not list
+	codeForgeNotSynced  = "forge-not-synced" // the section's repositories have no GitHub data, or only part of it
+	codeForgeIncomplete = "forge-incomplete" // a sync's completeness check found pull requests GitHub counts that the replica lacks (ADR 0013)
+	codePullsNotListed  = "pulls-not-listed" // explain: the changes behind a value are pull requests, which it does not list
 )
 
 // detailRecentReviews is who_knows@1's Detail key for a person's recent
@@ -61,10 +62,22 @@ func (f *ForgeRead) readAny() bool {
 // of the run's repositories: how far its pull requests reached in the
 // replica, and when they were last synced.
 type ForgeSync struct {
-	Repo    string     `json:"repo"`    // the forge repository, "owner/name", as the run read it
-	Key     string     `json:"key"`     // the Repo.Key of the run's repository whose origin named it when the run read it
-	Updated *time.Time `json:"updated"` // every pull request last updated before this was in the replica; null before its first page
-	Synced  *time.Time `json:"synced"`  // when the last sync that brought it up to date started: its "as of"; null until a sync finished
+	Repo string `json:"repo"` // the forge repository, "owner/name", as the run read it
+	Key  string `json:"key"`  // the Repo.Key of the run's repository whose origin named it when the run read it
+	// Updated: every pull request last updated from From until this was in
+	// the replica, unless Missing says the last check found fewer; null
+	// until a sync's pass completed (ADR 0013).
+	Updated *time.Time `json:"updated"`
+	Synced  *time.Time `json:"synced"` // when the last sync that brought it up to date started: its "as of"; null until a sync finished
+	From    *time.Time `json:"from"`   // the oldest last update the replica is complete from; null: from the repository's first pull request
+	// Missing is how many pull requests updated in the history window
+	// GitHub counted that the replica lacked, at the last sync's
+	// completeness check: 0 when it held them all.
+	Missing int `json:"missing"`
+	// Pending: pages of a pass that did not complete were stored. With no
+	// Synced, the first sync stopped halfway. JSON says so by listing the
+	// repository with a null synced.
+	Pending bool `json:"-"`
 }
 
 // hasData reports whether the replica held any GitHub data for the
@@ -72,7 +85,12 @@ type ForgeSync struct {
 // repository a sync listed but never stored a page of has neither, and
 // every part of a report treats it the same way: no GitHub data, so out of
 // the provenance, and in the forge-not-synced caveat.
-func (s ForgeSync) hasData() bool { return s.Updated != nil || s.Synced != nil }
+func (s ForgeSync) hasData() bool { return s.Updated != nil || s.Synced != nil || s.Pending }
+
+// complete reports whether the repository's GitHub data was whole when the
+// run read it: a finished sync whose completeness check found nothing
+// missing.
+func (s ForgeSync) complete() bool { return s.Synced != nil && s.Missing == 0 }
 
 // ForgeProvenance is the GitHub data behind a section: the watermarks the
 // run read for the section's repositories.
@@ -160,7 +178,8 @@ func (b *builder) forgeCaveats(members []*domain.RepoFacts, metric string, own b
 	if f == nil {
 		return nil
 	}
-	var ok, missing, partial []string
+	var ok, missing, partial, incomplete []string
+	lacking := 0      // the pull requests the incomplete repositories lack, by their last check
 	syncable := false // a repository without GitHub data has an origin on a forge, which a sync can copy it from
 	for _, rf := range members {
 		if rf.Status != domain.RepoStatusOK {
@@ -171,11 +190,12 @@ func (b *builder) forgeCaveats(members []*domain.RepoFacts, metric string, own b
 			continue
 		}
 		ok = append(ok, rf.Repo.Name)
-		data, synced := false, false
+		data, synced, short := false, false, 0
 		for _, s := range f.Repos {
 			if s.Key == rf.Repo.Key {
 				data = data || s.hasData()
 				synced = synced || s.Synced != nil
+				short += s.Missing
 			}
 		}
 		switch {
@@ -184,6 +204,9 @@ func (b *builder) forgeCaveats(members []*domain.RepoFacts, metric string, own b
 			syncable = syncable || onForge
 		case !synced:
 			partial = append(partial, rf.Repo.Name)
+		case short > 0:
+			incomplete = append(incomplete, rf.Repo.Name)
+			lacking += short
 		}
 	}
 	of := fmt.Sprintf("%d", len(ok)) // the repositories weighed: on a forge, unless own
@@ -218,6 +241,21 @@ func (b *builder) forgeCaveats(members []*domain.RepoFacts, metric string, own b
 		}
 		out = append(out, Caveat{Code: codeForgeNotSynced, Repos: sortedNames(partial), Message: msg})
 	}
+	if len(incomplete) > 0 {
+		// ADR 0013: the sync's completeness check counted pull requests in
+		// the window on GitHub that the replica lacked, and could not fill
+		// them in; the next sync reads the window again.
+		lack := plural(lacking, "pull request", "pull requests")
+		msg := fmt.Sprintf("GitHub data incomplete for %s: the last sync found %s in the history window that the "+
+			"replica lacks, so %s counts only the ones it holds; the next sync reads the window again.",
+			plural(len(incomplete), "repository", "repositories"), lack, metric)
+		if len(ok) == 1 {
+			msg = fmt.Sprintf("GitHub data incomplete for this repository: the last sync found %s in the history "+
+				"window that the replica lacks, so %s counts only the ones it holds; the next sync reads the window again.",
+				lack, metric)
+		}
+		out = append(out, Caveat{Code: codeForgeIncomplete, Repos: sortedNames(incomplete), Message: msg})
+	}
 	return out
 }
 
@@ -238,7 +276,7 @@ func (b *builder) forgeElsewhere(others []*domain.RepoFacts, metric string) []Ca
 		if _, onForge := domain.RemoteRepo(rf.Repo.Remote); rf.Status != domain.RepoStatusOK || !onForge {
 			continue
 		}
-		if !slices.ContainsFunc(f.Repos, func(s ForgeSync) bool { return s.Key == rf.Repo.Key && s.Synced != nil }) {
+		if !slices.ContainsFunc(f.Repos, func(s ForgeSync) bool { return s.Key == rf.Repo.Key && s.complete() }) {
 			short = append(short, rf.Repo.Name)
 		}
 	}
@@ -282,7 +320,7 @@ func forgeAsOf(f *ForgeProvenance) string {
 func forgeSummary(m *Model) string {
 	seen := map[string]bool{}
 	var oldest *time.Time
-	unsynced := 0
+	unsynced, incomplete := 0, 0
 	for _, r := range m.Repos {
 		f := r.Card.Provenance.Forge
 		if f == nil {
@@ -293,6 +331,9 @@ func forgeSummary(m *Model) string {
 				continue
 			}
 			seen[s.Repo] = true
+			if s.Missing > 0 {
+				incomplete++
+			}
 			switch {
 			case s.Synced == nil:
 				unsynced++
@@ -308,7 +349,11 @@ func forgeSummary(m *Model) string {
 		return fmt.Sprintf("GitHub data partly synced: the first sync of %d of %s did not finish",
 			unsynced, plural(len(seen), "repository", "repositories"))
 	}
-	return "GitHub data as of " + day(*oldest) + ", the oldest sync of " + plural(len(seen), "repository", "repositories")
+	line := "GitHub data as of " + day(*oldest) + ", the oldest sync of " + plural(len(seen), "repository", "repositories")
+	if incomplete > 0 {
+		line += fmt.Sprintf("; incomplete for %d of them (pull requests missing)", incomplete)
+	}
+	return line
 }
 
 // sortedNames sorts repository names and drops repeats.

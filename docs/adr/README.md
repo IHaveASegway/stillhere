@@ -16,6 +16,7 @@ One file per decision that is hard to reverse. Format after Michael Nygard, "Doc
 | [0010](0010-rank-intervals-bootstrap-per-kind.md) | Rank intervals: a bootstrap per metric kind, reproducible by derived seeds | Proposed |
 | [0011](0011-a-run-keeps-the-github-facts-it-read.md) | A run keeps the GitHub facts it read | Proposed |
 | [0012](0012-a-run-reads-each-repository-as-it-stood-at-now.md) | A run reads each repository as it stood at `--now` | Proposed |
+| [0013](0013-sync-reads-bounded-passes-and-checks-the-replica.md) | A sync reads bounded passes and checks the replica against GitHub's count | Proposed |
 
 Open decisions that have not reached an ADR yet are listed in [product.md](../product.md#open-decisions).
 

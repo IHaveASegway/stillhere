@@ -1,0 +1,31 @@
+{
+  "data": {
+    "rateLimit": {
+      "cost": 1,
+      "remaining": 4980,
+      "resetAt": "2026-10-09T04:00:00Z"
+    },
+    "repositoryOwner": {
+      "repositories": {
+        "pageInfo": {
+          "hasNextPage": false,
+          "endCursor": "sync-repos-end"
+        },
+        "nodes": [
+          {
+            "id": "R_widget",
+            "name": "widget",
+            "owner": {
+              "login": "acme"
+            },
+            "isArchived": true,
+            "isFork": false,
+            "defaultBranchRef": {
+              "name": "main"
+            }
+          }
+        ]
+      }
+    }
+  }
+}
