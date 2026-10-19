@@ -859,23 +859,32 @@ Holding binary changes on `prod` paths only fails nothing since #70: a binary ch
 
 ### A formatting pass (`fixture.Formatting`, wave 11)
 
-The no-ignore-revs caveat names the commits that look like a formatting pass (KT-10, [report-json.md](../../docs/spec/report-json.md#caveats)): ones holding a little of each of many prod files, which no fixture above holds, since it needs a repository of 10,000 surviving prod lines or more. `fixture.Formatting(t)` builds one named `formatting`, with no `.git-blame-ignore-revs`, scanned alone as above. Each module `pkg/m01.py` to `pkg/m12.py` holds 1,000 lines `m<NN>_<i> = <i>`; a rewritten line keeps its name and wraps its value (`m01_3 = fmt(3)`), so `blame -w` does not see through it, as it would through a change of spacing.
+The no-ignore-revs caveat names the commits that look like a formatting pass (KT-10, [report-json.md](../../docs/spec/report-json.md#caveats)): ones holding a little of each of many prod files, over lines older than their own, which no fixture above holds, since it needs a repository of 10,000 surviving prod lines or more. `fixture.Formatting(t)` builds one named `formatting`, with no `.git-blame-ignore-revs`, scanned alone as above. Each module `pkg/m01.py` to `pkg/m12.py` holds 1,000 lines `m<NN>_<i> = <i>`, and each command `cmd/c01.py` to `cmd/c12.py` 500 lines `c<NN>_<i> = <i>`; a rewritten line keeps its name and wraps its value (`m01_3 = fmt(3)`), so `blame -w` does not see through it, as it would through a change of spacing.
 
 | Row | When | Author | What |
 | --- | --- | --- | --- |
+| R1 | 2026-01-05 | Dan Rewrite `<dan@example.com>` | "feat: rewrite the commands": adds the twelve commands, 6,000 lines. |
+| R2 | 2026-01-19 | Eve Refactor `<eve@example.com>` | "refactor: the commands": rewrites lines 46 to 500 of every command as `cli(<i>)`. |
 | F1 | 2026-02-02 | Ada Import `<ada@example.com>` | Adds the twelve modules, 12,000 lines. |
 | F2 | 2026-03-02 | `fmt[bot]` `<fmt[bot]@users.noreply.github.com>` | "style: format": rewrites lines 1 to 40 of every module as `fmt(<i>)`. |
 | F3 | 2026-04-06 | Bea Feature `<bea@example.com>` | Adds `pkg/big.py`, 2,000 lines. |
 | F4 | 2026-05-04 | Cy Rename `<cy@example.com>` | Rewrites lines 41 to 50 of every module as `renamed(<i>)`. |
 
-At HEAD the 13 prod files hold 14,000 surviving prod lines: Ada 11,400 (950 of each module), Bea 2,000, the bot 480 (40 of each module), Cy 120 (10 of each). The card's one `no-ignore-revs` caveat says so and names F2 alone, by its first 12 hex digits: "1 commit looks like one, holding a little of each of many prod files: <F2>, a bot's, 480 lines (3.4%) in 12 files", and that its full SHA goes in a `.git-blame-ignore-revs` at the repository's root, committed. F1 holds lines in as many files, but 95% of each, as an import does; F3 is the largest commit after it, in one file; F4 is as wide and as shallow as F2, 1% of each module, but 120 lines are 0.9% of the repository's, under the 2% that moves numbers.
+At HEAD the 25 prod files hold 20,000 surviving prod lines: Ada 11,400 (950 of each module), Eve 5,460 (455 of each command), Bea 2,000, Dan 540 (45 of each command), the bot 480 (40 of each module), Cy 120 (10 of each). The card's one `no-ignore-revs` caveat says so and names F2 alone, by its first 12 hex digits: "1 commit looks like one, holding a little of each of many prod files: <F2>, a bot's, 480 lines (2.4%) in 12 files". It says how to have blame skip it in a clone: its full SHA in a file passed to a scan of the repository alone (`git -C PATH rev-parse <F2> >> ignore-revs.txt`, then `stillhere scan --ignore-revs-file ignore-revs.txt PATH`), and that a `.git-blame-ignore-revs` at the root counts once it is on origin's default branch as last fetched, not as a commit made only in the clone.
+
+R1 is as wide and as shallow as F2 (9% of each command, 12 of the 25 files) and larger (540 lines, 2.7%), but it is the oldest owner of every file it holds lines in: it created them, as a rewrite or an import does, while F2 edited lines older than its own. F1 holds lines in as many files, but 95% of each, as an import does; R2 holds 91% of each command; F3 is one file; F4 is as wide and as shallow as F2, 1% of each module, but 120 lines are 0.6% of the repository's, under the 2% that moves numbers.
+
+who-knows of `pkg/` (14,000 lines, F2's 480 among them) carries the same caveat word for word: the repository's 20,000 lines and F2's 2.4%, not the path's.
 
 Wrong implementations this catches:
 
 - **The commit holding the most lines.** F1, the import, is named, and 11,400 lines would be suggested for blame to skip.
-- **Share alone, without breadth.** F3's 2,000 lines (14.3%) in one file are named.
+- **Share alone, without breadth.** F3's 2,000 lines (10.0%) in one file are named.
 - **Breadth without a floor of lines.** F4 is named beside F2.
+- **Breadth and depth without the oldest owner.** R1 is named first, before F2, and the command the caveat gives would have blame skip Dan's rewrite (wave 11's review: fzf's "Rewrite fzf in Go").
 - **The author's kind left out, or read from the name.** F2's author is a bot by the `[bot]` in its address, as the policy's `[bots]` fragments read it (`identity`); the caveat says "a bot's".
+- **A route that does nothing in a clone.** The caveat tells the reader to commit a `.git-blame-ignore-revs`, which a scan never reads while the commit is only in the clone (wave 11's review: a scan reads origin's branch as last fetched, ADR 0009).
+- **who-knows judging the path.** who-knows of `pkg/` says "a repository with 14,000 surviving prod lines" and F2's 3.4%: the path's numbers under the repository's words.
 
 ### Partial and shallow clones (#74)
 

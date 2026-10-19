@@ -495,8 +495,10 @@ func Explain(ctx context.Context, d Deps, r ExplainRequest) (*report.Explain, er
 	if err != nil {
 		return nil, err
 	}
-	if err := inHistory(def.ID.String(), r.Days, historyOf(s.facts)); err != nil {
-		return nil, err
+	if r.Days != 0 {
+		if err := windowDays(def.ID.String(), r.Days, historyOf(s.facts)); err != nil {
+			return nil, err
+		}
 	}
 	var matched *report.Caveat
 	switch {
@@ -590,40 +592,43 @@ func Explain(ctx context.Context, d Deps, r ExplainRequest) (*report.Explain, er
 }
 
 // explainDays refuses a window of days for a metric whose window is not
-// the week's, or one outside the policy's bounds: landed@1 and landed@2
-// read [now - days, now), so explain can trace them over any span the
-// run's history holds (the 365 days of a still-here table's
-// landings_365d; inHistory), while every other metric's window is
-// its definition's. The words name no flag: the command line's --days and
-// the MCP server's days argument both reach it.
+// the week's: landed@1 and landed@2 read [now - days, now), so explain can
+// trace them over any span the run's history holds (the 365 days of a
+// still-here table's landings_365d; windowDays, once the run is read),
+// while every other metric's window is its definition's. The words name no
+// flag: the command line's --days and the MCP server's days argument both
+// reach it.
 func explainDays(def metrics.Definition, days int) error {
-	switch {
-	case days == 0:
-		return nil
-	case def.ID.Name != "landed":
+	if days != 0 && def.ID.Name != "landed" {
 		return &domain.UsageError{Msg: fmt.Sprintf("%s reads a window of its own definition; a window in days is "+
 			"landed@1's and landed@2's alone", def.ID)}
-	case days < 1 || days > policy.MaxWeekDays:
-		return &domain.UsageError{Msg: fmt.Sprintf("a window of %d days: want 1 to %d", days, policy.MaxWeekDays)}
 	}
 	return nil
 }
 
-// inHistory refuses a window of days longer than the history the run read
-// (h, the 365 days of a scan, a week run's own days), for metric: what
-// landed before it is unknown, not none, so an answer over the window
-// would read that span as one in which nothing landed, the "unknown"
-// metrics.md says a page must tell from "nothing landed". explain of
-// landed@1 and landed@2 and who-knows' recent landers and reviewers both
-// ask it.
-func inHistory(metric string, days int, h domain.Window) error {
+// windowDays refuses a window of days, for metric, that the run cannot
+// answer: one under a day, or one longer than the history the run read (h,
+// the 365 days of a scan, a week run's own days) or than the policy's
+// bound (policy.MaxWeekDays). What landed before the history is unknown,
+// not none, so an answer over a longer window would read that span as one
+// in which nothing landed, the "unknown" metrics.md says a page must tell
+// from "nothing landed". Every refusal names the longest window the run
+// answers, so no bound it states is one a second check then refuses.
+// explain of landed@1 and landed@2 and who-knows' recent landers and
+// reviewers both ask it.
+func windowDays(metric string, days int, h domain.Window) error {
 	held := int(h.Until.Sub(h.Since) / (24 * time.Hour))
-	if days <= held {
+	most := min(held, policy.MaxWeekDays)
+	if days >= 1 && days <= most {
 		return nil
 	}
-	return &domain.UsageError{Msg: fmt.Sprintf("%s over %d days: the run's history covers %d days (%s to %s), so what "+
-		"landed before it is unknown, not none; ask for %d days or fewer", metric, days, held,
-		h.Since.UTC().Format(time.DateOnly), h.Until.UTC().Format(time.DateOnly), held)}
+	covers := fmt.Sprintf("the run's history covers %d days (%s to %s)", held,
+		h.Since.UTC().Format(time.DateOnly), h.Until.UTC().Format(time.DateOnly))
+	if days < 1 {
+		return &domain.UsageError{Msg: fmt.Sprintf("%s over %d days: want 1 to %d, as %s", metric, days, most, covers)}
+	}
+	return &domain.UsageError{Msg: fmt.Sprintf("%s over %d days: %s, so what landed before it is unknown, not none; "+
+		"ask for %d days or fewer", metric, days, covers, most)}
 }
 
 // explainMissing is the error for a subject the run holds no value about
@@ -773,9 +778,6 @@ func WhoKnows(ctx context.Context, d Deps, r WhoKnowsRequest) (*report.WhoKnows,
 		return nil, err
 	}
 	days := cmp.Or(r.Days, metrics.WhoKnowsDays)
-	if days < 1 || days > policy.MaxWeekDays {
-		return nil, &domain.UsageError{Msg: fmt.Sprintf("a window of %d days: want 1 to %d", days, policy.MaxWeekDays)}
-	}
 	s, err := load(ctx, d, r.RunID)
 	if err != nil {
 		return nil, err
@@ -784,7 +786,7 @@ func WhoKnows(ctx context.Context, d Deps, r WhoKnowsRequest) (*report.WhoKnows,
 	// the run read, as explain's does (Ruby F10: a slow repository's last
 	// landers are months back): before it, who landed is unknown, not
 	// nobody.
-	if err := inHistory(report.MetricWhoKnows, days, historyOf(s.facts)); err != nil {
+	if err := windowDays(report.MetricWhoKnows, days, historyOf(s.facts)); err != nil {
 		return nil, err
 	}
 	// --repo names a repository as the reader names one: a key, a name as
@@ -826,7 +828,7 @@ func WhoKnows(ctx context.Context, d Deps, r WhoKnowsRequest) (*report.WhoKnows,
 	}
 	run := s.run
 	w := report.NewWhoKnows(&report.WhoKnowsInput{
-		Run: &run, Facts: underPrefix(s.facts, prefix, repo), Who: s.who, Path: prefix, Repo: repo, Values: values,
+		Run: &run, Facts: underPrefix(s.facts, prefix, repo), Whole: s.facts, Who: s.who, Path: prefix, Repo: repo, Values: values,
 		Knowledge: knowledge, Forge: forge, Commands: d.Commands, Activity: activity, Days: days,
 	})
 	if c, ok := whoKnowsNoPath(s.facts, prefix, repo, run.ID); ok {

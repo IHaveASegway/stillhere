@@ -18,7 +18,7 @@ Change analytics for git and GitHub (what landed, what lasted, who knows it) for
 
 stillhere is one static binary for macOS, Linux and Windows, on amd64 and arm64. CI runs the tests on Linux only: it builds the macOS and Windows binaries on every change, but does not test them. stillhere runs the git on your `PATH`, which must be 2.45 or newer (`git version` tells you).
 
-No release is tagged yet, so install from source, with Go 1.27 or newer (an older Go fetches 1.27 itself when `GOTOOLCHAIN` is `auto`, its default). `go install` needs no checkout:
+No release is tagged yet, so install from source. The module needs Go 1.27 or newer, and Go 1.21 or newer fetches 1.27 itself unless `GOTOOLCHAIN` is `local`, as some distributions' packaged Go sets it in `$(go env GOROOT)/go.env` (Fedora's does): then put `GOTOOLCHAIN=auto` before the command. Go 1.20 and older cannot fetch a toolchain. `go install` needs no checkout:
 
 ```sh
 go install github.com/IHaveASegway/stillhere/cmd/stillhere@main     # the newest commit on main

@@ -128,10 +128,11 @@ func BuildBinary(ctx context.Context, dir string) error {
 // Formatting builds the formatting-pass guard of testdata/fixture/SPEC.md
 // (KT-10) in a new temporary directory and returns its absolute path: a
 // work tree named "formatting", on branch main, with no
-// .git-blame-ignore-revs and 14,000 prod lines: an import of twelve files,
-// a bot's pass that rewrites a little of each of them, a person's large
-// file of one feature, and a person's small edit of every file. It stops
-// the test with t.Fatal if the build fails.
+// .git-blame-ignore-revs and 20,000 prod lines: a rewrite of twelve files
+// whose lines a later refactor mostly replaced, an import of twelve
+// others, a bot's pass that rewrites a little of each of those, a person's
+// large file of one feature, and a person's small edit of every imported
+// file. It stops the test with t.Fatal if the build fails.
 func Formatting(t testing.TB) string {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), formattingName)
@@ -164,8 +165,26 @@ func formattingHistory(b *builder) {
 	fmtBot := person{"fmt[bot]", "fmt[bot]@users.noreply.github.com"}
 	bea := person{"Bea Feature", "bea@example.com"}
 	cy := person{"Cy Rename", "cy@example.com"}
+	dan := person{"Dan Rewrite", "dan@example.com"}
+	eve := person{"Eve Refactor", "eve@example.com"}
 	module := func(i int) (path, name string) {
 		return fmt.Sprintf("pkg/m%02d.py", i), fmt.Sprintf("m%02d", i)
+	}
+	command := func(i int) (path, name string) {
+		return fmt.Sprintf("cmd/c%02d.py", i), fmt.Sprintf("c%02d", i)
+	}
+	// refactored is a command's 500 lines "<name>_<i> = <i>", with the
+	// lines after kept written "cli(<i>)".
+	refactored := func(name string, kept int) string {
+		var s strings.Builder
+		for i := 1; i <= 500; i++ {
+			if i <= kept {
+				fmt.Fprintf(&s, "%s_%d = %d\n", name, i, i)
+			} else {
+				fmt.Fprintf(&s, "%s_%d = cli(%d)\n", name, i, i)
+			}
+		}
+		return s.String()
 	}
 	// content is a module's 1,000 lines "<name>_<i> = <i>", with lines 1
 	// to formatted written "fmt(<i>)" and the lines after them up to
@@ -186,6 +205,20 @@ func formattingHistory(b *builder) {
 	}
 	b.initRepo()
 	b.git("config", "commit.gpgsign", "false")
+
+	b.row(noon(2026, time.January, 5), dan) // R1: the rewrite, twelve commands of 500 lines
+	for i := 1; i <= 12; i++ {
+		path, name := command(i)
+		b.write(path, numbered(name, 500))
+	}
+	b.commit("feat: rewrite the commands")
+
+	b.row(noon(2026, time.January, 19), eve) // R2: lines 46 to 500 of every command
+	for i := 1; i <= 12; i++ {
+		path, name := command(i)
+		b.write(path, refactored(name, 45))
+	}
+	b.commit("refactor: the commands")
 
 	b.row(noon(2026, time.February, 2), ada) // F1: the import, twelve modules of 1,000 lines
 	for i := 1; i <= 12; i++ {

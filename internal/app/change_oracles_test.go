@@ -781,11 +781,14 @@ func backdatedGuard(t *testing.T) {
 }
 
 // formattingGuard checks SPEC's formatting-pass guard (KT-10): the card of a
-// repository with 14,000 prod lines and no .git-blame-ignore-revs names F2,
+// repository with 20,000 prod lines and no .git-blame-ignore-revs names F2,
 // the bot's pass over a little of every module, in its no-ignore-revs
-// caveat, and neither F1, the import, which holds most of each file it
-// touched, nor F3, the largest commit after it, which is one file, nor F4,
-// as wide and as shallow as F2 but 0.9% of the lines.
+// caveat, with the route that works in a clone, and neither R1, the
+// rewrite, as wide and as shallow as F2 and larger, but the oldest owner
+// of every file it holds lines in, nor F1, the import, which holds most of
+// each file it touched, nor F3, one file, nor F4, as wide and as shallow
+// as F2 but 0.6% of the lines. who-knows of pkg/ says of the repository
+// what the card says, not of the path's 14,000 lines.
 func formattingGuard(t *testing.T) {
 	s := scan(t, "", nil, scanRanked(fixture.Formatting(t)))
 	r := onlyRepo(t, s.model)
@@ -795,19 +798,28 @@ func formattingGuard(t *testing.T) {
 			pass = c.SHA[:12]
 		}
 	}
-	want := "No .git-blame-ignore-revs in a repository with 14,000 surviving prod lines: a formatting commit would take the " +
+	want := "No .git-blame-ignore-revs in a repository with 20,000 surviving prod lines: a formatting commit would take the " +
 		"credit for every line it touched. 1 commit looks like one, holding a little of each of many prod files: " + pass +
-		", a bot's, 480 lines (3.4%) in 12 files. If it only reformats, renames or annotates code, add its full SHA to a " +
-		".git-blame-ignore-revs at the repository's root (git rev-parse " + pass + " >> .git-blame-ignore-revs) and " +
-		"commit it: the next scan's blame credits those lines to the authors before it."
-	var got []string
-	for _, c := range r.Card.Caveats {
-		if c.Code == "no-ignore-revs" {
-			got = append(got, c.Message)
+		", a bot's, 480 lines (2.4%) in 12 files. If it only reformats, renames or annotates code, have blame skip it: " +
+		"write its full SHA to a file and scan this repository alone with it (git -C PATH rev-parse " + pass +
+		" >> ignore-revs.txt, then 'stillhere scan --ignore-revs-file ignore-revs.txt PATH'), which credits its lines to " +
+		"the authors before it. A .git-blame-ignore-revs at the repository's root does the same for every scan once it is " +
+		"on the branch a scan reads, origin's default branch as last fetched (a mirror's as last synced): a commit made " +
+		"only in the clone is not read."
+	noIgnoreRevs := func(cs []report.Caveat) []string {
+		var got []string
+		for _, c := range cs {
+			if c.Code == "no-ignore-revs" {
+				got = append(got, c.Message)
+			}
 		}
+		return got
 	}
-	if pass == "" || len(got) != 1 || got[0] != want {
+	if got := noIgnoreRevs(r.Card.Caveats); pass == "" || len(got) != 1 || got[0] != want {
 		t.Errorf("SPEC regression guards, formatting pass: the card's no-ignore-revs caveats are\n%q\nwant\n%q", got, want)
+	}
+	if got := noIgnoreRevs(s.whoKnows(t, "pkg").Caveats); len(got) != 1 || got[0] != want {
+		t.Errorf("SPEC regression guards, formatting pass: who-knows pkg's no-ignore-revs caveats are\n%q\nwant the card's\n%q", got, want)
 	}
 }
 

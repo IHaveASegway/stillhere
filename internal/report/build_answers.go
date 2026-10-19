@@ -86,7 +86,7 @@ func NewExplain(in *ExplainInput) *Explain {
 	}
 	repos := reposWith(in.Facts, involved)
 	e.Provenance = datedProvenance(in.Run, in.Facts, in.Forge, repos, []string{in.Metric.ID})
-	e.Caveats = answerCaveats(repos, in.Who)
+	e.Caveats = answerCaveats(repos, nil, in.Who)
 	if in.Forge.reads(in.Metric.ID) {
 		b := answerBuilder(in.Run, in.Facts, in.Forge)
 		e.Caveats = append(e.Caveats, b.forgeCaveats(reposWith(in.Facts, nil), in.Metric.ID, true)...)
@@ -287,7 +287,11 @@ func sortChanges(cs []Change) {
 // WhoKnowsInput is what NewWhoKnows builds a who-knows answer from.
 type WhoKnowsInput struct {
 	Run   *domain.Run
-	Facts *domain.FactSet // the run's facts: provenance, caveats, and the line owners under Path that the no-values check reads
+	Facts *domain.FactSet // the run's facts under Path: provenance, caveats, and the line owners under Path that the no-values check reads
+	// Whole is the run's facts, not cut to Path, which the caveat about a
+	// repository itself (no-ignore-revs) reads, so it says what the card
+	// says (partCaveats); nil: Facts are whole.
+	Whole *domain.FactSet
 	Who   People
 	Path  string // repo-relative prefix; "" for the whole repository
 	Repo  string // Repo.Key, or "" for every repository
@@ -410,7 +414,7 @@ func NewWhoKnows(in *WhoKnowsInput) *WhoKnows {
 	}
 	slices.SortFunc(w.Repos, func(a, b WhoKnowsRepo) int { return cmp.Or(cmp.Compare(a.Repo, b.Repo), cmp.Compare(a.Key, b.Key)) })
 	w.Provenance = datedProvenance(in.Run, in.Facts, in.Forge, asked, metrics)
-	w.Caveats = answerCaveats(asked, in.Who)
+	w.Caveats = answerCaveats(asked, in.Whole, in.Who)
 	if c, ok := whoKnowsMissing(in.Path, asked, ix); ok {
 		w.Caveats = append(w.Caveats, c)
 	}
@@ -711,7 +715,7 @@ func NewMe(in *MeInput) *Me {
 	slices.Sort(ids)
 	repos := reposWith(in.Facts, involved)
 	m.Provenance = datedProvenance(in.Run, in.Facts, in.Forge, repos, ids)
-	m.Caveats = answerCaveats(repos, in.Who)
+	m.Caveats = answerCaveats(repos, nil, in.Who)
 	// A person's review numbers can come from any repository of the run, so
 	// each GitHub number the page shows is caveated over all of them.
 	m.Caveats = append(m.Caveats, ForgeCaveats(in.Run, in.Facts, in.Forge, ids)...)
@@ -866,14 +870,28 @@ func AnswerCaveats(fs *domain.FactSet, who People) []Caveat {
 	for i := range fs.Repos {
 		repos = append(repos, &fs.Repos[i])
 	}
-	return answerCaveats(repos, who)
+	return answerCaveats(repos, nil, who)
 }
 
-func answerCaveats(repos []*domain.RepoFacts, who People) []Caveat {
+// answerCaveats says what could make an answer drawn from repos wrong.
+// whole holds the repositories' whole facts where repos are cut to a path
+// (who-knows'), which the caveat about a repository itself reads
+// (partCaveats), so a path's answer says of its repository what the card
+// says; nil: repos are whole.
+func answerCaveats(repos []*domain.RepoFacts, whole *domain.FactSet, who People) []Caveat {
 	out := []Caveat{notFetched()}
 	var all []Caveat
 	for _, rf := range repos {
-		all = append(all, repoCaveats(rf, who)...)
+		w := rf
+		if whole != nil {
+			for i := range whole.Repos {
+				if whole.Repos[i].Repo.Key == rf.Repo.Key {
+					w = &whole.Repos[i]
+					break
+				}
+			}
+		}
+		all = append(all, partCaveats(rf, w, who)...)
 	}
 	return append(out, summarize(all)...)
 }

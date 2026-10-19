@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
 )
@@ -54,23 +55,38 @@ const largeRepoLines = 10000
 
 // The no-ignore-revs caveat names the commits that look like a formatting
 // pass (KT-10), from blame alone, so a commit older than the history is
-// judged too: one holding a little of each of many prod files at HEAD. A
-// commit is named when its surviving prod lines are in at least a quarter
-// of the repository's prod files that hold lines, and in 10 or more; when,
-// at the median over those files, it holds at most a tenth of each file's
-// lines; and when it holds at least 2% of the repository's surviving prod
-// lines, so that its credit moves numbers. An import, a conversion or a
-// feature holds most of each file it touches, or few files; on 15
-// repositories of the round 2 and 3 corpora (wave 11) every commit these
-// bounds named was a formatting pass or a mechanical edit ("Reformat with
-// Spotless", "apply black", a package rename, type annotations), and none
-// was an import or a feature, while the commit holding the most lines,
-// which a share alone would name, was an import or a feature in 9 of them.
+// judged too: one holding a little of each of many prod files at HEAD,
+// over lines older than its own. A commit is named when its surviving prod
+// lines are in at least a quarter of the repository's prod files that hold
+// lines, and in 10 or more; when, at the median over those files, it holds
+// at most a tenth of each file's lines; when it holds at least 2% of the
+// repository's surviving prod lines, so that its credit moves numbers; and
+// when it is the oldest owner (no line of the file is older, by author
+// time) in at most half of those files. An import, a conversion or a
+// feature holds most of each file it touches, or few files. A rewrite or
+// an import whose lines were mostly rewritten since holds a little of each
+// file too, but it created the files, so it is their oldest owner, while a
+// reformat edits lines that were there before it. On 19 repositories
+// without such a file (15 of the round 2 and 3 corpora and 4 with a decade
+// or more of history that a review added, wave 11) these bounds named 14
+// commits. 13 were a formatting pass or a mechanical edit ("Reformat with
+// Spotless", "apply black", "Applied new coding style", a package rename,
+// type annotations), each the oldest owner in at most 1% of its files.
+// The 14th, a refactor that let a program be used as a library, was not,
+// which is why the caveat asks the reader to check each. The oldest-owner
+// bound left out one commit, a rewrite in a new language, the oldest owner
+// in all 16 of its files. The commit holding the most lines, which a share
+// alone would name, was an import or a feature in 9 of the first 15
+// repositories.
+// Author time misleads where a reformat's author time predates most of the
+// files it touched, as a long-lived branch rebased late can leave it: such
+// a pass is not named.
 const (
 	formatMinFiles     = 10   // prod files a candidate holds lines in, at least
 	formatFilesDivisor = 4    // and at least 1/formatFilesDivisor of the repository's prod files that hold lines
 	formatMaxFileShare = 0.10 // the median share of each such file's lines it holds, at most
 	formatMinShare     = 0.02 // its share of the repository's surviving prod lines, at least
+	formatMaxOldest    = 0.5  // the share of those files whose oldest owner it is, at most
 	formatMaxNamed     = 3    // candidates named, by lines
 )
 
@@ -90,19 +106,24 @@ func formattingCommits(rf *domain.RepoFacts, total int) []formatCommit {
 	prod := prodAtHead(rf)
 	type held struct {
 		email   string
+		when    time.Time // its author time, which every row of the commit carries
 		lines   int
 		perFile map[string]int
 	}
 	fileLines := map[string]int{}
+	oldest := map[string]time.Time{} // a prod file's oldest author time among its lines
 	byCommit := map[string]*held{}
 	for _, o := range rf.Owners {
 		if !prod[o.Path] || o.Lines <= 0 {
 			continue
 		}
 		fileLines[o.Path] += o.Lines
+		if t, ok := oldest[o.Path]; !ok || o.AuthorTime.Before(t) {
+			oldest[o.Path] = o.AuthorTime
+		}
 		h := byCommit[o.Commit]
 		if h == nil {
-			h = &held{email: o.Author.Email, perFile: map[string]int{}}
+			h = &held{email: o.Author.Email, when: o.AuthorTime, perFile: map[string]int{}}
 			byCommit[o.Commit] = h
 		}
 		h.lines += o.Lines
@@ -115,10 +136,14 @@ func formattingCommits(rf *domain.RepoFacts, total int) []formatCommit {
 			continue
 		}
 		shares := make([]float64, 0, files)
+		created := 0 // the files no line of which is older than h's
 		for path, n := range h.perFile {
 			shares = append(shares, float64(n)/float64(fileLines[path]))
+			if !oldest[path].Before(h.when) {
+				created++
+			}
 		}
-		if median(shares) > formatMaxFileShare {
+		if median(shares) > formatMaxFileShare || float64(created) > formatMaxOldest*float64(files) {
 			continue
 		}
 		out = append(out, formatCommit{sha: sha, email: h.email, lines: h.lines, files: files})
@@ -144,8 +169,14 @@ func median(xs []float64) float64 {
 // formattingText names the formatting candidates of a repository with total
 // surviving prod lines, each with its share and whether a bot or a person
 // wrote it (who's bot rule; nothing when who is nil), and says how to have
-// blame skip one: its full SHA in the .git-blame-ignore-revs at the
-// repository's root, committed, which the next scan reads at HEAD.
+// blame skip one. The way that works today, for anyone, is a file of its
+// SHA passed to a scan of the repository alone (--ignore-revs-file,
+// single-repository runs only). A .git-blame-ignore-revs at the
+// repository's root counts only once it is on the commit a scan reads,
+// which is origin's default branch as the clone last fetched it, or a
+// mirror's as it was last synced (discovery.md, ADR 0009), so a commit made
+// in the clone alone changes nothing, and a reader of someone else's
+// repository cannot make one land.
 func formattingText(cs []formatCommit, total int, who People) string {
 	var each []string
 	for _, c := range cs {
@@ -164,9 +195,12 @@ func formattingText(cs []formatCommit, total int, who People) string {
 	if len(cs) > 1 {
 		look, one = plural(len(cs), "commit", "commits")+" look like one, each holding a little of each of many prod files: ", "one"
 	}
-	return look + strings.Join(each, "; ") + ". If " + one + " only reformats, renames or annotates code, add its full SHA " +
-		"to a .git-blame-ignore-revs at the repository's root (git rev-parse " + short12(cs[0].sha) +
-		" >> .git-blame-ignore-revs) and commit it: the next scan's blame credits those lines to the authors before it."
+	return look + strings.Join(each, "; ") + ". If " + one + " only reformats, renames or annotates code, have blame skip it: " +
+		"write its full SHA to a file and scan this repository alone with it (git -C PATH rev-parse " + short12(cs[0].sha) +
+		" >> ignore-revs.txt, then 'stillhere scan --ignore-revs-file ignore-revs.txt PATH'), which credits its lines to " +
+		"the authors before it. A .git-blame-ignore-revs at the repository's root does the same for every scan once it is " +
+		"on the branch a scan reads, origin's default branch as last fetched (a mirror's as last synced): a commit made " +
+		"only in the clone is not read."
 }
 
 // caveatOrder lists the repository caveat codes from the most to the least
@@ -187,7 +221,8 @@ var summaries = map[string]string{
 	codeBinary: "git took some changes to prod files for binary, so their lines are unknown: durable@1 and simplifying@1 " +
 		"leave them out, and the lines landed do not count them.",
 	codeNoIgnoreRevs: "Large repositories without a .git-blame-ignore-revs: a formatting commit would take the credit for every line it touched " +
-		"(each repository's card names the commits that look like one, if any).",
+		"(each repository's own caveat names the commits that look like one, if any: on its card in the report, and in " +
+		"an MCP overview of that repository).",
 	codeDuplicate: "Clones of the same remote as these repositories were skipped as duplicates: each repository is counted once (see their warnings).",
 	codeInlineTests: "Rust unit tests inside the source (#[cfg(test)] items in prod files) count as prod in these repositories, " +
 		"because a file has one role (see their warnings for how many lines).",
@@ -221,6 +256,18 @@ func NoValuesCaveat(message string) Caveat {
 // tells a bot's commit from a person's where a caveat says which (nil:
 // it does not say).
 func repoCaveats(rf *domain.RepoFacts, who People) []Caveat {
+	return partCaveats(rf, rf, who)
+}
+
+// partCaveats says what could make the numbers drawn from rf wrong: a
+// repository's facts, or those under a path of it (who-knows': app's
+// underPrefix), of the repository whose whole facts are whole. A caveat
+// about the facts the numbers count, files blame failed on and changes git
+// took for binary, counts rf's. One about the repository itself, the
+// no-ignore-revs caveat (its size, its .git-blame-ignore-revs and the
+// commits that look like a formatting pass), reads whole's, so every view
+// of a repository says the same of it as its card.
+func partCaveats(rf, whole *domain.RepoFacts, who People) []Caveat {
 	name := rf.Repo.Name
 	var out []Caveat
 	add := func(code, msg string) {
@@ -255,10 +302,10 @@ func repoCaveats(rf *domain.RepoFacts, who People) []Caveat {
 			"8,000 bytes, or -diff in .git/info/attributes), so their lines are unknown: durable@1 and simplifying@1 leave "+
 			"them out, and the lines landed do not count them.")
 	}
-	if lines := blamedProdLines(rf, nil); rf.LineFacts && rf.IgnoreRevs.Source == "" && lines >= largeRepoLines {
+	if lines := blamedProdLines(whole, nil); whole.LineFacts && whole.IgnoreRevs.Source == "" && lines >= largeRepoLines {
 		msg := "No .git-blame-ignore-revs in a repository with " + grouped(lines) +
 			" surviving prod lines: a formatting commit would take the credit for every line it touched."
-		if cs := formattingCommits(rf, lines); len(cs) > 0 {
+		if cs := formattingCommits(whole, lines); len(cs) > 0 {
 			msg += " " + formattingText(cs, lines, who)
 		}
 		add(codeNoIgnoreRevs, msg)
