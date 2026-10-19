@@ -19,6 +19,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
 	"github.com/IHaveASegway/stillhere/internal/policy"
@@ -73,7 +74,7 @@ type kind struct {
 // forge app account. The fact set's GitHub data (FactSet.Forge) links forge
 // logins to its people (Reviewer).
 func New(fs *domain.FactSet, p *policy.Policy) *Directory {
-	d := &Directory{names: displayNames(fs), logins: reviewerLogins(fs), forms: loginForms(fs), accounts: forgeAccounts(fs)}
+	d := &Directory{logins: reviewerLogins(fs), forms: loginForms(fs), accounts: forgeAccounts(fs)}
 	d.linked = linkedLogins(d.logins)
 	if p != nil {
 		d.botFragments = fragments(p.Bots.Fragments)
@@ -87,6 +88,14 @@ func New(fs *domain.FactSet, p *policy.Policy) *Directory {
 			}
 		}
 	}
+	// The display-name rule ranks a name a page can show above one that
+	// gives an address away (withholds), so it reads the people's local
+	// parts first, with each address a bot or not by its email alone: names
+	// can only add bots, whose addresses withhold nothing, so these are all
+	// the final ones and more, and a name the rule picks is withheld only
+	// when every name of its address would be.
+	d.locals = personLocals(fs, d)
+	d.names = displayNames(fs, d.withholds)
 	if len(d.names) > 0 {
 		d.kinds = make(map[string]kind, len(d.names))
 		for email, name := range d.names {
@@ -143,10 +152,8 @@ func runAddresses(fs *domain.FactSet) []string {
 //
 // git has already applied the mailmap to every name in the facts, so a name
 // the mailmap supplies is the name every sighting carries. Otherwise the
-// rule of docs/spec/git-invocation.md applies: the name seen most often with
-// that email, counting each commit once as its author and once as a
-// co-author; ties go to the newest committer time among the commits that
-// used the name, then to the name's UTF-8 bytes, ascending.
+// rule of docs/spec/git-invocation.md applies (displayNames): of the
+// names a page can show, a person's full name, the one seen most often.
 //
 // A GitHub login's key (LoginKey) has no display name of its own: its name
 // is the login as GitHub last reported it ("@Zoe" for the key "@zoe",
@@ -276,21 +283,72 @@ func containsAny(frags []string, ss ...string) bool {
 
 // nameTally counts one name's sightings for one email.
 type nameTally struct {
-	count  int
-	newest time.Time // the newest committer time among the commits that used the name
+	nameQuality
+	count    int       // the commits that used it, as their author or a co-author, each once
+	authored bool      // the email authored one of them with it, not only a Co-authored-by trailer
+	newest   time.Time // the newest time among them
 }
 
-// displayNames applies the display-name rule to every email the fact set
-// shows: commit authors and co-authors, and the authors and co-authors of
-// blamed commits the history does not hold (blame can attribute lines to
-// commits older than any history window, which carry only an author time).
-// Each commit counts once per (email, name).
-func displayNames(fs *domain.FactSet) map[string]string {
+// nameQuality is what the display-name rule reads of a name itself, before
+// it counts the name's sightings.
+type nameQuality struct {
+	person bool // the name has words a person's name has: not a default one (candNameKey)
+	shown  bool // it gives no address of the run away (Withheld's rule), so a page can print it
+	full   bool // more than a handle or a first name alone (fullName)
+}
+
+// fullName reports whether a display name is more than a handle or a first
+// name alone: two words or more that hold a letter (candWords; a login's
+// number, as in "gus-2410", is no word of a name), or a name in a script
+// written without spaces between its parts, as a Chinese, Japanese or
+// Korean name is, which one word holds whole.
+func fullName(name string) bool {
+	_, words := candWords(name)
+	lettered := 0
+	for _, w := range words {
+		if strings.IndexFunc(w, unicode.IsLetter) >= 0 {
+			lettered++
+		}
+	}
+	if lettered >= 2 {
+		return true
+	}
+	return strings.IndexFunc(name, func(r rune) bool {
+		return unicode.In(r, unicode.Han, unicode.Hiragana, unicode.Katakana, unicode.Hangul)
+	}) >= 0
+}
+
+// displayNames applies the display-name rule (docs/spec/git-invocation.md
+// #identity-mailmap-and-bots) to every email the fact set shows: commit
+// authors and co-authors, and the authors and co-authors of blamed commits
+// the history does not hold (blame can attribute lines to commits older
+// than any history window, which carry only an author time). Each commit
+// counts once per (email, name). withholds is the run's withholding rule
+// (Directory.withholds).
+//
+// The rule is the name seen most often, as it was, once three things about
+// the names themselves are settled (wave 11, round 3): a person's name
+// before a default one (candNameKey), so a stray commit from a machine's
+// "root" renames no one; a name a page can show before one that gives an
+// address away, which it would withhold; and a full name before a single
+// word (fullName). The last is what round 3's org F11 needed: a person who
+// changed user.name from a handle to their full name was the full name in
+// week, which reads a week, and the handle in scan, which reads a year and
+// every blamed commit, the handle winning on its older commits. The
+// newest name was tried first and was worse on round 3's 983 addresses: one
+// later commit as a first name alone, or as a login GitHub filled in,
+// renamed people who had committed for years under their full name, and a
+// shared address's newest commit, under another contributor's name, named
+// its maintainer. Of names alike in all three, the most sightings win, then
+// one the email authored a commit with over one only Co-authored-by
+// trailers carry (round 3's Ruby F11), then the newest, then the smaller
+// UTF-8 bytes.
+func displayNames(fs *domain.FactSet, withholds func(name string) bool) map[string]string {
 	if fs == nil {
 		return nil
 	}
 	tallies := make(map[string]map[string]*nameTally)
-	see := func(p domain.Person, at time.Time) {
+	see := func(p domain.Person, at time.Time, authored bool) {
 		if p.Name == "" {
 			return
 		}
@@ -302,10 +360,12 @@ func displayNames(fs *domain.FactSet) map[string]string {
 		}
 		t := byName[p.Name]
 		if t == nil {
-			t = &nameTally{}
+			key, _ := candNameKey(p.Name)
+			t = &nameTally{nameQuality: nameQuality{person: key != "", shown: !withholds(p.Name), full: fullName(p.Name)}}
 			byName[p.Name] = t
 		}
 		t.count++
+		t.authored = t.authored || authored
 		if at.After(t.newest) {
 			t.newest = at
 		}
@@ -317,11 +377,11 @@ func displayNames(fs *domain.FactSet) map[string]string {
 	// (email, name) once. Co-author lists are short, so the quadratic
 	// duplicate check allocates nothing.
 	seeCommit := func(author domain.Person, coAuthors []domain.Person, at time.Time) {
-		see(author, at)
+		see(author, at, true)
 		for i, co := range coAuthors {
 			dup := func(p domain.Person) bool { return same(p, co) }
 			if !same(co, author) && !slices.ContainsFunc(coAuthors[:i], dup) {
-				see(co, at)
+				see(co, at, false)
 			}
 		}
 	}
@@ -361,14 +421,24 @@ func displayNames(fs *domain.FactSet) map[string]string {
 }
 
 // better reports whether name a, with tally ta, beats name b with tally tb:
-// more sightings, then the newer committer time, then the smaller UTF-8
-// bytes. The order is total, so map iteration order cannot change the
-// winner.
+// a person's name over a default one, then one a page can show over one it
+// withholds, then a full name over a single word, then more sightings, then
+// a name the email authored with over one only trailers carry, then the
+// newer commit, then the smaller UTF-8 bytes. The order is total, so map
+// iteration order cannot change the winner.
 func better(a string, ta *nameTally, b string, tb *nameTally) bool {
-	if ta.count != tb.count {
+	switch {
+	case ta.person != tb.person:
+		return ta.person
+	case ta.shown != tb.shown:
+		return ta.shown
+	case ta.full != tb.full:
+		return ta.full
+	case ta.count != tb.count:
 		return ta.count > tb.count
-	}
-	if !ta.newest.Equal(tb.newest) {
+	case ta.authored != tb.authored:
+		return ta.authored
+	case !ta.newest.Equal(tb.newest):
 		return ta.newest.After(tb.newest)
 	}
 	return a < b

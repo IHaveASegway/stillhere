@@ -82,6 +82,36 @@ type NamedRepo struct {
 	Key, Name string
 	Group     string // "" when the repository was named directly
 	Path      string // the absolute path the run read it at, for resolving an absolute path inside it
+	// Forge (wave 11, round 3's KT-2) are the names, "host/owner/name" as
+	// domain.RemoteRepo gives them, that the run's GitHub data gives the
+	// repository: the forge repository joined to it and the names GitHub
+	// resolves to that one (domain.ForgeRepo.Aliases), which MatchRepos
+	// matches OWNER/NAME by when the origin does not; nil without GitHub
+	// data, and in a StoredRun, which reads no facts.
+	Forge []string
+}
+
+// withForgeNames sets each repository's Forge names from the fact set's
+// GitHub data, by the join the run counts by (domain.ForgeFacts.RunJoin).
+func withForgeNames(repos []NamedRepo, fs *domain.FactSet) {
+	if fs.Forge == nil {
+		return
+	}
+	join := fs.Forge.RunJoin(fs.Repos)
+	names := map[string][]string{} // Repo.Key → its forge names
+	for _, r := range fs.Forge.Repos {
+		name, ok := domain.RemoteRepo(r.Key)
+		if !ok {
+			continue
+		}
+		for _, key := range join[r.ID] {
+			names[key] = append(names[key], name)
+			names[key] = append(names[key], domain.ForgeAliasNames(r)...)
+		}
+	}
+	for i := range repos {
+		repos[i].Forge = names[repos[i].Key]
+	}
 }
 
 // NamedPerson is someone a run knows: an author, a co-author, or anyone a
@@ -137,6 +167,7 @@ func runNames(s *stored) (*Names, error) {
 		repoName[rf.Repo.Key] = rf.Repo.Name
 	}
 	n.Groups, n.Repos = mcpNamedScopes(s.facts.Groups, repos)
+	withForgeNames(n.Repos, s.facts)
 
 	type acc struct {
 		p     NamedPerson

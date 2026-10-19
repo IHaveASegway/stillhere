@@ -234,15 +234,41 @@ func planMoves(found []mirrorAt, want map[string]string, owners map[string]bool)
 			switch {
 			case i == keep && m.path == target:
 			case i == keep && m.stale:
-				moves = append(moves, domain.MirrorMove{Repo: id, From: m.path, To: target, Reason: domain.MirrorRestored})
+				moves = append(moves, domain.MirrorMove{Repo: id, From: m.path, To: target, Reason: domain.MirrorRestored,
+					Was: staleName(m, target)})
 			case i == keep:
-				moves = append(moves, domain.MirrorMove{Repo: id, From: m.path, To: target, Reason: domain.MirrorRenamed})
+				was := m.owner + "/" + strings.TrimSuffix(filepath.Base(m.path), ".git")
+				moves = append(moves, domain.MirrorMove{Repo: id, From: m.path, To: target, Reason: domain.MirrorRenamed, Was: was})
 			case !m.stale:
 				moves = append(moves, domain.MirrorMove{Repo: id, From: m.path, Reason: domain.MirrorDuplicate})
 			}
 		}
 	}
 	return moves
+}
+
+// staleName is the name a mirror in root/.stale held when it went stale,
+// "owner/name", when it is another than its repository's path now
+// (target) says: GitHub resolves that name to the repository, as it does a
+// renamed mirror's (MirrorMove.Was). A transfer's usual course is a sync of
+// the old owner, which moves the mirror to root/.stale/OLD/NAME.git, then
+// one of the new owner, which brings it back (wave 11's review). A name
+// that ends as freeName's own names do, "-2" and on, may be that suffix
+// rather than the repository's, and the hold directory names no owner, so
+// either gives "", as does the same name.
+func staleName(m mirrorAt, target string) string {
+	stem := strings.TrimSuffix(filepath.Base(m.path), ".git")
+	if i := strings.LastIndexByte(stem, '-'); i >= 0 {
+		if _, err := strconv.Atoi(stem[i+1:]); err == nil {
+			return ""
+		}
+	}
+	was := m.owner + "/" + stem
+	now := filepath.Base(filepath.Dir(target)) + "/" + strings.TrimSuffix(filepath.Base(target), ".git")
+	if m.owner == holdDir || strings.EqualFold(was, now) {
+		return ""
+	}
+	return was
 }
 
 // moveMirrors makes the moves: those to root/.stale first, which only free

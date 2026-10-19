@@ -184,9 +184,9 @@
     "body": "sync-links.json"
   },
   {
-    "name": "S21 run 6, a first sync into a fresh facts.db D: look the repository up",
+    "name": "S21 run 6, a first sync into a fresh facts.db D, asked for by an old name: GitHub answers with the repository under its current one, acme/widget",
     "operation": "Repo",
-    "variables": {"owner": "acme", "name": "widget"},
+    "variables": {"owner": "old-acme", "name": "widget"},
     "status": 200,
     "headers": {"Date": "Fri, 09 Oct 2026 05:00:00 GMT"},
     "body": "sync-repo.json"
@@ -222,5 +222,37 @@
     "status": 200,
     "headers": {"Date": "Fri, 09 Oct 2026 05:00:04 GMT"},
     "body": "sync-links.json"
+  },
+  {
+    "name": "S25 run 7, a later sync into facts.db D: look the repository up",
+    "operation": "Repo",
+    "variables": {"owner": "acme", "name": "widget"},
+    "status": 200,
+    "headers": {"Date": "Fri, 09 Oct 2026 06:00:00 GMT"},
+    "body": "sync-repo.json"
+  },
+  {
+    "name": "S26 run 7 looks the alias D holds up again: GitHub resolves old-acme/widget to another repository now, one its old owner made under the name, which ended the redirect",
+    "operation": "Repo",
+    "variables": {"owner": "old-acme", "name": "widget"},
+    "status": 200,
+    "headers": {"Date": "Fri, 09 Oct 2026 06:00:01 GMT"},
+    "text": "{\"data\": {\"rateLimit\": {\"cost\": 1, \"remaining\": 4958, \"resetAt\": \"2026-10-09T07:00:00Z\"}, \"repository\": {\"id\": \"R_oldwidget\", \"name\": \"widget\", \"owner\": {\"login\": \"old-acme\"}, \"isArchived\": false, \"isFork\": false, \"defaultBranchRef\": {\"name\": \"main\"}}}}"
+  },
+  {
+    "name": "S27 run 7's pass down to the watermark, page 1: every pull request on it is older than the stop point, which ends the pass",
+    "operation": "PullRequests",
+    "variables": {"repo": "R_widget", "first": 50, "after": null, "direction": "DESC"},
+    "status": 200,
+    "headers": {"Date": "Fri, 09 Oct 2026 06:00:02 GMT"},
+    "body": "sync-pulls-1.json"
+  },
+  {
+    "name": "S28 run 7's check: the replica holds the 4 GitHub counts",
+    "operation": "PullRequestCount",
+    "variables": {"q": "repo:acme/widget is:pr updated:2025-10-09T06:00:00Z..2026-10-09T05:55:01Z"},
+    "status": 200,
+    "headers": {"Date": "Fri, 09 Oct 2026 06:00:03 GMT"},
+    "text": "{\"data\": {\"rateLimit\": {\"cost\": 1, \"remaining\": 4955, \"resetAt\": \"2026-10-09T07:00:00Z\"}, \"search\": {\"issueCount\": 4}}}"
   }
 ]

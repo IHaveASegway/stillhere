@@ -399,10 +399,7 @@ func reviewsByOthers(p *domain.PullRequest, w domain.Window, who *identity.Direc
 // domain.ForgeJoin would make of the same origins. Only GitHub data that no
 // run joined, the replica itself, is joined here.
 func reviewsJoin(fs *domain.FactSet) map[string][]string {
-	if fs.Forge.Join != nil {
-		return fs.Forge.Join
-	}
-	return domain.ForgeJoin(fs.Repos, fs.Forge.Repos)
+	return fs.Forge.RunJoin(fs.Repos)
 }
 
 // reviewsIndex is the GitHub data of a view's repositories that

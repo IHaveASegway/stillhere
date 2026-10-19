@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
+	"github.com/IHaveASegway/stillhere/internal/identity"
 	"github.com/IHaveASegway/stillhere/internal/policy"
 )
 
@@ -38,6 +39,12 @@ type Input struct {
 	// before the person goes quiet. nil for week, and when the reader
 	// cannot tell: no page then shows one.
 	Activity map[string]domain.Activity
+	// Candidates are the run's identity candidates (identity.Candidates over
+	// Facts, with Who): a section's unmerged-identities caveat names a
+	// shared display name only when one of them links two of its emails, so
+	// it names what the identities command suggests a line for (wave 11,
+	// round 3's TS F10), and counts the others apart.
+	Candidates []identity.Candidate
 }
 
 // Landed is how the landed window was set: by the command line, or by the
@@ -229,6 +236,9 @@ func (b *builder) repo(rf *domain.RepoFacts) Repo {
 		IgnoreRevs: IgnoreRevs{
 			Source: rf.IgnoreRevs.Source, SHA256: rf.IgnoreRevs.SHA256, Revs: slices.Clone(rf.IgnoreRevs.Revs),
 		},
+	}
+	if fr, ok := b.in.Facts.Forge.RepoOf(b.in.Facts.Repos, rf.Repo.Key); ok {
+		r.ForgeBranch = fr.DefaultBranch
 	}
 	for _, e := range rf.BlameErrors {
 		r.Errors.Blame = append(r.Errors.Blame, FileError{Path: e.Path, Message: e.Message})

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
+	"github.com/IHaveASegway/stillhere/internal/identity"
 	"github.com/IHaveASegway/stillhere/internal/rank"
 )
 
@@ -33,6 +34,10 @@ type ExplainInput struct {
 	Window   domain.Window
 	Forge    *ForgeRead // the GitHub data the run read; nil when the reader cannot tell
 	Commands Commands   // how the answer names the commands it sends the reader to; nil: the command line's
+	// Candidates are the run's identity candidates, as Input.Candidates: the
+	// unmerged-identities caveat says another email has the person's name
+	// as identities would suggest merging them, or that it would not.
+	Candidates []identity.Candidate
 }
 
 // NewExplain builds the explain answer: the subject's values and, for a
@@ -98,7 +103,7 @@ func NewExplain(in *ExplainInput) *Explain {
 		e.Caveats = append(e.Caveats, explainEmpty(in))
 	}
 	if in.Subject.Kind == domain.SubjectPerson {
-		if c, ok := sameName(in.Facts, in.Who, in.Subject.Key, in.Commands); ok {
+		if c, ok := sameName(in.Facts, in.Who, newLinks(in.Candidates), in.Subject.Key, in.Commands); ok {
 			e.Caveats = append(e.Caveats, c)
 		}
 	}
@@ -216,10 +221,7 @@ func coverageTraced(fs *domain.FactSet, t *domain.Trace, who People, involved ma
 	}
 	titles := map[pullKey]string{}
 	if fs.Forge != nil {
-		join := fs.Forge.Join
-		if join == nil {
-			join = domain.ForgeJoin(fs.Repos, fs.Forge.Repos)
-		}
+		join := fs.Forge.RunJoin(fs.Repos)
 		for _, p := range fs.Forge.PullRequests {
 			for _, key := range join[p.Repo] {
 				if _, ok := titles[pullKey{key, p.Number}]; !ok {
@@ -310,6 +312,8 @@ type WhoKnowsInput struct {
 	// Days is the window Values' recent landers and reviewers were
 	// computed over (app.WhoKnows resolves it), which the answer states.
 	Days int
+	// Candidates are the run's identity candidates, as Input.Candidates.
+	Candidates []identity.Candidate
 }
 
 // NewWhoKnows builds the who-knows answer: per repository, the majority
@@ -435,7 +439,7 @@ func NewWhoKnows(in *WhoKnowsInput) *WhoKnows {
 			}
 		}
 	}
-	if c, ok := sharedNames(in.Who, listed, in.Commands); ok {
+	if c, ok := sharedNames(in.Who, newLinks(in.Candidates), listed, in.Commands, unlinkedWhy(in.Commands)); ok {
 		w.Caveats = append(w.Caveats, c)
 	}
 	// The path's knowledge loss and concentration count each address
@@ -662,6 +666,8 @@ type MeInput struct {
 	// them carry their validity notes to it (ValidityCaveats).
 	Metrics  []MetricInfo
 	Commands Commands // how the page names the commands it sends the reader to; nil: the command line's
+	// Candidates are the run's identity candidates, as ExplainInput.Candidates.
+	Candidates []identity.Candidate
 }
 
 // NewMe builds a person's own page: their values and their place in every
@@ -719,7 +725,7 @@ func NewMe(in *MeInput) *Me {
 	// A person's review numbers can come from any repository of the run, so
 	// each GitHub number the page shows is caveated over all of them.
 	m.Caveats = append(m.Caveats, ForgeCaveats(in.Run, in.Facts, in.Forge, ids)...)
-	if c, ok := sameName(in.Facts, in.Who, in.Email, in.Commands); ok {
+	if c, ok := sameName(in.Facts, in.Who, newLinks(in.Candidates), in.Email, in.Commands); ok {
 		m.Caveats = append(m.Caveats, c)
 	}
 	// The page carries the definitions of the metrics it shows, as explain
@@ -940,8 +946,11 @@ func reposWith(fs *domain.FactSet, keys map[string]bool) []*domain.RepoFacts {
 // sameName says when another email in the run has the person's display
 // name: if they are one person, their numbers are split between the two.
 // It compares the names as the identities command does (People.NameKey),
-// a withheld one included, and prints none.
-func sameName(fs *domain.FactSet, who People, email string, cmds Commands) (Caveat, bool) {
+// a withheld one included, and prints none. Wave 11 (round 3's TS F10):
+// when no identity candidate links the person's email to any of the others
+// (l), identities suggests no line, and the caveat says so rather than
+// send the reader there.
+func sameName(fs *domain.FactSet, who People, l links, email string, cmds Commands) (Caveat, bool) {
 	if who == nil {
 		return Caveat{}, false
 	}
@@ -950,12 +959,13 @@ func sameName(fs *domain.FactSet, who People, email string, cmds Commands) (Cave
 		return Caveat{}, false
 	}
 	seen := map[string]bool{email: true}
-	others := 0
+	others, linked := 0, false
 	check := func(e string) {
 		if !seen[e] {
 			seen[e] = true
 			if who.NameKey(e) == key {
 				others++
+				linked = linked || l.together([]string{email, e})
 			}
 		}
 	}
@@ -970,8 +980,15 @@ func sameName(fs *domain.FactSet, who People, email string, cmds Commands) (Cave
 			check(o.Author.Email)
 		}
 	}
-	if others == 0 {
+	switch {
+	case others == 0:
 		return Caveat{}, false
+	case !linked:
+		return Caveat{
+			Code: codeIdentities,
+			Message: "Another email in this run has the same display name, but " + unlinkedWhy(cmds) +
+				": their numbers stay apart, as two people's would.",
+		}, true
 	}
 	return Caveat{
 		Code: codeIdentities,

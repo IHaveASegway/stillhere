@@ -135,7 +135,8 @@ func FindPerson(n *Names, query string, q PersonQuery) (NamedPerson, *report.Cav
 	case len(exact) > 1:
 		return NamedPerson{}, nil, &domain.UsageError{Msg: fmt.Sprintf(
 			"%d people are named %q in run %d: %s. %s one of the ids. If they are one person, a .mailmap line merges "+
-				"them (%s suggests it).", len(exact), query, run, listPeople(exact, q), q.Again, cmds.Identities())}
+				"them (%s suggests it when its evidence links their addresses; an address several people use it links "+
+				"to no one).", len(exact), query, run, listPeople(exact, q), q.Again, cmds.Identities())}
 	case len(partial) == 1:
 		p := partial[0]
 		return p, &report.Caveat{Code: "name-match", Message: fmt.Sprintf(

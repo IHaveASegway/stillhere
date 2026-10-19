@@ -2,6 +2,7 @@ package app_test
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"github.com/IHaveASegway/stillhere/internal/domain"
 	"github.com/IHaveASegway/stillhere/internal/fixture"
 	"github.com/IHaveASegway/stillhere/internal/gitcli"
+	"github.com/IHaveASegway/stillhere/internal/identity"
 	"github.com/IHaveASegway/stillhere/internal/report"
 )
 
@@ -52,6 +54,42 @@ var namesHistory = []struct {
 	{namesDay(time.March, 15), "Root Builder <root@buildbox>", "root.py", 2, ""},
 	{namesDay(time.March, 13), "Your Name <you@corp.example>", "yours.py", 2, ""},
 	{namesDay(time.March, 14), "Your Name <you@mail.example>", "yours2.py", 2, ""},
+	// Wave 11: a person who changed user.name from a handle to their full
+	// name, whose full name wins though the handle has more commits (round
+	// 3's org F11: week, which reads a week, showed the new name and scan,
+	// which reads a year, the old one); and a person a later Co-authored-by
+	// trailer spells otherwise, whose own name stays (Ruby F11). A name
+	// counts by its commits, not its lines, so they hold one line each,
+	// below every row the text table's first 10 must show.
+	{namesDay(time.March, 16), "klane42 <kit@corp.example>", "kit1.py", 0, ""},
+	{namesDay(time.March, 17), "klane42 <kit@corp.example>", "kit2.py", 0, ""},
+	{namesDay(time.March, 18), "Kit Lane <kit@corp.example>", "kit3.py", 1, ""},
+	{namesDay(time.March, 19), "Pat Doe <pat@corp.example>", "pat.py", 1, ""},
+	{namesDay(time.March, 20), "Sam Same <sam@corp.example>", "pair.py", 0,
+		"feat: add pair.py\n\nCo-authored-by: pd <pat@corp.example>"},
+	// A name a person and a team's info mailbox share, which no identity
+	// rule links, so the caveat counts it apart (round 3's TS F10).
+	{namesDay(time.March, 21), "Lee Role <lee@corp.example>", "lee.py", 1, ""},
+	{namesDay(time.March, 22), "Lee Role <info@corp.example>", "info.py", 1, ""},
+	// Wave 11's review, which found the newest name worse on round 3's
+	// people: one whose most and newest commits carry their address's local
+	// part, which a page withholds, and an older one their full name, which
+	// it shows; one whose newest commit gives a first name alone; and a team
+	// mailbox whose newest commit is another person's, which the name seen
+	// most often outlasts.
+	{namesDay(time.March, 23), "Rin Vale <rin.vale@corp.example>", "rin1.py", 1, ""},
+	{namesDay(time.March, 24), "rin.vale <rin.vale@corp.example>", "rin2.py", 0, ""},
+	{namesDay(time.March, 25), "rin.vale <rin.vale@corp.example>", "rin3.py", 0, ""},
+	{namesDay(time.March, 26), "Fay Moss <fmoss@corp.example>", "fay1.py", 1, ""},
+	{namesDay(time.March, 27), "Fay Moss <fmoss@corp.example>", "fay2.py", 0, ""},
+	{namesDay(time.March, 28), "Fay <fmoss@corp.example>", "fay3.py", 0, ""},
+	{namesDay(time.March, 29), "Max Bell <hello@corp.example>", "hello1.py", 1, ""},
+	{namesDay(time.March, 30), "Max Bell <hello@corp.example>", "hello2.py", 0, ""},
+	{namesDay(time.March, 31), "Ola Grey <hello@corp.example>", "hello3.py", 0, ""},
+	// One whose only commit adds no line: no value is stored of her, and
+	// explain of landed over a window that holds her landing says so
+	// rather than refusing (wave 11's review).
+	{namesDay(time.April, 1), "Noa Quiet <noa@corp.example>", "noa.py", 0, ""},
 	// A bot whose name is an address, and one whose name is its own
 	// noreply login, which is shown.
 	{namesDay(time.October, 2), "renovate@corp.example <renovate@corp.example>", "renovate.py", 1, ""},
@@ -181,6 +219,13 @@ func displayNames(t *testing.T) {
 		"you@corp.example":        {"Your Name", false},
 		"you@mail.example":        {"Your Name", false},
 		"root@buildbox":           {"Root Builder", false},
+		"kit@corp.example":        {"Kit Lane", false},
+		"pat@corp.example":        {"Pat Doe", false},
+		"lee@corp.example":        {"Lee Role", false},
+		"info@corp.example":       {"Lee Role", false},
+		"rin.vale@corp.example":   {"Rin Vale", false},
+		"fmoss@corp.example":      {"Fay Moss", false},
+		"hello@corp.example":      {"Max Bell", false},
 		"renovate@corp.example":   {"", true},
 		"49699333+dependabot[bot]@users.noreply.github.com": {"dependabot[bot]", false},
 	})
@@ -191,10 +236,15 @@ func displayNames(t *testing.T) {
 	// is counted. who-knows, which lists both Sams as owners, says so too,
 	// and of the whole repository it gives the card's knowledge numbers, so
 	// it says, in the same caveat, what the card's says of the identity
-	// candidates who hold lines there (#104).
+	// candidates who hold lines there (#104). Lee's name, which a team's
+	// info mailbox shares, is counted apart: identities compares no role
+	// address, so it suggests no line (wave 11, round 3's TS F10).
 	const unmerged = `2 display names belong to more than one email and were not merged: "SAM SAME." and 1 name withheld ` +
 		`because it gives an address away. If the emails of a name are one person, a .mailmap line merges them: ` +
-		`'stillhere identities' suggests the lines, with the evidence for each.`
+		`'stillhere identities' suggests the lines, with the evidence for each. 1 more display name belongs to more ` +
+		`than one email, but no identity rule links their emails (an address several people use, such as a team or ` +
+		`info mailbox, two GitHub accounts, or a name more than 10 addresses carry), so 'stillhere identities' ` +
+		`suggests no line for them: their numbers stay apart, as two people's would.`
 	messages := func(caveats []report.Caveat) []string {
 		var got []string
 		for _, c := range caveats {
@@ -206,6 +256,38 @@ func displayNames(t *testing.T) {
 	}
 	if got := messages(first.model.Caveats); len(got) != 1 || got[0] != unmerged {
 		t.Errorf("the names repository's report says %q of unmerged identities, want %q", got, unmerged)
+	}
+	// Noa's one landing is older than the stored week and holds no line:
+	// explain of landed says what the run stores of a person, by her name
+	// and id, and over 365 days it answers with her landing (wave 11's
+	// review: the stored week's refusal came before the window asked for).
+	landed := domain.MetricID{Name: "landed", Version: 2}
+	_, err = app.Explain(t.Context(), first.read, app.ExplainRequest{RunID: first.run, Metric: landed, Subject: person("noa@corp.example")})
+	if want := `person "Noa Quiet" (` + identity.Pseudonym("noa@corp.example") + `) holds no value in run ` + fmt.Sprint(first.run) +
+		": no surviving prod line, no landing in the 7 days landed reads"; !errors.Is(err, domain.ErrNotFound) ||
+		err == nil || !strings.HasPrefix(err.Error(), want) || strings.Contains(err.Error(), "corp.example") {
+		t.Errorf("explain landed@2 of Noa: %v; want not found, beginning %q", err, want)
+	}
+	noa, err := app.Explain(t.Context(), first.read, app.ExplainRequest{RunID: first.run, Metric: landed,
+		Subject: person("noa@corp.example"), Days: 365})
+	if err != nil || len(noa.Values) == 0 || noa.Values[0].Num != 1 {
+		t.Errorf("explain landed@2 of Noa over 365 days: %v, %+v; want her one landing", err, noa)
+	}
+	// week finds its candidates in its own commits, with no GitHub data,
+	// while identities reads the latest scan: of Lee's name it says what
+	// the week's rules found, and nothing of what identities suggests
+	// (wave 11's review).
+	week, err := app.Week(t.Context(), writeDeps(t, "", nil),
+		app.WeekRequest{Paths: []string{dir}, Now: fixture.Now, Days: 365, DaysFromCLI: true})
+	if err != nil {
+		t.Fatalf("app.Week of the names repository: %v", err)
+	}
+	const weekLeft = `1 more display name belongs to more than one email, but no identity rule links their emails in this ` +
+		`week's commits (an address several people use, such as a team or info mailbox, or a name more than 10 addresses ` +
+		`carry; week reads no GitHub data, whose links to one account a scan's identity candidates weigh too): their ` +
+		`numbers stay apart, as two people's would.`
+	if got := messages(week.Caveats); len(got) != 1 || !strings.HasSuffix(got[0], weekLeft) || strings.Contains(got[0], "suggests no line") {
+		t.Errorf("the names repository's week says %q of unmerged identities, want it to end %q", got, weekLeft)
 	}
 	card := messages(first.model.Repos[0].Card.Caveats)
 	if got := messages(first.whoKnows(t, "").Caveats); len(card) != 1 || !strings.HasPrefix(card[0], "2 identity candidates hold lines here: ") ||

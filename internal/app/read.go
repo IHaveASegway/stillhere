@@ -440,7 +440,7 @@ func buildReport(ctx context.Context, d Deps, r ReportRequest, scanRanks bool) (
 		Values: s.values, Ranks: sets,
 		Landed:  report.Landed{Days: s.policy.Week.Days, Sort: s.policy.Week.Sort},
 		History: historyOf(s.facts), Timings: timings, Scope: s.scope(), Forge: s.forge, Commands: d.Commands,
-		Activity: activity,
+		Activity: activity, Candidates: s.candidates(),
 	}), s, nil
 }
 
@@ -529,9 +529,12 @@ func Explain(ctx context.Context, d Deps, r ExplainRequest) (*report.Explain, er
 			values = append(values, v)
 		}
 	}
-	if known && in.Days != s.policy.Week.Days {
+	if in.Days != s.policy.Week.Days {
 		// A window the scan did not store, computed from the run's facts
-		// as a scan computes the stored one.
+		// as a scan computes the stored one, before a subject with no
+		// stored value is refused: the window asked for may hold theirs
+		// (wave 11's review: landed over 365 days was refused for a person
+		// whose one landing was older than the stored week).
 		computed, err := m.Compute(in)
 		if err != nil {
 			return nil, fmt.Errorf("explaining %s over %d days: %w", def.ID, in.Days, err)
@@ -539,6 +542,7 @@ func Explain(ctx context.Context, d Deps, r ExplainRequest) (*report.Explain, er
 		for _, v := range computed {
 			if v.Subject == r.Subject {
 				values = append(values, v)
+				known = true
 			}
 		}
 	}
@@ -584,6 +588,7 @@ func Explain(ctx context.Context, d Deps, r ExplainRequest) (*report.Explain, er
 	e := report.NewExplain(&report.ExplainInput{
 		Run: &run, Facts: s.facts, Who: s.who, Metric: metricInfo(def), Subject: r.Subject,
 		Values: values, Clusters: clusters, Trace: trace, Window: window, Forge: s.forge, Commands: d.Commands,
+		Candidates: s.candidates(),
 	})
 	if matched != nil {
 		e.Caveats = append(e.Caveats, *matched)
@@ -649,11 +654,52 @@ func (s *stored) explainMissing(sub domain.Subject, cmds report.Commands) error 
 				"surviving prod lines; %s answers any path: %w", sub.Key[i+1:], name, s.run.ID, cmds.WhoKnows(), domain.ErrNotFound)
 		}
 	case domain.SubjectPerson:
-		return fmt.Errorf("%s %s has no values in run %d (a person is named by their canonical email, after .mailmap, "+
-			"or by @login when the run links no email to that GitHub login): %w",
-			sub.Kind, sub.Key, s.run.ID, domain.ErrNotFound)
+		return s.noValue(sub.Key, false, cmds)
 	}
 	return fmt.Errorf("%s %s has no values in run %d: %w", sub.Kind, sub.Key, s.run.ID, domain.ErrNotFound)
+}
+
+// noValue is the not-found error of a person a run stores no value about,
+// in words both inbound adapters print as they are (it is ErrNotFound):
+// what a run stores of a person, so the reason is true whatever kept them
+// out (wave 11's review: "none of their changes landed in a window a
+// metric reads" was said of a person with a landing in the 365 days the
+// AI-assisted share reads, and the MCP server said it in a copy of its own).
+type noValue struct{ msg string }
+
+func (e *noValue) Error() string        { return e.msg }
+func (e *noValue) Is(target error) bool { return target == domain.ErrNotFound }
+
+// noValue is the error of a person, key, the run stores no value about: on
+// their own page (own), which computes their AI-assisted share too, none of
+// that either; else where a longer window and that share are.
+func (s *stored) noValue(key string, own bool, cmds report.Commands) error {
+	msg := fmt.Sprintf("%s holds no value in run %d: no surviving prod line, no landing in the %d days landed reads, "+
+		"and no change or review a ranked metric scores is theirs", personText(s.who, key), s.run.ID, s.policy.Week.Days)
+	if own {
+		return &noValue{msg: msg + ", nor any landing their AI-assisted share counts"}
+	}
+	return &noValue{msg: msg + "; explaining landed over more days may count older landings, and their own " +
+		"AI-assisted share is on their own page (" + report.CommandsOr(cmds).OwnPage() + ")"}
+}
+
+// personText names a person in an error as every page names them, never by
+// their email: text never prints one (docs/spec/report-json.md, "Where
+// emails go"), and the command line's error line is text a user pastes.
+// It is the display name with the id a reader passes back
+// (identity.Pseudonym), the id alone when the name is withheld (it gives an
+// address away) or none was recorded, and a GitHub login's key as it is.
+// Round 3's KT-6: explain --person with the id of a person who held no
+// value printed the full address behind the id.
+func personText(who *identity.Directory, key string) string {
+	if identity.LoginKey(key) {
+		return "person " + key
+	}
+	id := identity.Pseudonym(key)
+	if name := who.Name(key); name != "" && !who.Withheld(key) {
+		return fmt.Sprintf("person %q (%s)", name, id)
+	}
+	return "person " + id
 }
 
 // findSubject resolves a reader's --repo, --group or --area (r) in the
@@ -829,7 +875,7 @@ func WhoKnows(ctx context.Context, d Deps, r WhoKnowsRequest) (*report.WhoKnows,
 	run := s.run
 	w := report.NewWhoKnows(&report.WhoKnowsInput{
 		Run: &run, Facts: underPrefix(s.facts, prefix, repo), Whole: s.facts, Who: s.who, Path: prefix, Repo: repo, Values: values,
-		Knowledge: knowledge, Forge: forge, Commands: d.Commands, Activity: activity, Days: days,
+		Knowledge: knowledge, Forge: forge, Commands: d.Commands, Activity: activity, Days: days, Candidates: s.candidates(),
 	})
 	if c, ok := whoKnowsNoPath(s.facts, prefix, repo, run.ID); ok {
 		w.Caveats = append(w.Caveats, c)
@@ -1340,8 +1386,7 @@ func personPage(ctx context.Context, d Deps, cmd string, runID int64, email stri
 		values = append(values, share...)
 	}
 	if len(values) == 0 {
-		return nil, fmt.Errorf("%s has no values in run %d (a person is named by their canonical email, after .mailmap): %w",
-			email, s.run.ID, domain.ErrNotFound)
+		return nil, s.noValue(email, own, d.commands())
 	}
 	sets, _, err := rankAll(s.input(), allRanked(), rankScopes(s.scope(), s.facts), s.ranks, &subject)
 	if err != nil {
@@ -1350,7 +1395,7 @@ func personPage(ctx context.Context, d Deps, cmd string, runID int64, email stri
 	run := s.run
 	page := report.NewMe(&report.MeInput{
 		Run: &run, Facts: s.facts, Who: s.who, Email: email, Values: values, Ranks: sets, Forge: s.forge,
-		Metrics: Metrics().Metrics, Commands: d.Commands,
+		Metrics: Metrics().Metrics, Commands: d.Commands, Candidates: s.candidates(),
 	})
 	if matched != nil {
 		page.Caveats = append(page.Caveats, *matched)

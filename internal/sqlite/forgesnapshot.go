@@ -62,7 +62,7 @@ func (s *Store) PutRunForge(ctx context.Context, runID int64, repos []domain.For
 // snapshotTables are the forge snapshot's tables, children first.
 var snapshotTables = []string{
 	"forge_snapshot_links", "forge_snapshot_commits", "forge_snapshot_reviews", "forge_snapshot_labels", "forge_snapshot_pulls",
-	"forge_snapshot_repos",
+	"forge_snapshot_repo_aliases", "forge_snapshot_repos",
 }
 
 // snapshotPut writes the rows of one run's forge snapshot, each list
@@ -75,8 +75,12 @@ func snapshotPut(ctx context.Context, tx *sql.Tx, runID int64, repos []domain.Fo
 	}
 	repoRows := newInserter(ctx, tx, "forge_snapshot_repos", "run_id", "seq", "id", "key", "owner", "name",
 		"default_branch", "archived", "fork")
+	aliases := newInserter(ctx, tx, "forge_snapshot_repo_aliases", "run_id", "repo_seq", "seq", "name")
 	for i, r := range repos {
 		repoRows.add(runID, i, r.ID, r.Key, r.Owner, r.Name, r.DefaultBranch, encodeBool(r.Archived), encodeBool(r.Fork))
+		for j, name := range r.Aliases {
+			aliases.add(runID, i, j, name)
+		}
 	}
 	pullRows := newInserter(ctx, tx, "forge_snapshot_pulls", "run_id", "seq", "id", "repo", "number", "title", "author",
 		"author_bot", "state", "draft", "base_branch", "created", "updated", "closed", "merged", "merge_sha",
@@ -103,7 +107,7 @@ func snapshotPut(ctx context.Context, tx *sql.Tx, runID int64, repos []domain.Fo
 			commits.add(runID, i, j, c.SHA, c.AuthorEmail, c.AuthorLogin)
 		}
 	}
-	return closeAll(linkRows, repoRows, pullRows, labels, reviews, commits)
+	return closeAll(linkRows, repoRows, aliases, pullRows, labels, reviews, commits)
 }
 
 // RunForge returns the forge snapshot a complete or partial run kept, with
@@ -154,6 +158,23 @@ SELECT seq, id, key, owner, name, default_branch, archived, fork FROM forge_snap
 	}
 	if len(f.Repos) == 0 {
 		return nil, nil
+	}
+	// The repositories' aliases (migration 11), in the order they were put.
+	if err := each(ctx, tx, `
+SELECT repo_seq, name FROM forge_snapshot_repo_aliases WHERE run_id = ? ORDER BY repo_seq, seq`,
+		args, func(rows *sql.Rows) error {
+			var seq int64
+			var name string
+			if err := rows.Scan(&seq, &name); err != nil {
+				return err
+			}
+			if seq < 0 || seq >= int64(len(f.Repos)) {
+				return fmt.Errorf("an alias of repository %d, of %d", seq, len(f.Repos))
+			}
+			f.Repos[seq].Aliases = append(f.Repos[seq].Aliases, name)
+			return nil
+		}); err != nil {
+		return nil, fmt.Errorf("reading forge_snapshot_repo_aliases: %w", err)
 	}
 	if err := each(ctx, tx, `SELECT repo, `+forgeMarkSelect+` FROM forge_run_watermarks WHERE run_id = ? ORDER BY repo`,
 		args, func(rows *sql.Rows) error {

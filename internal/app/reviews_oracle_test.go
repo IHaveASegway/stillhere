@@ -18,6 +18,7 @@ import (
 	"github.com/IHaveASegway/stillhere/internal/domain"
 	"github.com/IHaveASegway/stillhere/internal/fixture"
 	"github.com/IHaveASegway/stillhere/internal/gitcli"
+	"github.com/IHaveASegway/stillhere/internal/identity"
 	"github.com/IHaveASegway/stillhere/internal/rank"
 	"github.com/IHaveASegway/stillhere/internal/report"
 	"github.com/IHaveASegway/stillhere/internal/sqlite"
@@ -230,6 +231,11 @@ func reviewMergeMethods(t *testing.T) {
 		reviewSeed(t, st, reviewMergesRepo, reviewMergesPulls(shas), reviewAt(time.October, 3, 12))
 	})
 	r := onlyRepo(t, s.model)
+	// The card says whose default branch it read: GitHub's, which the
+	// replica records (wave 11, round 3's org F10).
+	if text := string(render(t, s.model).text); r.ForgeBranch != "main" || !strings.Contains(text, "(GitHub's default branch)") {
+		t.Errorf("SPEC merge methods: forge_default_branch %q, want main, said in the card's heading:\n%s", r.ForgeBranch, text)
+	}
 	for _, c := range []struct {
 		path string
 		want map[string]int
@@ -251,6 +257,27 @@ func reviewMergeMethods(t *testing.T) {
 	want := reviewCoverageRow{Num: 3, Den: 5, Via: 4, Direct: 1, ApprovedOnly: 3, Repos: 1}
 	reviewCheckCoverage(t, "SPEC merge methods, review_coverage@1", s,
 		map[string]reviewCoverageRow{"repo:" + r.Key: want}, map[string]reviewCoverageRow{"all:": want})
+	// #2's author is ali, who wrote S1, the commit the run holds, named as
+	// every page names her, not by the trailer's name of the address #2's
+	// own commit was written with (wave 11, round 3's Ruby F11).
+	e, err := app.Explain(t.Context(), s.read, app.ExplainRequest{RunID: s.run, Metric: domain.MetricID{Name: "review_coverage", Version: 1},
+		Subject: domain.Subject{Kind: domain.SubjectRepo, Key: r.Key}})
+	if err != nil {
+		t.Fatalf("SPEC merge methods, explain review_coverage@1: %v", err)
+	}
+	i := slices.IndexFunc(e.Coverage, func(c report.CoverageChange) bool { return c.Pull != nil && *c.Pull == 2 })
+	if i < 0 || e.Coverage[i].Author == nil || e.Coverage[i].Author.Key != "ali@example.com" || e.Coverage[i].Author.Name != "Ali Squash" {
+		t.Errorf("SPEC merge methods: #2's coverage row %+v, want its author ali@example.com, Ali Squash", e.Coverage)
+	}
+	// The trailer's address holds no value: explain by its id says so by
+	// its name and id, never its email, which no text prints (round 3's
+	// KT-6).
+	_, err = app.Explain(t.Context(), s.read, app.ExplainRequest{RunID: s.run, Metric: domain.MetricID{Name: "landed", Version: 2},
+		Person: identity.Pseudonym("ali.squash@home.example")})
+	if want := `person "A. Squash" (` + identity.Pseudonym("ali.squash@home.example") + `) holds no value in run`; !errors.Is(err, domain.ErrNotFound) ||
+		!strings.Contains(err.Error(), want) || strings.Contains(err.Error(), "home.example") {
+		t.Errorf("SPEC merge methods: explain by the id of a person who holds no value: %v; want not found, %q and no email", err, want)
+	}
 	reviewWholeChange(t, s, shas)
 
 	// A replica with a hole (#101): it lacks #3, whose squash, S2, names it.
@@ -710,8 +737,11 @@ func reviewMergesPulls(shas map[string]string) []domain.PullRequest {
 	return []domain.PullRequest{
 		merged(1, "rob", reviewAt(time.October, 1, 12), "feat: add two.py", // R2, after R1 in the same second
 			[]domain.ForgeCommit{unlanded('8', "rob"), unlanded('9', "rob")}, "sam", reviewAt(time.October, 1, 9)),
-		merged(2, "ali", reviewAt(time.October, 2, 12), "feat: add a.py (#2)", // S1
-			[]domain.ForgeCommit{unlanded('a', "ali")}, "rita", reviewAt(time.October, 2, 9)),
+		// S1; #2's own commit was Ali's under the address S1's trailer
+		// names (wave 11, Ruby F11).
+		merged(2, "ali", reviewAt(time.October, 2, 12), "feat: add a.py (#2)",
+			[]domain.ForgeCommit{{SHA: strings.Repeat("a", 40), AuthorEmail: "ali.squash@home.example", AuthorLogin: "ali"}},
+			"rita", reviewAt(time.October, 2, 9)),
 		merged(3, "bo", reviewAt(time.October, 2, 12), "feat: add b.py (#3)", // S2, after S1 in the same second
 			[]domain.ForgeCommit{unlanded('b', "bo"), unlanded('c', "bo")}, "tess", reviewAt(time.October, 2, 10)),
 		agent,

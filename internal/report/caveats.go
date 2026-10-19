@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
+	"github.com/IHaveASegway/stillhere/internal/identity"
 )
 
 // Caveats turn the run's warnings and facts into what a reader needs to
@@ -46,6 +47,12 @@ const (
 	// counts the landings below the commit read that are dated at or after
 	// --now, so it is that repository's caveat as it stands.
 	codeDatedAfterNow = "dated-after-now"
+	// codeForgeMoved and codeForgeUnmatched (wave 11, round 3's KT-2) are a
+	// repository's warnings, whose messages name the repository's old and
+	// new names and the command that fixes each, so each is that
+	// repository's caveat as it stands; summaries words them for several.
+	codeForgeMoved     = "forge-moved"
+	codeForgeUnmatched = "forge-unmatched"
 )
 
 // largeRepoLines is the size, in surviving prod lines, from which a
@@ -223,7 +230,8 @@ var summaries = map[string]string{
 	codeNoIgnoreRevs: "Large repositories without a .git-blame-ignore-revs: a formatting commit would take the credit for every line it touched " +
 		"(each repository's own caveat names the commits that look like one, if any: on its card in the report, and in " +
 		"an MCP overview of that repository).",
-	codeDuplicate: "Clones of the same remote as these repositories were skipped as duplicates: each repository is counted once (see their warnings).",
+	codeDuplicate: "Other clones of these repositories, of the same remote or of an old name GitHub resolves to the repository, " +
+		"were skipped as duplicates: each repository is counted once (see their warnings).",
 	codeInlineTests: "Rust unit tests inside the source (#[cfg(test)] items in prod files) count as prod in these repositories, " +
 		"because a file has one role (see their warnings for how many lines).",
 	codeHeadAfterNow: "These repositories are read at the newest commit on their branch's first-parent chain committed before --now: " +
@@ -231,6 +239,10 @@ var summaries = map[string]string{
 	codeDatedAfterNow: "In these repositories, landings dated at or after --now lie below the commit read, as a backdated commit " +
 		"or a clock that ran ahead leaves: blame counts the lines they hold, but no window counts them, so their authors can look inactive " +
 		"(see their warnings for how many).",
+	codeForgeMoved: "These repositories' origins name a GitHub repository by a name GitHub moved it from: their GitHub data " +
+		"is joined by the old name, which GitHub resolves to it (see their warnings for the new names and the command that sets them).",
+	codeForgeUnmatched: "No GitHub data is these repositories', while facts.db holds GitHub data of repositories whose history " +
+		"they share: if GitHub moved them, a sync of each origin's name records the move (see their warnings for the names and the command).",
 }
 
 func notFetched() Caveat {
@@ -503,21 +515,83 @@ func (b *builder) identityCaveat(scope domain.Scope, members []*domain.RepoFacts
 			emails[v.Subject.Key] = true
 		}
 	}
-	return sharedNames(b.in.Who, emails, b.in.Commands)
+	why := unlinkedWhy(b.in.Commands)
+	if b.in.Kind == KindWeek {
+		why = weekUnlinkedWhy
+	}
+	return sharedNames(b.in.Who, newLinks(b.in.Candidates), emails, b.in.Commands, why)
 }
+
+// links says which addresses the run's identity candidates put together:
+// each address of a candidate (identity.Candidate.Addresses), lowercased,
+// to the candidate's place in the list. An address is in one candidate at
+// most.
+type links map[string]int
+
+func newLinks(cands []identity.Candidate) links {
+	l := links{}
+	for i := range cands {
+		for _, a := range cands[i].Addresses {
+			l[strings.ToLower(a.Email)] = i
+		}
+	}
+	return l
+}
+
+// together reports whether one candidate holds two of emails.
+func (l links) together(emails []string) bool {
+	seen := map[int]bool{}
+	for _, e := range emails {
+		if i, ok := l[e]; ok {
+			if seen[i] {
+				return true
+			}
+			seen[i] = true
+		}
+	}
+	return false
+}
+
+// unlinkedWhy is why identities suggests no line for a display name that
+// emails no candidate links carry: the same-name rule compares neither an
+// address several people use nor two GitHub accounts, and a name that more
+// than 10 addresses carry is a default someone's tooling wrote
+// (docs/spec/identities.md#rules).
+func unlinkedWhy(cmds Commands) string {
+	return "no identity rule links their emails (an address several people use, such as a team or info mailbox, two " +
+		"GitHub accounts, or a name more than 10 addresses carry), so " + CommandsOr(cmds).Identities() +
+		" suggests no line for them"
+}
+
+// weekUnlinkedWhy is unlinkedWhy for week, whose candidates are its own
+// facts' (app.Week): it reads a week's commits and no GitHub data, while
+// identities reads the latest scan, a year and GitHub's links, which may
+// link the emails a week leaves apart (wave 11's review: one name of four
+// week addresses was a scan's candidate by its same-forge-account rule).
+// So it says what the week's rules found, and nothing of what identities
+// suggests.
+const weekUnlinkedWhy = "no identity rule links their emails in this week's commits (an address several people use, " +
+	"such as a team or info mailbox, or a name more than 10 addresses carry; week reads no GitHub data, whose links " +
+	"to one account a scan's identity candidates weigh too)"
 
 // sharedNames is the unmerged-identities caveat about emails, the people a
 // section shows: the display names more than one of them carries, compared
 // as the identities command compares them (People.NameKey: case, spacing
 // and punctuation never tell two names apart, and a default name, a bot's
-// or a login's is no name to share), so the caveat names a name exactly
-// when identities compares it (#69). git's mailmap is the only identity
-// store, so stillhere never merges people by name; it says where a
-// .mailmap line may be missing. A shared name that gives an address away
-// is counted and not printed, as no page prints it: it is withheld on
-// every address that carries it (personName), so the caveat and the tables
-// agree. A name written two ways is printed the first way, in byte order.
-func sharedNames(who People, emails map[string]bool, cmds Commands) (Caveat, bool) {
+// or a login's is no name to share), of which it names those whose emails
+// the run's identity candidates link (l), the names identities suggests a
+// line for, and counts the others apart, giving why they stay apart
+// (unlinkedWhy, or weekUnlinkedWhy for week; wave 11, round 3's TS
+// F10: a maintainer's remaining address was a mailbox committed under six
+// names, which identities rightly never compares, and the caveat sent the
+// user to identities for a line it could not suggest). git's mailmap is
+// the only identity store, so stillhere never merges people by name; it
+// says where a .mailmap line may be missing. A shared name that gives an
+// address away is counted and not printed, as no page prints it: it is
+// withheld on every address that carries it (personName), so the caveat
+// and the tables agree. A name written two ways is printed the first way,
+// in byte order.
+func sharedNames(who People, l links, emails map[string]bool, cmds Commands, why string) (Caveat, bool) {
 	if who == nil {
 		return Caveat{}, false
 	}
@@ -528,10 +602,12 @@ func sharedNames(who People, emails map[string]bool, cmds Commands) (Caveat, boo
 		}
 	}
 	var shared []string
-	withheld := 0
+	withheld, unlinked := 0, 0
 	for _, es := range byKey {
 		switch {
 		case len(es) < 2:
+		case !l.together(es):
+			unlinked++
 		case slices.ContainsFunc(es, func(e string) bool { return nameWithheld(who, e) }):
 			withheld++
 		default:
@@ -543,27 +619,38 @@ func sharedNames(who People, emails map[string]bool, cmds Commands) (Caveat, boo
 		}
 	}
 	total := len(shared) + withheld
-	if total == 0 {
+	if total == 0 && unlinked == 0 {
 		return Caveat{}, false
 	}
-	slices.Sort(shared)
-	named := shared
-	if len(named) > 5 {
-		named = append(slices.Clone(named[:5]), fmt.Sprintf("%d more", len(shared)-5))
+	var msg string
+	if total > 0 {
+		slices.Sort(shared)
+		named := shared
+		if len(named) > 5 {
+			named = append(slices.Clone(named[:5]), fmt.Sprintf("%d more", len(shared)-5))
+		}
+		if withheld > 0 {
+			named = append(named, plural(withheld, "name withheld because it gives an address away",
+				"names withheld because they give an address away"))
+		}
+		msg = "1 display name belongs to more than one email and was not merged: "
+		if total > 1 {
+			msg = grouped(total) + " display names belong to more than one email and were not merged: "
+		}
+		msg += joinNames(named) + ". If the emails of a name are one person, a .mailmap line merges them: " +
+			identitiesHint(cmds)
 	}
-	if withheld > 0 {
-		named = append(named, plural(withheld, "name withheld because it gives an address away",
-			"names withheld because they give an address away"))
+	if unlinked > 0 {
+		if msg != "" {
+			msg += " "
+		}
+		left := plural(unlinked, "more display name belongs", "more display names belong")
+		if total == 0 {
+			left = plural(unlinked, "display name belongs", "display names belong")
+		}
+		msg += left + " to more than one email, but " + why + ": their numbers stay apart, as two people's would."
 	}
-	msg := "1 display name belongs to more than one email and was not merged: "
-	if total > 1 {
-		msg = grouped(total) + " display names belong to more than one email and were not merged: "
-	}
-	return Caveat{
-		Code: codeIdentities,
-		Message: msg + joinNames(named) + ". If the emails of a name are one person, a .mailmap line merges them: " +
-			identitiesHint(cmds),
-	}, true
+	return Caveat{Code: codeIdentities, Message: msg}, true
 }
 
 // goingQuietCaveat is the going-quiet caveat of a section that shows

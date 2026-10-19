@@ -2,6 +2,7 @@ package app
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
@@ -68,11 +69,24 @@ func MatchRepos(repos []NamedRepo, query string) []NamedRepo {
 			hostForm = bare // host/owner/name, as RemoteRepo gives a remote
 		}
 	}
+	names := func(have string) bool {
+		return remote && have == want || ownerName != "" && strings.HasSuffix(have, ownerName) ||
+			hostForm != "" && have == hostForm
+	}
 	for _, rp := range repos {
-		have, ok := domain.RemoteRepo(rp.Key)
-		switch {
-		case !ok:
-		case remote && have == want, ownerName != "" && strings.HasSuffix(have, ownerName), hostForm != "" && have == hostForm:
+		if have, ok := domain.RemoteRepo(rp.Key); ok && names(have) {
+			found = append(found, rp)
+		}
+	}
+	if len(found) > 0 {
+		return found
+	}
+	// Last, the names the run's GitHub data gives a repository (wave 11,
+	// round 3's KT-2): its forge repository's, which a clone of an old name
+	// does not have, and the old names GitHub resolves to it, which a
+	// mirror under the new name does not.
+	for _, rp := range repos {
+		if slices.ContainsFunc(rp.Forge, names) {
 			found = append(found, rp)
 		}
 	}
@@ -86,6 +100,7 @@ func namedRepos(fs *domain.FactSet) []NamedRepo {
 		repos = append(repos, rf.Repo)
 	}
 	_, named := mcpNamedScopes(nil, repos)
+	withForgeNames(named, fs)
 	return named
 }
 

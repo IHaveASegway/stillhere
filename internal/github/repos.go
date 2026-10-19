@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"slices"
+	"strings"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
 	"github.com/IHaveASegway/stillhere/internal/redact"
@@ -145,7 +146,16 @@ func (s *Source) Repo(ctx context.Context, owner, name string) (domain.ForgeRepo
 		return domain.ForgeRepo{}, fmt.Errorf("GitHub named repository %s/%s %q/%q, which cannot be a directory",
 			owner, name, n.Owner.Login, n.Name)
 	}
-	return s.forgeRepo(n), nil
+	repo := s.forgeRepo(n)
+	// GitHub answers an old name with the repository it moved to (a rename
+	// or a transfer, which it redirects): the name asked for is one it
+	// resolves to the repository, which a clone's origin may still hold
+	// (ForgeRepo.Aliases, round 3's KT-2). Names compare without case, as
+	// GitHub compares them.
+	if asked := owner + "/" + name; !strings.EqualFold(asked, repo.Owner+"/"+repo.Name) {
+		repo.Aliases = []string{strings.ToLower(asked)}
+	}
+	return repo, nil
 }
 
 // forgeRepo translates a repository GitHub listed or looked up, whose

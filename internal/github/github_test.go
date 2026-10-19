@@ -169,8 +169,10 @@ func TestGitHubSync(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReconcileMirrors (rename): %v", err)
 	}
+	// The move names the repository's old name, which GitHub now resolves
+	// to it (wave 11, KT-2): the sync records it as an alias.
 	equal(t, "moves after the rename", moves, []domain.MirrorMove{
-		{Repo: "R_widget", From: widgetDir, To: gizmoDir, Reason: domain.MirrorRenamed},
+		{Repo: "R_widget", From: widgetDir, To: gizmoDir, Reason: domain.MirrorRenamed, Was: "acme/widget"},
 	})
 	if dir, err = src.Mirror(ctx, gizmo, root); err != nil {
 		t.Fatalf("Mirror (after the rename): %v", err)
@@ -200,6 +202,24 @@ func TestGitHubSync(t *testing.T) {
 	})
 	if moves, err = src.ReconcileMirrors(ctx, "acme", listing, root); err != nil || moves != nil {
 		t.Fatalf("ReconcileMirrors with every mirror in place = %v, %v; want no move", moves, err)
+	}
+	// A transfer's usual course (wave 11's review): a sync of the old owner
+	// moves the mirror to root/.stale, and one of the new owner brings it
+	// back, naming the name its path held, as a renamed mirror's move does.
+	if _, err = src.ReconcileMirrors(ctx, "acme", repos[:4], root); err != nil {
+		t.Fatalf("ReconcileMirrors (transferred away): %v", err)
+	}
+	transferred := gizmo
+	transferred.Owner, transferred.Key = "acme-labs", base+"/acme-labs/gizmo.git"
+	if moves, err = src.ReconcileMirrors(ctx, "acme-labs", []domain.ForgeRepo{transferred}, root); err != nil {
+		t.Fatalf("ReconcileMirrors (transferred in): %v", err)
+	}
+	equal(t, "moves once the new owner lists the transferred repository", moves, []domain.MirrorMove{
+		{Repo: "R_widget", From: staleDir, To: filepath.Join(root, "acme-labs", "gizmo.git"), Reason: domain.MirrorRestored,
+			Was: "acme/gizmo"},
+	})
+	if _, err = src.ReconcileMirrors(ctx, "acme", listing, root); err != nil { // back where the checks below read it
+		t.Fatalf("ReconcileMirrors (transferred back): %v", err)
 	}
 	if server.authorized.Load() == 0 || server.refused.Load() != 0 {
 		t.Fatalf("git server: %d authorized, %d refused requests; want every request authorized by the token",
@@ -601,15 +621,142 @@ func syncScenario(t *testing.T) {
 	// the whole window and completes, and the check fails. The replica is
 	// synced and complete from the window's start, which a later --since
 	// compares against; nothing is recorded missing.
+	// It asks for the repository by an old name, which GitHub answers with
+	// the repository under its current one (S21), as it does a renamed or
+	// transferred repository: the replica records the old name as an alias
+	// and the summary names the move (wave 11, round 3's KT-2).
 	d := open()
-	sum, err = run(d, "2026-10-09T05:00:00Z", "", "acme/widget")
+	sum, err = run(d, "2026-10-09T05:00:00Z", "", "old-acme/widget")
 	if err != nil {
 		t.Fatalf("run 6: %v", err)
 	}
-	equal(t, "run 6's summary", *sum, app.SyncSummary{Repos: 1, Synced: 1, Unchecked: 1, Pulls: 4, Took: sum.Took})
+	equal(t, "run 6's summary", *sum, app.SyncSummary{Repos: 1, Synced: 1, Unchecked: 1, Pulls: 4, Took: sum.Took,
+		Moved: []string{"old-acme/widget → acme/widget"}})
 	equal(t, "run 6's watermark", mark(d), domain.ForgeWatermark{Repo: "R_widget",
 		Updated: ts("2026-10-09T05:00:00Z"), From: ts("2025-10-09T05:00:00Z"), Synced: ts("2026-10-09T05:00:00Z")})
 	equal(t, "run 6's author links", links(d), wantLinks) // L4
+	replicaD, err := d.LoadForge(ctx, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "run 6's aliases", replicaD.Repos[0].Aliases, []string{"old-acme/widget"})
+
+	// A clone made before the move, whose origin still names the old name,
+	// in SSH's scp-like form: a scan with D joins widget's GitHub data by
+	// the alias, says so with the git remote set-url that names it as
+	// GitHub does in the origin's own form (wave 11's review: GitHub's HTTPS
+	// URL would move an SSH user's pushes to HTTPS), and finds it by the
+	// name GitHub gives it now; a scan with A, whose replica learned no
+	// alias, joins nothing and, since the clone shares the history of
+	// widget's GitHub data, says which sync records the move, and no
+	// set-url, which would point a fork's clone at its upstream.
+	mirror := filepath.Join(root, "acme", "widget.git")
+	gitHost, err := url.Parse(server.url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sshOld := "git@" + gitHost.Hostname() + ":old-acme/widget.git"
+	old := fixture.Clone(t, mirror, "widget", sshOld)
+	scanAt := func(store *sqlite.Store, now string, paths ...string) (*report.Model, string) {
+		t.Helper()
+		model, err := app.Scan(ctx, app.Deps{Git: git, Store: store, ForgeStore: store, Policy: pol, Log: logger},
+			app.ScanRequest{Paths: paths, Now: ts(now)})
+		if err != nil {
+			t.Fatalf("scan of %v: %v", paths, err)
+		}
+		var doc bytes.Buffer
+		if err := report.JSON(&doc, model); err != nil {
+			t.Fatal(err)
+		}
+		return model, doc.String()
+	}
+	codes := func(model *report.Model) []string {
+		var got []string
+		for _, r := range model.Repos {
+			for _, w := range r.Warnings {
+				got = append(got, w.Code)
+			}
+		}
+		return got
+	}
+	_, moved := scanAt(d, "2026-10-09T05:30:00Z", old)
+	for _, want := range []string{`"code": "forge-moved"`, `"repo": "acme/widget"`,
+		"git remote set-url origin git@" + gitHost.Hostname() + ":acme/widget.git"} {
+		if !strings.Contains(moved, want) {
+			t.Errorf("the scan of the old name's clone with the alias lacks %q:\n%s", want, moved)
+		}
+	}
+	if strings.Contains(moved, "set-url origin "+widget.Key) {
+		t.Errorf("the scan of the old name's SSH clone advises GitHub's HTTPS URL:\n%s", moved)
+	}
+	known, err := app.WhoKnows(ctx, app.Deps{Store: d, ForgeStore: d, Log: logger}, app.WhoKnowsRequest{Path: "", Repo: "acme/widget"})
+	if err != nil {
+		t.Fatalf("who-knows --repo acme/widget of the old name's clone: %v", err)
+	}
+	equal(t, "who-knows --repo by the name GitHub gives the repository", known.Repo, sshOld)
+	_, unmatched := scanAt(a, "2026-10-09T05:30:00Z", old)
+	for _, want := range []string{`"code": "forge-unmatched"`, "facts.db holds the GitHub data of acme/widget",
+		"stillhere sync github --repo old-acme/widget"} {
+		if !strings.Contains(unmatched, want) {
+			t.Errorf("the scan of the old name's clone without the alias lacks %q:\n%s", want, unmatched)
+		}
+	}
+	if strings.Contains(unmatched, "git remote set-url") {
+		t.Errorf("the scan of the old name's clone without the alias advises a set-url GitHub has not confirmed:\n%s", unmatched)
+	}
+	// A repository renamed under its owner, whose old name no repository of
+	// the replica holds, shares the history all the same (round 3's KT-2,
+	// by a rename); a repository of widget's name under another owner,
+	// whose history it does not share, is none of widget's business and
+	// gets no warning (wave 11's review: an organization's sync made every
+	// unrelated docs, cli or homebrew-tap of another owner a moved one).
+	legacy := fixture.Clone(t, mirror, "widget-legacy", server.url+"/acme/widget-legacy.git")
+	_, renamedDoc := scanAt(a, "2026-10-09T05:30:00Z", legacy)
+	for _, want := range []string{`"code": "forge-unmatched"`, "stillhere sync github --repo acme/widget-legacy"} {
+		if !strings.Contains(renamedDoc, want) {
+			t.Errorf("the scan of a clone of widget's old name under its owner lacks %q:\n%s", want, renamedDoc)
+		}
+	}
+	other := fixture.Clone(t, fixture.Sibling(t), "widget", server.url+"/pat-example/widget.git")
+	if model, _ := scanAt(a, "2026-10-09T05:30:00Z", other); len(codes(model)) != 0 {
+		t.Errorf("the scan of an unrelated repository of widget's name carries the warnings %v", codes(model))
+	}
+	// The old name's clone beside the mirror, which names the repository
+	// by its current name, in one scan: one repository, kept as the mirror
+	// with a duplicate-repo warning, so its pull requests count once (wave
+	// 11's review: both joined, and review coverage doubled).
+	both, _ := scanAt(d, "2026-10-09T05:30:00Z", old, mirror)
+	if len(both.Repos) != 1 || both.Repos[0].Key != widget.Key || !slices.Equal(codes(both), []string{"duplicate-repo"}) ||
+		!strings.Contains(both.Repos[0].Warnings[0].Message, "skipped "+old) {
+		t.Errorf("the scan of the old name's clone and the mirror gives %d repositories with the warnings %v, want the mirror "+
+			"alone with a duplicate-repo warning that names the clone", len(both.Repos), codes(both))
+	}
+	// A repository of the old name that is not widget's history, as one
+	// its old owner made under the name: the alias joins it to nothing.
+	reused := fixture.Clone(t, fixture.Sibling(t), "widget", server.url+"/old-acme/widget.git")
+	if model, _ := scanAt(d, "2026-10-09T05:30:00Z", reused); len(codes(model)) != 0 || model.Repos[0].ForgeBranch != "" {
+		t.Errorf("the scan of an unrelated repository under widget's old name carries %v and GitHub's branch %q, want neither",
+			codes(model), model.Repos[0].ForgeBranch)
+	}
+
+	// Run 7 (S25 to S28): a later sync looks the alias up again (S26), and
+	// GitHub resolves old-acme/widget to another repository now, one its
+	// old owner made under the name: the replica drops the alias, and the
+	// old name's clone, whose history is widget's, is unmatched again.
+	sum, err = run(d, "2026-10-09T06:00:00Z", "", "acme/widget")
+	if err != nil {
+		t.Fatalf("run 7: %v", err)
+	}
+	equal(t, "run 7's summary", *sum, app.SyncSummary{Repos: 1, Synced: 1, Took: sum.Took})
+	equal(t, "run 7's watermark", mark(d), domain.ForgeWatermark{Repo: "R_widget",
+		Updated: ts("2026-10-09T06:00:01Z"), From: ts("2025-10-09T05:00:00Z"), Synced: ts("2026-10-09T06:00:00Z")})
+	if replicaD, err = d.LoadForge(ctx, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	equal(t, "run 7's aliases", replicaD.Repos[0].Aliases, []string(nil))
+	if model, _ := scanAt(d, "2026-10-09T06:30:00Z", old); !slices.Equal(codes(model), []string{"forge-unmatched"}) {
+		t.Errorf("the scan of the old name's clone after run 7 carries %v, want forge-unmatched", codes(model))
+	}
 	api.done(t)
 	noSecret(t, "the sync scenario's logs", logs.String(), []string{plantedToken, "AUTHORIZATION"})
 }

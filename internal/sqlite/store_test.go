@@ -330,7 +330,9 @@ func sampleRunForge(zone *time.Location) ([]domain.ForgeRepo, []domain.PullReque
 		return time.Date(2026, time.September, day, hour, 0, 0, 0, time.UTC).In(zone)
 	}
 	repos := []domain.ForgeRepo{
-		{ID: "R_api", Key: "https://github.com/acme/api.git", Owner: "acme", Name: "api", DefaultBranch: "main"},
+		// The names GitHub resolves to api besides its own (migration 11, KT-2).
+		{ID: "R_api", Key: "https://github.com/acme/api.git", Owner: "acme", Name: "api", DefaultBranch: "main",
+			Aliases: []string{"acme/api-server", "old-acme/api"}},
 		{ID: "R_docs", Key: "https://github.com/acme/docs.git", Owner: "acme", Name: "docs", Archived: true, Fork: true},
 	}
 	pulls := []domain.PullRequest{{

@@ -25,6 +25,14 @@ type ForgeRepo struct {
 	DefaultBranch string // "" for an empty repository
 	Archived      bool
 	Fork          bool
+	// Aliases (wave 11, round 3's KT-2) are the other names, "owner/name",
+	// that GitHub resolves to this repository: one a sync looked up that
+	// GitHub answered under this name (it redirects a renamed or
+	// transferred repository's old name), or one its mirror's path held
+	// when a sync found it there by its node id. Lowercased, sorted, never
+	// its own name; nil for none. A sync records them (only it asks GitHub);
+	// ForgeJoin joins a clone whose origin still names one.
+	Aliases []string
 }
 
 // RemoteRepo returns the repository a git remote names on its host, as
@@ -85,6 +93,19 @@ func RemoteRepo(remote string) (string, bool) {
 // A repository whose collection failed (status error) joins nothing: a
 // failed repository adds nothing to a run's numbers, its GitHub ones
 // included, as every page that lists it says.
+//
+// Wave 11 (round 3's KT-2): an origin also names a forge repository by one
+// of its Aliases, a name GitHub resolves to it, so a clone made before a
+// rename or a transfer, whose origin still works through GitHub's
+// redirect, gets the GitHub data a sync copied under the new name. The
+// node id is what both names resolve to; the names are only how a clone
+// reaches it. A name some forge repository holds now is never an alias:
+// GitHub ends a redirect when a repository takes the old name, and a
+// later sync of the replica sees that repository. A scan keeps a join by an
+// alias only for a clone that holds a commit the repository's GitHub data
+// names (app's aliasJoinsShared, wave 11's review): this join reads
+// origins alone, and a name can pass to an unrelated repository before a
+// sync looks it up again.
 func ForgeJoin(repos []RepoFacts, forge []ForgeRepo) map[string][]string {
 	byName := map[string][]string{} // RemoteRepo → Repo.Key of the run's repositories
 	for i := range repos {
@@ -96,20 +117,79 @@ func ForgeJoin(repos []RepoFacts, forge []ForgeRepo) map[string][]string {
 			byName[name] = append(byName[name], rf.Repo.Key)
 		}
 	}
+	current := map[string]bool{} // RemoteRepo of every forge repository's own name
+	for _, r := range forge {
+		if name, ok := RemoteRepo(r.Key); ok {
+			current[name] = true
+		}
+	}
 	var out map[string][]string
 	for _, r := range forge {
 		name, ok := RemoteRepo(r.Key)
-		if !ok || len(byName[name]) == 0 {
+		if !ok {
+			continue
+		}
+		keys := slices.Clone(byName[name])
+		for _, alias := range ForgeAliasNames(r) {
+			if !current[alias] {
+				keys = append(keys, byName[alias]...)
+			}
+		}
+		if len(keys) == 0 {
 			continue
 		}
 		if out == nil {
 			out = map[string][]string{}
 		}
-		keys := slices.Clone(byName[name])
 		slices.Sort(keys)
 		out[r.ID] = slices.Compact(keys)
 	}
 	return out
+}
+
+// ForgeAliasNames returns r's Aliases as RemoteRepo names them,
+// "host/owner/name" on r's own host, the form ForgeJoin compares origins
+// in; nil for none or a key that names no repository.
+func ForgeAliasNames(r ForgeRepo) []string {
+	name, ok := RemoteRepo(r.Key)
+	if !ok || len(r.Aliases) == 0 {
+		return nil
+	}
+	host, _, _ := strings.Cut(name, "/")
+	out := make([]string, 0, len(r.Aliases))
+	for _, a := range r.Aliases {
+		out = append(out, host+"/"+strings.ToLower(strings.Trim(a, "/")))
+	}
+	return out
+}
+
+// RunJoin is the join of a fact set's repositories (repos) to f's forge
+// repositories that every metric and page counts by: the one a scan made
+// and the run kept (Join), else, for GitHub data no run joined (the
+// replica itself), ForgeJoin made now. nil for no GitHub data.
+func (f *ForgeFacts) RunJoin(repos []RepoFacts) map[string][]string {
+	switch {
+	case f == nil:
+		return nil
+	case f.Join != nil:
+		return f.Join
+	}
+	return ForgeJoin(repos, f.Repos)
+}
+
+// RepoOf returns the forge repository RunJoin joins the run's repository
+// key to, and false when none is.
+func (f *ForgeFacts) RepoOf(repos []RepoFacts, key string) (ForgeRepo, bool) {
+	if f == nil {
+		return ForgeRepo{}, false
+	}
+	join := f.RunJoin(repos)
+	for _, r := range f.Repos {
+		if slices.Contains(join[r.ID], key) {
+			return r, true
+		}
+	}
+	return ForgeRepo{}, false
 }
 
 // ForgeUser is an account as it appears on a pull request or a review.
@@ -290,6 +370,13 @@ type MirrorMove struct {
 	From   string // the absolute path it was at
 	To     string // the absolute path it moved to, or would have
 	Reason string // MirrorRenamed, MirrorRestored, MirrorStale or MirrorDuplicate
+	// Was (wave 11, KT-2) is, for MirrorRenamed, the "owner/name" the
+	// mirror's path held: the name GitHub listed the repository under when
+	// a sync mirrored it, which GitHub now resolves to it (one of its
+	// ForgeRepo.Aliases); for MirrorRestored, the name its path under
+	// root/.stale held, when that is another and cannot be a suffix the
+	// move to root/.stale added; "" otherwise.
+	Was string
 	// Err says why the mirror could not move, scrubbed; "" when it moved.
 	// A listed repository whose mirror could not move is not mirrored by
 	// that sync, which would otherwise clone a second copy of it.
@@ -382,8 +469,14 @@ type ForgeSource interface {
 // data at all, neither the dating nor the pull requests.
 type ForgeStore interface {
 	// PutForgeRepos upserts the repositories a sync is about to bring up to
-	// date, by ID.
+	// date, by ID, each with its Aliases as the sync found them, which
+	// replace the ones the replica held of it; a name some repository of
+	// the replica holds now is no repository's alias.
 	PutForgeRepos(ctx context.Context, repos []ForgeRepo) error
+	// ForgeAliases returns the aliases the replica holds, by ForgeRepo.ID,
+	// each list sorted (wave 11's review): a sync looks each one up again,
+	// since GitHub ends a redirect when another repository takes the name.
+	ForgeAliases(ctx context.Context) (map[string][]string, error)
 	// ForgeWatermark returns a repository's watermark, with zero times when
 	// the replica has none.
 	ForgeWatermark(ctx context.Context, repo string) (ForgeWatermark, error)

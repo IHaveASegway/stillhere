@@ -553,26 +553,32 @@ type ShareIfMerged struct {
 // Repo is one repository's part of a report: its card first, then the
 // detail behind it.
 type Repo struct {
-	Name       string     `json:"name"`
-	Key        string     `json:"key"`
-	Group      string     `json:"group"` // "" when the repository was named directly
-	Path       string     `json:"path"`
-	Remote     string     `json:"remote_scrubbed"` // "" when there is no origin
-	Branch     string     `json:"branch"`
-	Head       string     `json:"head"`
-	Bare       bool       `json:"bare"`
-	Shallow    bool       `json:"shallow"`
-	Partial    bool       `json:"partial"`
-	Status     string     `json:"status"`     // ok or error
-	Error      string     `json:"error"`      // scrubbed; "" when ok
-	LineFacts  bool       `json:"line_facts"` // blame ran: false for week runs, shallow and partial clones
-	Card       RepoCard   `json:"card"`
-	Warnings   []Warning  `json:"warnings"`
-	Errors     Errors     `json:"errors"`
-	Skipped    Skipped    `json:"skipped"`
-	IgnoreRevs IgnoreRevs `json:"blame_ignore_revs"`
-	Week       *WeekTable `json:"week"`       // nil when the repository failed
-	StillHere  *StillHere `json:"still_here"` // nil without line facts
+	Name   string `json:"name"`
+	Key    string `json:"key"`
+	Group  string `json:"group"` // "" when the repository was named directly
+	Path   string `json:"path"`
+	Remote string `json:"remote_scrubbed"` // "" when there is no origin
+	Branch string `json:"branch"`          // the clone's default branch (docs/spec/discovery.md#default-branch)
+	// ForgeBranch (wave 11, round 3's org F10) is GitHub's default branch
+	// for the repository, as the run's GitHub data recorded it, "" without
+	// GitHub data: a page says whether Branch is GitHub's default or only
+	// the clone's (origin/HEAD, a bare mirror's HEAD), so a reader does not
+	// take an unusual default for a clone on the wrong branch.
+	ForgeBranch string     `json:"forge_default_branch"`
+	Head        string     `json:"head"`
+	Bare        bool       `json:"bare"`
+	Shallow     bool       `json:"shallow"`
+	Partial     bool       `json:"partial"`
+	Status      string     `json:"status"`     // ok or error
+	Error       string     `json:"error"`      // scrubbed; "" when ok
+	LineFacts   bool       `json:"line_facts"` // blame ran: false for week runs, shallow and partial clones
+	Card        RepoCard   `json:"card"`
+	Warnings    []Warning  `json:"warnings"`
+	Errors      Errors     `json:"errors"`
+	Skipped     Skipped    `json:"skipped"`
+	IgnoreRevs  IgnoreRevs `json:"blame_ignore_revs"`
+	Week        *WeekTable `json:"week"`       // nil when the repository failed
+	StillHere   *StillHere `json:"still_here"` // nil without line facts
 }
 
 // RepoCard is what a lead or an agent reads first about one repository:

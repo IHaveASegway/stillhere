@@ -161,7 +161,9 @@ func (s *server) addTools(srv *sdk.Server) {
 			"person (default), repo, group, area or all; for an area, subject is the repository and path its top-level "+
 			"directory; all is the whole run's own numbers, over every repository, with no subject (landed and "+
 			"review_coverage). "+
-			"A repository or a group may be passed as overview's scope_arg gives it (repo:NAME, group:NAME). "+
+			"A repository or a group may be passed as overview's scope_arg gives it (repo:NAME, group:NAME), with no subject_kind; "+
+			"a metric never about a person (review_coverage, knowledge_loss, knowledge_concentration, ai_assisted) reads a "+
+			"bare subject as a repository or a group; path with no subject_kind is an area's. "+
 			"A metric about a kind of subject it has no values about is refused with the calls that answer instead: the "+
 			"ranked metrics (durable, simplifying, reviews_given) are about people, and overview with rank gives a "+
 			"repository's or a group's table of them; who_knows is computed per path by the who_knows tool, never stored. "+
@@ -172,7 +174,7 @@ func (s *server) addTools(srv *sdk.Server) {
 			`"metric": {"type": "string", "description": "A metric id such as durable@1, or a name such as durable for its latest version."}`,
 			`"subject": {"type": "string", "description": "Who or what the number is about: a person's name or id, a repository, or a group (a name, or overview's scope_arg); empty for the user the server runs for."}`,
 			`"subject_kind": {"type": "string", "enum": ["person", "repo", "group", "area", "all"], "description": "What subject names; person when empty; all for every repository, with no subject."}`,
-			`"path": {"type": "string", "description": "For subject_kind area: the repository's top-level directory, such as src."}`,
+			`"path": {"type": "string", "description": "An area's top-level directory, such as src, in the repository subject names: subject_kind area, or none; refused with any other kind."}`,
 			`"days": {"type": "integer", "minimum": 1, "maximum": 365, "description": "landed@1's and landed@2's window in days, for the values and the landings listed alike: 365 traces a still-here table's landings_365d. Default: the run's week. Other metrics read their own window. The run's history covers 365 days, and a longer window is refused: what landed before it is unknown."}`,
 			propFormat, propLimit, propCursor),
 		s.explain)
@@ -301,10 +303,6 @@ type personIn struct {
 func (s *server) person(ctx context.Context, in personIn) *sdk.CallToolResult {
 	f, _, _ := common{ResponseFormat: in.ResponseFormat}.format(0, personRows, personDetailedRows)
 	return s.answer(ctx, "person", f, narrowPerson, func(ctx context.Context, c *call) (render, error) {
-		r, err := c.resolver(ctx)
-		if err != nil {
-			return nil, err
-		}
 		p, caveat, err := s.whom(ctx, c, in.Name)
 		if err != nil {
 			return nil, err
@@ -322,12 +320,8 @@ func (s *server) person(ctx context.Context, in personIn) *sdk.CallToolResult {
 		} else {
 			me, err = app.Person(ctx, d, app.PersonRequest{RunID: c.run(), Email: p.Key})
 		}
-		if errors.Is(err, domain.ErrNotFound) {
-			return nil, notFoundf("%q is in run %d as an author or a co-author, but holds no value: none of their changes "+
-				"left a surviving prod line or landed in a window a metric reads.", r.named(p), c.run())
-		}
 		if err != nil {
-			return nil, err
+			return nil, err // a person with no value: app's not-found error, by name and id (app.Person)
 		}
 		if caveat != nil {
 			me.Caveats = append(me.Caveats, *caveat)
@@ -537,7 +531,6 @@ func (s *server) explain(ctx context.Context, in explainIn) *sdk.CallToolResult 
 		}
 		var subject domain.Subject
 		var caveat *report.Caveat
-		var who string // the person as the server names them (resolver.named), for a miss
 		switch {
 		case in.SubjectKind == domain.SubjectAll && strings.TrimSpace(in.Subject) != "":
 			return nil, &domain.UsageError{Msg: "subject_kind all is every repository and takes no subject: leave subject " +
@@ -547,8 +540,12 @@ func (s *server) explain(ctx context.Context, in explainIn) *sdk.CallToolResult 
 			return nil, &domain.UsageError{Msg: fmt.Sprintf(
 				"subject_kind %s needs subject: a repository's name for repo and area, a group's for group", in.SubjectKind)}
 		}
-		switch in.SubjectKind {
-		case "", domain.SubjectPerson:
+		kind, err := explainKind(id, in, r)
+		if err != nil {
+			return nil, err
+		}
+		switch kind {
+		case domain.SubjectPerson:
 			if report.OwnPageOnly(id) {
 				// A person's own AI-assisted share is shown only to them
 				// (ADR 0007), and explain is what anyone may read.
@@ -560,14 +557,19 @@ func (s *server) explain(ctx context.Context, in explainIn) *sdk.CallToolResult 
 			if p, caveat, err = s.whom(ctx, c, in.Subject); err != nil {
 				return nil, err
 			}
-			subject, who = domain.Subject{Kind: domain.SubjectPerson, Key: p.Key}, r.named(p)
+			subject = domain.Subject{Kind: domain.SubjectPerson, Key: p.Key}
+		case explainRefused:
+			// A metric with no person values, whose subject names no scope:
+			// app.Explain refuses the kind before it reads a run, naming
+			// the kinds its values are about and the calls that answer.
+			subject = domain.Subject{Kind: domain.SubjectPerson}
 		case domain.SubjectRepo, domain.SubjectArea:
 			rp, err := c.repo(ctx, in.Subject)
 			if err != nil {
 				return nil, err
 			}
 			subject = domain.Subject{Kind: domain.SubjectRepo, Key: rp.Key}
-			if in.SubjectKind == domain.SubjectArea {
+			if kind == domain.SubjectArea {
 				dir := strings.Trim(strings.TrimSpace(in.Path), "/")
 				if dir == "" || strings.Contains(dir, "/") {
 					return nil, &domain.UsageError{Msg: fmt.Sprintf("an area is a top-level directory of a repository: pass "+
@@ -601,11 +603,10 @@ func (s *server) explain(ctx context.Context, in explainIn) *sdk.CallToolResult 
 			return nil, err
 		}
 		e, err := app.Explain(ctx, d, app.ExplainRequest{RunID: c.run(), Metric: id, Subject: subject, Days: in.Days})
-		switch {
-		case errors.Is(err, domain.ErrNotFound) && who != "":
-			return nil, notFoundf("%q holds no value in run %d: none of their changes left a surviving prod line or "+
-				"landed in a window a metric reads.", who, c.run())
-		case err != nil:
+		if err != nil {
+			// A person with no value is app's not-found error, which names
+			// them by display name and id and says what the run stores of a
+			// person, in the server's words (d.Commands).
 			return nil, err
 		}
 		if err := checkCursor(cursorRun, e.Provenance.RunID); err != nil {
@@ -616,6 +617,81 @@ func (s *server) explain(ctx context.Context, in explainIn) *sdk.CallToolResult 
 		}
 		return func(sh *shaper) (any, error) { return sh.explainAnswer(e, s.cfg.AllowSource), nil }, nil
 	})
+}
+
+// explainRefused is explainKind's kind for a subject it lets app.Explain
+// refuse: the metric holds no value about a person, and the subject is
+// one, or empty.
+const explainRefused = "refused"
+
+// explainKind is the kind of subject an explain call is about: subject_kind
+// when it is given; else an area when path is (wave 11's review: path
+// without subject_kind answered about the whole repository, and with
+// subject_kind repo it was dropped without a word, so path with any other
+// kind is refused); else, when the subject is a scope_arg as overview
+// gives it (repo:NAME, group:NAME), that kind, as the tool's description
+// says; else, for a metric no scan stores a person's values of
+// (app.AboutPeople: review_coverage@1, knowledge_loss@1,
+// knowledge_concentration@1, ai_assisted@1), the repository or group the
+// subject names (the finder every scope argument goes through,
+// app.FindScopes), explainRefused when it names a person of the run or
+// none is given, and otherwise the scope finder's miss, which lists the
+// run's repositories and groups (wave 11's review: a mistyped repository
+// was refused as being about a person); else a person. Round 3's KT-8:
+// explain(review_coverage, "repo:NAME") answered that no one was named
+// "repo:NAME", and the person lookup's miss hid the refusal that says to
+// pass subject_kind repo.
+func explainKind(id domain.MetricID, in explainIn, r *resolver) (string, error) {
+	subject := strings.TrimSpace(in.Subject)
+	if path := strings.TrimSpace(in.Path); path != "" {
+		switch {
+		case in.SubjectKind != "" && in.SubjectKind != domain.SubjectArea:
+			return "", &domain.UsageError{Msg: fmt.Sprintf("path is an area's top-level directory, which subject_kind %s "+
+				"has none of: pass subject_kind area with it, or leave path out", in.SubjectKind)}
+		case subject == "":
+			return "", &domain.UsageError{Msg: "path is an area's top-level directory: pass subject, the repository it is in"}
+		}
+		return domain.SubjectArea, nil
+	}
+	if in.SubjectKind != "" {
+		return in.SubjectKind, nil
+	}
+	if prefix, _, ok := strings.Cut(subject, ":"); ok {
+		switch strings.ToLower(prefix) {
+		case domain.ScopeRepo:
+			return domain.SubjectRepo, nil
+		case domain.ScopeGroup:
+			return domain.SubjectGroup, nil
+		}
+	}
+	people, err := app.AboutPeople(id, toolCommands{})
+	if err != nil || people {
+		return domain.SubjectPerson, err
+	}
+	// ai_assisted@1 about a person is refused for everyone, in words that
+	// say where the user's own share is (the person branch).
+	refused := explainRefused
+	if report.OwnPageOnly(id) {
+		refused = domain.SubjectPerson
+	}
+	if subject == "" {
+		return refused, nil
+	}
+	found := r.scopes(subject)
+	switch {
+	case len(found) == 0:
+		if _, _, err := r.person(subject); err == nil {
+			return refused, nil
+		}
+		_, err := r.scope(subject) // the miss, with the run's repositories and groups
+		return "", err
+	case len(found) > 1:
+		_, err := r.scope(subject) // the choices, each with its scope_arg
+		return "", err
+	case found[0].Kind == domain.ScopeGroup:
+		return domain.SubjectGroup, nil
+	}
+	return domain.SubjectRepo, nil
 }
 
 // fewPeople refuses the AI-assisted share of a repository or a group that

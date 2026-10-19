@@ -57,7 +57,7 @@ stillhere scan .                 # history, blame, metrics and ranks into ~/.sti
 `scan` prints the run as a report, and `stillhere report` prints it again later, from facts.db alone. The repository's card comes first:
 
 ```text
-Repository cli · trunk @ ff67d76 · ok
+Repository cli · trunk @ ff67d76 (GitHub's default branch) · ok
   age 2,567 days (first commit 2019-10-04 UTC) · 1,495 files at HEAD, 530 prod paths · 93,356
   surviving prod lines in 530 prod files · 468 people, 4 bots · landings: 17 in the window, 602 in
   the history
@@ -118,8 +118,9 @@ identities · every repository · run 7 · as of 2026-10-15 UTC
   hand-off guesses (--all lists them)
 
 1. (name withheld) · high confidence · same-name, same-forge-account
-   1. GitHub noreply · (name withheld) · 14 commits · 2022-04-27 → 2023-10-23 · cli
-   2. other domain · (name withheld) · 2 commits · 2022-05-06 → 2022-05-09 · cli · canonical
+   1. GitHub noreply · (name withheld) · 14 commits in this run · 2022-04-27 → 2023-10-23 · cli
+   2. other domain · (name withheld) · 2 commits in this run · 2022-05-06 → 2022-05-09 · cli ·
+      canonical
    both addresses carry one display name, withheld because it gives an address away
    GitHub attributes the commits of both addresses to one account, whose login is withheld as the
      local part of an address: GitHub's own link, the attribution its contributor pages show, which
@@ -241,6 +242,8 @@ stillhere report --rank reviews_given
 ```
 
 Run step 4 again after the first sync: GitHub's own links from commits to accounts arrive with it, and they make most of the high-confidence merges (on honojs/hono, 4 lines before the sync and 18 after). Keep passing the same `--mailmap`, or the scan loses step 4's merges.
+
+Scanning your own clone instead of the mirrors works the same: its origin names the repository. If GitHub renamed the repository or moved it to another owner since you cloned it, sync it by the name your clone's origin holds (`stillhere sync github --repo old-owner/name`): GitHub answers with the repository under its new name, the sync records the move, and your clone's card says its GitHub data was joined by the old name, with the `git remote set-url` that names it as GitHub does, in your origin's own form (SSH stays SSH). A card with a `forge-unmatched` caveat is one whose origin no synced repository matches, while a repository in facts.db shares its history: run the `sync github --repo` it names, your origin's name, which records the move, or syncs the fork if your clone is one. A repository of the same name that shares no history is not yours and gets no caveat.
 
 The `reviews_given@1` table shows each reviewer's share of approvals with no comment beside the count, because rubber stamps count as reviews.
 

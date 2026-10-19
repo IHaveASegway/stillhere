@@ -921,7 +921,7 @@ func textRepo(p *printer, m *Model, r *Repo) {
 		head += " · group " + clean(r.Group)
 	}
 	if r.Head != "" {
-		head += " · " + clean(r.Branch) + " @ " + short(r.Head)
+		head += " · " + clean(r.Branch) + " @ " + short(r.Head) + " " + branchNote(r, clean)
 	}
 	head += " · " + clean(r.Status)
 	p.wrapped("", "  ", head)
