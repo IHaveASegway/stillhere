@@ -361,19 +361,23 @@ var (
 
 // unsentWhy is why every AI-assisted share is withheld when the call could
 // not settle its decision, as a caveat and a refusal say it: the reason, in
-// words that name no path, since the log on stderr has the error.
+// words that name no path, since the log on stderr has the error, and what
+// the user can do. It never suggests a new record: one forgets what the old
+// one let leave, and its first answers could be subtracted from those.
 func unsentWhy(err error) string {
 	switch {
 	case errors.Is(err, app.ErrEgressInputs):
-		return "the egress record holds a decision about this run made over other numbers than the run holds now " +
-			"(a later stillhere computed them again), and the new numbers could be subtracted from those already sent"
+		return "the egress record holds a decision about this scan made over other numbers than the scan holds now " +
+			"(a later stillhere computed them again), and the new numbers could be subtracted from those already sent; " +
+			"a new scan is decided afresh against the record"
 	case errors.Is(err, errNoEgress):
 		return "this server lets a share leave only once it has recorded it (its egress record, ADR 0015), and it " +
-			"runs without one: the user can restart stillhere mcp with --egress set to a file it can write"
+			"runs without one: the user can restart stillhere mcp with --egress naming the record it kept before"
 	}
 	return "this server lets a share leave only once it has recorded it (its egress record, ADR 0015), and it could " +
-		"not read or write the record: the server's log on stderr says why, and the user can make the record writable " +
-		"or restart stillhere mcp with --egress set to a file it can write"
+		"not read or write the record: the server's log on stderr says why. The user can make the record writable " +
+		"again, or move it with its -wal file to a place that is and restart stillhere mcp with --egress naming it; " +
+		"a new, empty record is no fix, since it would forget what this one let leave"
 }
 
 // scope resolves a scope argument against the call's run; a miss says

@@ -287,8 +287,8 @@ func scopeOf(sc domain.Scope, name string) scopeOut {
 // without pointing at a share it could be worked out from.
 func withheldWhy() string {
 	return fmt.Sprintf("fewer than %d people landed in its window, or it would let a share that is withheld be "+
-		"worked out from those shown, in this run or beside the shares this server's record holds for another run "+
-		"of the same as-of time. A share of one or two people is close to one person's own, which only that "+
+		"worked out from those shown, in this run or beside the shares this server's record holds for another scan "+
+		"whose window overlaps this one's. A share of one or two people is close to one person's own, which only that "+
 		"person sees (ADR 0007)", app.AIShareMinPeople)
 }
 

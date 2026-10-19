@@ -9,17 +9,12 @@
 -- recorded, is never revised. Its format must stay readable by every later
 -- stillhere, so every change is a new numbered migration that adds.
 --
--- It holds no fact and no email: scopes (repository keys and group names),
--- the numbers sent, and the people behind each repository's share as
--- HMAC-SHA-256 hashes under a random salt kept in egress_meta. Times are TEXT
--- in UTC with nine fractional digits, as in facts.db; the tables are STRICT.
-
--- The record's own settings: 'salt', 32 random bytes made when the file is
--- first opened for writing.
-CREATE TABLE egress_meta (
-	key   TEXT PRIMARY KEY,
-	value BLOB NOT NULL
-) STRICT;
+-- It holds no fact and no email: scopes (repository keys and names, group
+-- names), the numbers sent, a digest of each repository's landings in the
+-- window, and the people behind each repository's share as numbers that are
+-- distinct within their decision and name no one outside it ('1', '2' and
+-- on, in an order no one can repeat). Times are TEXT in UTC with nine
+-- fractional digits, as in facts.db; the tables are STRICT.
 
 -- One row per run: a run is its id in its facts.db and its start time, since
 -- two facts.db files, or one deleted and scanned again, reuse ids.
@@ -29,14 +24,18 @@ CREATE TABLE decisions (
 	run_started  TEXT    NOT NULL,
 	inputs       TEXT    NOT NULL, -- hex SHA-256 of the run's AI-share inputs: the numbers it was decided over
 	metric       TEXT    NOT NULL, -- ai_assisted@1
-	window_since TEXT    NOT NULL, -- the shares' window: decisions of one window are checked against each other
+	window_since TEXT    NOT NULL, -- the shares' window: a decision is checked against every one whose window overlaps it
 	window_until TEXT    NOT NULL,
 	version      TEXT    NOT NULL, -- the stillhere that decided it
 	decided      TEXT    NOT NULL, -- the wall clock when it was recorded
 	UNIQUE (run_id, run_started)
 ) STRICT;
 
-CREATE INDEX decisions_by_window ON decisions (window_since, window_until);
+-- A new decision reads every decision whose window overlaps its own:
+-- window_until > its since AND window_since < its until. The first is the
+-- selective one, since a run is mostly decided after those it is checked
+-- against, so the index leads with window_until.
+CREATE INDEX decisions_by_window ON decisions (window_until, window_since);
 
 -- The shares a decision lets leave, as they leave. None: every share of the
 -- run is withheld.
@@ -49,13 +48,20 @@ CREATE TABLE decision_shares (
 	PRIMARY KEY (decision, kind, key)
 ) STRICT;
 
--- Every repository a share of the decision adds up (Repo.Key), with its
--- own counts in the run, which a later decision compares with its own: a
--- repository whose counts differ between two runs of one window (a policy
--- or a .mailmap changed between the scans) would let the difference out.
+-- Every repository a share of the decision adds up (Repo.Key), as a later
+-- decision matches it with its own: by key, or by history, the hex SHA-256
+-- of the SHAs of its landings in the window ('' when none), which a copy or
+-- a clone whose origin is spelt otherwise shares under another key; and by
+-- its own counts in the run. A repository of equal counts in two runs is
+-- one term of the sums both send, whatever their windows, and one whose
+-- counts differ over the same landings, or in the same window, would let
+-- the difference out (a policy or a .mailmap changed between the scans).
+-- name is Repo.Name, as the answers name it, for the audit.
 CREATE TABLE decision_repos (
 	decision INTEGER NOT NULL REFERENCES decisions (id),
 	repo     TEXT    NOT NULL,
+	name     TEXT    NOT NULL,
+	history  TEXT    NOT NULL,
 	num      REAL    NOT NULL,
 	den      REAL    NOT NULL,
 	PRIMARY KEY (decision, repo)
@@ -73,8 +79,8 @@ CREATE TABLE decision_share_repos (
 ) STRICT;
 
 -- The people of each such repository: one row per block of addresses
--- (identity.Blocks), its key hashed; '' is the empty address. A repository
--- with no row holds no person's landing.
+-- (identity.Blocks), numbered within the decision; '' is the empty address.
+-- A repository with no row holds no person's landing.
 CREATE TABLE decision_people (
 	decision INTEGER NOT NULL,
 	repo     TEXT    NOT NULL,
@@ -84,10 +90,6 @@ CREATE TABLE decision_people (
 ) STRICT;
 
 -- Append-only: an answer that left the machine is a fact.
-CREATE TRIGGER egress_meta_no_update BEFORE UPDATE ON egress_meta
-BEGIN SELECT RAISE(ABORT, 'the egress record is append-only'); END;
-CREATE TRIGGER egress_meta_no_delete BEFORE DELETE ON egress_meta
-BEGIN SELECT RAISE(ABORT, 'the egress record is append-only'); END;
 CREATE TRIGGER decisions_no_update BEFORE UPDATE ON decisions
 BEGIN SELECT RAISE(ABORT, 'the egress record is append-only'); END;
 CREATE TRIGGER decisions_no_delete BEFORE DELETE ON decisions

@@ -13,13 +13,14 @@ import (
 // it is sent, and every later decision is checked against it. It is a store
 // of its own, apart from facts.db, which the MCP server cannot write and a
 // user may delete and scan again; it holds no fact and no email, only
-// scopes, numbers and salted hashes.
+// scopes, numbers, digests of landings, and people numbered within each
+// decision.
 
 // EgressRun names a run in the record: its id in its facts.db and its
 // start time, since two facts.db files, or one deleted and scanned again,
 // reuse ids; and the window of its AI-assisted shares, by which a new
 // decision finds the shares already recorded that it could be subtracted
-// from (the same as-of and length).
+// from: every decision whose window overlaps its own.
 type EgressRun struct {
 	ID      int64
 	Started time.Time
@@ -35,18 +36,24 @@ type EgressShare struct {
 	Num, Den float64
 }
 
-// EgressRepo is one repository a recorded share adds up: its own counts in
-// the run, which a later decision of the window compares with its own, and
-// the people its landings are made of as the floor counts them
-// (app.AIShareMinPeople): one key per block of addresses (identity.Blocks),
-// each a hex HMAC-SHA-256 of the block's key under the record's salt, so
-// the record holds no address; "" is the empty address, which counts only
-// alone. People are sorted, and nil for a repository of no person's
-// landing.
+// EgressRepo is one repository a recorded share adds up, as a later
+// decision matches it with its own: by its key (Repo.Key) and its name
+// (Repo.Name, as the answers name it); by History, the hex SHA-256 of the
+// SHAs of its landings in the window, which a copy of it, or a clone whose
+// origin is spelt otherwise, shares under another key ("" when no landing
+// fell in the window); and by its own counts in the run. People are the
+// people its landings are made of as the floor counts them
+// (app.AIShareMinPeople): one number per block of addresses
+// (identity.Blocks), "1", "2" and on, distinct within the decision and
+// meaningless outside it (numbered in an order no one can repeat), so the
+// record holds no address and no list of candidate addresses can be tested
+// against it; "" is the empty address, which counts only alone. People are
+// sorted, and nil for a repository of no person's landing.
 type EgressRepo struct {
-	Key      string
-	Num, Den float64
-	People   []string
+	Key, Name string
+	History   string
+	Num, Den  float64
+	People    []string
 }
 
 // EgressDecision is one run's recorded decision.
@@ -67,14 +74,14 @@ type EgressDecision struct {
 // server, and only through Decide; readers audit it (Decisions).
 type EgressLedger interface {
 	// Decide returns the decision the record holds for run, and false. When
-	// it holds none, it calls decide with the record's salt and every
-	// decision recorded for run.Window, records what decide returns as
-	// run's, durably, and returns it and true. The lookup, the call and the
-	// write are one transaction under the record's write lock, so two
-	// servers never decide one run twice, nor two runs of one window without
-	// each seeing the other's decision. An error from decide records
-	// nothing.
-	Decide(ctx context.Context, run EgressRun, decide func(salt []byte, sent []EgressDecision) (EgressDecision, error)) (EgressDecision, bool, error)
+	// it holds none, it calls decide with every recorded decision whose
+	// window overlaps run.Window, records what decide returns as run's,
+	// durably, and returns it and true. The lookup, the call and the write
+	// are one transaction under the record's write lock, so two servers
+	// never decide one run twice, nor two runs of overlapping windows
+	// without the later seeing the earlier's decision. An error from decide
+	// records nothing.
+	Decide(ctx context.Context, run EgressRun, decide func(sent []EgressDecision) (EgressDecision, error)) (EgressDecision, bool, error)
 	// Decisions returns every recorded decision, oldest first.
 	Decisions(ctx context.Context) ([]EgressDecision, error)
 	// Close releases the record.

@@ -84,10 +84,7 @@ func openReadOnly(ctx context.Context, abs, op string) (*Store, error) {
 		return nil, readOnlyFailed(op, abs, err, false)
 	}
 	if walHolds(abs) {
-		return nil, &domain.UsageError{Msg: fmt.Sprintf("%s %s: this directory cannot be written, and the database's "+
-			"write-ahead log (%s-wal) holds commits that SQLite reads only through a shared-memory file beside it: "+
-			"make the directory writable for one read, or copy %s and %s-wal to a directory that is and pass --db",
-			op, abs, filepath.Base(abs), filepath.Base(abs), filepath.Base(abs))}
+		return nil, walUnreadable(op, abs, factsSchema)
 	}
 	s = &Store{path: abs, immutable: true}
 	if err := s.readOnlyOpen(ctx, true); err != nil {
@@ -107,28 +104,45 @@ func openReadOnly(ctx context.Context, abs, op string) (*Store, error) {
 // and when the file changed while it read, a checkpoint ran under it, so
 // it reads again, once, and is refused if the file changed again.
 func (s *Store) immutableRead(ctx context.Context, fn func(*sql.Tx) error) error {
+	return immutableRead(s.path, factsSchema, func() error { return s.readTx(ctx, fn) })
+}
+
+// immutableRead runs read, a read of the file of sc at path opened
+// immutable=1, with the guards Store.immutableRead describes. The egress
+// record's reader (OpenEgressReadOnly) reads through it too.
+func immutableRead(path string, sc schema, read func() error) error {
 	for attempt := 0; ; attempt++ {
-		if walHolds(s.path) {
-			return &domain.UsageError{Msg: fmt.Sprintf("%s: another process is writing the facts database now (its "+
+		if walHolds(path) {
+			return &domain.UsageError{Msg: fmt.Sprintf("%s: another process is writing the %s now (its "+
 				"write-ahead log, %s-wal, holds commits), and this directory cannot be written here, so stillhere cannot "+
-				"read beside it safely: run the command again when the scan or sync finishes, or copy the database to a "+
-				"directory that can be written and pass --db", s.path, filepath.Base(s.path))}
+				"read beside it safely: run the command again when %s finishes, or copy the %s to a "+
+				"directory that can be written and pass %s", path, sc.name, filepath.Base(path), sc.writer, sc.name, sc.flag)}
 		}
-		before, err := os.Stat(s.path)
+		before, err := os.Stat(path)
 		if err != nil {
 			return err
 		}
-		err = s.readTx(ctx, fn)
-		after, serr := os.Stat(s.path)
-		if serr == nil && after.Size() == before.Size() && after.ModTime().Equal(before.ModTime()) && !walHolds(s.path) {
+		err = read()
+		after, serr := os.Stat(path)
+		if serr == nil && after.Size() == before.Size() && after.ModTime().Equal(before.ModTime()) && !walHolds(path) {
 			return err
 		}
 		if attempt > 0 {
-			return &domain.UsageError{Msg: fmt.Sprintf("%s: the facts database changed while it was read, twice, and "+
+			return &domain.UsageError{Msg: fmt.Sprintf("%s: the %s changed while it was read, twice, and "+
 				"this directory cannot be written here, so stillhere reads it without the locks that would keep a "+
-				"writer out: run the command again when the scan or sync that writes it finishes", s.path)}
+				"writer out: run the command again when %s that writes it finishes", path, sc.name, sc.writer)}
 		}
 	}
+}
+
+// walUnreadable is the refusal of a file of sc in a directory this process
+// cannot write, whose write-ahead log holds commits: SQLite reads them only
+// through the -shm file it cannot make there.
+func walUnreadable(op, abs string, sc schema) error {
+	return &domain.UsageError{Msg: fmt.Sprintf("%s %s: this directory cannot be written, and the %s's "+
+		"write-ahead log (%s-wal) holds commits that SQLite reads only through a shared-memory file beside it: "+
+		"make the directory writable for one read, or copy %s and %s-wal to a directory that is and pass %s",
+		op, abs, sc.name, filepath.Base(abs), filepath.Base(abs), filepath.Base(abs), sc.flag)}
 }
 
 // readOnlyFailed words a failed read-only open, in an unwritable directory

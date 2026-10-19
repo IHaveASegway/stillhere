@@ -41,8 +41,9 @@ and a person's AI-assisted share is shown only to that person, the one --me
 names (ADR 0007). A repository's or a group's AI-assisted share leaves only
 once the server has recorded it in its egress record, --egress (ADR 0015),
 and only when it cannot be subtracted from shares sent before; while the
-record cannot be written, every such share is withheld. 'stillhere egress'
-prints what the record holds.
+record cannot be written, every such share is withheld. Keep the record:
+unlike facts.db it cannot be made again, and a new one forgets what left.
+'stillhere egress' prints what it holds.
 
 To use it from Claude Code, register stillhere's absolute path: Claude Code
 starts the server with its own PATH, which need not hold stillhere. command -v
@@ -66,7 +67,7 @@ PATH, and the line below would register an empty command.
 			if err != nil {
 				return err
 			}
-			record, err := egressPath(egress)
+			record, err := egressPath(egress, true)
 			if err != nil {
 				return err
 			}
@@ -125,17 +126,34 @@ PATH, and the line below would register an empty command.
 // egress.
 func addEgressFlag(f *pflag.FlagSet, egress *string) {
 	f.StringVar(egress, "egress", "",
-		"egress record `FILE`: the AI-assisted shares the MCP server lets leave (default $STILLHERE_HOME/egress.db)")
+		"egress record `FILE`: the AI-assisted shares the MCP server lets leave (default $STILLHERE_HOME/egress.db; an absolute path for mcp)")
 }
 
 // egressPath resolves --egress, else $STILLHERE_HOME/egress.db: one record
 // per home, whichever facts.db --db names, since a record keys each run by
-// its id and start time and checks a new run against every run of its
-// window that any server of the home answered about.
-func egressPath(flag string) (string, error) {
+// its id and start time and checks a new run against every run whose
+// window overlaps its own that any server of the home answered about. The
+// server's (server) must be absolute, as STILLHERE_HOME must: a relative
+// one would give every directory the server starts in a record of its own
+// (Claude Code starts a server registered with --scope user in each
+// project's), and each would forget what the others let leave. The
+// reader's is resolved against the working directory.
+func egressPath(flag string, server bool) (string, error) {
 	if flag != "" {
 		if err := localPath("--egress", flag); err != nil {
 			return "", err
+		}
+		if !filepath.IsAbs(flag) {
+			if server {
+				return "", usagef("--egress %q is a relative path, which names another egress record in every directory "+
+					"the server starts in, each forgetting what the others let leave: pass an absolute path (such as \"$PWD/%s\")",
+					flag, flag)
+			}
+			abs, err := filepath.Abs(flag)
+			if err != nil {
+				return "", usagef("--egress %s: %v", flag, err)
+			}
+			return abs, nil
 		}
 		return flag, nil
 	}

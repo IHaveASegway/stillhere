@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -21,7 +22,7 @@ import (
 // AI-assisted shares so that no two answers about the run can be subtracted
 // to give a share of one or two people. Answers about two runs can be: a
 // scan of group ai shows the group at 4 of 16 with team and solo withheld, a
-// rescan of team alone at the same as-of time shows team at 1 of 12, and
+// rescan of team alone minutes later shows team at 1 of 12, and
 // (4 - 1) of (16 - 12) is solo's one person's own 3 of 4. So can answers
 // about one run from two versions whose rules decide it differently. Both
 // are closed by deciding against what already left: an answer that left the
@@ -36,20 +37,30 @@ import (
 //     and only then returns it. A record whose decision was made over other
 //     numbers than the run holds now (Inputs) is ErrEgressInputs: the run
 //     was rewritten, and its new numbers could be subtracted from the old.
-//  2. Against what was sent. The shares recorded for the run's window (the
-//     same as-of and length) and the run's own form one table over
-//     repositories, whatever run each came from. The run's shares may leave
-//     only when that table keeps the property aishare.go proves for one run:
-//     its sets of repositories nest (a laminar family), and every residual,
-//     a set less the sets below it, holds no one or at least
-//     AIShareMinPeople people. A repository must carry the same counts in
-//     every run of the window that sends a share of it, or the difference
-//     of two shares would be its change between the scans (a policy or a
-//     .mailmap changed). When it does not hold, the run's offending shares
-//     are withheld, the run's own
-//     rules decide again around them (aiShareInputs.decide with forced), and
-//     the check is made again, until it holds: each round withholds one
-//     more of the run's shares, so it ends.
+//  2. Against what was sent: every decision recorded for a window that
+//     overlaps the run's, whatever its as-of time. A share is a sum of its
+//     repositories' counts, so a sum the record holds and one the run would
+//     send are terms of one table wherever a repository carries the same
+//     counts in both: a rescan seconds or days later, in which no landing
+//     entered or left the window, subtracts exactly. So a repository is one
+//     term of the table across runs when its counts are equal and it is the
+//     same repository, by its key or by its history, the landings its
+//     share counts, which a copy or a clone whose origin is spelt otherwise
+//     shares under another key. One whose counts differ is another term:
+//     the difference of its shares is the change of its landings between
+//     the windows, which is what remains (ADR 0015). The run's shares may
+//     leave only when the table keeps the property aishare.go proves for
+//     one run: its sets of terms nest (a laminar family), and every
+//     residual, a set less the sets below it, holds no one or at least
+//     AIShareMinPeople people, counted by the people of each decision that
+//     holds the set. Over the same landings, or in the same window, a
+//     repository must carry the same counts in every run that sends a share
+//     of it, or the difference of two shares would be its change between
+//     the scans (a policy or a .mailmap changed). When the table does not
+//     hold, the run's offending shares are withheld, the run's own rules
+//     decide again around them (aiShareInputs.decide with forced), and the
+//     check is made again, until it holds: each round withholds one more of
+//     the run's shares, so it ends.
 //  3. Fail safe (Saltzer and Schroeder, "The Protection of Information in
 //     Computer Systems", 1975: fail-safe defaults). An adapter that cannot
 //     read or write the record withholds every share; ShareDecision returns
@@ -78,11 +89,11 @@ var ErrEgressInputs = errors.New("the egress record holds a decision about this 
 
 // ShareDecision returns the decision about n's run that may leave the
 // machine (ADR 0015): the one d.Egress holds for the run, else one decided
-// from n's inputs against every decision recorded for the run's window, and
-// recorded before it is returned. It returns every error of the record as
-// it is, and ErrEgressInputs; either way the caller withholds every share.
-// A run with no AI-assisted value has nothing to decide: the zero decision,
-// recorded nowhere.
+// from n's inputs against every decision recorded for a window that
+// overlaps the run's, and recorded before it is returned. It returns every
+// error of the record as it is, and ErrEgressInputs; either way the caller
+// withholds every share. A run with no AI-assisted value has nothing to
+// decide: the zero decision, recorded nowhere.
 func ShareDecision(ctx context.Context, d Deps, n *Names) (AIShares, error) {
 	if d.Egress == nil {
 		return AIShares{}, errors.New("app.ShareDecision: no egress record")
@@ -94,8 +105,10 @@ func ShareDecision(ctx context.Context, d Deps, n *Names) (AIShares, error) {
 	window := in.window()
 	inputs := in.digest(window)
 	run := domain.EgressRun{ID: n.Run.ID, Started: n.Run.Started, Window: window}
-	dec, made, err := d.Egress.Decide(ctx, run, func(salt []byte, sent []domain.EgressDecision) (domain.EgressDecision, error) {
-		return in.against(salt, sent, inputs, d.Version), nil
+	checked := 0
+	dec, made, err := d.Egress.Decide(ctx, run, func(sent []domain.EgressDecision) (domain.EgressDecision, error) {
+		checked = len(sent)
+		return in.against(window, sent, inputs, d.Version)
 	})
 	if err != nil {
 		return AIShares{}, err
@@ -109,7 +122,8 @@ func ShareDecision(ctx context.Context, d Deps, n *Names) (AIShares, error) {
 	}
 	slices.SortFunc(shown, aiShareCompare)
 	if made && d.Log != nil {
-		d.Log.Info("recorded the AI-assisted shares that may leave", "run", n.Run.ID, "shares", len(shown))
+		d.Log.Info("recorded the AI-assisted shares that may leave", "run", n.Run.ID, "shares", len(shown),
+			"checked_against", checked)
 	}
 	return AIShares{Shown: shown}, nil
 }
@@ -124,13 +138,20 @@ func (in *aiShareInputs) window() domain.Window {
 	return in.values[keys[0]].Window
 }
 
+// egressInstant is how the digest writes an instant: UTC to the nanosecond.
+const egressInstant = "2006-01-02T15:04:05.000000000Z"
+
 // digest is the hex SHA-256 of what the decision is made over that is the
-// run's own and no version's rule: the metric and window, whether the whole
-// run's share reaches an answer, and each repository with its group and its
-// value's counts, from which every larger scope's share is added up. The
-// people are left out: they are counted by the version's rule
-// (identity.Blocks), and a later version whose rule counts otherwise must
-// read the recorded decision, not refuse it.
+// run's own and no version's rule: the line "stillhere egress inputs 1";
+// the metric (ai_assisted@1); the shares' window, since and until; whether
+// the whole run's share reaches an answer (report.WholeRun); and for each
+// repository with a value, by key, its key, its group, its value's num and
+// den and its value's own window, from which every larger scope's share is
+// added up. The people are left out: they are counted by the version's
+// rule (identity.Blocks), and a later version whose rule counts otherwise
+// must read the recorded decision, not refuse it. So are the repositories'
+// names and histories, which the record keeps to match repositories, not
+// numbers that leave.
 func (in *aiShareInputs) digest(w domain.Window) string {
 	group := map[string]string{}
 	for _, r := range in.repos {
@@ -138,49 +159,108 @@ func (in *aiShareInputs) digest(w domain.Window) string {
 	}
 	var b strings.Builder
 	fmt.Fprintf(&b, "stillhere egress inputs 1\nmetric %s\nwindow %s %s\nwhole %t\n", aiShareMetric,
-		w.Since.UTC().Format("2006-01-02T15:04:05.000000000Z"), w.Until.UTC().Format("2006-01-02T15:04:05.000000000Z"), in.whole)
+		w.Since.UTC().Format(egressInstant), w.Until.UTC().Format(egressInstant), in.whole)
 	for _, k := range slices.Sorted(maps.Keys(in.values)) {
 		v := in.values[k]
 		fmt.Fprintf(&b, "repo %s %s %s %s %s %s\n", strconv.Quote(k), strconv.Quote(group[k]),
 			strconv.FormatFloat(v.Num, 'g', -1, 64), strconv.FormatFloat(v.Den, 'g', -1, 64),
-			v.Window.Since.UTC().Format("2006-01-02T15:04:05.000000000Z"), v.Window.Until.UTC().Format("2006-01-02T15:04:05.000000000Z"))
+			v.Window.Since.UTC().Format(egressInstant), v.Window.Until.UTC().Format(egressInstant))
 	}
 	sum := sha256.Sum256([]byte(b.String()))
 	return hex.EncodeToString(sum[:])
 }
 
-// egressPerson is the key the record holds for one block of addresses: the
-// first 128 bits of HMAC-SHA-256 under the record's salt, so the record
-// does not reverse to addresses, and two homes' records do not join on a
-// person. The empty address stays "", which aiShareCount reads.
-func egressPerson(salt []byte, key string) string {
-	if key == "" {
+// egressHistory is the history the record matches a repository by: the hex
+// SHA-256 of the line "stillhere egress history 1" and the SHAs of its
+// landings in w, one per line, sorted. A copy of the repository, or a
+// clone whose origin is spelt otherwise, has the same under another key.
+// It is "" when no landing fell in w: every such repository would share it.
+func egressHistory(landings []domain.Landing, w domain.Window) string {
+	var shas []string
+	for _, l := range landings {
+		if w.Contains(l.Time) {
+			shas = append(shas, l.SHA)
+		}
+	}
+	if len(shas) == 0 {
 		return ""
 	}
-	m := hmac.New(sha256.New, salt)
-	m.Write([]byte(key))
-	return hex.EncodeToString(m.Sum(nil)[:16])
+	slices.Sort(shas)
+	sum := sha256.Sum256([]byte("stillhere egress history 1\n" + strings.Join(slices.Compact(shas), "\n") + "\n"))
+	return hex.EncodeToString(sum[:])
 }
 
-// against decides the run's shares against the decisions sent for its
-// window (point 2 above) and returns the decision to record.
-func (in *aiShareInputs) against(salt []byte, sent []domain.EgressDecision, inputs, version string) domain.EgressDecision {
+// egressPeople numbers the blocks of addresses of one decision ("1", "2",
+// ...), the people the record keeps for it, in an order no one can repeat:
+// by HMAC-SHA-256 under a random key made for the decision and never
+// stored. Numbers are distinct within the decision, which is all its
+// residuals need, since every residual is counted by the people of one
+// decision; outside it they name no one, so no list of candidate addresses
+// can be tested against the record, nor sorted to match the numbers, and
+// two decisions' people do not join. The empty address stays "", which
+// aiShareCount reads.
+func egressPeople(people map[string]map[string]bool) (map[string]string, error) {
+	key := make([]byte, sha256.Size)
+	if _, err := rand.Read(key); err != nil {
+		return nil, err
+	}
+	order := map[string]string{}
+	for _, ps := range people {
+		for p := range ps {
+			if p != "" {
+				m := hmac.New(sha256.New, key)
+				m.Write([]byte(p))
+				order[p] = string(m.Sum(nil))
+			}
+		}
+	}
+	blocks := slices.Collect(maps.Keys(order))
+	slices.SortFunc(blocks, func(a, b string) int { return cmp.Compare(order[a], order[b]) })
+	out := map[string]string{"": ""}
+	for i, p := range blocks {
+		out[p] = strconv.Itoa(i + 1)
+	}
+	return out, nil
+}
+
+// against decides the run's shares against the decisions sent for windows
+// that overlap w (point 2 above) and returns the decision to record.
+func (in *aiShareInputs) against(w domain.Window, sent []domain.EgressDecision, inputs, version string) (domain.EgressDecision, error) {
+	numbered, err := egressPeople(in.people)
+	if err != nil {
+		return domain.EgressDecision{}, err
+	}
 	people := make(map[string]map[string]bool, len(in.people))
 	for repo, ps := range in.people {
-		hashed := make(map[string]bool, len(ps))
+		set := make(map[string]bool, len(ps))
 		for p := range ps {
-			hashed[egressPerson(salt, p)] = true
+			set[numbered[p]] = true
 		}
-		people[repo] = hashed
+		people[repo] = set
+	}
+	names := map[string]string{}
+	for _, r := range in.repos {
+		names[r.Key] = r.Name
+	}
+	repos := make(map[string]domain.EgressRepo, len(in.values))
+	for k, v := range in.values {
+		r := domain.EgressRepo{Key: k, Name: names[k], History: in.history[k], Num: v.Num, Den: v.Den}
+		if len(people[k]) > 0 {
+			r.People = slices.Sorted(maps.Keys(people[k]))
+		}
+		repos[k] = r
 	}
 	run := &aiShareInputs{repos: in.repos, people: people, values: in.values, whole: in.whole}
 	forced := map[domain.Scope]bool{}
 	for {
 		shares := run.shares(run.decide(forced))
-		add := egressConflicts(shares, people, in.values, sent)
+		add := egressConflicts(shares, repos, w, sent)
 		if len(add) == 0 {
-			return domain.EgressDecision{Inputs: inputs, Metric: aiShareMetric, Shares: shares,
-				Repos: egressRepos(shares, people, in.values), Version: version}
+			d := domain.EgressDecision{Inputs: inputs, Metric: aiShareMetric, Shares: shares, Version: version}
+			for _, k := range egressHeld(shares) {
+				d.Repos = append(d.Repos, repos[k])
+			}
+			return d, nil
 		}
 		for _, sc := range add {
 			forced[sc] = true
@@ -214,138 +294,300 @@ func (in *aiShareInputs) shares(a AIShares) []domain.EgressShare {
 	return out
 }
 
-// egressRepos is every repository a share adds up, as the record keeps it:
-// by key, with its counts and its people, sorted, nil for a repository of
-// no person's landing.
-func egressRepos(shares []domain.EgressShare, people map[string]map[string]bool, values map[string]domain.MetricValue) []domain.EgressRepo {
+// egressHeld is every repository a share adds up, sorted: the ones the
+// record keeps with the decision.
+func egressHeld(shares []domain.EgressShare) []string {
 	keys := map[string]bool{}
 	for _, sh := range shares {
 		for _, k := range sh.Repos {
 			keys[k] = true
 		}
 	}
-	var out []domain.EgressRepo
-	for _, k := range slices.Sorted(maps.Keys(keys)) {
-		r := domain.EgressRepo{Key: k, Num: values[k].Num, Den: values[k].Den}
-		if len(people[k]) > 0 {
-			r.People = slices.Sorted(maps.Keys(people[k]))
-		}
-		out = append(out, r)
-	}
-	return out
+	return slices.Sorted(maps.Keys(keys))
 }
 
-// egressNode is one set of repositories in the table of shares the record
-// and the run make together: a recorded share's, the run's, or both, when
-// the run would show a set again.
+// egressTerms numbers the terms of the table the record and the run make
+// together: one per repository of the run, and one per repository of a
+// recorded decision that is no earlier term. A recorded repository is an
+// earlier term when it carries the same counts and the same key or the same
+// history, so a rescan's repository and the one a group's share added up
+// before are one term when nothing changed, and two when anything did. A
+// repository of no landing (0 of 0) adds nothing to any sum and is no term.
+type egressTerms struct {
+	n                int
+	byKey, byHistory map[string]int // "key or history\x00num\x00den" -> term
+	// ambiguous terms are those one decision holds twice, or that two terms
+	// could be: a run, or a decision, that holds a repository and a copy of
+	// it. The table cannot say how often they enter a sum, so the run's
+	// shares that hold them stay local.
+	ambiguous map[int]bool
+}
+
+func newEgressTerms() *egressTerms {
+	return &egressTerms{byKey: map[string]int{}, byHistory: map[string]int{}, ambiguous: map[int]bool{}}
+}
+
+func egressCounted(id string, num, den float64) string {
+	return id + "\x00" + strconv.FormatFloat(num, 'g', -1, 64) + "\x00" + strconv.FormatFloat(den, 'g', -1, 64)
+}
+
+// add returns r's term, -1 for a repository of no landing; own says r is
+// the run's own, which is always a term of its own.
+func (t *egressTerms) add(r domain.EgressRepo, own bool) int {
+	if r.Num == 0 && r.Den == 0 {
+		return -1
+	}
+	byKey := egressCounted(r.Key, r.Num, r.Den)
+	byHistory := ""
+	if r.History != "" {
+		byHistory = egressCounted(r.History, r.Num, r.Den)
+	}
+	var found []int
+	if id, ok := t.byKey[byKey]; ok {
+		found = append(found, id)
+	}
+	if id, ok := t.byHistory[byHistory]; ok && byHistory != "" && !slices.Contains(found, id) {
+		found = append(found, id)
+	}
+	id := t.n
+	switch {
+	case own || len(found) == 0:
+		t.n++
+	default:
+		id = slices.Min(found)
+	}
+	if (own && len(found) > 0) || len(found) > 1 {
+		t.ambiguous[id] = true
+		for _, f := range found {
+			t.ambiguous[f] = true
+		}
+	}
+	if _, ok := t.byKey[byKey]; !ok {
+		t.byKey[byKey] = id
+	}
+	if _, ok := t.byHistory[byHistory]; !ok && byHistory != "" {
+		t.byHistory[byHistory] = id
+	}
+	return id
+}
+
+// egressNode is one set of terms in the table: a recorded share's, the
+// run's, or both, when the run would show a set again.
 type egressNode struct {
-	repos    []string // Repo.Key, sorted
-	in       map[string]bool
-	num, den float64
+	terms    []int // sorted
+	in       map[int]bool
 	recorded bool
-	scopes   []domain.Scope             // the run's scopes with this set: what withholding it withholds
-	people   map[string]map[string]bool // by repository: the people of the run the node is read from
-	children []*egressNode              // the largest sets below it
+	scopes   []domain.Scope // the run's scopes with this set: what withholding it withholds
+	// people holds, for each decision that holds the set (the run's
+	// included), the people of each of its terms in that decision. A
+	// residual counts as few as the fewest any of them makes it.
+	people []map[int]map[string]bool
 }
 
-func newEgressNode(repos []string, num, den float64, people map[string]map[string]bool) *egressNode {
-	n := &egressNode{repos: repos, in: make(map[string]bool, len(repos)), num: num, den: den, people: people}
-	for _, k := range repos {
-		n.in[k] = true
+func (n *egressNode) sig() string {
+	var b strings.Builder
+	for _, t := range n.terms {
+		b.WriteString(strconv.Itoa(t))
+		b.WriteByte(',')
 	}
-	return n
+	return b.String()
 }
 
-// count is the fewest people the repositories can be made of, by the
-// node's run's people (aiShareCount).
-func (n *egressNode) count(repos []string) int {
-	u := map[string]bool{}
-	for _, k := range repos {
-		maps.Copy(u, n.people[k])
-	}
-	return aiShareCount(u)
-}
-
-// uncovered is the node's residual: its repositories no set below it holds.
-func (n *egressNode) uncovered() []string {
-	covered := map[string]bool{}
-	for _, c := range n.children {
-		maps.Copy(covered, c.in)
-	}
-	var out []string
-	for _, k := range n.repos {
-		if !covered[k] {
-			out = append(out, k)
+// count is the fewest people the terms can be made of, by the people of
+// each decision that holds the node (aiShareCount).
+func (n *egressNode) count(terms []int) int {
+	fewest := -1
+	for _, pm := range n.people {
+		u := map[string]bool{}
+		for _, t := range terms {
+			maps.Copy(u, pm[t])
+		}
+		if c := aiShareCount(u); fewest < 0 || c < fewest {
+			fewest = c
 		}
 	}
-	return out
+	return max(fewest, 0)
 }
 
-// within lists every node at and below n.
-func (n *egressNode) within() []*egressNode {
-	out := []*egressNode{n}
-	for _, c := range n.children {
-		out = append(out, c.within()...)
+// within reports whether every term of n is in p and p holds more.
+func (n *egressNode) within(p *egressNode) bool {
+	if len(n.terms) >= len(p.terms) {
+		return false
 	}
-	return out
+	for _, t := range n.terms {
+		if !p.in[t] {
+			return false
+		}
+	}
+	return true
+}
+
+// common is how many terms n and p share.
+func (n *egressNode) common(p *egressNode) int {
+	c := 0
+	for _, t := range n.terms {
+		if p.in[t] {
+			c++
+		}
+	}
+	return c
+}
+
+// tangled reports whether n and p overlap without either holding the
+// other.
+func (n *egressNode) tangled(p *egressNode) bool {
+	c := n.common(p)
+	return c > 0 && c < len(n.terms) && c < len(p.terms)
 }
 
 // egressConflicts returns the run's shares to withhold before the check of
-// point 2 can hold, none when it holds: first every share whose set
-// overlaps a recorded one without nesting, or that holds a repository a
-// recorded decision holds with other counts (values are the run's); else,
-// at the first residual of one or two people, bottom-up, the run's own
-// shares directly below that set, smallest first, while each adds someone
-// to it, and the set itself when it is the run's alone and that was not
-// enough. A residual those cannot mend withholds every share of the run
-// within the set, and one no share of the run is within, which only a
-// damaged record holds, every share of the run (fail closed).
-func egressConflicts(shares []domain.EgressShare, people map[string]map[string]bool, values map[string]domain.MetricValue,
+// point 2 can hold, none when it holds. repos are the run's repositories
+// with a value, w its window, and sent the decisions recorded for windows
+// that overlap it.
+//
+// First, every share of the run that holds a repository whose counts a
+// recorded decision holds otherwise over the same landings or in the same
+// window, or that holds an ambiguous term; every share whose set overlaps
+// a recorded set without nesting; and every share that overlaps a recorded
+// set which itself overlaps another recorded set without nesting, which
+// the residuals below cannot read. Otherwise, at the first residual of one
+// or two people, smallest sets first, the run's own shares inside that set,
+// smallest first, while each adds someone to it, and the set itself when it
+// is the run's alone and that was not enough; a residual those cannot mend
+// withholds every share of the run within the set. A residual of recorded
+// sets alone, which no share of the run is within, is left: the run neither
+// made it nor can mend it.
+func egressConflicts(shares []domain.EgressShare, repos map[string]domain.EgressRepo, w domain.Window,
 	sent []domain.EgressDecision) []domain.Scope {
-	// The recorded sets, each once, read by the first decision that sent it:
-	// every later one was checked against that one.
+	terms := newEgressTerms()
+	own := map[string]int{}
+	for _, k := range slices.Sorted(maps.Keys(repos)) {
+		own[k] = terms.add(repos[k], true)
+	}
+	runPeople := map[int]map[string]bool{}
+	for k, id := range own {
+		runPeople[id] = egressSet(repos[k].People)
+	}
+	// The recorded sets, each once, with the people of every decision that
+	// holds it.
 	var nodes []*egressNode
-	bySet := map[string]*egressNode{}
-	counted := map[string][][2]float64{} // the counts each recorded decision holds a repository with
-	for _, d := range sent {
-		dp := map[string]map[string]bool{}
-		for _, r := range d.Repos {
-			set := make(map[string]bool, len(r.People))
-			for _, p := range r.People {
-				set[p] = true
-			}
-			dp[r.Key] = set
-			counted[r.Key] = append(counted[r.Key], [2]float64{r.Num, r.Den})
+	bySig := map[string]*egressNode{}
+	node := func(ts []int, people map[int]map[string]bool) *egressNode {
+		slices.Sort(ts)
+		ts = slices.Compact(ts)
+		n := &egressNode{terms: ts, in: map[int]bool{}}
+		for _, t := range ts {
+			n.in[t] = true
 		}
-		for _, sh := range d.Shares {
-			k := strings.Join(sh.Repos, "\x00")
-			if len(sh.Repos) == 0 || bySet[k] != nil {
+		if found := bySig[n.sig()]; found != nil {
+			found.people = append(found.people, people)
+			return found
+		}
+		n.people = []map[int]map[string]bool{people}
+		bySig[n.sig()] = n
+		nodes = append(nodes, n)
+		return n
+	}
+	for _, d := range sent {
+		of := map[string]int{}
+		people := map[int]map[string]bool{}
+		held := map[int]bool{}
+		for _, r := range d.Repos {
+			id := terms.add(r, false)
+			of[r.Key] = id
+			if id < 0 {
 				continue
 			}
-			n := newEgressNode(sh.Repos, sh.Num, sh.Den, dp)
-			n.recorded = true
-			bySet[k] = n
-			nodes = append(nodes, n)
+			if held[id] {
+				terms.ambiguous[id] = true // the decision holds one term twice
+			}
+			held[id] = true
+			if people[id] == nil {
+				people[id] = map[string]bool{}
+			}
+			maps.Copy(people[id], egressSet(r.People))
+		}
+		for _, sh := range d.Shares {
+			var ts []int
+			for _, k := range sh.Repos {
+				if id, ok := of[k]; ok && id >= 0 {
+					ts = append(ts, id)
+				}
+			}
+			if len(ts) > 0 {
+				node(ts, people).recorded = true
+			}
 		}
 	}
+	recorded := slices.Clone(nodes)
+	// tangled holds, for a recorded set the run touches, whether it overlaps
+	// another recorded set without nesting.
+	tangled := map[*egressNode]bool{}
+	tangledWith := func(r *egressNode) bool {
+		if t, ok := tangled[r]; ok {
+			return t
+		}
+		tangled[r] = slices.ContainsFunc(recorded, r.tangled)
+		return tangled[r]
+	}
+	// changed holds the run's repositories that a recorded decision holds
+	// with other counts over the same landings, or in the same window: the
+	// difference of two shares of one would be its change between the scans.
+	changed := map[string]bool{}
+	byHistory := map[string][]string{}
+	for k, r := range repos {
+		if r.History != "" {
+			byHistory[r.History] = append(byHistory[r.History], k)
+		}
+	}
+	for _, d := range sent {
+		same := d.Run.Window.Since.Equal(w.Since) && d.Run.Window.Until.Equal(w.Until)
+		for _, q := range d.Repos {
+			var keys []string
+			if r, ok := repos[q.Key]; ok && same && (q.Num != r.Num || q.Den != r.Den) {
+				keys = append(keys, q.Key)
+			}
+			if q.History != "" {
+				for _, k := range byHistory[q.History] {
+					if r := repos[k]; q.Num != r.Num || q.Den != r.Den {
+						keys = append(keys, k)
+					}
+				}
+			}
+			for _, k := range keys {
+				changed[k] = true
+			}
+		}
+	}
+	runNodes := make([]*egressNode, len(shares))
 	var bad []domain.Scope
-	for _, sh := range shares {
+	for i, sh := range shares {
+		var ts []int
 		for _, k := range sh.Repos {
-			for _, c := range counted[k] {
-				if c != [2]float64{values[k].Num, values[k].Den} {
-					bad = append(bad, sh.Scope) // the repository changed between the runs: the difference is the change's
+			if changed[k] {
+				bad = append(bad, sh.Scope) // the same landings, or the same window, counted otherwise: the difference is the change's
+			}
+			if id := own[k]; id >= 0 {
+				ts = append(ts, id)
+				if terms.ambiguous[id] {
+					bad = append(bad, sh.Scope) // a repository the table holds a copy of: how often it enters a sum is unknown
 				}
 			}
 		}
-		for _, r := range nodes {
-			common := 0
-			for _, k := range sh.Repos {
-				if r.in[k] {
-					common++
-				}
-			}
-			if common > 0 && common < len(sh.Repos) && common < len(r.repos) {
+		if len(ts) == 0 {
+			continue // a share of no landing adds nothing to the table
+		}
+		n := &egressNode{terms: slices.Compact(slices.Sorted(slices.Values(ts))), in: map[int]bool{}}
+		for _, t := range n.terms {
+			n.in[t] = true
+		}
+		runNodes[i] = n
+		for _, r := range recorded {
+			switch {
+			case n.tangled(r):
 				bad = append(bad, sh.Scope) // overlapping sets that do not nest
+			case n.common(r) > 0 && tangledWith(r):
+				bad = append(bad, sh.Scope) // beside recorded sets that overlap without nesting, a residual means nothing
 			}
 		}
 	}
@@ -353,74 +595,104 @@ func egressConflicts(shares []domain.EgressShare, people map[string]map[string]b
 		slices.SortFunc(bad, aiShareCompare)
 		return slices.Compact(bad)
 	}
-	for _, sh := range shares {
-		k := strings.Join(sh.Repos, "\x00")
-		n := bySet[k]
-		if n == nil {
-			n = newEgressNode(sh.Repos, sh.Num, sh.Den, people)
-			bySet[k] = n
-			nodes = append(nodes, n)
+	for i, sh := range shares {
+		if runNodes[i] == nil {
+			continue
 		}
+		n := node(runNodes[i].terms, runPeople)
 		n.scopes = append(n.scopes, sh.Scope)
 	}
-	// The table is laminar now, so each set hangs from the smallest set that
-	// holds it, and the residuals are read bottom-up, as aishare.go reads
-	// one run's.
+	// The run's sets nest with every recorded set they touch now, so a
+	// set's residual is its terms that no other set inside it holds, and
+	// the residuals are read smallest set first, as aishare.go reads one
+	// run's bottom-up. Only a set that is the run's or holds one of the
+	// run's can have a residual the run makes.
 	slices.SortStableFunc(nodes, func(a, b *egressNode) int {
-		return cmp.Or(cmp.Compare(len(a.repos), len(b.repos)), cmp.Compare(strings.Join(a.repos, "\x00"), strings.Join(b.repos, "\x00")))
+		return cmp.Or(cmp.Compare(len(a.terms), len(b.terms)), cmp.Compare(a.sig(), b.sig()))
 	})
-	for i, n := range nodes {
-		for _, p := range nodes[i+1:] {
-			if len(p.repos) > len(n.repos) && p.in[n.repos[0]] {
-				p.children = append(p.children, n)
-				break
+	for _, p := range nodes {
+		if len(p.scopes) == 0 && !slices.ContainsFunc(runNodes, func(n *egressNode) bool { return n != nil && n.within(p) }) {
+			continue
+		}
+		var inside []*egressNode
+		for _, n := range nodes {
+			if n.within(p) {
+				inside = append(inside, n)
 			}
 		}
-	}
-	for _, p := range nodes {
-		u := p.uncovered()
-		c := p.count(u)
+		residual := func(without map[*egressNode]bool) []int {
+			covered := map[int]bool{}
+			for _, n := range inside {
+				if !without[n] {
+					maps.Copy(covered, n.in)
+				}
+			}
+			var out []int
+			for _, t := range p.terms {
+				if !covered[t] {
+					out = append(out, t)
+				}
+			}
+			return out
+		}
+		c := p.count(residual(nil))
 		if c == 0 || c >= AIShareMinPeople {
 			continue
 		}
 		var kids []*egressNode
-		for _, ch := range p.children {
-			if !ch.recorded {
-				kids = append(kids, ch)
+		for _, n := range inside {
+			if len(n.scopes) > 0 && !n.recorded {
+				kids = append(kids, n)
 			}
 		}
 		slices.SortFunc(kids, func(a, b *egressNode) int {
-			return cmp.Or(cmp.Compare(p.count(a.repos), p.count(b.repos)), aiShareCompare(a.scopes[0], b.scopes[0]))
+			return cmp.Or(cmp.Compare(p.count(a.terms), p.count(b.terms)), aiShareCompare(a.scopes[0], b.scopes[0]))
 		})
+		without := map[*egressNode]bool{}
 		var add []domain.Scope
 		for _, ch := range kids {
 			if c >= AIShareMinPeople {
 				break
 			}
-			with := append(slices.Clone(u), ch.uncovered()...)
-			if p.count(with) == c {
-				continue // withholding it would add no one
+			without[ch] = true
+			if with := p.count(residual(without)); with != c {
+				c = with
+				add = append(add, ch.scopes...)
+				continue
 			}
-			u, c = with, p.count(with)
-			add = append(add, ch.scopes...)
+			delete(without, ch) // withholding it would add no one
 		}
 		if c > 0 && c < AIShareMinPeople && !p.recorded {
 			add = append(add, p.scopes...)
 		}
-		if len(add) == 0 {
-			for _, n := range p.within() {
+		if c > 0 && c < AIShareMinPeople && len(add) == 0 {
+			add = append(add, p.scopes...)
+			for _, n := range inside {
 				add = append(add, n.scopes...)
 			}
 		}
 		if len(add) == 0 {
-			for _, sh := range shares {
-				add = append(add, sh.Scope)
-			}
+			continue
 		}
 		slices.SortFunc(add, aiShareCompare)
 		return slices.Compact(add)
 	}
 	return nil
+}
+
+// egressSet is a list of people as a set.
+func egressSet(people []string) map[string]bool {
+	set := make(map[string]bool, len(people))
+	for _, p := range people {
+		set[p] = true
+	}
+	return set
+}
+
+// egressOverlap reports whether two windows overlap: what Decide hands a
+// new decision.
+func egressOverlap(a, b domain.Window) bool {
+	return a.Until.After(b.Since) && a.Since.Before(b.Until)
 }
 
 // EgressRequest asks for the egress record, as stillhere egress prints it.
@@ -429,8 +701,11 @@ type EgressRequest struct {
 }
 
 // Egress returns every decision the egress record holds, oldest first, as
-// report.Egress: what the MCP server let leave the machine, for the owner to
-// audit (ADR 0015). It reads d.Egress only.
+// report.Egress: the AI-assisted shares the MCP server let leave the
+// machine, or may still let leave, of each run it answered about with a
+// share, for the owner to audit (ADR 0015). Each decision names the earlier
+// ones it was checked against: every one recorded before it for a window
+// that overlaps its own. It reads d.Egress only.
 func Egress(ctx context.Context, d Deps, r EgressRequest) (*report.Egress, error) {
 	if d.Egress == nil {
 		return nil, errors.New("app.Egress: no egress record")
@@ -440,22 +715,35 @@ func Egress(ctx context.Context, d Deps, r EgressRequest) (*report.Egress, error
 		return nil, err
 	}
 	out := &report.Egress{Record: r.Record, Decisions: []report.EgressDecision{}}
-	for _, dec := range ds {
+	for i, dec := range ds {
 		people := map[string]map[string]bool{}
+		names := map[string]string{}
 		for _, rp := range dec.Repos {
-			set := map[string]bool{}
-			for _, p := range rp.People {
-				set[p] = true
-			}
-			people[rp.Key] = set
+			people[rp.Key] = egressSet(rp.People)
+			names[rp.Key] = rp.Name
 		}
 		e := report.EgressDecision{Run: dec.Run.ID, RunStarted: dec.Run.Started, AsOf: dec.Run.Window.Until,
 			Window: report.Interval{Since: dec.Run.Window.Since, Until: dec.Run.Window.Until}, Metric: dec.Metric.String(),
-			Inputs: dec.Inputs, Version: dec.Version, Decided: dec.Decided, Shares: []report.EgressShare{}}
+			Inputs: dec.Inputs, Version: dec.Version, Decided: dec.Decided, CheckedAgainst: []report.EgressRun{},
+			Shares: []report.EgressShare{}}
+		for _, earlier := range ds[:i] {
+			if egressOverlap(earlier.Run.Window, dec.Run.Window) {
+				e.CheckedAgainst = append(e.CheckedAgainst, report.EgressRun{Run: earlier.Run.ID, RunStarted: earlier.Run.Started})
+			}
+		}
 		for _, sh := range dec.Shares {
-			n := newEgressNode(sh.Repos, sh.Num, sh.Den, people)
-			es := report.EgressShare{Scope: report.Scope{Kind: sh.Scope.Kind, Key: sh.Scope.Key}, Repos: slices.Clone(sh.Repos),
-				Num: sh.Num, Den: sh.Den, People: n.count(sh.Repos)}
+			u := map[string]bool{}
+			for _, k := range sh.Repos {
+				maps.Copy(u, people[k])
+			}
+			es := report.EgressShare{Scope: report.Scope{Kind: sh.Scope.Kind, Key: sh.Scope.Key}, Name: sh.Scope.Key,
+				Repos: slices.Clone(sh.Repos), Num: sh.Num, Den: sh.Den, People: aiShareCount(u)}
+			switch sh.Scope.Kind {
+			case domain.ScopeRepo:
+				es.Name = names[sh.Scope.Key]
+			case domain.ScopeAll:
+				es.Name = ""
+			}
 			if es.Repos == nil {
 				es.Repos = []string{}
 			}

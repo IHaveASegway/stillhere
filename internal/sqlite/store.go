@@ -315,21 +315,31 @@ func unwritable(verb, path string, err error, sc schema) error {
 // and SQLite would answer a conflicting switch with SQLITE_BUSY at once.
 // migrate turns it on instead (walMode).
 func dsn(path string, readOnly bool, mode string) string {
-	return dsnSynced(path, readOnly, mode, "NORMAL")
+	return dsnSynced(path, readOnly, mode, false)
 }
 
-// dsnSynced is dsn with the writer's synchronous level: NORMAL for facts.db,
-// FULL for the egress record, whose every commit must survive a power cut
-// (egress.go).
-func dsnSynced(path string, readOnly bool, mode, synchronous string) string {
+// dsnSynced is dsn with the writer's durability: facts.db's NORMAL, or,
+// durable, the egress record's (egress.go), whose every commit must survive
+// a power cut before the answer it records leaves: synchronous=FULL, which
+// syncs the log at every commit, and fullfsync and checkpoint_fullfsync,
+// without which a sync on macOS reaches the drive but not past its write
+// cache (fsync(2) there; https://sqlite.org/pragma.html#pragma_fullfsync).
+// Both are no-ops elsewhere.
+func dsnSynced(path string, readOnly bool, mode string, durable bool) string {
 	q := url.Values{}
 	q.Set("_busy_timeout", strconv.FormatInt(busyTimeout.Milliseconds(), 10))
 	q.Set("_foreign_keys", "1")
 	q.Set("_dqs", "0")
-	if readOnly {
+	switch {
+	case readOnly:
 		q.Set("_query_only", "1")
-	} else {
-		q.Set("_synchronous", synchronous)
+	case durable:
+		q.Set("_synchronous", "FULL")
+		q.Set("_txlock", "immediate")
+		q.Add("_pragma", "fullfsync(1)")
+		q.Add("_pragma", "checkpoint_fullfsync(1)")
+	default:
+		q.Set("_synchronous", "NORMAL")
 		q.Set("_txlock", "immediate")
 	}
 	if mode != "" {

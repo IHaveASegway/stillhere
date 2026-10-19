@@ -3,7 +3,6 @@ package cli
 import (
 	"errors"
 	"fmt"
-	"path/filepath"
 
 	"github.com/spf13/cobra"
 
@@ -15,26 +14,28 @@ func (e *env) egressCommand() *cobra.Command {
 	var egress string
 	cmd := &cobra.Command{
 		Use:   "egress",
-		Short: "Print the AI-assisted shares the MCP server let leave the machine",
-		Long: `egress prints the egress record (ADR 0015): for each run an MCP server answered
-about, the AI-assisted shares it decided may leave the machine, recorded
-before the first of them did, with the numbers as they left, how many people
-each share is made of, and the stillhere version that decided. A run's
-decision is made once and kept: every later answer about the run, by any
-version, sends the same shares, and a later run's shares leave only when they
-cannot be subtracted from these.
+		Short: "Print the AI-assisted shares the MCP server may let leave the machine",
+		Long: `egress prints the egress record (ADR 0015): each run's decision about the
+AI-assisted shares the MCP server may let leave the machine, recorded with
+the run's whole decision before the first of them was about to leave, so a
+share listed need not have been sent. Each comes with the numbers as they
+would leave, how many people it is made of, the repository's name beside its
+key, the stillhere version that decided, and the earlier decisions it was
+decided against: every one recorded before it for a window that overlaps its
+own. A run's decision is made once and kept: every later answer about the
+run, by any version, sends the same shares, and a later run's shares leave
+only when they cannot be subtracted from these.
 
-It reads the record and never writes it; the record holds no email, only
-scopes, numbers and salted hashes of the people behind each share.`,
+It reads the record and never writes it, so it reads a copy or a record on a
+read-only mount too; beside a record it can write, SQLite may make the -wal
+and -shm files a reader needs. The record holds no email, only scopes,
+numbers, a digest of each repository's landings, and the people behind each
+share numbered within their decision, which names no one outside it.`,
 		Args: usageArgs(cobra.NoArgs),
 		RunE: func(cmd *cobra.Command, _ []string) (err error) {
-			path, err := egressPath(egress)
+			abs, err := egressPath(egress, false)
 			if err != nil {
 				return err
-			}
-			abs, err := filepath.Abs(path)
-			if err != nil {
-				return usagef("--egress %s: %v", path, err)
 			}
 			ledger, err := sqlite.OpenEgressReadOnly(cmd.Context(), abs)
 			if err != nil {

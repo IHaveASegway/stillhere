@@ -30,14 +30,15 @@ import (
 // one: no two calls disagree, and no pair of answers about the run can be
 // subtracted to give what one of them withholds. Two decisions made here
 // alone can be: those of two runs, since each run is decided on its own (a
-// rescan of fewer repositories at the same as-of time gives a share the
-// first run withheld exactly), and those one run gets from two versions
-// whose count of people, threshold or order of suppression differ. What
-// leaves the machine is therefore decided once more, against the egress
-// record (egress.go, ADR 0015): a run's decision is recorded before its
-// first share leaves, every later call by any version reads that record,
-// and a new run's decision is checked against the shares recorded for its
-// window.
+// rescan of fewer repositories minutes later, in which no landing entered
+// or left the window, gives a share the first run withheld exactly), and
+// those one run gets from two versions whose count of people, threshold or
+// order of suppression differ. What leaves the machine is therefore
+// decided once more, against the egress record (egress.go, ADR 0015): a
+// run's decision is recorded before its first share leaves, every later
+// call by any version reads that record, and a new run's decision is
+// checked against the shares recorded for every window that overlaps its
+// own.
 //
 // The rules, bottom-up over the tree of scopes: the whole run, its groups,
 // their repositories, and the repositories named on their own, which hang
@@ -150,17 +151,19 @@ type aiShareNode struct {
 // the whole run's share as report.Build adds them, and whether the whole
 // run's share reaches an answer (report.WholeRun). The run's own decision
 // (decide) and the one the egress record holds (egress.go) are made from
-// the same inputs.
+// the same inputs; the record also matches each repository by the landings
+// its value counts (history), which a copy shares under another key.
 type aiShareInputs struct {
-	repos  []domain.Repo
-	people map[string]map[string]bool    // by Repo.Key, for a repository with a share
-	values map[string]domain.MetricValue // by Repo.Key: its ai_assisted@1 value
-	whole  bool
+	repos   []domain.Repo
+	people  map[string]map[string]bool    // by Repo.Key, for a repository with a share
+	values  map[string]domain.MetricValue // by Repo.Key: its ai_assisted@1 value
+	history map[string]string             // by Repo.Key: egressHistory of its landings in its value's window
+	whole   bool
 }
 
 // aiShareInputsOf reads a stored run's inputs.
 func aiShareInputsOf(s *stored) *aiShareInputs {
-	in := &aiShareInputs{people: aiSharePeople(s), values: map[string]domain.MetricValue{},
+	in := &aiShareInputs{people: aiSharePeople(s), values: map[string]domain.MetricValue{}, history: map[string]string{},
 		whole: report.WholeRun(s.scope(), len(s.facts.Groups))}
 	for _, rf := range s.facts.Repos {
 		in.repos = append(in.repos, rf.Repo)
@@ -168,6 +171,12 @@ func aiShareInputsOf(s *stored) *aiShareInputs {
 	for _, v := range s.values {
 		if v.Metric.String() == report.MetricAIAssisted && v.Subject.Kind == domain.SubjectRepo {
 			in.values[v.Subject.Key] = v
+		}
+	}
+	for i := range s.facts.Repos {
+		rf := &s.facts.Repos[i]
+		if v, ok := in.values[rf.Repo.Key]; ok {
+			in.history[rf.Repo.Key] = egressHistory(rf.Landings, v.Window)
 		}
 	}
 	return in

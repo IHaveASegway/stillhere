@@ -1392,7 +1392,7 @@ func TestMCPTools(t *testing.T) {
 				t.Fatal(err)
 			}
 			defer func() { _ = e.Close() }()
-			if _, _, err := e.Decide(ctx, d.Run, func([]byte, []domain.EgressDecision) (domain.EgressDecision, error) { return d, nil }); err != nil {
+			if _, _, err := e.Decide(ctx, d.Run, func([]domain.EgressDecision) (domain.EgressDecision, error) { return d, nil }); err != nil {
 				t.Fatal(err)
 			}
 		}
@@ -1449,6 +1449,43 @@ func TestMCPTools(t *testing.T) {
 		}
 		got, _ = overview(t, connect(t, Config{Open: openDB(db), Egress: openEgress(ledger), RunID: 1, Version: "test"}, 0), "ai")
 		shown(t, "overview(ai) of run 1, pinned, after the rescan", got, truth, "group:ai")
+
+		// The rescan need not share the first scan's --now. One a second
+		// later, as the default --now, the clock, gives two scans seconds
+		// apart, and one a day later, in which no landing entered or left
+		// the window, sum team's same 1 of 12, so they subtract exactly too;
+		// so does a copy of team under another key (another directory, or a
+		// clone whose origin is spelt otherwise) at the same --now, which
+		// holds the same landings. Each is withheld beside the group's share
+		// sent before.
+		teamCopy := filepath.Join(root, "copies", "team-copy")
+		if err := os.CopyFS(teamCopy, os.DirFS(filepath.Join(group, "team"))); err != nil {
+			t.Fatal(err)
+		}
+		for i, c := range []struct {
+			what       string
+			now        time.Time
+			path, repo string
+		}{
+			{"a second later", fixture.Now.Add(time.Second), filepath.Join(group, "team"), "team"},
+			{"a day later", fixture.Now.AddDate(0, 0, 1), filepath.Join(group, "team"), "team"},
+			{"of a copy under another key", fixture.Now, teamCopy, "team-copy"},
+		} {
+			ledger, db := filepath.Join(root, fmt.Sprintf("later-%d-egress.db", i)), filepath.Join(root, fmt.Sprintf("later-%d.db", i))
+			scan(t, db, mailmap, domain.ScopeGroup, group)
+			first := local(t, db)
+			cs = connect(t, Config{Open: openDB(db), Egress: openEgress(ledger), Version: "test"}, 0)
+			got, _ = overview(t, cs, "ai")
+			shown(t, "overview(ai) before a rescan "+c.what, got, first, "group:ai")
+			scanAt(t, c.now, db, mailmap, domain.ScopeGroup, c.path)
+			rescan := local(t, db)
+			if sh := rescan["repo:"+c.repo]; sh == nil || residual(first["group:ai"], sh) != residual(first["repo:solo"]) {
+				t.Fatalf("a rescan %s: its local share of %s, %+v, less group ai's is not solo's %+v: the case this checks is gone",
+					c.what, c.repo, sh, first["repo:solo"])
+			}
+			got, _ = overview(t, cs, "")
+			shown(t, "overview() of a rescan "+c.what, got, rescan)
+		}
 
 		// One run, two versions: a version whose rules show crew and withhold
 		// group nomail, as this one decides the other way round, recorded
@@ -1665,9 +1702,15 @@ func scanPlatform(t *testing.T) (db string, git *gitcli.Runner, platform, mailma
 
 // scan records one scan of paths in db through app.Scan, with the adapters
 // internal/cli builds: a gitcli.Runner with the mailmap, the packaged
-// policy and a sqlite.Store, and the rank scope given (--scope). It returns
-// the runner.
+// policy and a sqlite.Store, and the rank scope given (--scope), as of
+// fixture.Now. It returns the runner.
 func scan(t *testing.T, db, mailmap, scope string, paths ...string) *gitcli.Runner {
+	t.Helper()
+	return scanAt(t, fixture.Now, db, mailmap, scope, paths...)
+}
+
+// scanAt is scan as of now (--now).
+func scanAt(t *testing.T, now time.Time, db, mailmap, scope string, paths ...string) *gitcli.Runner {
 	t.Helper()
 	ctx := t.Context()
 	git, err := gitcli.New(ctx, gitcli.Config{MailmapFile: mailmap})
@@ -1686,7 +1729,7 @@ func scan(t *testing.T, db, mailmap, scope string, paths ...string) *gitcli.Runn
 	// The store is both ports, as internal/cli hands it over: the scan reads
 	// the GitHub data a sync left in the replica (seedSolo).
 	_, err = app.Scan(ctx, app.Deps{Git: git, Store: store, ForgeStore: store, Policy: p, Version: "test"},
-		app.ScanRequest{Paths: paths, Now: fixture.Now, Rank: ranks, Scope: scope})
+		app.ScanRequest{Paths: paths, Now: now, Rank: ranks, Scope: scope})
 	if cerr := store.Close(); err == nil {
 		err = cerr
 	}

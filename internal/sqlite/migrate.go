@@ -46,11 +46,15 @@ type schema struct {
 	// writers says, to a user whose file of this kind cannot be written,
 	// who writes it there and what to do.
 	writers string
+	// flag is the flag that names such a file, and writer what writes
+	// one, as a reader's refusal names them (immutableRead).
+	flag, writer string
 }
 
 // factsSchema is facts.db's.
 var factsSchema = schema{name: "facts database", files: migrationFiles, dir: "migrations", appID: applicationID,
-	writers: "scan and sync write the facts database there; make it writable, or pass --db or set STILLHERE_HOME to a place that is"}
+	writers: "scan and sync write the facts database there; make it writable, or pass --db or set STILLHERE_HOME to a place that is",
+	flag:    "--db", writer: "the scan or sync"}
 
 // migration is one embedded schema change.
 type migration struct {

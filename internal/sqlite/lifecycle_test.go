@@ -77,11 +77,13 @@ func TestStoreLifecycle(t *testing.T) {
 }
 
 // testEgress covers the egress record (ADR 0015): a reader creates nothing;
-// the writer makes the file 0600 with a salt; Decide records a run's
-// decision once, durably, hands a later run of the window every earlier
-// decision and one of another window none, and round-trips what it
-// recorded; SQL that updates or deletes a row is refused; and the record
-// and facts.db refuse each other.
+// the writer makes the file 0600; Decide records a run's decision once,
+// durably, hands a later run every earlier decision whose window overlaps
+// its own, a second later or an hour, and one of a window that does not
+// overlap none, and round-trips what it recorded; SQL that updates or
+// deletes a row is refused; a reader reads a record in a directory it
+// cannot write, and refuses one whose log holds a commit there with what to
+// do; and the record and facts.db refuse each other.
 func testEgress(t *testing.T) {
 	ctx := t.Context()
 	dir := filepath.Join(t.TempDir(), "home")
@@ -104,11 +106,11 @@ func testEgress(t *testing.T) {
 	ai := domain.MetricID{Name: "ai_assisted", Version: 1}
 	want := domain.EgressDecision{Run: first, Inputs: "digest-1", Metric: ai, Version: "test",
 		Shares: []domain.EgressShare{{Scope: domain.Scope{Kind: domain.ScopeGroup, Key: "ai"}, Repos: []string{"local:solo", "local:team"}, Num: 4, Den: 16}},
-		Repos: []domain.EgressRepo{{Key: "local:solo", Num: 3, Den: 4, People: []string{"aa"}},
-			{Key: "local:team", Num: 1, Den: 12, People: []string{"", "bb", "cc"}}}}
-	got, made, err := e.Decide(ctx, first, func(salt []byte, sent []domain.EgressDecision) (domain.EgressDecision, error) {
-		if len(salt) != 32 || len(sent) != 0 {
-			t.Errorf("the first decision got a salt of %d bytes and %d earlier decisions, want 32 and none", len(salt), len(sent))
+		Repos: []domain.EgressRepo{{Key: "local:solo", Name: "solo", History: "h-solo", Num: 3, Den: 4, People: []string{"aa"}},
+			{Key: "local:team", Name: "team", Num: 1, Den: 12, People: []string{"", "bb", "cc"}}}}
+	got, made, err := e.Decide(ctx, first, func(sent []domain.EgressDecision) (domain.EgressDecision, error) {
+		if len(sent) != 0 {
+			t.Errorf("the first decision got %d earlier decisions, want none", len(sent))
 		}
 		return want, nil
 	})
@@ -116,7 +118,7 @@ func testEgress(t *testing.T) {
 		t.Fatalf("Decide(run 1) = %+v, %v, %v, want it recorded now", got, made, err)
 	}
 	want.Decided = got.Decided
-	again, made, err := e.Decide(ctx, first, func([]byte, []domain.EgressDecision) (domain.EgressDecision, error) {
+	again, made, err := e.Decide(ctx, first, func([]domain.EgressDecision) (domain.EgressDecision, error) {
 		t.Error("Decide decided run 1 again")
 		return domain.EgressDecision{}, nil
 	})
@@ -124,18 +126,31 @@ func testEgress(t *testing.T) {
 		t.Fatalf("Decide(run 1 again) = %v, %v, want the recorded decision", made, err)
 	}
 	wantEqual(t, "the recorded decision", want, again)
-	// A rescan of the same window sees run 1's decision; another window's sees none.
-	second := domain.EgressRun{ID: 2, Started: now.Add(2 * time.Hour), Window: window}
-	if _, _, err := e.Decide(ctx, second, func(_ []byte, sent []domain.EgressDecision) (domain.EgressDecision, error) {
-		wantEqual(t, "the decisions of run 2's window", []domain.EgressDecision{want}, sent)
+	// A rescan a second later sees run 1's decision, and one an hour later
+	// both; a run whose window ends where theirs began sees none.
+	shifted := func(d time.Duration) domain.Window {
+		return domain.Window{Since: window.Since.Add(d), Until: window.Until.Add(d)}
+	}
+	second := domain.EgressRun{ID: 2, Started: now.Add(2 * time.Hour), Window: shifted(time.Second)}
+	if _, _, err := e.Decide(ctx, second, func(sent []domain.EgressDecision) (domain.EgressDecision, error) {
+		wantEqual(t, "the decisions of windows that overlap run 2's", []domain.EgressDecision{want}, sent)
 		return domain.EgressDecision{Inputs: "digest-2", Metric: ai, Version: "test"}, nil
 	}); err != nil {
 		t.Fatal(err)
 	}
-	later := domain.EgressRun{ID: 3, Started: now.Add(3 * time.Hour), Window: domain.Window{Since: window.Since.Add(time.Hour), Until: now.Add(time.Hour)}}
-	if _, _, err := e.Decide(ctx, later, func(_ []byte, sent []domain.EgressDecision) (domain.EgressDecision, error) {
+	later := domain.EgressRun{ID: 3, Started: now.Add(3 * time.Hour), Window: shifted(time.Hour)}
+	if _, _, err := e.Decide(ctx, later, func(sent []domain.EgressDecision) (domain.EgressDecision, error) {
+		if len(sent) != 2 {
+			t.Errorf("a run an hour later got %d decisions, want runs 1 and 2", len(sent))
+		}
+		return domain.EgressDecision{}, errors.New("decided nothing")
+	}); err == nil {
+		t.Error("Decide recorded a decision whose decide failed")
+	}
+	apart := domain.EgressRun{ID: 4, Started: now.Add(4 * time.Hour), Window: domain.Window{Since: window.Since.AddDate(-1, 0, 0), Until: window.Since}}
+	if _, _, err := e.Decide(ctx, apart, func(sent []domain.EgressDecision) (domain.EgressDecision, error) {
 		if len(sent) != 0 {
-			t.Errorf("a run of another window got %d decisions, want none", len(sent))
+			t.Errorf("a run of a window that does not overlap got %d decisions, want none", len(sent))
 		}
 		return domain.EgressDecision{}, errors.New("decided nothing")
 	}); err == nil {
@@ -143,7 +158,7 @@ func testEgress(t *testing.T) {
 	}
 	raw := openRaw(t, path)
 	for _, q := range []string{`UPDATE decision_shares SET num = 3`, `DELETE FROM decisions`, `DELETE FROM decision_people`,
-		`UPDATE egress_meta SET value = x'00'`} {
+		`UPDATE decision_repos SET history = ''`} {
 		if _, err := raw.ExecContext(ctx, q); err == nil || !strings.Contains(err.Error(), "append-only") {
 			t.Errorf("%s: %v, want it refused as append-only", q, err)
 		}
@@ -155,6 +170,63 @@ func testEgress(t *testing.T) {
 	defer func() { _ = ro.Close() }()
 	if ds, err := ro.Decisions(ctx); err != nil || len(ds) != 2 || ds[0].Run != first || ds[1].Run != second {
 		t.Errorf("Decisions = %+v, %v, want runs 1 and 2, oldest first", ds, err)
+	}
+	// In a directory it cannot write, a reader reads the record as it is
+	// (#79), and makes nothing there; with a commit in the log, which it
+	// cannot read without a -shm file there, it says what to do.
+	if runtime.GOOS != "windows" {
+		execRaw(t, raw, `PRAGMA wal_checkpoint(TRUNCATE)`) // every commit in the file, as a writer that closed leaves it
+		copyTo := func(dir string, from string, names ...string) {
+			t.Helper()
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range names {
+				data, err := os.ReadFile(from + strings.TrimPrefix(name, "egress.db"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, name), data, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.Chmod(dir, 0o500); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+		}
+		locked := filepath.Join(t.TempDir(), "locked")
+		copyTo(locked, path, "egress.db")
+		r, err := sqlite.OpenEgressReadOnly(ctx, filepath.Join(locked, "egress.db"))
+		if err != nil {
+			t.Fatalf("OpenEgressReadOnly(a record in a read-only directory) = %v", err)
+		}
+		if ds, err := r.Decisions(ctx); err != nil || len(ds) != 2 {
+			t.Errorf("Decisions of a record in a read-only directory = %d, %v, want runs 1 and 2", len(ds), err)
+		}
+		_ = r.Close()
+		if entries, _ := os.ReadDir(locked); len(entries) != 1 {
+			t.Errorf("the read-only directory holds %d files after reading, want egress.db alone", len(entries))
+		}
+		src := filepath.Join(t.TempDir(), "egress.db")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(src, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		w := openRaw(t, src)
+		execRaw(t, w, `PRAGMA wal_autocheckpoint = 0`, `CREATE TABLE scratch (a)`)
+		walled := filepath.Join(t.TempDir(), "walled")
+		copyTo(walled, src, "egress.db", "egress.db-wal")
+		if r, err := sqlite.OpenEgressReadOnly(ctx, filepath.Join(walled, "egress.db")); !errors.As(err, &usage) ||
+			!strings.Contains(usage.Msg, "egress.db-wal") || !strings.Contains(usage.Msg, "--egress") {
+			if err == nil {
+				_ = r.Close()
+			}
+			t.Errorf("OpenEgressReadOnly(a read-only directory whose log holds a commit) = %v, want a *domain.UsageError that names egress.db-wal and --egress", err)
+		}
 	}
 	if runtime.GOOS != "windows" {
 		if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0o600 {

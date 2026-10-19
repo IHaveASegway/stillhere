@@ -2,7 +2,6 @@ package sqlite
 
 import (
 	"context"
-	"crypto/rand"
 	"database/sql"
 	"embed"
 	"errors"
@@ -27,12 +26,13 @@ import (
 // record is append-only (triggers refuse every UPDATE and DELETE) and must
 // stay readable from the first release on.
 //
-// Every commit is synchronous=FULL: in WAL mode NORMAL survives a crash of
-// the process but can lose the last commits to a power cut, and a lost
-// decision would let a later one disagree with an answer that was sent. A
-// decision takes one connection's IMMEDIATE transaction for its lookup, the
-// decision itself and its rows, so two servers that share the record queue
-// for it and each sees the other's decision.
+// Every commit is synchronous=FULL with fullfsync (dsnSynced): in WAL mode
+// NORMAL survives a crash of the process but can lose the last commits to a
+// power cut, as can FULL on macOS without fullfsync, and a lost decision
+// would let a later one disagree with an answer that was sent. A decision
+// takes one connection's IMMEDIATE transaction for its lookup, the decision
+// itself and its rows, so two servers that share the record queue for it
+// and the later sees the earlier's decision.
 
 //go:embed egress/*.sql
 var egressFiles embed.FS
@@ -41,28 +41,29 @@ var egressFiles embed.FS
 // bytes "steg", so neither facts.db nor another program's file opens as one.
 const egressAppID = 0x73746567
 
-// egressSchema is the egress record's.
+// egressSchema is the egress record's. Its refusal of a file it cannot
+// write never suggests a new file: a new record forgets what the old one
+// let leave, and the first answers it records could be subtracted from
+// those.
 var egressSchema = schema{name: "egress record", files: egressFiles, dir: "egress", appID: egressAppID,
-	writers: "stillhere mcp records there the AI-assisted shares it lets leave, and withholds every share while it cannot; " +
-		"make it writable, or pass --egress or set STILLHERE_HOME to a place that is"}
-
-// egressSaltBytes is the length of the record's salt: 256 bits, the
-// HMAC-SHA-256 key size.
-const egressSaltBytes = 32
+	writers: "stillhere mcp records there the AI-assisted shares it lets leave, and withholds every share while it cannot: " +
+		"make it writable again, or move the record and its -wal file to a place that is and pass that path as --egress. " +
+		"Do not start a new record instead: it would forget what this one let leave",
+	flag: "--egress", writer: "stillhere mcp's decision"}
 
 // Egress is one open egress record. It is safe for concurrent use.
 type Egress struct {
-	path     string
-	db       *sql.DB // one connection, whose transactions begin IMMEDIATE (or read-only, readOnly)
-	salt     []byte  // nil for a read-only record
-	readOnly bool
+	path      string
+	db        *sql.DB // one connection, whose transactions begin IMMEDIATE (or read-only, readOnly)
+	readOnly  bool
+	immutable bool // read-only in a directory it cannot write: every read guards itself (immutableRead)
 }
 
 var _ domain.EgressLedger = (*Egress)(nil)
 
 // OpenEgress opens the egress record at path for the MCP server, its one
-// writer: it creates a missing directory 0700 and file 0600, migrates the
-// schema, and makes the record's salt the first time. Another program's file,
+// writer: it creates a missing directory 0700 and file 0600 and migrates
+// the schema. Another program's file,
 // a facts database and a record a newer stillhere wrote are each a
 // *domain.UsageError that names the path, as is a file or a directory it
 // cannot write.
@@ -90,24 +91,11 @@ func OpenEgress(ctx context.Context, path string) (*Egress, error) {
 
 func (e *Egress) open(ctx context.Context) error {
 	var err error
-	if e.db, err = sql.Open("sqlite", dsnSynced(e.path, false, "", "FULL")); err != nil {
+	if e.db, err = sql.Open("sqlite", dsnSynced(e.path, false, "", true)); err != nil {
 		return err
 	}
 	e.db.SetMaxOpenConns(1)
-	if err := egressSchema.migrate(ctx, e.db); err != nil {
-		return err
-	}
-	salt := make([]byte, egressSaltBytes)
-	if _, err := rand.Read(salt); err != nil {
-		return err
-	}
-	return e.write(ctx, func(tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO egress_meta (key, value) SELECT 'salt', ?
-			WHERE NOT EXISTS (SELECT 1 FROM egress_meta WHERE key = 'salt')`, salt); err != nil {
-			return fmt.Errorf("making the record's salt: %w", err)
-		}
-		return tx.QueryRowContext(ctx, `SELECT value FROM egress_meta WHERE key = 'salt'`).Scan(&e.salt)
-	})
+	return egressSchema.migrate(ctx, e.db)
 }
 
 // OpenEgressReadOnly opens the existing egress record at path for a reader,
@@ -115,7 +103,12 @@ func (e *Egress) open(ctx context.Context) error {
 // file is a *domain.UsageError that names the path and says when the MCP
 // server makes one, so a mistyped --egress is not read as "nothing sent".
 // It refuses what OpenEgress refuses, and a record older than this binary,
-// which only its writer migrates.
+// which only its writer migrates. Like facts.db's reader (openReadOnly), it
+// reads a record in a directory it cannot write (a read-only mount, a copy
+// in another user's directory) with immutable=1 when the write-ahead log
+// holds nothing, and otherwise says what to do. Beside a record it can
+// write, SQLite may make the -wal and -shm files a reader of a WAL-mode
+// database needs; the record itself is never written.
 func OpenEgressReadOnly(ctx context.Context, path string) (*Egress, error) {
 	if path == "" {
 		return nil, &domain.UsageError{Msg: "no egress record path"}
@@ -133,31 +126,71 @@ func OpenEgressReadOnly(ctx context.Context, path string) (*Egress, error) {
 	case !fi.Mode().IsRegular():
 		return nil, &domain.UsageError{Msg: abs + ": not an egress record file"}
 	}
+	const op = "sqlite.OpenEgressReadOnly"
 	e := &Egress{path: abs, readOnly: true}
-	if e.db, err = sql.Open("sqlite", dsn(abs, true, "ro")); err != nil {
-		return nil, err
+	err = e.readOnlyOpen(ctx)
+	if err == nil {
+		return e, nil
+	}
+	err = errors.Join(err, e.Close())
+	if !unwritableHere(err) {
+		return nil, openFailed(op, abs, err)
+	}
+	if walHolds(abs) {
+		return nil, walUnreadable(op, abs, egressSchema)
+	}
+	e = &Egress{path: abs, readOnly: true, immutable: true}
+	if err := e.readOnlyOpen(ctx); err != nil {
+		return nil, errors.Join(openFailed(op, abs, err), e.Close())
+	}
+	return e, nil
+}
+
+// readOnlyOpen opens the record read-only (immutable=1 too when e is) and
+// checks its header.
+func (e *Egress) readOnlyOpen(ctx context.Context) error {
+	var err error
+	if e.db, err = sql.Open("sqlite", readOnlyDSN(e.path, e.immutable)); err != nil {
+		return err
+	}
+	if e.immutable {
+		e.db.SetMaxIdleConns(0) // no page cache outlives a read (immutableRead)
 	}
 	ms, err := egressSchema.migrations()
 	if err != nil {
-		return nil, errors.Join(err, e.Close())
+		return err
 	}
 	var h fileHeader
-	err = retryBusy(ctx, func() error {
-		var err error
-		h, err = egressSchema.readHeader(ctx, e.db)
-		return err
+	err = e.read(func() error {
+		return retryBusy(ctx, func() error {
+			var err error
+			h, err = egressSchema.readHeader(ctx, e.db)
+			return err
+		})
 	})
-	if err == nil {
-		err = h.check(egressSchema, len(ms))
+	if err != nil {
+		return err
 	}
-	if err == nil && h.version < len(ms) {
-		err = &domain.UsageError{Msg: fmt.Sprintf("an egress record of schema version %d, older than this stillhere's %d: "+
+	if err := h.check(egressSchema, len(ms)); err != nil {
+		return err
+	}
+	switch {
+	case h.version == 0:
+		return &domain.UsageError{Msg: "an empty file, not an egress record yet: stillhere mcp makes one the first " +
+			"time it lets an AI-assisted share leave"}
+	case h.version < len(ms):
+		return &domain.UsageError{Msg: fmt.Sprintf("an egress record of schema version %d, older than this stillhere's %d: "+
 			"stillhere mcp upgrades it the next time it starts with it", h.version, len(ms))}
 	}
-	if err != nil {
-		return nil, errors.Join(openFailed("sqlite.OpenEgressReadOnly", abs, err), e.Close())
+	return nil
+}
+
+// read runs fn, guarded as an immutable open's reads must be.
+func (e *Egress) read(fn func() error) error {
+	if e.immutable {
+		return immutableRead(e.path, egressSchema, fn)
 	}
-	return e, nil
+	return fn()
 }
 
 // write runs fn in one IMMEDIATE transaction, waiting for another
@@ -175,7 +208,7 @@ func (e *Egress) write(ctx context.Context, fn func(*sql.Tx) error) error {
 
 // Decide implements domain.EgressLedger.
 func (e *Egress) Decide(ctx context.Context, run domain.EgressRun,
-	decide func(salt []byte, sent []domain.EgressDecision) (domain.EgressDecision, error)) (domain.EgressDecision, bool, error) {
+	decide func(sent []domain.EgressDecision) (domain.EgressDecision, error)) (domain.EgressDecision, bool, error) {
 	if e.readOnly {
 		return domain.EgressDecision{}, false, fmt.Errorf("sqlite.Egress.Decide %s: the record was opened read-only", e.path)
 	}
@@ -193,11 +226,14 @@ func (e *Egress) Decide(ctx context.Context, run domain.EgressRun,
 			}
 			return err
 		}
-		sent, err := egressLoad(ctx, tx, `WHERE window_since IS ? AND window_until IS ?`, at[1], at[2])
+		// Every decision whose window overlaps the run's: its shares and
+		// the run's are terms of one table wherever a repository carries the
+		// same counts in both (app.ShareDecision).
+		sent, err := egressLoad(ctx, tx, `WHERE window_until > ? AND window_since < ?`, at[1], at[2])
 		if err != nil {
 			return err
 		}
-		d, err := decide(slices.Clone(e.salt), sent)
+		d, err := decide(sent)
 		if err != nil {
 			return err
 		}
@@ -216,15 +252,22 @@ func (e *Egress) Decide(ctx context.Context, run domain.EgressRun,
 
 // Decisions implements domain.EgressLedger.
 func (e *Egress) Decisions(ctx context.Context) ([]domain.EgressDecision, error) {
-	tx, err := e.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: e.readOnly})
-	if err != nil {
-		return nil, fmt.Errorf("sqlite.Egress.Decisions %s: %w", e.path, err)
+	var ds []domain.EgressDecision
+	err := e.read(func() error {
+		tx, err := e.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: e.readOnly})
+		if err != nil {
+			return err
+		}
+		if ds, err = egressLoad(ctx, tx, ""); err != nil {
+			return errors.Join(err, rollback(tx))
+		}
+		return tx.Commit()
+	})
+	var usage *domain.UsageError
+	if err != nil && !errors.As(err, &usage) {
+		err = fmt.Errorf("sqlite.Egress.Decisions %s: %w", e.path, err)
 	}
-	ds, err := egressLoad(ctx, tx, "")
-	if err != nil {
-		return nil, errors.Join(fmt.Errorf("sqlite.Egress.Decisions %s: %w", e.path, err), rollback(tx))
-	}
-	return ds, tx.Commit()
+	return ds, err
 }
 
 // Close releases the record. It is safe on a nil Egress, one whose open
@@ -275,85 +318,121 @@ func egressLoad(ctx context.Context, tx *sql.Tx, where string, args ...any) ([]d
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return nil, err
 	}
+	at := make(map[int64]int, len(ids))
 	for i, id := range ids {
-		if err := egressLoadParts(ctx, tx, id, &out[i]); err != nil {
-			return nil, fmt.Errorf("decision %d: %w", id, err)
-		}
+		at[id] = i
+	}
+	if err := egressLoadParts(ctx, tx, where, args, at, out); err != nil {
+		return nil, err
 	}
 	return out, nil
 }
 
-// egressLoadParts reads one decision's shares, their repositories and the
-// people of each repository.
-func egressLoadParts(ctx context.Context, tx *sql.Tx, id int64, d *domain.EgressDecision) error {
-	rows, err := tx.QueryContext(ctx, `SELECT kind, key, num, den FROM decision_shares WHERE decision = ? ORDER BY kind, key`, id)
+// egressLoadParts reads the shares, their repositories and the people of
+// each repository of the decisions where selects, at their index in out
+// (at, by id): four queries, whatever the number of decisions.
+func egressLoadParts(ctx context.Context, tx *sql.Tx, where string, args []any, at map[int64]int, out []domain.EgressDecision) error {
+	if len(out) == 0 {
+		return nil
+	}
+	of := `WHERE decision IN (SELECT id FROM decisions ` + where + `)`
+	decision := func(id int64) (*domain.EgressDecision, error) {
+		i, ok := at[id]
+		if !ok {
+			return nil, fmt.Errorf("a row of decision %d, which the record does not hold", id)
+		}
+		return &out[i], nil
+	}
+	rows, err := tx.QueryContext(ctx, `SELECT decision, kind, key, num, den FROM decision_shares `+of+` ORDER BY decision, kind, key`, args...)
 	if err != nil {
 		return err
 	}
-	index := map[domain.Scope]int{}
+	type share struct {
+		id int64
+		sc domain.Scope
+	}
+	shares := map[share]int{}
 	for rows.Next() {
+		var id int64
 		var sh domain.EgressShare
 		var num, den sql.NullFloat64
-		if err := rows.Scan(&sh.Scope.Kind, &sh.Scope.Key, &num, &den); err != nil {
+		if err := rows.Scan(&id, &sh.Scope.Kind, &sh.Scope.Key, &num, &den); err != nil {
+			return errors.Join(err, rows.Close())
+		}
+		d, err := decision(id)
+		if err != nil {
 			return errors.Join(err, rows.Close())
 		}
 		sh.Num, sh.Den = decodeFloat(num), decodeFloat(den)
-		index[sh.Scope] = len(d.Shares)
+		shares[share{id, sh.Scope}] = len(d.Shares)
 		d.Shares = append(d.Shares, sh)
 	}
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return err
 	}
-	rows, err = tx.QueryContext(ctx, `SELECT kind, key, repo FROM decision_share_repos WHERE decision = ? ORDER BY kind, key, repo`, id)
+	rows, err = tx.QueryContext(ctx, `SELECT decision, kind, key, repo FROM decision_share_repos `+of+` ORDER BY decision, kind, key, repo`, args...)
 	if err != nil {
 		return err
 	}
 	for rows.Next() {
+		var id int64
 		var sc domain.Scope
 		var repo string
-		if err := rows.Scan(&sc.Kind, &sc.Key, &repo); err != nil {
+		if err := rows.Scan(&id, &sc.Kind, &sc.Key, &repo); err != nil {
 			return errors.Join(err, rows.Close())
 		}
-		i, ok := index[sc]
+		i, ok := shares[share{id, sc}]
 		if !ok {
-			return errors.Join(fmt.Errorf("a repository of share %s %q, which the decision does not hold", sc.Kind, sc.Key), rows.Close())
+			return errors.Join(fmt.Errorf("decision %d: a repository of share %s %q, which the decision does not hold", id, sc.Kind, sc.Key), rows.Close())
 		}
+		d, _ := decision(id)
 		d.Shares[i].Repos = append(d.Shares[i].Repos, repo)
 	}
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return err
 	}
-	rows, err = tx.QueryContext(ctx, `SELECT repo, num, den FROM decision_repos WHERE decision = ? ORDER BY repo`, id)
+	rows, err = tx.QueryContext(ctx, `SELECT decision, repo, name, history, num, den FROM decision_repos `+of+` ORDER BY decision, repo`, args...)
 	if err != nil {
 		return err
 	}
-	repos := map[string]int{}
+	type repo struct {
+		id  int64
+		key string
+	}
+	repos := map[repo]int{}
 	for rows.Next() {
+		var id int64
 		var r domain.EgressRepo
 		var num, den sql.NullFloat64
-		if err := rows.Scan(&r.Key, &num, &den); err != nil {
+		if err := rows.Scan(&id, &r.Key, &r.Name, &r.History, &num, &den); err != nil {
+			return errors.Join(err, rows.Close())
+		}
+		d, err := decision(id)
+		if err != nil {
 			return errors.Join(err, rows.Close())
 		}
 		r.Num, r.Den = decodeFloat(num), decodeFloat(den)
-		repos[r.Key] = len(d.Repos)
+		repos[repo{id, r.Key}] = len(d.Repos)
 		d.Repos = append(d.Repos, r)
 	}
 	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
 		return err
 	}
-	rows, err = tx.QueryContext(ctx, `SELECT repo, person FROM decision_people WHERE decision = ? ORDER BY repo, person`, id)
+	rows, err = tx.QueryContext(ctx, `SELECT decision, repo, person FROM decision_people `+of+` ORDER BY decision, repo, person`, args...)
 	if err != nil {
 		return err
 	}
 	for rows.Next() {
-		var repo, person string
-		if err := rows.Scan(&repo, &person); err != nil {
+		var id int64
+		var key, person string
+		if err := rows.Scan(&id, &key, &person); err != nil {
 			return errors.Join(err, rows.Close())
 		}
-		i, ok := repos[repo]
+		i, ok := repos[repo{id, key}]
 		if !ok {
-			return errors.Join(fmt.Errorf("the people of %q, a repository the decision does not hold", repo), rows.Close())
+			return errors.Join(fmt.Errorf("decision %d: the people of %q, a repository the decision does not hold", id, key), rows.Close())
 		}
+		d, _ := decision(id)
 		d.Repos[i].People = append(d.Repos[i].People, person)
 	}
 	return errors.Join(rows.Err(), rows.Close())
@@ -378,8 +457,8 @@ func egressInsert(ctx context.Context, tx *sql.Tx, d *domain.EgressDecision) err
 		return err
 	}
 	for _, r := range d.Repos {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO decision_repos (decision, repo, num, den) VALUES (?, ?, ?, ?)`,
-			id, r.Key, encodeFloat(r.Num), encodeFloat(r.Den)); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO decision_repos (decision, repo, name, history, num, den) VALUES (?, ?, ?, ?, ?, ?)`,
+			id, r.Key, r.Name, r.History, encodeFloat(r.Num), encodeFloat(r.Den)); err != nil {
 			return fmt.Errorf("repository %q: %w", r.Key, err)
 		}
 	}
