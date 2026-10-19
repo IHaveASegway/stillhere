@@ -352,6 +352,11 @@ Wrong implementations this catches:
 - **Crediting the merger, or patching with `log --first-parent -p`.** Bob replaces Cara as the recent lander of `side.py`: with `--first-parent`, git gives row 8 its first-parent diff, which adds `side.py` and `side_week.py` as Bob's.
 - **Commit time instead of landing time.** `side.py` has no recent lander, because `e08df80` was written in February.
 
+The window is the query's (wave 11, Ruby F10): with `--days 300`, `[2025-12-11, 2026-10-07)`, `split.py`'s recent landers are Gina and Hank (rows 5 and 6, 2026-01-06 and 2026-01-07), one landing each, its owners and top authors as above, and the answer's `days` is 300 (90 without `--days`). `--days 400` is a usage error that says the run's history covers 365 days: who landed before it is unknown, not nobody.
+
+- **The window not passed on.** `split.py` still has no recent lander with `--days 300`.
+- **A window longer than the history answered.** `--days 400` lists the same people as 365 days would, reading the 35 days before the history as days in which nothing landed.
+
 Paths that hold no one's knowledge say why (#71, PF-8), and, the run's policy being the packaged one, which no file holds, each policy caveat says to write it out first, `stillhere policy > stillhere.toml` (wave 10's review):
 
 | Path | Answer | Why |
@@ -699,7 +704,7 @@ Wrong implementations this catches:
 
 ## Regression guards (`TestChangeOracles`)
 
-Three small repositories hold history shapes that neither fixture may hold, because each would move its oracles: two that once broke the history collector (the review of #37), `fixture.Backdated(t)` and `fixture.MergedRevert(t)`, and one that broke `durable@1` (#54, and its text twin #70), `fixture.Binary(t)`. Each is its own repository, so a guard that fails names its own cause. A fourth, `fixture.MergeMethods(t)`, holds how GitHub's merge methods land pull requests (#38's review); it has a setup of its own, under the [reviews](#merge-methods-fixturemergemethods) it guards, and so has a fifth, `fixture.MergeBack(t)`, a maintenance branch merged back (wave 10), under the [same reviews](#merge-back-fixturemergeback).
+Four small repositories hold history shapes that neither fixture may hold, because each would move its oracles: two that once broke the history collector (the review of #37), `fixture.Backdated(t)` and `fixture.MergedRevert(t)`, one that broke `durable@1` (#54, and its text twin #70), `fixture.Binary(t)`, and one large enough for the no-ignore-revs caveat to name its formatting pass (wave 11), `fixture.Formatting(t)`. Each is its own repository, so a guard that fails names its own cause. A fifth, `fixture.MergeMethods(t)`, holds how GitHub's merge methods land pull requests (#38's review); it has a setup of its own, under the [reviews](#merge-methods-fixturemergemethods) it guards, and so has a sixth, `fixture.MergeBack(t)`, a maintenance branch merged back (wave 10), under the [same reviews](#merge-back-fixturemergeback).
 
 - **Setup.** Each is scanned alone with `--now 2026-10-07T00:00:00Z`, no mailmap and the packaged policy, so the windows are those of the [change oracles](#change-oracles-m1-testchangeoracles). Every commit is at 12:00:00Z on the stated day, with the same author and committer except the backdated guard's A2, which was authored and committed on different days by different people; no date is within a day of a window boundary. Where a row gives only a line count, the file holds lines `<name>_<i> = <i>` and the subject is `feat: add <file>`. Commit IDs are stable, as in the sibling, and are for debugging only.
 - **Derivation.** The values below were derived by hand from the History tables and [metrics.md](../../docs/metrics.md#change-facts-shared-by-durable1-and-simplifying1), then confirmed with plain git 2.50.1 through `gitcli.Runner` (`log --first-parent` with `--since` and with `--since-as-filter`, `rev-list M^1..M`, `log --no-walk --stdin --grep`, `blame -w -M`; for the binary guard, `log --numstat` and `log -p -U0 -w` with History's diff options). The commands and their output are in the pull requests for #13, #54 and #70 that added them.
@@ -851,6 +856,35 @@ Wrong implementations this catches (each was run as a mutation of `internal/metr
 Holding binary changes on `prod` paths only fails nothing since #70: a binary change on a path with no `prod` role, such as V1's, leaves both sums by that role already. The rule holds every binary change only so that it stays one line.
 
 **The card's caveat (#64).** The repository's card carries one `binary-changes` caveat that counts the changes to `prod` files, by the path each change wrote, that git took for binary: 4, B1's `bin.py`, T2's and T3's `flip.py` and V2's `lib.py`. V1's `vendor/lib.py` has no role and is not counted. Leaving their lines out is complete-case analysis, so the reader is told how many were left out. Without the caveat the card says nothing, as before #64; counting by the role at HEAD would miss `bin.py`, which HEAD has only as `moved.py` (3).
+
+### A formatting pass (`fixture.Formatting`, wave 11)
+
+The no-ignore-revs caveat names the commits that look like a formatting pass (KT-10, [report-json.md](../../docs/spec/report-json.md#caveats)): ones holding a little of each of many prod files, over lines older than their own, which no fixture above holds, since it needs a repository of 10,000 surviving prod lines or more. `fixture.Formatting(t)` builds one named `formatting`, with no `.git-blame-ignore-revs`, scanned alone as above. Each module `pkg/m01.py` to `pkg/m12.py` holds 1,000 lines `m<NN>_<i> = <i>`, and each command `cmd/c01.py` to `cmd/c12.py` 500 lines `c<NN>_<i> = <i>`; a rewritten line keeps its name and wraps its value (`m01_3 = fmt(3)`), so `blame -w` does not see through it, as it would through a change of spacing.
+
+| Row | When | Author | What |
+| --- | --- | --- | --- |
+| R1 | 2026-01-05 | Dan Rewrite `<dan@example.com>` | "feat: rewrite the commands": adds the twelve commands, 6,000 lines. |
+| R2 | 2026-01-19 | Eve Refactor `<eve@example.com>` | "refactor: the commands": rewrites lines 46 to 500 of every command as `cli(<i>)`. |
+| F1 | 2026-02-02 | Ada Import `<ada@example.com>` | Adds the twelve modules, 12,000 lines. |
+| F2 | 2026-03-02 | `fmt[bot]` `<fmt[bot]@users.noreply.github.com>` | "style: format": rewrites lines 1 to 40 of every module as `fmt(<i>)`. |
+| F3 | 2026-04-06 | Bea Feature `<bea@example.com>` | Adds `pkg/big.py`, 2,000 lines. |
+| F4 | 2026-05-04 | Cy Rename `<cy@example.com>` | Rewrites lines 41 to 50 of every module as `renamed(<i>)`. |
+
+At HEAD the 25 prod files hold 20,000 surviving prod lines: Ada 11,400 (950 of each module), Eve 5,460 (455 of each command), Bea 2,000, Dan 540 (45 of each command), the bot 480 (40 of each module), Cy 120 (10 of each). The card's one `no-ignore-revs` caveat says so and names F2 alone, by its first 12 hex digits: "1 commit looks like one, holding a little of each of many prod files: <F2>, a bot's, 480 lines (2.4%) in 12 files". It says how to have blame skip it in a clone: its full SHA in a file passed to a scan of the repository alone (`git -C PATH rev-parse <F2> >> ignore-revs.txt`, then `stillhere scan --ignore-revs-file ignore-revs.txt PATH`), and that a `.git-blame-ignore-revs` at the root counts once it is on origin's default branch as last fetched, not as a commit made only in the clone.
+
+R1 is as wide and as shallow as F2 (9% of each command, 12 of the 25 files) and larger (540 lines, 2.7%), but it is the oldest owner of every file it holds lines in: it created them, as a rewrite or an import does, while F2 edited lines older than its own. F1 holds lines in as many files, but 95% of each, as an import does; R2 holds 91% of each command; F3 is one file; F4 is as wide and as shallow as F2, 1% of each module, but 120 lines are 0.6% of the repository's, under the 2% that moves numbers.
+
+who-knows of `pkg/` (14,000 lines, F2's 480 among them) carries the same caveat word for word: the repository's 20,000 lines and F2's 2.4%, not the path's.
+
+Wrong implementations this catches:
+
+- **The commit holding the most lines.** F1, the import, is named, and 11,400 lines would be suggested for blame to skip.
+- **Share alone, without breadth.** F3's 2,000 lines (10.0%) in one file are named.
+- **Breadth without a floor of lines.** F4 is named beside F2.
+- **Breadth and depth without the oldest owner.** R1 is named first, before F2, and the command the caveat gives would have blame skip Dan's rewrite (wave 11's review: fzf's "Rewrite fzf in Go").
+- **The author's kind left out, or read from the name.** F2's author is a bot by the `[bot]` in its address, as the policy's `[bots]` fragments read it (`identity`); the caveat says "a bot's".
+- **A route that does nothing in a clone.** The caveat tells the reader to commit a `.git-blame-ignore-revs`, which a scan never reads while the commit is only in the clone (wave 11's review: a scan reads origin's branch as last fetched, ADR 0009).
+- **who-knows judging the path.** who-knows of `pkg/` says "a repository with 14,000 surviving prod lines" and F2's 3.4%: the path's numbers under the repository's words.
 
 ### Partial and shallow clones (#74)
 

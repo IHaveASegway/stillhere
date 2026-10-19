@@ -6,6 +6,7 @@ import (
 
 	"github.com/IHaveASegway/stillhere/internal/classify"
 	"github.com/IHaveASegway/stillhere/internal/domain"
+	"github.com/IHaveASegway/stillhere/internal/identity"
 	"github.com/IHaveASegway/stillhere/internal/redact"
 	"github.com/IHaveASegway/stillhere/internal/report"
 )
@@ -88,7 +89,9 @@ func Paths(ctx context.Context, d Deps, r PathsRequest) (*report.Paths, error) {
 	}
 	ps := report.NewPaths(&report.PathsInput{
 		Run: &run, Facts: &asked, Prefixes: prefixes, Repo: repo, Role: r.Role, Skipped: r.Skipped,
-		PolicySource: source, Rows: rows,
+		// The run's directory tells a bot's commit from a person's in the
+		// no-ignore-revs caveat, by the run's own policy's bots.
+		PolicySource: source, Rows: rows, Who: identity.New(&asked, p),
 	})
 	// A PATH no repository asked about holds lists nothing: say so, and how
 	// the run writes its paths, as who-knows does, rather than an empty

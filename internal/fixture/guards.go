@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -21,6 +22,7 @@ const (
 	backdatedName    = "backdated"
 	mergedRevertName = "merged-revert"
 	binaryName       = "binary"
+	formattingName   = "formatting"
 )
 
 // nul is the byte that makes git take a file for binary when it is in the
@@ -121,6 +123,127 @@ func BuildBinary(ctx context.Context, dir string) error {
 		return fmt.Errorf("fixture: build binary repository in %s: %w", dir, b.err)
 	}
 	return nil
+}
+
+// Formatting builds the formatting-pass guard of testdata/fixture/SPEC.md
+// (KT-10) in a new temporary directory and returns its absolute path: a
+// work tree named "formatting", on branch main, with no
+// .git-blame-ignore-revs and 20,000 prod lines: a rewrite of twelve files
+// whose lines a later refactor mostly replaced, an import of twelve
+// others, a bot's pass that rewrites a little of each of those, a person's
+// large file of one feature, and a person's small edit of every imported
+// file. It stops the test with t.Fatal if the build fails.
+func Formatting(t testing.TB) string {
+	t.Helper()
+	dir := filepath.Join(t.TempDir(), formattingName)
+	if err := BuildFormatting(t.Context(), dir); err != nil {
+		t.Fatal(err)
+	}
+	return dir
+}
+
+// BuildFormatting builds the formatting-pass guard in dir, which is created
+// when missing and must otherwise be empty. Cancelling ctx kills the
+// running git process and returns its error.
+func BuildFormatting(ctx context.Context, dir string) error {
+	b, err := newBuilder(ctx, dir)
+	if err != nil {
+		return fmt.Errorf("fixture: %w", err)
+	}
+	formattingHistory(b)
+	if b.err != nil {
+		return fmt.Errorf("fixture: build formatting repository in %s: %w", dir, b.err)
+	}
+	return nil
+}
+
+// formattingHistory writes the Formatting history table of SPEC, each row
+// commented with its row ID. The pass rewrites its lines' content, not only
+// their spacing, since blame -w would see through a whitespace change.
+func formattingHistory(b *builder) {
+	ada := person{"Ada Import", "ada@example.com"}
+	fmtBot := person{"fmt[bot]", "fmt[bot]@users.noreply.github.com"}
+	bea := person{"Bea Feature", "bea@example.com"}
+	cy := person{"Cy Rename", "cy@example.com"}
+	dan := person{"Dan Rewrite", "dan@example.com"}
+	eve := person{"Eve Refactor", "eve@example.com"}
+	module := func(i int) (path, name string) {
+		return fmt.Sprintf("pkg/m%02d.py", i), fmt.Sprintf("m%02d", i)
+	}
+	command := func(i int) (path, name string) {
+		return fmt.Sprintf("cmd/c%02d.py", i), fmt.Sprintf("c%02d", i)
+	}
+	// refactored is a command's 500 lines "<name>_<i> = <i>", with the
+	// lines after kept written "cli(<i>)".
+	refactored := func(name string, kept int) string {
+		var s strings.Builder
+		for i := 1; i <= 500; i++ {
+			if i <= kept {
+				fmt.Fprintf(&s, "%s_%d = %d\n", name, i, i)
+			} else {
+				fmt.Fprintf(&s, "%s_%d = cli(%d)\n", name, i, i)
+			}
+		}
+		return s.String()
+	}
+	// content is a module's 1,000 lines "<name>_<i> = <i>", with lines 1
+	// to formatted written "fmt(<i>)" and the lines after them up to
+	// renamed written "renamed(<i>)".
+	content := func(name string, formatted, renamed int) string {
+		var s strings.Builder
+		for i := 1; i <= 1000; i++ {
+			switch {
+			case i <= formatted:
+				fmt.Fprintf(&s, "%s_%d = fmt(%d)\n", name, i, i)
+			case i <= renamed:
+				fmt.Fprintf(&s, "%s_%d = renamed(%d)\n", name, i, i)
+			default:
+				fmt.Fprintf(&s, "%s_%d = %d\n", name, i, i)
+			}
+		}
+		return s.String()
+	}
+	b.initRepo()
+	b.git("config", "commit.gpgsign", "false")
+
+	b.row(noon(2026, time.January, 5), dan) // R1: the rewrite, twelve commands of 500 lines
+	for i := 1; i <= 12; i++ {
+		path, name := command(i)
+		b.write(path, numbered(name, 500))
+	}
+	b.commit("feat: rewrite the commands")
+
+	b.row(noon(2026, time.January, 19), eve) // R2: lines 46 to 500 of every command
+	for i := 1; i <= 12; i++ {
+		path, name := command(i)
+		b.write(path, refactored(name, 45))
+	}
+	b.commit("refactor: the commands")
+
+	b.row(noon(2026, time.February, 2), ada) // F1: the import, twelve modules of 1,000 lines
+	for i := 1; i <= 12; i++ {
+		path, name := module(i)
+		b.write(path, numbered(name, 1000))
+	}
+	b.commit("feat: import the modules")
+
+	b.row(noon(2026, time.March, 2), fmtBot) // F2: the pass, lines 1 to 40 of every module
+	for i := 1; i <= 12; i++ {
+		path, name := module(i)
+		b.write(path, content(name, 40, 40))
+	}
+	b.commit("style: format")
+
+	b.row(noon(2026, time.April, 6), bea) // F3: one feature, one large file
+	b.write("pkg/big.py", numbered("big", 2000))
+	b.commit("feat: add big.py")
+
+	b.row(noon(2026, time.May, 4), cy) // F4: lines 41 to 50 of every module
+	for i := 1; i <= 12; i++ {
+		path, name := module(i)
+		b.write(path, content(name, 40, 50))
+	}
+	b.commit("refactor: rename")
 }
 
 // backdatedHistory writes the Backdated history table of SPEC: one row per

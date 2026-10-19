@@ -14,7 +14,9 @@ command -v stillhere            # prints its path when the Go bin directory is o
 stillhere version
 ```
 
-git 2.45 or newer must be on your `PATH`. `@main` is the newest commit; `@latest` can lag it by hours through the Go module proxy. [Install](../README.md#install) has the other ways.
+git 2.45 or newer must be on your `PATH`. `@main` is the newest commit; `@latest` can lag it by hours through the Go module proxy, and `GOPROXY=direct go install github.com/IHaveASegway/stillhere/cmd/stillhere@main` skips the proxy once. If `go env GONOPROXY` (or `GOPRIVATE`) matches github.com, as a company's settings often do, the first command fetches with your git directly, so git must be able to read github.com over HTTPS. Or build from a checkout with `make build` ([Install](../README.md#install)).
+
+No release exists yet, so there is no Homebrew cask, no `@latest` release and no Docker image: `brew install --cask ihaveasegway/tap/stillhere` fails with `Cask 'stillhere' is unavailable` until the first release. [Install](../README.md#after-the-first-release-none-yet) lists those commands for then.
 
 ## 2. What landed this week
 

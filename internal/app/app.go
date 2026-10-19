@@ -154,6 +154,10 @@ type WhoKnowsRequest struct {
 	RunID int64  // 0: the latest complete or partial scan run
 	Path  string // repo-relative path prefix
 	Repo  string // Repo.Key; "" searches every repository in the run
+	// Days is the window of recent landers and reviewers, [now - Days,
+	// now); 0: metrics.WhoKnowsDays (90). It is at most the history the
+	// run read, as explain's Days is, and the answer states it.
+	Days int
 }
 
 // PathsRequest asks which class each path of a stored run got, and by

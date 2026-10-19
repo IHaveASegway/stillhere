@@ -19,6 +19,14 @@ type whoKnowsV1 struct{}
 
 var whoKnowsID = domain.MetricID{Name: "who_knows", Version: 1}
 
+// WhoKnowsDays is who_knows@1's window of recent landers and reviewers
+// when the query names none: [now - 90 days, now). A query may name
+// another (who-knows --days, the MCP server's who_knows days), as explain
+// of landed@1 and landed@2 may: the window is the question's, so a value
+// over another one is the same metric asked about another span, and its
+// answer says which (report.WhoKnows.Days).
+const WhoKnowsDays = recentDays
+
 // Definition returns who_knows@1's catalog entry.
 func (whoKnowsV1) Definition() Definition {
 	return Definition{
@@ -33,11 +41,12 @@ func (whoKnowsV1) Definition() Definition {
 			"uncounted_<role>_lines and uncounted_<role>_files for each, the lines the answer leaves out; and one value per " +
 			"person listed, whose Value is their counted " +
 			"lines under the path, with Detail majority_files (files under the path they hold at least half of), recent_landings " +
-			"(landings in [now - 90d, now) in which a non-merge commit credited to them changed non-blank lines on a path with a " +
+			"(landings in [now - D, now) in which a non-merge commit credited to them changed non-blank lines on a path with a " +
 			"role under the path, ignore-revs commits excluded), top_author (1 to 5, by counted lines then email, when they are " +
 			"one of the top five) and, when the run has GitHub data for the repository, recent_reviews (merged pull requests " +
 			"authored by someone else whose landings changed the path as recent_landings counts a change, on which they " +
-			"submitted a review, approved, changes requested or commented, in [now - 90d, now)). A person is listed when any " +
+			"submitted a review, approved, changes requested or commented, in [now - D, now)). D is 90 days unless the query " +
+			"names another window, at most the run's history (who-knows --days, who_knows' days). A person is listed when any " +
 			"of the four applies; a reviewer the run cannot link to an email is listed as @login. Bots are ranked among bots, " +
 			"apart.",
 		Ranked:      false,
@@ -73,8 +82,12 @@ func (whoKnowsV1) compute(*view) ([]domain.MetricValue, error) { return nil, nil
 // covers src/pay.go but not srcutil/x.go. A repo that is no key is matched
 // by its scrubbed form (redact.URL), so a remote pasted with its credentials
 // finds its repository; one that matches neither wraps domain.ErrNotFound.
-// A prefix nothing is known under gives no values.
-func WhoKnows(in *Input, repo, prefix string) ([]domain.MetricValue, error) {
+// A prefix nothing is known under gives no values. days is the window of
+// recent landers and reviewers, [now - days, now); 0 or less is
+// WhoKnowsDays. Whether the run's history holds the window is the
+// caller's to check (app.WhoKnows), since what landed before the history
+// is unknown, not none.
+func WhoKnows(in *Input, repo, prefix string, days int) ([]domain.MetricValue, error) {
 	if in == nil || in.Facts == nil {
 		return nil, errNoFacts
 	}
@@ -87,7 +100,10 @@ func WhoKnows(in *Input, repo, prefix string) ([]domain.MetricValue, error) {
 		return nil, err
 	}
 	clean := cleanPrefix(prefix)
-	w := v.window(recentDays, 0)
+	if days <= 0 {
+		days = WhoKnowsDays
+	}
+	w := v.window(days, 0)
 	reviews := v.reviews() // once for every repository asked about
 	var out []domain.MetricValue
 	for _, r := range v.repos {

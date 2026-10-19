@@ -188,11 +188,15 @@ type Change struct {
 // WhoKnows is the who_knows@1 answer for a path: a routing answer, not a
 // rank.
 type WhoKnows struct {
-	Provenance Provenance     `json:"provenance"`
-	Path       string         `json:"path"` // repo-relative prefix; "" for the whole repository
-	Repo       string         `json:"repo"` // the --repo filter (Repo.Key), or "" for every repository
-	Repos      []WhoKnowsRepo `json:"repos"`
-	Caveats    []Caveat       `json:"caveats"`
+	Provenance Provenance `json:"provenance"`
+	Path       string     `json:"path"` // repo-relative prefix; "" for the whole repository
+	Repo       string     `json:"repo"` // the --repo filter (Repo.Key), or "" for every repository
+	// Days is the window of recent landers and reviewers, [now - Days,
+	// now): 90 unless the query named another (who-knows --days, the MCP
+	// server's who_knows days; Ruby F10).
+	Days    int            `json:"days"`
+	Repos   []WhoKnowsRepo `json:"repos"`
+	Caveats []Caveat       `json:"caveats"`
 
 	addrs []string // the run's addresses (#90); never encoded
 }
@@ -218,8 +222,8 @@ type WhoKnowsRepo struct {
 	Uncounted      []RoleLines `json:"uncounted"`
 	MajorityOwners []Knower    `json:"majority_owners"` // hold at least half the lines of a file under the path
 	TopAuthors     []Knower    `json:"top_authors"`     // up to five, by prod lines under the path, then email
-	RecentLanders  []Knower    `json:"recent_landers"`  // credited with a change under the path in the last 90 days
-	// RecentReviewers reviewed, in the last 90 days, a merged pull request
+	RecentLanders  []Knower    `json:"recent_landers"`  // credited with a change under the path in the answer's window (WhoKnows.Days)
+	// RecentReviewers reviewed, in the answer's window, a merged pull request
 	// that changed the path, by the GitHub data the run read: [] also when
 	// the run has none for the repository, which provenance.forge then does
 	// not list.
@@ -251,8 +255,8 @@ type Knower struct {
 	NameWithheld   bool   `json:"name_withheld"`   // as StillHereRow's
 	Lines          int    `json:"lines"`           // surviving non-blank lines under the path, of the roles the answer counts (WhoKnowsRepo.Roles)
 	MajorityFiles  int    `json:"majority_files"`  // files under the path where the person is a majority owner
-	RecentLandings int    `json:"recent_landings"` // landings in the last 90 days that changed the path
-	RecentReviews  int    `json:"recent_reviews"`  // pull requests that changed the path, reviewed in the last 90 days
+	RecentLandings int    `json:"recent_landings"` // landings in the answer's window (WhoKnows.Days) that changed the path
+	RecentReviews  int    `json:"recent_reviews"`  // pull requests that changed the path, reviewed in the answer's window
 	// The person's last activity in the run, as a still-here row's
 	// (StillHereRow.LastActive and the rest).
 	LastActive   *time.Time `json:"last_active"`

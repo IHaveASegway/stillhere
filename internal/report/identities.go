@@ -250,7 +250,7 @@ func NewIdentities(in *IdentitiesInput) *Identities {
 	// The answer covers every repository of the scope's facts and reads no
 	// metric, so it shows no GitHub number and carries no forge caveat.
 	id.Provenance = AnswerProvenance(in.Run, fs, in.Forge, nil)
-	id.Caveats = append(AnswerCaveats(fs), Caveat{
+	id.Caveats = append(AnswerCaveats(fs, in.Who), Caveat{
 		Code: identCodeMailmap,
 		Message: "These are the run's addresses, which git mailmapped when the run was scanned: an address the " +
 			"mailmap merged is in no candidate, and a .mailmap line added since takes effect at the next scan. " +

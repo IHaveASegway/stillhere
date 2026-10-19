@@ -946,6 +946,7 @@ type whoKnowsOut struct {
 	head
 	Path  string         `json:"path"` // the repo-relative prefix; "" for the whole repository
 	Repo  string         `json:"repo"` // the repository searched, or "" for every one
+	Days  int            `json:"days"` // the window of recent landers and reviewers (report.WhoKnows.Days)
 	Repos []whoKnowsRepo `json:"repos"`
 	tail
 }
@@ -961,7 +962,7 @@ type whoKnowsRepo struct {
 }
 
 func (s *shaper) whoKnowsAnswer(w *report.WhoKnows, repoName string) *whoKnowsOut {
-	out := &whoKnowsOut{Path: w.Path, Repo: repoName, tail: tail{Caveats: w.Caveats}}
+	out := &whoKnowsOut{Path: w.Path, Repo: repoName, Days: w.Days, tail: tail{Caveats: w.Caveats}}
 	repos, pg := paginate(w.Repos, s.f, w.Provenance.RunID)
 	if pg.Total > 1 || pg.NextCursor != nil {
 		out.Page = pg

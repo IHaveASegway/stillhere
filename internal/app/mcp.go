@@ -588,7 +588,7 @@ func Changes(ctx context.Context, d Deps, r ChangesRequest) (*ChangesAnswer, err
 	if err != nil {
 		return nil, err
 	}
-	a.Caveats = append(append(report.AnswerCaveats(scoped), caveats...), validity...)
+	a.Caveats = append(append(report.AnswerCaveats(scoped, s.who), caveats...), validity...)
 	return a, nil
 }
 
@@ -992,7 +992,7 @@ func Highlights(ctx context.Context, d Deps, r HighlightsRequest) (*HighlightsAn
 	a.Provenance = report.AnswerProvenance(&run, scoped, s.forge, used)
 	// The top tier can hold reviews_given@1, whose GitHub numbers carry
 	// their caveats as its rank tables do.
-	a.Caveats = append(report.AnswerCaveats(scoped), report.ForgeCaveats(&run, scoped, s.forge, used)...)
+	a.Caveats = append(report.AnswerCaveats(scoped, s.who), report.ForgeCaveats(&run, scoped, s.forge, used)...)
 	a.Caveats = append(a.Caveats, report.Caveat{Code: "highlights",
 		Message: "Highlights are rule-based picks for recognition, not a ranking of people: the top tier counts everyone " +
 			"whose 95% rank interval reaches first place and names them when they are a third of the table or fewer, or " +
@@ -1282,7 +1282,7 @@ func Diff(ctx context.Context, d Deps, r DiffRequest) (*DiffAnswer, error) {
 	scoped := mcpScopedFacts(s.facts, []*domain.RepoFacts{rf})
 	run := s.run
 	a.Provenance = report.AnswerProvenance(&run, scoped, s.forge, nil)
-	a.Caveats = report.AnswerCaveats(scoped)
+	a.Caveats = report.AnswerCaveats(scoped, s.who)
 	switch {
 	case left > 0:
 		a.Truncated = true

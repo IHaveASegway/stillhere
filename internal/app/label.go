@@ -226,7 +226,7 @@ func Label(ctx context.Context, d Deps, r LabelRequest) (*report.LabelSample, er
 	sample.Progress = lr.progress(picked, labelled, s.facts.Now)
 	run := s.run
 	sample.Provenance = report.AnswerProvenance(&run, s.facts, s.forge, ids)
-	sample.Caveats = report.AnswerCaveats(s.facts)
+	sample.Caveats = report.AnswerCaveats(s.facts, s.who)
 	for j, m := range lr.metrics {
 		if m.forge && !lr.scores[j] {
 			sample.Caveats = append(sample.Caveats, report.ForgeCaveatsAlone(&run, s.facts, s.forge, m.id)...)
