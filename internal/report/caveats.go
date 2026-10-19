@@ -77,7 +77,8 @@ var summaries = map[string]string{
 	codeBinary: "git took some changes to prod files for binary, so their lines are unknown: durable@1 and simplifying@1 " +
 		"leave them out, and the lines landed do not count them.",
 	codeNoIgnoreRevs: "Large repositories without a .git-blame-ignore-revs: a formatting commit would take the credit for every line it touched.",
-	codeDuplicate:    "Clones of the same remote as these repositories were skipped as duplicates: each repository is counted once (see their warnings).",
+	codeDuplicate: "Other clones of these repositories, of the same remote or of an old name GitHub resolves to the repository, " +
+		"were skipped as duplicates: each repository is counted once (see their warnings).",
 	codeInlineTests: "Rust unit tests inside the source (#[cfg(test)] items in prod files) count as prod in these repositories, " +
 		"because a file has one role (see their warnings for how many lines).",
 	codeHeadAfterNow: "These repositories are read at the newest commit on their branch's first-parent chain committed before --now: " +
@@ -87,8 +88,8 @@ var summaries = map[string]string{
 		"(see their warnings for how many).",
 	codeForgeMoved: "These repositories' origins name a GitHub repository by a name GitHub moved it from: their GitHub data " +
 		"is joined by the old name, which GitHub resolves to it (see their warnings for the new names and the command that sets them).",
-	codeForgeUnmatched: "No GitHub data is these repositories', while facts.db holds repositories of their names under other " +
-		"owners: if GitHub moved them, a sync of the old name records the move (see their warnings for the names and the command).",
+	codeForgeUnmatched: "No GitHub data is these repositories', while facts.db holds GitHub data of repositories whose history " +
+		"they share: if GitHub moved them, a sync of each origin's name records the move (see their warnings for the names and the command).",
 }
 
 func notFetched() Caveat {
@@ -343,7 +344,11 @@ func (b *builder) identityCaveat(scope domain.Scope, members []*domain.RepoFacts
 			emails[v.Subject.Key] = true
 		}
 	}
-	return sharedNames(b.in.Who, newLinks(b.in.Candidates), emails, b.in.Commands)
+	why := unlinkedWhy(b.in.Commands)
+	if b.in.Kind == KindWeek {
+		why = weekUnlinkedWhy
+	}
+	return sharedNames(b.in.Who, newLinks(b.in.Candidates), emails, b.in.Commands, why)
 }
 
 // links says which addresses the run's identity candidates put together:
@@ -387,13 +392,25 @@ func unlinkedWhy(cmds Commands) string {
 		" suggests no line for them"
 }
 
+// weekUnlinkedWhy is unlinkedWhy for week, whose candidates are its own
+// facts' (app.Week): it reads a week's commits and no GitHub data, while
+// identities reads the latest scan, a year and GitHub's links, which may
+// link the emails a week leaves apart (wave 11's review: one name of four
+// week addresses was a scan's candidate by its same-forge-account rule).
+// So it says what the week's rules found, and nothing of what identities
+// suggests.
+const weekUnlinkedWhy = "no identity rule links their emails in this week's commits (an address several people use, " +
+	"such as a team or info mailbox, or a name more than 10 addresses carry; week reads no GitHub data, whose links " +
+	"to one account a scan's identity candidates weigh too)"
+
 // sharedNames is the unmerged-identities caveat about emails, the people a
 // section shows: the display names more than one of them carries, compared
 // as the identities command compares them (People.NameKey: case, spacing
 // and punctuation never tell two names apart, and a default name, a bot's
 // or a login's is no name to share), of which it names those whose emails
 // the run's identity candidates link (l), the names identities suggests a
-// line for, and counts the others apart with why (wave 11, round 3's TS
+// line for, and counts the others apart, giving why they stay apart
+// (unlinkedWhy, or weekUnlinkedWhy for week; wave 11, round 3's TS
 // F10: a maintainer's remaining address was a mailbox committed under six
 // names, which identities rightly never compares, and the caveat sent the
 // user to identities for a line it could not suggest). git's mailmap is
@@ -403,7 +420,7 @@ func unlinkedWhy(cmds Commands) string {
 // withheld on every address that carries it (personName), so the caveat
 // and the tables agree. A name written two ways is printed the first way,
 // in byte order.
-func sharedNames(who People, l links, emails map[string]bool, cmds Commands) (Caveat, bool) {
+func sharedNames(who People, l links, emails map[string]bool, cmds Commands, why string) (Caveat, bool) {
 	if who == nil {
 		return Caveat{}, false
 	}
@@ -460,7 +477,7 @@ func sharedNames(who People, l links, emails map[string]bool, cmds Commands) (Ca
 		if total == 0 {
 			left = plural(unlinked, "display name belongs", "display names belong")
 		}
-		msg += left + " to more than one email, but " + unlinkedWhy(cmds) + ": their numbers stay apart, as two people's would."
+		msg += left + " to more than one email, but " + why + ": their numbers stay apart, as two people's would."
 	}
 	return Caveat{Code: codeIdentities, Message: msg}, true
 }

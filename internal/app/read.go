@@ -527,9 +527,12 @@ func Explain(ctx context.Context, d Deps, r ExplainRequest) (*report.Explain, er
 			values = append(values, v)
 		}
 	}
-	if known && in.Days != s.policy.Week.Days {
+	if in.Days != s.policy.Week.Days {
 		// A window the scan did not store, computed from the run's facts
-		// as a scan computes the stored one.
+		// as a scan computes the stored one, before a subject with no
+		// stored value is refused: the window asked for may hold theirs
+		// (wave 11's review: landed over 365 days was refused for a person
+		// whose one landing was older than the stored week).
 		computed, err := m.Compute(in)
 		if err != nil {
 			return nil, fmt.Errorf("explaining %s over %d days: %w", def.ID, in.Days, err)
@@ -537,6 +540,7 @@ func Explain(ctx context.Context, d Deps, r ExplainRequest) (*report.Explain, er
 		for _, v := range computed {
 			if v.Subject == r.Subject {
 				values = append(values, v)
+				known = true
 			}
 		}
 	}
@@ -643,10 +647,33 @@ func (s *stored) explainMissing(sub domain.Subject, cmds report.Commands) error 
 				"surviving prod lines; %s answers any path: %w", sub.Key[i+1:], name, s.run.ID, cmds.WhoKnows(), domain.ErrNotFound)
 		}
 	case domain.SubjectPerson:
-		return fmt.Errorf("%s holds no value in run %d: none of their changes left a surviving prod line or landed in "+
-			"a window a metric reads: %w", personText(s.who, sub.Key), s.run.ID, domain.ErrNotFound)
+		return s.noValue(sub.Key, false, cmds)
 	}
 	return fmt.Errorf("%s %s has no values in run %d: %w", sub.Kind, sub.Key, s.run.ID, domain.ErrNotFound)
+}
+
+// noValue is the not-found error of a person a run stores no value about,
+// in words both inbound adapters print as they are (it is ErrNotFound):
+// what a run stores of a person, so the reason is true whatever kept them
+// out (wave 11's review: "none of their changes landed in a window a
+// metric reads" was said of a person with a landing in the 365 days the
+// AI-assisted share reads, and the MCP server said it in a copy of its own).
+type noValue struct{ msg string }
+
+func (e *noValue) Error() string        { return e.msg }
+func (e *noValue) Is(target error) bool { return target == domain.ErrNotFound }
+
+// noValue is the error of a person, key, the run stores no value about: on
+// their own page (own), which computes their AI-assisted share too, none of
+// that either; else where a longer window and that share are.
+func (s *stored) noValue(key string, own bool, cmds report.Commands) error {
+	msg := fmt.Sprintf("%s holds no value in run %d: no surviving prod line, no landing in the %d days landed reads, "+
+		"and no change or review a ranked metric scores is theirs", personText(s.who, key), s.run.ID, s.policy.Week.Days)
+	if own {
+		return &noValue{msg: msg + ", nor any landing their AI-assisted share counts"}
+	}
+	return &noValue{msg: msg + "; explaining landed over more days may count older landings, and their own " +
+		"AI-assisted share is on their own page (" + report.CommandsOr(cmds).OwnPage() + ")"}
 }
 
 // personText names a person in an error as every page names them, never by
@@ -1344,8 +1371,7 @@ func personPage(ctx context.Context, d Deps, cmd string, runID int64, email stri
 		values = append(values, share...)
 	}
 	if len(values) == 0 {
-		return nil, fmt.Errorf("%s holds no value in run %d: none of their changes left a surviving prod line or "+
-			"landed in a window a metric reads: %w", personText(s.who, email), s.run.ID, domain.ErrNotFound)
+		return nil, s.noValue(email, own, d.commands())
 	}
 	sets, _, err := rankAll(s.input(), allRanked(), rankScopes(s.scope(), s.facts), s.ranks, &subject)
 	if err != nil {

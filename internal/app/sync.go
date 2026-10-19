@@ -171,6 +171,9 @@ func syncRepos(ctx context.Context, d Deps, r SyncRequest, listed []domain.Forge
 			what, left.count(leftArchived), left.count(leftFork), left.count(leftEmpty), domain.ErrNoFacts)
 	}
 	sum.Moved = syncMoves(repos, renamed, log)
+	if err := checkAliases(ctx, d, repos, log); err != nil {
+		return domain.RunStatusFailed, fmt.Errorf("checking the old names of %s: %w", what, err)
+	}
 	sum.Repos = len(repos)
 	if err := d.ForgeStore.PutForgeRepos(ctx, repos); err != nil {
 		return domain.RunStatusFailed, fmt.Errorf("storing the repositories of %s: %w", what, err)
@@ -315,7 +318,8 @@ func selectRepos(listed []domain.ForgeRepo, r SyncRequest, named bool) ([]domain
 // no repository is mirrored, for the same reason; pull requests still sync.
 //
 // It also returns, by ForgeRepo.ID, the name each renamed repository's
-// mirror was found under (MirrorMove.Was), whether or not it could move:
+// mirror was found under, or a restored one held in root/.stale
+// (MirrorMove.Was), whether or not it could move:
 // the node id says GitHub listed the repository under that name, and
 // resolves it to the repository now (ForgeRepo.Aliases).
 func reconcileMirrors(ctx context.Context, d Deps, r SyncRequest, owner string, mirrored []domain.ForgeRepo,
@@ -332,7 +336,7 @@ func reconcileMirrors(ctx context.Context, d Deps, r SyncRequest, owner string, 
 	var unmirrored map[string]error
 	var renamed map[string][]string
 	for _, m := range moves {
-		if m.Reason == domain.MirrorRenamed && m.Was != "" {
+		if m.Was != "" {
 			if renamed == nil {
 				renamed = map[string][]string{}
 			}
@@ -365,15 +369,21 @@ func reconcileMirrors(ctx context.Context, d Deps, r SyncRequest, owner string, 
 // its mirror's old path held (renamed, by ForgeRepo.ID), beside those a
 // --repo lookup found (ForgeRepo.Aliases), so PutForgeRepos records them
 // all; logs each move; and returns them as the summary names them,
-// "old → new", sorted. A name that is the repository's own is no alias.
+// "old → new", sorted. A name that is the repository's own, or another
+// repository's of this sync, is no alias: GitHub resolves it to that one
+// (wave 11's review: a mirror found at acme/a, beside the repository that
+// holds acme/a now, was named a move of acme/a).
 func syncMoves(repos []domain.ForgeRepo, renamed map[string][]string, log *slog.Logger) []string {
+	held := make(map[string]bool, len(repos)) // every repository's own name, lowercased
+	for _, r := range repos {
+		held[strings.ToLower(repoName(r))] = true
+	}
 	var moved []string
 	for i := range repos {
 		r := &repos[i]
-		own := strings.ToLower(repoName(*r))
 		var names []string
 		for _, a := range mergeAliases(r.Aliases, renamed[r.ID]) {
-			if a != own {
+			if !held[a] {
 				names = append(names, a)
 			}
 		}
@@ -386,6 +396,53 @@ func syncMoves(repos []domain.ForgeRepo, renamed map[string][]string, log *slog.
 	}
 	slices.Sort(moved)
 	return moved
+}
+
+// checkAliases adds to each repository the aliases the replica holds of it
+// (ForgeStore.ForgeAliases) that GitHub still resolves to it, beside those
+// this sync learned (syncMoves), so that PutForgeRepos keeps those and
+// drops the others: one lookup of each name (ForgeSource.Repo), whose
+// answer is GitHub's redirect as it stands. A name GitHub no longer knows,
+// or that it resolves to another repository now, is no alias of this one
+// any more: GitHub ends a redirect when a repository takes the old name, as
+// the old owner's new repository or fork does, and a clone of that one
+// would otherwise join the moved repository's pull requests (wave 11's
+// review). A lookup that fails otherwise keeps the alias, for the next sync
+// to check.
+func checkAliases(ctx context.Context, d Deps, repos []domain.ForgeRepo, log *slog.Logger) error {
+	stored, err := d.ForgeStore.ForgeAliases(ctx)
+	if err != nil || len(stored) == 0 {
+		return err
+	}
+	for i := range repos {
+		r := &repos[i]
+		for _, a := range stored[r.ID] {
+			owner, name, ok := strings.Cut(a, "/")
+			if !ok || slices.Contains(r.Aliases, a) {
+				continue // learned this sync, from GitHub's own answer or the node id
+			}
+			fr, err := d.Forge.Repo(ctx, owner, name)
+			var usage *domain.UsageError
+			switch {
+			case errors.As(err, &usage):
+				log.Info("GitHub no longer resolves an old name of the repository: the replica drops it", "was", a,
+					"now", repoName(*r))
+				continue
+			case err != nil:
+				if ctx.Err() != nil {
+					return ctx.Err()
+				}
+				log.Warn("could not check an old name of the repository with GitHub: the replica keeps it", "was", a,
+					"now", repoName(*r), "err", redact.Scrub(err.Error()))
+			case fr.ID != r.ID:
+				log.Info("an old name of the repository names another repository now: the replica drops it", "was", a,
+					"now", repoName(*r), "holder", repoName(fr))
+				continue
+			}
+			r.Aliases = mergeAliases(r.Aliases, []string{a})
+		}
+	}
+	return nil
 }
 
 // mergeAliases is a and b as one ForgeRepo.Aliases list: lowercased,

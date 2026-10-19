@@ -57,11 +57,13 @@ groups; `who_knows` is computed per path and never explained: call
 `who_knows(path, repo)`. Asking about a kind a metric has no value about is
 refused with the calls that answer instead. Without `subject_kind`, a
 `scope_arg` such as `repo:NAME` says the kind, and a metric never about a
-person (review coverage, knowledge loss) reads a bare subject as the
-repository or group it names. A repository GitHub renamed or moved answers to
+person (review coverage, knowledge loss, knowledge concentration, the
+AI-assisted share) reads a bare subject as the repository or group it names;
+`path` with no `subject_kind` is an area's. A repository GitHub renamed or moved answers to
 its old name and its new one once a sync has seen the move; a caveat
-`forge-unmatched` means the user should sync it by the name the clone's
-origin holds. A still-here row's
+`forge-unmatched` means the clone shares history with a synced repository it
+did not join: the user should sync it by the name the clone's origin holds
+(which records a move, or syncs a fork), not repoint the clone's origin. A still-here row's
 `landings_365d` counts the landings `landed` credits to the person (who wrote
 it, merges apart in `merged_365d`): `explain(metric: "landed", subject: P,
 days: 365)` lists them.

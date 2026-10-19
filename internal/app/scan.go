@@ -101,6 +101,7 @@ func Scan(ctx context.Context, d Deps, r ScanRequest) (*report.Model, error) {
 	var forge *report.ForgeRead // nil without the replica port: the scan cannot speak for the replica, as a reader without it cannot
 	var watermarks []domain.RunWatermark
 	if d.ForgeStore != nil {
+		forgeDuplicates(fs, replica)
 		fs.Forge, watermarks = runForge(fs.Repos, replica)
 		forge = forgeRead(watermarks)
 		forgeNameWarnings(fs.Repos, fs.Forge, replica)
@@ -309,6 +310,7 @@ func runForge(repos []domain.RepoFacts, replica *domain.ForgeFacts) (*domain.For
 		return nil, nil
 	}
 	join := domain.ForgeJoin(repos, replica.Repos)
+	aliasJoinsShared(join, repos, replica)
 	if len(join) == 0 {
 		return nil, nil
 	}
@@ -366,23 +368,98 @@ const (
 	// its GitHub data was joined by (domain.ForgeRepo.Aliases).
 	warnForgeMoved = "forge-moved"
 	// warnForgeUnmatched: no forge repository is the repository's, while
-	// the replica holds one of its name under another owner.
+	// the replica holds GitHub data of one whose history the clone shares.
 	warnForgeUnmatched = "forge-unmatched"
+	// warnDuplicate is discovery's code (collect.Discovery.Warnings): a
+	// scan skips a clone whose origin names, by an old name GitHub
+	// resolves to it, the repository another clone's origin names now.
+	warnDuplicate = "duplicate-repo"
 )
+
+// forgeDuplicates leaves out of the run each collected clone whose origin
+// names a forge repository by one of its aliases while another repository
+// of the run names it by its current name, as discovery skips a second
+// clone of one remote (docs/spec/discovery.md, rule 5): both are one
+// repository, which GitHub resolves both names to, and counting both would
+// count its commits, lines and pull requests twice (wave 11's review: one
+// scan of an old name's clone beside the new name's mirror gave 124 of 160
+// reviewed, each clone's 62 of 80). It runs once collection has said what
+// each clone holds, since an alias joins only a clone that shares the
+// repository's history (aliasJoinsShared). The kept repository carries a
+// duplicate-repo warning naming both paths, the skipped clone's origin and
+// GitHub's name. Two clones of one name in two forms (SSH and HTTPS) stay
+// two repositories, as discovery keeps them.
+func forgeDuplicates(fs *domain.FactSet, replica *domain.ForgeFacts) {
+	if replica == nil || len(fs.Repos) < 2 {
+		return
+	}
+	join := domain.ForgeJoin(fs.Repos, replica.Repos)
+	aliasJoinsShared(join, fs.Repos, replica)
+	at := make(map[string]int, len(fs.Repos)) // Repo.Key → index in fs.Repos
+	for i := range fs.Repos {
+		at[fs.Repos[i].Repo.Key] = i
+	}
+	skip := map[string]bool{}
+	for _, r := range replica.Repos {
+		now, ok := domain.RemoteRepo(r.Key)
+		if !ok || len(join[r.ID]) < 2 {
+			continue
+		}
+		var current, old []int
+		for _, key := range join[r.ID] {
+			if origin, _ := domain.RemoteRepo(fs.Repos[at[key]].Repo.Remote); origin == now {
+				current = append(current, at[key])
+			} else {
+				old = append(old, at[key])
+			}
+		}
+		if len(current) == 0 || len(old) == 0 {
+			continue
+		}
+		kept := &fs.Repos[slices.MinFunc(current, func(a, b int) int {
+			return cmp.Compare(fs.Repos[a].Repo.Path, fs.Repos[b].Repo.Path)
+		})]
+		var dups []domain.Warning
+		for _, i := range old {
+			o := fs.Repos[i].Repo
+			skip[o.Key] = true
+			dups = append(dups, domain.Warning{Code: warnDuplicate, Message: fmt.Sprintf(
+				"skipped %s; its origin (%s) names a repository GitHub now calls %s/%s, the remote of %s (%s)",
+				o.Path, o.Remote, r.Owner, r.Name, kept.Repo.Path, kept.Repo.Remote)})
+		}
+		kept.Warnings = repoWarnings(kept.Repo, kept.Warnings, dups)
+	}
+	if len(skip) == 0 {
+		return
+	}
+	fs.Repos = slices.DeleteFunc(fs.Repos, func(rf domain.RepoFacts) bool { return skip[rf.Repo.Key] })
+	for i := range fs.Groups {
+		fs.Groups[i].Repos = slices.DeleteFunc(slices.Clone(fs.Groups[i].Repos), func(k string) bool { return skip[k] })
+	}
+}
 
 // forgeNameWarnings gives each collected repository whose origin names a
 // GitHub repository by another name than the replica's a warning, which
 // the run keeps and every section with its numbers says (its card's
 // caveats): forge-moved when the run's join (own, runForge's) took its
 // GitHub data by a name GitHub moved the repository from, with the command
-// that names it as GitHub does now; and
-// forge-unmatched when no forge repository joined it while the replica
-// holds one of the same name under another owner, which no other
-// repository of the run is a clone of, as a sync that copied
-// the repository under its new name before GitHub's move was recorded
-// leaves it, with the sync that records the move. Round 3's KT-2: a clone
-// of a moved repository, scanned with 535 pull requests synced under its
-// new owner's name, showed no review coverage and said nothing.
+// that names it as GitHub does now; and forge-unmatched when no forge
+// repository joined it while the replica holds GitHub data of one whose
+// history it shares (sharedHistory) and that no other repository of the
+// run is a clone of, as a sync that copied the repository under its new
+// name before GitHub's move was recorded leaves it, with the sync that
+// records the move. Round 3's KT-2: a clone of a moved repository, scanned
+// with 535 pull requests synced under its new owner's name, showed no
+// review coverage and said nothing.
+//
+// Wave 11's review: a name alone says nothing. A repository of the same
+// name under another owner is as often an unrelated one (anyone who syncs
+// an organization has its docs, cli or homebrew-tap), and a rename under
+// the same owner keeps no name at all; the commits are what a moved
+// repository and its clone share. So is a fork's history, and only GitHub's
+// answer to a sync of the origin's name tells a fork from a move, so the
+// warning gives that command, and no git remote set-url, which would point
+// a fork's clone at its upstream.
 func forgeNameWarnings(repos []domain.RepoFacts, own, replica *domain.ForgeFacts) {
 	if replica == nil {
 		return
@@ -395,6 +472,7 @@ func forgeNameWarnings(repos []domain.RepoFacts, own, replica *domain.ForgeFacts
 			}
 		}
 	}
+	var named map[string][]string // SHA → the unjoined forge repositories whose GitHub data names it; built once, when needed
 	for i := range repos {
 		rf := &repos[i]
 		origin, ok := domain.RemoteRepo(rf.Repo.Remote)
@@ -411,38 +489,159 @@ func forgeNameWarnings(repos []domain.RepoFacts, own, replica *domain.ForgeFacts
 			w = domain.Warning{Code: warnForgeMoved, Message: fmt.Sprintf("Its origin names %s, which GitHub now calls "+
 				"%s/%s: the GitHub data synced under that name is this repository's, joined by the old name, which GitHub "+
 				"resolves to it. 'git remote set-url origin %s' names it as GitHub does, before another repository can take "+
-				"the old name and end GitHub's redirect.", path, r.Owner, r.Name, r.Key)}
+				"the old name and end GitHub's redirect.", path, r.Owner, r.Name, renamedRemote(rf.Repo.Remote, r.Owner, r.Name))}
 		} else {
-			_, name, _ := strings.Cut(path, "/")
-			var same, keys []string
-			for _, r := range replica.Repos {
-				// One the run joined to another of its repositories is that
-				// repository's, whose own clone the run holds: this one is
-				// then a fork, not the clone of a moved repository.
-				if own != nil && len(own.Join[r.ID]) > 0 {
-					continue
-				}
-				if have, ok := domain.RemoteRepo(r.Key); ok && strings.HasPrefix(have, host+"/") &&
-					strings.EqualFold(r.Name, name) {
-					same = append(same, r.Owner+"/"+r.Name)
-					keys = append(keys, r.Key)
-				}
+			if named == nil {
+				// A forge repository the run joined is the repository of the
+				// run it joined, whose own clone the run holds: another clone
+				// sharing its history is a fork or a copy, not the clone of a
+				// moved repository.
+				named = forgeCommits(replica, func(id string) bool { return own != nil && len(own.Join[id]) > 0 })
 			}
+			same := sharedHistory(rf, host, named, replica)
 			if len(same) == 0 {
 				continue
 			}
-			slices.Sort(same)
-			remote := ""
-			if len(keys) == 1 {
-				remote = fmt.Sprintf(" (or 'git remote set-url origin %s' names it as GitHub does)", keys[0])
-			}
 			w = domain.Warning{Code: warnForgeUnmatched, Message: fmt.Sprintf("No GitHub data in facts.db is this "+
-				"repository's: its origin names %s, while facts.db holds %s. If GitHub moved the repository there, "+
-				"'stillhere sync github --repo %s' records the move and the next scan joins it%s; a fork is another "+
-				"repository, whose own name a sync copies.", path, joinNames(same), path, remote)}
+				"repository's: its origin names %s, while facts.db holds the GitHub data of %s, whose history this clone "+
+				"shares. If GitHub moved or renamed the repository, 'stillhere sync github --repo %s' records the move and "+
+				"the next scan joins it; if this clone is a fork's, the same command syncs the fork's own.",
+				path, joinNames(same), path)}
 		}
 		rf.Warnings = repoWarnings(rf.Repo, rf.Warnings, []domain.Warning{w})
 	}
+}
+
+// aliasJoinsShared drops from join each repository that it joined by an
+// alias of a forge repository (domain.ForgeRepo.Aliases) and whose facts
+// hold no commit that repository's GitHub data names (forgeCommits): the
+// name has gone to another repository since a sync recorded it, as when
+// the old owner made a new one under it, which ends GitHub's redirect. A
+// clone of that new repository shares no history with the old one, and
+// its origin is no clone of the data (wave 11's review: a recorded alias
+// joined an unrelated clone whose origin named the old name to the moved
+// repository's pull requests). A repository joined by a forge
+// repository's own name is joined by GitHub's word for it, and stays.
+func aliasJoinsShared(join map[string][]string, repos []domain.RepoFacts, replica *domain.ForgeFacts) {
+	byKey := make(map[string]*domain.RepoFacts, len(repos))
+	for i := range repos {
+		byKey[repos[i].Repo.Key] = &repos[i]
+	}
+	var named map[string][]string // built once, when some join is by an alias
+	for _, r := range replica.Repos {
+		keys, ok := join[r.ID]
+		if !ok {
+			continue
+		}
+		now, _ := domain.RemoteRepo(r.Key)
+		var kept []string
+		for _, key := range keys {
+			rf := byKey[key]
+			if origin, _ := domain.RemoteRepo(rf.Repo.Remote); origin != now {
+				if named == nil {
+					named = forgeCommits(replica, nil)
+				}
+				if !heldForge(rf, named)[r.ID] {
+					continue
+				}
+			}
+			kept = append(kept, key)
+		}
+		if len(kept) == 0 {
+			delete(join, r.ID)
+		} else {
+			join[r.ID] = kept
+		}
+	}
+}
+
+// forgeCommits indexes the commits the replica's GitHub data names, by
+// SHA, to the forge repositories that name them: each pull request's merge
+// commit and own commits, and the commit of each link to an account
+// (domain.ForgeFacts.Links: the newest commit of each author email of the
+// mirror's history, among them). A forge repository leave reports (nil:
+// none) is left out.
+func forgeCommits(replica *domain.ForgeFacts, leave func(id string) bool) map[string][]string {
+	out := map[string][]string{}
+	add := func(sha, repo string) {
+		if sha == "" || leave != nil && leave(repo) {
+			return
+		}
+		if ids := out[sha]; !slices.Contains(ids, repo) {
+			out[sha] = append(ids, repo)
+		}
+	}
+	for i := range replica.PullRequests {
+		p := &replica.PullRequests[i]
+		add(p.MergeCommit.SHA, p.Repo)
+		for _, c := range p.Commits {
+			add(c.SHA, p.Repo)
+		}
+	}
+	for _, l := range replica.Links {
+		add(l.SHA, l.Repo)
+	}
+	return out
+}
+
+// heldForge returns the forge repositories, by ID, whose GitHub data names
+// a commit rf holds (named, forgeCommits): one of its history, a blamed
+// line's or another ref's. A commit id names one commit, so a repository
+// with none in common shares no history.
+func heldForge(rf *domain.RepoFacts, named map[string][]string) map[string]bool {
+	found := map[string]bool{}
+	see := func(sha string) {
+		for _, id := range named[strings.ToLower(sha)] {
+			found[id] = true
+		}
+	}
+	for j := range rf.Commits {
+		see(rf.Commits[j].SHA)
+	}
+	for j := range rf.Owners {
+		see(rf.Owners[j].Commit)
+	}
+	for j := range rf.RefCommits {
+		see(rf.RefCommits[j].SHA)
+	}
+	return found
+}
+
+// sharedHistory returns, as "owner/name" and sorted, the forge repositories
+// on host whose GitHub data names a commit rf holds (heldForge).
+func sharedHistory(rf *domain.RepoFacts, host string, named map[string][]string, replica *domain.ForgeFacts) []string {
+	found := heldForge(rf, named)
+	var names []string
+	for _, r := range replica.Repos {
+		if have, ok := domain.RemoteRepo(r.Key); ok && found[r.ID] && strings.HasPrefix(have, host+"/") {
+			names = append(names, r.Owner+"/"+r.Name)
+		}
+	}
+	slices.Sort(names)
+	return slices.Compact(names)
+}
+
+// renamedRemote is remote, a scrubbed origin that domain.RemoteRepo reads,
+// naming owner/name instead, in the remote's own form: an scp-like remote
+// stays scp-like, user included, a URL keeps its scheme, host and port, and
+// a trailing ".git" stays when it had one. Scrubbing leaves a URL's user
+// out (redact.URL), which an ssh:// URL needs: GitHub's SSH user is git,
+// so it gets that one back. Wave 11's review: GitHub's HTTPS clone URL in
+// its place would move an SSH user's pushes to HTTPS credentials.
+func renamedRemote(remote, owner, name string) string {
+	suffix := ""
+	if strings.HasSuffix(strings.TrimRight(remote, "/"), ".git") {
+		suffix = ".git"
+	}
+	if scheme, rest, ok := strings.Cut(remote, "://"); ok {
+		authority, _, _ := strings.Cut(rest, "/")
+		if strings.HasSuffix(strings.ToLower(scheme), "ssh") && !strings.Contains(authority, "@") {
+			authority = "git@" + authority
+		}
+		return scheme + "://" + authority + "/" + owner + "/" + name + suffix
+	}
+	hostPart, _, _ := strings.Cut(remote, ":")
+	return hostPart + ":" + owner + "/" + name + suffix
 }
 
 // joinNames is "a", "a and b", "a, b and c": names in a sentence.

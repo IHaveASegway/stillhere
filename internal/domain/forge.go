@@ -101,7 +101,11 @@ func RemoteRepo(remote string) (string, bool) {
 // node id is what both names resolve to; the names are only how a clone
 // reaches it. A name some forge repository holds now is never an alias:
 // GitHub ends a redirect when a repository takes the old name, and a
-// later sync of the replica sees that repository.
+// later sync of the replica sees that repository. A scan keeps a join by an
+// alias only for a clone that holds a commit the repository's GitHub data
+// names (app's aliasJoinsShared, wave 11's review): this join reads
+// origins alone, and a name can pass to an unrelated repository before a
+// sync looks it up again.
 func ForgeJoin(repos []RepoFacts, forge []ForgeRepo) map[string][]string {
 	byName := map[string][]string{} // RemoteRepo → Repo.Key of the run's repositories
 	for i := range repos {
@@ -369,7 +373,9 @@ type MirrorMove struct {
 	// Was (wave 11, KT-2) is, for MirrorRenamed, the "owner/name" the
 	// mirror's path held: the name GitHub listed the repository under when
 	// a sync mirrored it, which GitHub now resolves to it (one of its
-	// ForgeRepo.Aliases); "" for the other reasons.
+	// ForgeRepo.Aliases); for MirrorRestored, the name its path under
+	// root/.stale held, when that is another and cannot be a suffix the
+	// move to root/.stale added; "" otherwise.
 	Was string
 	// Err says why the mirror could not move, scrubbed; "" when it moved.
 	// A listed repository whose mirror could not move is not mirrored by
@@ -463,8 +469,14 @@ type ForgeSource interface {
 // data at all, neither the dating nor the pull requests.
 type ForgeStore interface {
 	// PutForgeRepos upserts the repositories a sync is about to bring up to
-	// date, by ID.
+	// date, by ID, each with its Aliases as the sync found them, which
+	// replace the ones the replica held of it; a name some repository of
+	// the replica holds now is no repository's alias.
 	PutForgeRepos(ctx context.Context, repos []ForgeRepo) error
+	// ForgeAliases returns the aliases the replica holds, by ForgeRepo.ID,
+	// each list sorted (wave 11's review): a sync looks each one up again,
+	// since GitHub ends a redirect when another repository takes the name.
+	ForgeAliases(ctx context.Context) (map[string][]string, error)
 	// ForgeWatermark returns a repository's watermark, with zero times when
 	// the replica has none.
 	ForgeWatermark(ctx context.Context, repo string) (ForgeWatermark, error)

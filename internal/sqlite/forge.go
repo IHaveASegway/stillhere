@@ -29,12 +29,16 @@ import (
 var _ domain.ForgeStore = (*Store)(nil)
 
 // PutForgeRepos upserts the repositories a sync is about to bring up to
-// date, by ID, with the aliases this sync learned of them
-// (ForgeRepo.Aliases, migration 11): each name resolves to one repository,
-// the one that last answered to it, and a repository's own name is no
-// alias of any, so storing a repository deletes the alias row of its name.
-// Aliases a sync did not learn this time are kept: GitHub's redirect does
-// not end until another repository takes the name.
+// date, by ID, with their aliases (ForgeRepo.Aliases, migration 11) as the
+// sync found them: those it learned, and those the replica held that
+// GitHub still resolves to the repository (app's checkAliases), which
+// replace the repository's alias rows. Each name resolves to one
+// repository, the one that last answered to it, and the name some
+// repository holds now is no alias of any, whether or not this sync
+// stores that repository: GitHub ends a redirect when a repository takes
+// the old name (wave 11's review: a sync that stored R1 with the alias
+// acme/a beside R2, named acme/a now, kept the row, which came back as
+// R1's once R2 was renamed).
 func (s *Store) PutForgeRepos(ctx context.Context, repos []domain.ForgeRepo) error {
 	return s.forgeTx(ctx, "storing forge repositories", func(tx *sql.Tx) error {
 		stmt, err := tx.PrepareContext(ctx, `
@@ -54,8 +58,7 @@ ON CONFLICT (id) DO UPDATE SET
 			}
 		}
 		for _, r := range repos {
-			if _, err := tx.ExecContext(ctx, `DELETE FROM forge_repo_aliases WHERE name = ?`,
-				strings.ToLower(r.Owner+"/"+r.Name)); err != nil {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM forge_repo_aliases WHERE repo = ?`, r.ID); err != nil {
 				return fmt.Errorf("repository %s/%s: %w", r.Owner, r.Name, err)
 			}
 		}
@@ -68,8 +71,34 @@ ON CONFLICT (name) DO UPDATE SET repo = excluded.repo`, strings.ToLower(a), r.ID
 				}
 			}
 		}
+		// GitHub's names are ASCII, which lower() folds as Go does.
+		if _, err := tx.ExecContext(ctx, `
+DELETE FROM forge_repo_aliases WHERE name IN (SELECT lower(owner || '/' || name) FROM forge_repos)`); err != nil {
+			return fmt.Errorf("dropping aliases that name a repository now: %w", err)
+		}
 		return nil
 	})
+}
+
+// ForgeAliases returns the aliases the replica holds (migration 11), by
+// ForgeRepo.ID, each list sorted; nil for none.
+func (s *Store) ForgeAliases(ctx context.Context) (map[string][]string, error) {
+	var out map[string][]string
+	err := s.forgeRead(ctx, "reading forge aliases", func(tx *sql.Tx) error {
+		return forgeRows(ctx, tx, `SELECT repo, name FROM forge_repo_aliases ORDER BY repo, name`, nil,
+			func(rows *sql.Rows) error {
+				var repo, name string
+				if err := rows.Scan(&repo, &name); err != nil {
+					return err
+				}
+				if out == nil {
+					out = map[string][]string{}
+				}
+				out[repo] = append(out[repo], name)
+				return nil
+			})
+	})
+	return out, err
 }
 
 // ForgeWatermark returns a repository's watermark, with zero times when the

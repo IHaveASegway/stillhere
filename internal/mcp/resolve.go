@@ -24,16 +24,6 @@ import (
 // maxCandidates is how many candidates an error lists.
 const maxCandidates = 10
 
-// notFound is a miss the agent can act on: its message says what to pass
-// instead, and errors.Is finds domain.ErrNotFound in it without the
-// sentinel's text at the end of the sentence.
-type notFound struct{ msg string }
-
-func (e *notFound) Error() string { return e.msg }
-func (e *notFound) Unwrap() error { return domain.ErrNotFound }
-
-func notFoundf(format string, args ...any) error { return &notFound{msg: fmt.Sprintf(format, args...)} }
-
 // miss is a scope or a repository the run does not hold: a usage error
 // whose message lists what the run holds, to which the call adds the
 // stored run that holds it, if one does (call.elsewhere, MC-17).

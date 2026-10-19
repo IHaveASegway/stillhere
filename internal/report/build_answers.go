@@ -432,7 +432,7 @@ func NewWhoKnows(in *WhoKnowsInput) *WhoKnows {
 			}
 		}
 	}
-	if c, ok := sharedNames(in.Who, newLinks(in.Candidates), listed, in.Commands); ok {
+	if c, ok := sharedNames(in.Who, newLinks(in.Candidates), listed, in.Commands, unlinkedWhy(in.Commands)); ok {
 		w.Caveats = append(w.Caveats, c)
 	}
 	// The path's knowledge loss and concentration count each address

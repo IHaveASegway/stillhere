@@ -460,6 +460,22 @@ func TestMCPTools(t *testing.T) {
 			"knowledge_loss@1 holds no value about a person") || !strings.Contains(text, "subject_kind: repo") {
 			t.Errorf("explain(knowledge_loss, Lena Lead) was refused with %q, want the kinds it is about", text)
 		}
+		// Wave 11's review: a subject that names no scope and no person is
+		// answered with the run's repositories and groups, not as a person;
+		// path with no subject_kind is an area's, and with another kind is
+		// refused rather than dropped.
+		if text := refused(t, "explain", map[string]any{"metric": "review_coverage", "subject": "nosuchrepo"}); !strings.Contains(text,
+			`"nosuchrepo" is no group or repository of run`) || strings.Contains(text, "about a person") {
+			t.Errorf("explain(review_coverage, nosuchrepo) was refused with %q, want the run's scopes", text)
+		}
+		if text := refused(t, "explain", map[string]any{"metric": "knowledge_loss", "subject": "fixture", "path": "nosuchdir"}); !strings.Contains(text,
+			"who_knows(path, repo) answers any path") {
+			t.Errorf("explain(knowledge_loss, fixture, path nosuchdir) with no subject_kind was refused with %q, want the area's refusal", text)
+		}
+		if text := refused(t, "explain", map[string]any{"metric": "knowledge_loss", "subject": "fixture", "subject_kind": "repo",
+			"path": "nosuchdir"}); !strings.Contains(text, "pass subject_kind area with it") {
+			t.Errorf("explain(knowledge_loss, repo fixture, path nosuchdir) was refused with %q, want path refused for a repository", text)
+		}
 		// A repository of many people shows its AI-assisted share, a lower
 		// bound.
 		decode(t, ask(t, "explain", map[string]any{"metric": "ai_assisted", "subject": "sibling", "subject_kind": "repo"}), &e)
