@@ -495,7 +495,7 @@ func Explain(ctx context.Context, d Deps, r ExplainRequest) (*report.Explain, er
 	if err != nil {
 		return nil, err
 	}
-	if err := explainHistory(def, r.Days, historyOf(s.facts)); err != nil {
+	if err := inHistory(def.ID.String(), r.Days, historyOf(s.facts)); err != nil {
 		return nil, err
 	}
 	var matched *report.Caveat
@@ -593,7 +593,7 @@ func Explain(ctx context.Context, d Deps, r ExplainRequest) (*report.Explain, er
 // the week's, or one outside the policy's bounds: landed@1 and landed@2
 // read [now - days, now), so explain can trace them over any span the
 // run's history holds (the 365 days of a still-here table's
-// landings_365d; explainHistory), while every other metric's window is
+// landings_365d; inHistory), while every other metric's window is
 // its definition's. The words name no flag: the command line's --days and
 // the MCP server's days argument both reach it.
 func explainDays(def metrics.Definition, days int) error {
@@ -609,18 +609,20 @@ func explainDays(def metrics.Definition, days int) error {
 	return nil
 }
 
-// explainHistory refuses a window of days longer than the history the run
-// read (h, the 365 days of a scan, a week run's own days): what landed
-// before it is unknown, not none, so an answer over the window would read
-// that span as one in which nothing landed, the "unknown" metrics.md says a
-// page must tell from "nothing landed".
-func explainHistory(def metrics.Definition, days int, h domain.Window) error {
+// inHistory refuses a window of days longer than the history the run read
+// (h, the 365 days of a scan, a week run's own days), for metric: what
+// landed before it is unknown, not none, so an answer over the window
+// would read that span as one in which nothing landed, the "unknown"
+// metrics.md says a page must tell from "nothing landed". explain of
+// landed@1 and landed@2 and who-knows' recent landers and reviewers both
+// ask it.
+func inHistory(metric string, days int, h domain.Window) error {
 	held := int(h.Until.Sub(h.Since) / (24 * time.Hour))
 	if days <= held {
 		return nil
 	}
 	return &domain.UsageError{Msg: fmt.Sprintf("%s over %d days: the run's history covers %d days (%s to %s), so what "+
-		"landed before it is unknown, not none; ask for %d days or fewer", def.ID, days, held,
+		"landed before it is unknown, not none; ask for %d days or fewer", metric, days, held,
 		h.Since.UTC().Format(time.DateOnly), h.Until.UTC().Format(time.DateOnly), held)}
 }
 
@@ -770,8 +772,19 @@ func WhoKnows(ctx context.Context, d Deps, r WhoKnowsRequest) (*report.WhoKnows,
 	if _, err := lookupMetric(report.MetricWhoKnows, d.Commands); err != nil {
 		return nil, err
 	}
+	days := cmp.Or(r.Days, metrics.WhoKnowsDays)
+	if days < 1 || days > policy.MaxWeekDays {
+		return nil, &domain.UsageError{Msg: fmt.Sprintf("a window of %d days: want 1 to %d", days, policy.MaxWeekDays)}
+	}
 	s, err := load(ctx, d, r.RunID)
 	if err != nil {
+		return nil, err
+	}
+	// The window of recent landers and reviewers lies inside the history
+	// the run read, as explain's does (Ruby F10: a slow repository's last
+	// landers are months back): before it, who landed is unknown, not
+	// nobody.
+	if err := inHistory(report.MetricWhoKnows, days, historyOf(s.facts)); err != nil {
 		return nil, err
 	}
 	// --repo names a repository as the reader names one: a key, a name as
@@ -788,7 +801,7 @@ func WhoKnows(ctx context.Context, d Deps, r WhoKnowsRequest) (*report.WhoKnows,
 	// who_knows@1 is answered per query, for any prefix down to one file,
 	// and never stored: a value for every directory of every repository
 	// would outnumber the facts.
-	values, err := metrics.WhoKnows(s.input(), repo, prefix)
+	values, err := metrics.WhoKnows(s.input(), repo, prefix, days)
 	if err != nil {
 		return nil, fmt.Errorf("computing %s: %w", report.MetricWhoKnows, err)
 	}
@@ -814,7 +827,7 @@ func WhoKnows(ctx context.Context, d Deps, r WhoKnowsRequest) (*report.WhoKnows,
 	run := s.run
 	w := report.NewWhoKnows(&report.WhoKnowsInput{
 		Run: &run, Facts: underPrefix(s.facts, prefix, repo), Who: s.who, Path: prefix, Repo: repo, Values: values,
-		Knowledge: knowledge, Forge: forge, Commands: d.Commands, Activity: activity,
+		Knowledge: knowledge, Forge: forge, Commands: d.Commands, Activity: activity, Days: days,
 	})
 	if c, ok := whoKnowsNoPath(s.facts, prefix, repo, run.ID); ok {
 		w.Caveats = append(w.Caveats, c)

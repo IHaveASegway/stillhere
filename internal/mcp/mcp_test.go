@@ -349,6 +349,19 @@ func TestMCPTools(t *testing.T) {
 		if len(w.Repos) != 1 || names(w.Repos[0].MajorityOwners) != "Gina Split, Hank Split" || len(w.Repos[0].RecentLanders) != 0 {
 			t.Errorf("who_knows(split.py) %+v, want Gina and Hank as owners and no recent lander", w.Repos)
 		}
+		// A window of the agent's (wave 11, Ruby F10): split.py's January
+		// landers are in 300 days, and the answer says its window; one past
+		// the run's 365 days of history is refused, not answered as if
+		// nothing landed before it.
+		var long whoKnowsOut
+		decode(t, ask(t, "who_knows", map[string]any{"path": "split.py", "days": 300}), &long)
+		if w.Days != 90 || long.Days != 300 || len(long.Repos) != 1 || names(long.Repos[0].RecentLanders) != "Gina Split, Hank Split" {
+			t.Errorf("who_knows(split.py, days 300): days %d (and %d without), %+v; want 300 (90), Gina and Hank as recent landers",
+				long.Days, w.Days, long.Repos)
+		}
+		if text := refused(t, "who_knows", map[string]any{"path": "split.py", "days": 400}); !strings.Contains(text, "365") {
+			t.Errorf("who_knows(split.py, days 400) was refused with %q, want the run's 365 days named", text)
+		}
 	})
 
 	t.Run("changes", func(t *testing.T) {

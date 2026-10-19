@@ -123,7 +123,7 @@ func (s *server) addTools(srv *sdk.Server) {
 	tool(s, srv, "who_knows", "Who knows this code",
 		"Who knows the code under a path, per repository: majority owners (people credited with at least half of a file's "+
 			"surviving lines), the top five authors of surviving prod lines, recent landers and recent reviewers (the last 90 "+
-			"days; reviewers only in repositories whose GitHub data the run read, an empty list elsewhere) and bots apart, "+
+			"days, or days; reviewers only in repositories whose GitHub data the run read, an empty list elsewhere) and bots apart, "+
 			"each person with last_active and quiet_in_days (their last landing, review, pull request or commit on any "+
 			"branch, and the days left before knowledge loss counts them as gone quiet); a path with no prod line, such as "+
 			"tests or docs, is answered for its own lines (roles says which), and one with prod lines names the other lines it "+
@@ -135,6 +135,7 @@ func (s *server) addTools(srv *sdk.Server) {
 		schema(nil,
 			`"path": {"type": "string", "description": "A repo-relative path prefix, such as src/payments or a file, or an absolute path inside a scanned clone; empty for the whole repository."}`,
 			`"repo": {"type": "string", "description": "A repository by name, GROUP/NAME, OWNER/NAME, remote URL or key; empty searches every repository of the run."}`,
+			`"days": {"type": "integer", "minimum": 1, "maximum": 365, "description": "The window of recent landers and reviewers in days. Default: 90. On a repository that lands rarely, a longer one finds the people who changed the path months ago. The run's history covers 365 days, and a longer window is refused: what landed before it is unknown."}`,
 			propFormat, propLimit, propCursor),
 		s.whoKnows)
 	tool(s, srv, "changes", "What landed",
@@ -378,6 +379,7 @@ func (s *server) meUnknown(c *call) (report.Caveat, bool) {
 type whoKnowsIn struct {
 	Path string `json:"path"`
 	Repo string `json:"repo"`
+	Days int    `json:"days"` // 0: who_knows@1's 90 days (Ruby F10)
 	common
 }
 
@@ -416,7 +418,7 @@ func (s *server) whoKnows(ctx context.Context, in whoKnowsIn) *sdk.CallToolResul
 		if err != nil {
 			return nil, err
 		}
-		w, err := app.WhoKnows(ctx, d, app.WhoKnowsRequest{RunID: c.run(), Path: path, Repo: repo.Key})
+		w, err := app.WhoKnows(ctx, d, app.WhoKnowsRequest{RunID: c.run(), Path: path, Repo: repo.Key, Days: in.Days})
 		if err != nil {
 			return nil, err
 		}

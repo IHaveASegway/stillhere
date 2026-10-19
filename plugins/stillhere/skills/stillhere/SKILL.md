@@ -18,7 +18,7 @@ value: never use it for performance or pay decisions, and say so if asked to.
 | How is this platform or repository doing? Who is its code made of? | `overview(scope)`; empty scope first, to list the platforms and repositories with the `scope_arg` to pass for each |
 | Where in this repository has knowledge gone quiet, or rests with few people? | `overview(scope: R)`: its `areas`, the top-level directories with their knowledge loss, concentration and lines, largest first |
 | Who ranks where on a metric, in this platform or repository? | `overview(scope, rank: "durable")`: one ranked metric's table per call (`durable`, `simplifying` or `reviews_given`); `metrics()` lists the ranked ones |
-| Who should I ask about, or who should review, this path? | `who_knows(path, repo)`: majority owners, top authors, recent landers and recent reviewers, each with when they were last active; an absolute path inside a scanned clone works, and so does a test or docs directory, answered for its own lines (`roles`) |
+| Who should I ask about, or who should review, this path? | `who_knows(path, repo)`: majority owners, top authors, recent landers and recent reviewers, each with when they were last active; an absolute path inside a scanned clone works, and so does a test or docs directory, answered for its own lines (`roles`). Recent means 90 days; on a repository that lands rarely, `days: 365` finds the people who changed the path months ago |
 | Who is about to go quiet? Will knowledge loss jump? | `overview(scope: R)` or `overview(scope: G)`: `knowledge_loss.going_quiet`, its `holders` (who, their lines, `quiet_in_days`, the soonest first) and the share once they have gone quiet; a table's rows rarely show them, since they hold few lines |
 | What did a person's changes do? Where do they rank? | `person(name)`; an empty name is the user, whose answer alone holds their own AI-assisted share |
 | What landed this week, or since a date? What did X ship? | `changes(scope, since, person)`; leave `person` out for everyone, pass it empty for the user |
@@ -136,7 +136,7 @@ days: 365)` lists them.
   apart; reviews outside GitHub and pair programming are invisible. Without
   GitHub data there is no value, which is not 0.
 - **who_knows is a routing answer**, not a rank of expertise. Its recent
-  reviewers (the last 90 days) come only from repositories whose GitHub data the
+  reviewers (the last 90 days, or `days`) come only from repositories whose GitHub data the
   run read: elsewhere the list is empty, which says nothing about reviews, and
   `provenance.forge` does not list that repository.
 - **The ranked metrics are beta** until a lead's labels clear the bar (the

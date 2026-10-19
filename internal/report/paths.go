@@ -104,6 +104,10 @@ type PathsInput struct {
 	// Rows are the paths of each repository that pass the filters, keyed
 	// by Repo.Key, each with its rule.
 	Rows map[string][]PathRow
+	// Who is the run's directory, which tells a bot's commit from a
+	// person's in the caveats (the no-ignore-revs caveat's candidates);
+	// nil: they do not say.
+	Who People
 }
 
 // SkipClass is how the paths answer names a skipped class: "skipped:" and
@@ -116,7 +120,7 @@ func NewPaths(in *PathsInput) *Paths {
 		Provenance: AnswerProvenance(in.Run, in.Facts, nil, nil),
 		Prefixes:   slices.Clone(in.Prefixes), Repo: in.Repo, Role: in.Role, Skipped: in.Skipped,
 		PolicySource: in.PolicySource,
-		Caveats:      AnswerCaveats(in.Facts),
+		Caveats:      AnswerCaveats(in.Facts, in.Who),
 	}
 	if ps.Prefixes == nil {
 		ps.Prefixes = []string{}

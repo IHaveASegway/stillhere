@@ -86,7 +86,7 @@ func NewExplain(in *ExplainInput) *Explain {
 	}
 	repos := reposWith(in.Facts, involved)
 	e.Provenance = datedProvenance(in.Run, in.Facts, in.Forge, repos, []string{in.Metric.ID})
-	e.Caveats = answerCaveats(repos)
+	e.Caveats = answerCaveats(repos, in.Who)
 	if in.Forge.reads(in.Metric.ID) {
 		b := answerBuilder(in.Run, in.Facts, in.Forge)
 		e.Caveats = append(e.Caveats, b.forgeCaveats(reposWith(in.Facts, nil), in.Metric.ID, true)...)
@@ -303,6 +303,9 @@ type WhoKnowsInput struct {
 	// Activity is each person's last activity in the run
 	// (metrics.LastActivity), which each person listed shows; nil: none.
 	Activity map[string]domain.Activity
+	// Days is the window Values' recent landers and reviewers were
+	// computed over (app.WhoKnows resolves it), which the answer states.
+	Days int
 }
 
 // NewWhoKnows builds the who-knows answer: per repository, the majority
@@ -310,7 +313,7 @@ type WhoKnowsInput struct {
 // data the run read, the recent reviewers under the path, with bots apart
 // (docs/metrics.md#who_knows1-per-path).
 func NewWhoKnows(in *WhoKnowsInput) *WhoKnows {
-	w := &WhoKnows{Path: in.Path, Repo: in.Repo, addrs: runAddresses(in.Who)}
+	w := &WhoKnows{Path: in.Path, Repo: in.Repo, Days: in.Days, addrs: runAddresses(in.Who)}
 	ix := newValueIndex(in.Values)
 	kx := newValueIndex(in.Knowledge)
 	metrics := []string{MetricWhoKnows}
@@ -407,7 +410,7 @@ func NewWhoKnows(in *WhoKnowsInput) *WhoKnows {
 	}
 	slices.SortFunc(w.Repos, func(a, b WhoKnowsRepo) int { return cmp.Or(cmp.Compare(a.Repo, b.Repo), cmp.Compare(a.Key, b.Key)) })
 	w.Provenance = datedProvenance(in.Run, in.Facts, in.Forge, asked, metrics)
-	w.Caveats = answerCaveats(asked)
+	w.Caveats = answerCaveats(asked, in.Who)
 	if c, ok := whoKnowsMissing(in.Path, asked, ix); ok {
 		w.Caveats = append(w.Caveats, c)
 	}
@@ -708,7 +711,7 @@ func NewMe(in *MeInput) *Me {
 	slices.Sort(ids)
 	repos := reposWith(in.Facts, involved)
 	m.Provenance = datedProvenance(in.Run, in.Facts, in.Forge, repos, ids)
-	m.Caveats = answerCaveats(repos)
+	m.Caveats = answerCaveats(repos, in.Who)
 	// A person's review numbers can come from any repository of the run, so
 	// each GitHub number the page shows is caveated over all of them.
 	m.Caveats = append(m.Caveats, ForgeCaveats(in.Run, in.Facts, in.Forge, ids)...)
@@ -858,19 +861,19 @@ func answerBuilder(run *domain.Run, fs *domain.FactSet, forge *ForgeRead) *build
 
 // AnswerCaveats says what could make an answer drawn from every repository
 // of a run wrong.
-func AnswerCaveats(fs *domain.FactSet) []Caveat {
+func AnswerCaveats(fs *domain.FactSet, who People) []Caveat {
 	var repos []*domain.RepoFacts
 	for i := range fs.Repos {
 		repos = append(repos, &fs.Repos[i])
 	}
-	return answerCaveats(repos)
+	return answerCaveats(repos, who)
 }
 
-func answerCaveats(repos []*domain.RepoFacts) []Caveat {
+func answerCaveats(repos []*domain.RepoFacts, who People) []Caveat {
 	out := []Caveat{notFetched()}
 	var all []Caveat
 	for _, rf := range repos {
-		all = append(all, repoCaveats(rf)...)
+		all = append(all, repoCaveats(rf, who)...)
 	}
 	return append(out, summarize(all)...)
 }

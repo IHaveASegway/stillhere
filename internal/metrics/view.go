@@ -36,7 +36,7 @@ const day = 24 * time.Hour
 const (
 	cohortFrom      = 365 // durable@1 cohort: [now-365d, now-90d)
 	cohortTo        = 90
-	recentDays      = 90  // simplifying@1 window and who_knows@1 recent landers
+	recentDays      = 90  // simplifying@1 window and who_knows@1's default window of recent landers and reviewers (WhoKnowsDays)
 	activityDays    = 180 // knowledge_loss@1 activity
 	goingQuietDays  = 30  // knowledge_loss@1's going_quiet: people within this many days of the activity line
 	yearDays        = 365 // landings_365d, ai_assisted@1

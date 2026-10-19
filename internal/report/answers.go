@@ -568,12 +568,12 @@ func (w *WhoKnows) reviewsShown(r WhoKnowsRepo) bool {
 // whoKnowsIntro says what the answer lists, reviewers included where it
 // shows them.
 func (w *WhoKnows) whoKnowsIntro() string {
-	lists := "majority owners, the top authors of surviving prod lines (a path's own tests or docs where it holds none), " +
-		"and recent landers (90 days)"
+	recent := "recent landers"
 	if slices.ContainsFunc(w.Repos, w.reviewsShown) {
-		lists = "majority owners, the top authors of surviving prod lines (a path's own tests or docs where it holds none), " +
-			"and recent landers and reviewers (90 days)"
+		recent = "recent landers and reviewers"
 	}
+	lists := "majority owners, the top authors of surviving prod lines (a path's own tests or docs where it holds none), " +
+		"and " + recent + " (" + plural(w.Days, "day", "days") + ")"
 	return "a routing answer, not a rank: " + lists
 }
 

@@ -189,7 +189,7 @@ func Validate(ctx context.Context, d Deps, r ValidateRequest) (*report.Validatio
 	}
 	run := s.run
 	v.Provenance = report.AnswerProvenance(&run, s.facts, s.forge, ids)
-	v.Caveats = report.AnswerCaveats(s.facts)
+	v.Caveats = report.AnswerCaveats(s.facts, s.who)
 	v.Caveats = append(v.Caveats, report.ForgeCaveats(&run, s.facts, s.forge, slices.DeleteFunc(slices.Clone(ids),
 		func(id string) bool { return slices.Contains(alone, id) }))...)
 	for _, id := range alone {

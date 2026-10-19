@@ -52,6 +52,123 @@ const (
 // that a formatting pass is likely, and that its credit would move numbers.
 const largeRepoLines = 10000
 
+// The no-ignore-revs caveat names the commits that look like a formatting
+// pass (KT-10), from blame alone, so a commit older than the history is
+// judged too: one holding a little of each of many prod files at HEAD. A
+// commit is named when its surviving prod lines are in at least a quarter
+// of the repository's prod files that hold lines, and in 10 or more; when,
+// at the median over those files, it holds at most a tenth of each file's
+// lines; and when it holds at least 2% of the repository's surviving prod
+// lines, so that its credit moves numbers. An import, a conversion or a
+// feature holds most of each file it touches, or few files; on 15
+// repositories of the round 2 and 3 corpora (wave 11) every commit these
+// bounds named was a formatting pass or a mechanical edit ("Reformat with
+// Spotless", "apply black", a package rename, type annotations), and none
+// was an import or a feature, while the commit holding the most lines,
+// which a share alone would name, was an import or a feature in 9 of them.
+const (
+	formatMinFiles     = 10   // prod files a candidate holds lines in, at least
+	formatFilesDivisor = 4    // and at least 1/formatFilesDivisor of the repository's prod files that hold lines
+	formatMaxFileShare = 0.10 // the median share of each such file's lines it holds, at most
+	formatMinShare     = 0.02 // its share of the repository's surviving prod lines, at least
+	formatMaxNamed     = 3    // candidates named, by lines
+)
+
+// formatCommit is a commit the no-ignore-revs caveat names: its SHA, its
+// author's canonical email, its surviving prod lines and the prod files
+// that hold them.
+type formatCommit struct {
+	sha, email   string
+	lines, files int
+}
+
+// formattingCommits returns the commits of rf that look like a formatting
+// pass, by the bounds above, most lines first, then by SHA, at most
+// formatMaxNamed. total is the repository's surviving prod lines
+// (blamedProdLines), which a candidate's share is of.
+func formattingCommits(rf *domain.RepoFacts, total int) []formatCommit {
+	prod := prodAtHead(rf)
+	type held struct {
+		email   string
+		lines   int
+		perFile map[string]int
+	}
+	fileLines := map[string]int{}
+	byCommit := map[string]*held{}
+	for _, o := range rf.Owners {
+		if !prod[o.Path] || o.Lines <= 0 {
+			continue
+		}
+		fileLines[o.Path] += o.Lines
+		h := byCommit[o.Commit]
+		if h == nil {
+			h = &held{email: o.Author.Email, perFile: map[string]int{}}
+			byCommit[o.Commit] = h
+		}
+		h.lines += o.Lines
+		h.perFile[o.Path] += o.Lines
+	}
+	var out []formatCommit
+	for sha, h := range byCommit {
+		files := len(h.perFile)
+		if files < formatMinFiles || files*formatFilesDivisor < len(fileLines) || float64(h.lines) < formatMinShare*float64(total) {
+			continue
+		}
+		shares := make([]float64, 0, files)
+		for path, n := range h.perFile {
+			shares = append(shares, float64(n)/float64(fileLines[path]))
+		}
+		if median(shares) > formatMaxFileShare {
+			continue
+		}
+		out = append(out, formatCommit{sha: sha, email: h.email, lines: h.lines, files: files})
+	}
+	slices.SortFunc(out, func(a, b formatCommit) int { return cmp.Or(cmp.Compare(b.lines, a.lines), cmp.Compare(a.sha, b.sha)) })
+	if len(out) > formatMaxNamed {
+		out = out[:formatMaxNamed]
+	}
+	return out
+}
+
+// median is the middle of xs, the mean of the two middle values for an even
+// count; it sorts xs.
+func median(xs []float64) float64 {
+	slices.Sort(xs)
+	n := len(xs)
+	if n%2 == 1 {
+		return xs[n/2]
+	}
+	return (xs[n/2-1] + xs[n/2]) / 2
+}
+
+// formattingText names the formatting candidates of a repository with total
+// surviving prod lines, each with its share and whether a bot or a person
+// wrote it (who's bot rule; nothing when who is nil), and says how to have
+// blame skip one: its full SHA in the .git-blame-ignore-revs at the
+// repository's root, committed, which the next scan reads at HEAD.
+func formattingText(cs []formatCommit, total int, who People) string {
+	var each []string
+	for _, c := range cs {
+		kind := ""
+		switch {
+		case who == nil:
+		case who.Bot(c.email):
+			kind = ", a bot's"
+		default:
+			kind = ", a person's"
+		}
+		each = append(each, fmt.Sprintf("%s%s, %s lines (%s) in %s", short12(c.sha), kind, grouped(c.lines),
+			percent(float64(c.lines)/float64(total)), plural(c.files, "file", "files")))
+	}
+	look, one := "1 commit looks like one, holding a little of each of many prod files: ", "it"
+	if len(cs) > 1 {
+		look, one = plural(len(cs), "commit", "commits")+" look like one, each holding a little of each of many prod files: ", "one"
+	}
+	return look + strings.Join(each, "; ") + ". If " + one + " only reformats, renames or annotates code, add its full SHA " +
+		"to a .git-blame-ignore-revs at the repository's root (git rev-parse " + short12(cs[0].sha) +
+		" >> .git-blame-ignore-revs) and commit it: the next scan's blame credits those lines to the authors before it."
+}
+
 // caveatOrder lists the repository caveat codes from the most to the least
 // damaging; codes not listed follow, sorted.
 var caveatOrder = []string{
@@ -69,8 +186,9 @@ var summaries = map[string]string{
 	codeBlameErrors:   "Blame failed on some files, so their lines are missing.",
 	codeBinary: "git took some changes to prod files for binary, so their lines are unknown: durable@1 and simplifying@1 " +
 		"leave them out, and the lines landed do not count them.",
-	codeNoIgnoreRevs: "Large repositories without a .git-blame-ignore-revs: a formatting commit would take the credit for every line it touched.",
-	codeDuplicate:    "Clones of the same remote as these repositories were skipped as duplicates: each repository is counted once (see their warnings).",
+	codeNoIgnoreRevs: "Large repositories without a .git-blame-ignore-revs: a formatting commit would take the credit for every line it touched " +
+		"(each repository's card names the commits that look like one, if any).",
+	codeDuplicate: "Clones of the same remote as these repositories were skipped as duplicates: each repository is counted once (see their warnings).",
 	codeInlineTests: "Rust unit tests inside the source (#[cfg(test)] items in prod files) count as prod in these repositories, " +
 		"because a file has one role (see their warnings for how many lines).",
 	codeHeadAfterNow: "These repositories are read at the newest commit on their branch's first-parent chain committed before --now: " +
@@ -99,8 +217,10 @@ func NoValuesCaveat(message string) Caveat {
 	return Caveat{Code: codeNoValues, Message: message}
 }
 
-// repoCaveats says what could make one repository's numbers wrong.
-func repoCaveats(rf *domain.RepoFacts) []Caveat {
+// repoCaveats says what could make one repository's numbers wrong. who
+// tells a bot's commit from a person's where a caveat says which (nil:
+// it does not say).
+func repoCaveats(rf *domain.RepoFacts, who People) []Caveat {
 	name := rf.Repo.Name
 	var out []Caveat
 	add := func(code, msg string) {
@@ -136,8 +256,12 @@ func repoCaveats(rf *domain.RepoFacts) []Caveat {
 			"them out, and the lines landed do not count them.")
 	}
 	if lines := blamedProdLines(rf, nil); rf.LineFacts && rf.IgnoreRevs.Source == "" && lines >= largeRepoLines {
-		add(codeNoIgnoreRevs, "No .git-blame-ignore-revs in a repository with "+grouped(lines)+
-			" surviving prod lines: a formatting commit would take the credit for every line it touched.")
+		msg := "No .git-blame-ignore-revs in a repository with " + grouped(lines) +
+			" surviving prod lines: a formatting commit would take the credit for every line it touched."
+		if cs := formattingCommits(rf, lines); len(cs) > 0 {
+			msg += " " + formattingText(cs, lines, who)
+		}
+		add(codeNoIgnoreRevs, msg)
 	}
 	return out
 }
@@ -226,7 +350,7 @@ func (b *builder) scopeCaveats(members []*domain.RepoFacts, scope domain.Scope, 
 	out := []Caveat{notFetched()}
 	var all []Caveat
 	for _, rf := range members {
-		all = append(all, repoCaveats(rf)...)
+		all = append(all, repoCaveats(rf, b.in.Who)...)
 	}
 	out = append(out, summarize(all)...)
 	if c, ok := b.identityCaveat(scope, members); ok {
@@ -284,7 +408,7 @@ func (b *builder) runCaveats(m *Model) []Caveat {
 	}
 	var all []Caveat
 	for _, rf := range b.repos {
-		all = append(all, repoCaveats(rf)...)
+		all = append(all, repoCaveats(rf, b.in.Who)...)
 	}
 	out = append(out, summarize(all)...)
 	if c, ok := b.identityCaveat(domain.Scope{Kind: domain.ScopeAll}, b.repos); ok {

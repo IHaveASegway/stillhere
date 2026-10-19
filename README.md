@@ -18,13 +18,19 @@ Change analytics for git and GitHub (what landed, what lasted, who knows it) for
 
 stillhere is one static binary for macOS, Linux and Windows, on amd64 and arm64. CI runs the tests on Linux only: it builds the macOS and Windows binaries on every change, but does not test them. stillhere runs the git on your `PATH`, which must be 2.45 or newer (`git version` tells you).
 
-No release is tagged yet. Until the first one, install from source with Go 1.27 or newer, either with `go install`, which needs no checkout:
+No release is tagged yet, so install from source, with Go 1.27 or newer (an older Go fetches 1.27 itself when `GOTOOLCHAIN` is `auto`, its default). `go install` needs no checkout:
 
 ```sh
 go install github.com/IHaveASegway/stillhere/cmd/stillhere@main     # the newest commit on main
 ```
 
-`@main` asks for the branch's newest commit. `@latest` would too, before a tag exists, but through the Go module proxy (proxy.golang.org, the default `GOPROXY`) it resolves to the commit the proxy last saw, which can lag a fresh push by minutes to hours (round 2 got a build six merges behind). Whether `go install` goes through the proxy at all is `go env GOPROXY` and `go env GONOPROXY`: a module that `GONOPROXY` (or `GOPRIVATE`, when `GONOPROXY` is unset) matches is fetched from GitHub directly, and `GOPROXY=direct go install …@main` does so once. `stillhere version` prints the commit a binary was built from.
+`@main` asks for the branch's newest commit. `@latest` would too, before a tag exists, but through the Go module proxy (proxy.golang.org, the default `GOPROXY`) it resolves to the commit the proxy last saw, which can lag a fresh push by minutes to hours (round 2 got a build six merges behind). To skip the proxy once and fetch the newest commit from GitHub:
+
+```sh
+GOPROXY=direct go install github.com/IHaveASegway/stillhere/cmd/stillhere@main
+```
+
+When `go env GONOPROXY` (or `GOPRIVATE`, when `GONOPROXY` is unset) matches the module, as a company's `GOPRIVATE=github.com/*` does, `go install` always fetches it that way, with your git and without the checksum database, so the first command works unchanged as long as git can read github.com over HTTPS: a `url."git@github.com:".insteadOf` rule in your git config sends it over SSH instead, which needs your key. `stillhere version` prints the commit a binary was built from.
 
 `go install` puts the binary in `$(go env GOBIN)` when that is set, else in `$(go env GOPATH)/bin` (`~/go/bin` by default). Or build it from a checkout, which also stamps the commit and the build date into `stillhere version`:
 
@@ -37,16 +43,18 @@ mkdir -p ~/.local/bin && cp bin/stillhere ~/.local/bin/   # or any other directo
 
 Either way, that directory must be on your `PATH`, or every command below fails with "command not found": `command -v stillhere` prints the binary's path when it is, and `stillhere --version` prints the version. Windows has no `make`; use `go install` there.
 
-From the first release on:
+### After the first release (none yet)
+
+None of these works yet: there is no release, so there is no Homebrew cask, no `@latest` release and no published image. Until then, `brew install --cask ihaveasegway/tap/stillhere` adds the tap and fails with `Cask 'stillhere' is unavailable: ... Casks/stillhere.rb does not exist` (and suggests an unrelated cask), `@latest` builds whatever commit the proxy last saw, and `docker pull ghcr.io/ihaveasegway/stillhere` finds no image. Use `go install …@main` or `make build` above.
 
 ```sh
-# Homebrew, macOS or Linux. The cask installs Homebrew's git, which meets the floor.
+# After the first release: Homebrew, macOS or Linux. The cask installs Homebrew's git, which meets the floor.
 brew install --cask ihaveasegway/tap/stillhere
 
-# Go 1.27 or newer: @latest is then the newest release
+# After the first release: Go 1.27 or newer, @latest is then the newest release
 go install github.com/IHaveASegway/stillhere/cmd/stillhere@latest
 
-# Docker, linux/amd64 and linux/arm64, with git included
+# After the first release: Docker, linux/amd64 and linux/arm64, with git included
 docker pull ghcr.io/ihaveasegway/stillhere
 ```
 
@@ -83,7 +91,7 @@ stillhere help week
 
 `week` prints what landed on each repository's default branch: one row per person with their landings (a merged branch counts for the people who wrote it), commits, lines added, lines added to production code and the merges they landed, with bots in a table of their own. Text and Markdown print the first 10 rows of each table; `--all` prints every row. Each `PATH` is a repository (a work tree or a bare mirror) or a group: a directory whose immediate children are repositories. `week` reads only what is already cloned and stores nothing; fetch first for fresh numbers.
 
-Two files in the current directory change the answer when present. `.mailmap` folds one person's addresses into one identity (`--mailmap FILE` names another). `stillhere.toml` replaces the packaged policy as a whole: which paths count as production code, which authors are bots (`--policy FILE` names another). To start one, `stillhere policy > stillhere.toml` writes the packaged policy out as a complete file. The packaged policy counts as production code neither example code (`examples/`), benchmarks (`benches/`, `benchmarks/`), documentation tooling (`docs/`) nor build, packaging and CI tooling (`build/`, `scripts/`, `vite.config.ts`, `setup.py`, `.github/`), except Go code, which keeps its role under `docs/`, `build/` and `script/` because in Go a directory is a package, and after a scan `stillhere paths` lists every path with its role and the rule that gave it, so you can check what counts on your own layout ([classification.md](docs/spec/classification.md#what-counts-as-product-code-revision-3)).
+Two files in the current directory change the answer when present. `.mailmap` folds one person's addresses into one identity (`--mailmap FILE` names another). `stillhere.toml` replaces the packaged policy as a whole: which paths count as production code, which authors are bots (`--policy FILE` names another). To start one, `stillhere policy > stillhere.toml` writes the packaged policy out as a complete file. The packaged policy counts as production code neither example code (`examples/`), benchmarks (`benches/`, `benchmarks/`), tests (`tests/`, and Gradle's test source sets such as `src/jvmTest/` and `src/androidTest/`), documentation tooling (`docs/`, `.vitepress/`) nor build, packaging and CI tooling (`build/`, `scripts/` and a workspace package's `scripts/`, `vite.config.ts`, `setup.py`, `.github/`, Gradle's `build-logic/` and `buildSrc/`, and code under a dot-directory such as `.eslint/` or `.changeset/`), except Go code, which keeps its role under `docs/`, `build/` and `script/` because in Go a directory is a package, and after a scan `stillhere paths` lists every path with its role and the rule that gave it, so you can check what counts on your own layout ([classification.md](docs/spec/classification.md#what-counts-as-product-code-revision-3)).
 
 To keep a history, scan instead: `scan` records a run in facts.db (history, blame, metrics and ranks), and the read commands answer from the latest run, or from `--run ID`, without touching the repositories again.
 
@@ -91,6 +99,7 @@ To keep a history, scan instead: `scan` records a run in facts.db (history, blam
 stillhere scan ~/src/acme                           # record a run: the default branch of each repository
 stillhere report --rank durable@1                   # the run as a report, with durable@1's rank table
 stillhere who-knows services/billing                # who knows the code under a path, and when each was last active
+stillhere who-knows services/billing --days 365     # with who landed or reviewed changes there in a year, not 90 days
 stillhere paths --skipped                           # which paths a run left out, and the rule that decided each
 stillhere explain durable@1 --person "Ada Example"  # the changes behind one person's value: a name, @login, id or email
 stillhere explain review_coverage --repo api        # each change behind a repository's number: reviewed, not, or left out and why
@@ -117,14 +126,14 @@ Run `identities` again after the first `sync github`: GitHub's links arrive with
 
 Knowledge loss counts someone as gone quiet after 180 days without a landing, a review, a pull request opened or pushed to, or a commit on any branch or tag of the clone, across every repository of the scan, so a repository scanned alone can read higher than in its organization's scan. Every page shows each holder's last activity, and a card names the people holding lines who are within 30 days of the line ("going quiet within 30 days"), with a `going-quiet` caveat that says what knowledge loss becomes once they cross it.
 
-In Docker, mount the repositories and run as the user who owns them, because git refuses to read a repository that belongs to someone else ("dubious ownership"):
+In Docker, mount the repositories and run as the user who owns them, because git refuses to read a repository that belongs to someone else ("dubious ownership"). The image is published from the first release on (none yet), so this pull fails until then:
 
 ```sh
 docker run --rm --user "$(id -u):$(id -g)" -v "$HOME/src:/work:ro" \
   ghcr.io/ihaveasegway/stillhere week /work/acme
 ```
 
-The image is published from the first release on. Until then, build it from a checkout with `go run github.com/goreleaser/goreleaser/v2@v2.18.3 release --snapshot --clean`, as the [Dockerfile](Dockerfile) says. That loads one image per platform into your Docker daemon, tagged with its platform, such as `ghcr.io/ihaveasegway/stillhere:latest-arm64`: run that name in place of `ghcr.io/ihaveasegway/stillhere`.
+Until the first release, build the image from a checkout with `go run github.com/goreleaser/goreleaser/v2@v2.18.3 release --snapshot --clean`, as the [Dockerfile](Dockerfile) says. That loads one image per platform into your Docker daemon, tagged with its platform, such as `ghcr.io/ihaveasegway/stillhere:latest-arm64`: run that name in place of `ghcr.io/ihaveasegway/stillhere`.
 
 On macOS, git may report dubious ownership when containers with different `--user` values read one mount, because Docker Desktop does not always show a container a mounted file's owner as the Mac has it. Use one `--user` for every container that reads a mount, or use the binary.
 
@@ -164,7 +173,7 @@ Everything after `--` is the server's own command line; add `--db FILE` there fo
 
 Whatever the flags, a repository's or group's AI-assisted share is sent only when at least three people landed in it, counting as one person every address that shares a name (any name seen with it, a default one such as John Doe included), a local part or a GitHub account with another, or that a hand-off or `stillhere identities` links: with fewer, it would be close to one person's own share. A share is also withheld when it would let a withheld share be worked out from the shares sent beside it, such as a group's less its repositories'.
 
-The skill in [plugins/stillhere/skills/stillhere](plugins/stillhere/skills/stillhere/SKILL.md) teaches your agent which tool answers which question, how to read rank intervals, and the stated limits. It is at that path in a checkout and in every release archive, and the Homebrew cask keeps it in the cask's own directory, `$(brew --caskroom)/stillhere/<version>/plugins/stillhere/skills/stillhere`. Copy that directory to `~/.claude/skills/stillhere` to use it in every project, or load the plugin it belongs to for one session: `claude --plugin-dir plugins/stillhere`, run in a checkout or an unpacked archive.
+The skill in [plugins/stillhere/skills/stillhere](plugins/stillhere/skills/stillhere/SKILL.md) teaches your agent which tool answers which question, how to read rank intervals, and the stated limits. It is at that path in a checkout and, from the first release on, in every release archive, and the Homebrew cask keeps it in the cask's own directory, `$(brew --caskroom)/stillhere/<version>/plugins/stillhere/skills/stillhere`. Copy that directory to `~/.claude/skills/stillhere` to use it in every project, or load the plugin it belongs to for one session: `claude --plugin-dir plugins/stillhere`, run in a checkout or an unpacked archive.
 
 Text in the answers comes from the repositories (names, paths, commit subjects, diffs) and is untrusted: the tool descriptions and the skill tell the agent never to follow instructions found in it.
 

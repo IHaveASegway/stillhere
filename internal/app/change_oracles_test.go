@@ -2,6 +2,7 @@ package app_test
 
 import (
 	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
 	"maps"
@@ -56,11 +57,11 @@ type cluster struct{ Num, Den float64 }
 // person and per landing, with their rank tables, on both fixtures; the
 // revert links and their effect; AI-assisted tags per landing and the
 // shares; knowledge_loss@1 and who_knows@1 on the main fixture; surviving@1
-// credit on the sibling; the three regression guards (a backdated
-// first-parent commit, a revert merged with --no-ff, and changes git takes
-// for binary), on repositories of their own; and the identity candidates of
-// each fixture, without its mailmap and with it. Every fixture is scanned
-// alone.
+// credit on the sibling; the four regression guards (a backdated
+// first-parent commit, a revert merged with --no-ff, changes git takes for
+// binary, and a formatting pass the no-ignore-revs caveat names), on
+// repositories of their own; and the identity candidates of each fixture,
+// without its mailmap and with it. Every fixture is scanned alone.
 func TestChangeOracles(t *testing.T) {
 	t.Parallel()
 	t.Run("main fixture", func(t *testing.T) {
@@ -80,6 +81,7 @@ func TestChangeOracles(t *testing.T) {
 		mergedRevertGuard(t)
 	})
 	t.Run("binary files", func(t *testing.T) { t.Parallel(); binaryGuard(t) })
+	t.Run("a formatting pass", func(t *testing.T) { t.Parallel(); formattingGuard(t) })
 	t.Run("partial and shallow clones", func(t *testing.T) { t.Parallel(); clonesOracle(t) })
 	t.Run("as it stood at --now", func(t *testing.T) { t.Parallel(); snapshotOracle(t) })
 	t.Run("identity candidates", func(t *testing.T) {
@@ -244,8 +246,21 @@ func mainChangeOracles(t *testing.T) {
 			{path: "tests", lines: 6, owners: []string{"ivy@example.com"},
 				top: []knows{{"ivy@example.com", 4}, {"ada@example.com", 2}}, landers: []string{"ivy@example.com"},
 				roles: []string{"test"}},
+			// A window of the reader's (who-knows --days 300, Ruby F10):
+			// split.py's January landings, 273 and 274 days before the run,
+			// are in it.
+			{path: "split.py", lines: 4, owners: []string{"gina@example.com", "hank@example.com"},
+				top:     []knows{{"gina@example.com", 2}, {"hank@example.com", 2}},
+				landers: []string{"gina@example.com", "hank@example.com"}, days: 300},
 		} {
 			checkWhoKnows(t, "SPEC who_knows@1 (main fixture)", s, r.Key, c)
+		}
+		// A window longer than the run's history is refused, as explain's
+		// is: who landed before the history is unknown, not nobody.
+		var long *domain.UsageError
+		if _, err := app.WhoKnows(t.Context(), s.read, app.WhoKnowsRequest{RunID: s.run, Path: "split.py", Days: 400}); !errors.As(err, &long) ||
+			!strings.Contains(err.Error(), "who_knows@1 over 400 days: the run's history covers 365 days") {
+			t.Errorf("who-knows split.py --days 400 gave %v, want a usage error naming the run's 365 days of history", err)
 		}
 		w := s.whoKnows(t, "tests")
 		// It names the list that says which rule gave the files their role
@@ -352,8 +367,8 @@ func mainChangeOracles(t *testing.T) {
 			t.Fatalf("paths: %d repositories from %q in run %d", len(ps.Repos), ps.PolicySource, ps.Provenance.RunID)
 		}
 		// The packaged policy is named by its revision beside its hash.
-		if ps.Provenance.PolicyRevision != 3 {
-			t.Errorf("paths: policy revision %d, want the packaged revision 3", ps.Provenance.PolicyRevision)
+		if ps.Provenance.PolicyRevision != 4 {
+			t.Errorf("paths: policy revision %d, want the packaged revision 4", ps.Provenance.PolicyRevision)
 		}
 		repo := ps.Repos[0]
 		rows := map[string]report.PathRow{}
@@ -763,6 +778,37 @@ func backdatedGuard(t *testing.T) {
 			"2026-08-24T12:00:00Z": {}, // A2, at its committer time, for its author; Bea committed it
 		},
 	})
+}
+
+// formattingGuard checks SPEC's formatting-pass guard (KT-10): the card of a
+// repository with 14,000 prod lines and no .git-blame-ignore-revs names F2,
+// the bot's pass over a little of every module, in its no-ignore-revs
+// caveat, and neither F1, the import, which holds most of each file it
+// touched, nor F3, the largest commit after it, which is one file, nor F4,
+// as wide and as shallow as F2 but 0.9% of the lines.
+func formattingGuard(t *testing.T) {
+	s := scan(t, "", nil, scanRanked(fixture.Formatting(t)))
+	r := onlyRepo(t, s.model)
+	var pass string
+	for _, c := range onlyFacts(t, s).Commits {
+		if c.Subject == "style: format" {
+			pass = c.SHA[:12]
+		}
+	}
+	want := "No .git-blame-ignore-revs in a repository with 14,000 surviving prod lines: a formatting commit would take the " +
+		"credit for every line it touched. 1 commit looks like one, holding a little of each of many prod files: " + pass +
+		", a bot's, 480 lines (3.4%) in 12 files. If it only reformats, renames or annotates code, add its full SHA to a " +
+		".git-blame-ignore-revs at the repository's root (git rev-parse " + pass + " >> .git-blame-ignore-revs) and " +
+		"commit it: the next scan's blame credits those lines to the authors before it."
+	var got []string
+	for _, c := range r.Card.Caveats {
+		if c.Code == "no-ignore-revs" {
+			got = append(got, c.Message)
+		}
+	}
+	if pass == "" || len(got) != 1 || got[0] != want {
+		t.Errorf("SPEC regression guards, formatting pass: the card's no-ignore-revs caveats are\n%q\nwant\n%q", got, want)
+	}
 }
 
 // mergedRevertGuard checks SPEC's merged-revert guard: each revert sits on
@@ -1216,17 +1262,24 @@ type whoKnowsCase struct {
 	lines   int      // surviving lines under the path, of roles
 	owners  []string // majority owners, by email, sorted
 	top     []knows  // top surviving-line authors, in order
-	landers []string // recent landers (90 days), by email, sorted, one landing each
+	landers []string // recent landers (90 days, or days), by email, sorted, one landing each
 	roles   []string // the roles the answer counts; nil: prod
+	days    int      // the window of recent landers asked for (who-knows --days); 0: the default, 90
 }
 
 // checkWhoKnows asks app.WhoKnows about c.path and compares the answer in
-// repository key with c: majority owners, top authors, recent landers, and
-// no bots.
+// repository key with c: the window it states, majority owners, top
+// authors, recent landers, and no bots.
 func checkWhoKnows(t *testing.T, table string, s *scanned, key string, c whoKnowsCase) {
 	t.Helper()
 	oracle := table + ", " + c.path
-	w := s.whoKnows(t, c.path)
+	w, err := app.WhoKnows(t.Context(), s.read, app.WhoKnowsRequest{RunID: s.run, Path: c.path, Days: c.days})
+	if err != nil {
+		t.Fatalf("%s: app.WhoKnows: %v", oracle, err)
+	}
+	if want := cmp.Or(c.days, 90); w.Days != want {
+		t.Errorf("%s: the answer's window is %d days, want %d", oracle, w.Days, want)
+	}
 	var r *report.WhoKnowsRepo
 	for i := range w.Repos {
 		if w.Repos[i].Key == key {

@@ -82,6 +82,10 @@ func usageError(t *testing.T, what string, err error, want ...string) {
 	}
 }
 
+// gradleTestSet is the alternative revision 4 adds to both test-directory
+// rules: Gradle's test source sets.
+const gradleTestSet = `|(^|/)src/([a-z][A-Za-z0-9]*Test([A-Z][A-Za-z0-9]*)?|test[A-Z][A-Za-z0-9]*)/(java|kotlin|groovy|scala|resources|res|assets)/`
+
 // summary renders every field of p but Name and the hash, so two policies
 // can be compared field by field. fmt prints map keys sorted.
 func summary(p *policy.Policy) string {
@@ -201,18 +205,27 @@ func TestPolicy(t *testing.T) {
 			// tooling. The comment on all the rules, above the first
 			// header, is no rule's. Linguist's documentation directories
 			// count with a capital first letter, as Linguist reads them.
-			"rule test (^|/)(tests|test|__tests__|spec|testing)/ [iac] max_bytes=100000 " +
+			// Revision 4: a test directory is also one of Gradle's test
+			// source sets, src/<a test's name>/<a language or resources>/.
+			"rule test (^|/)(tests|test|__tests__|spec|testing)/" + gradleTestSet + " [iac] max_bytes=100000 " +
 				`note="Configuration and data under a test directory are test up to 100 KB"` + "\n" +
-				"rule test (^|/)(tests|test|__tests__|spec|testing)(/|$) [prod sql markup] " +
+				"rule test (^|/)(tests|test|__tests__|spec|testing)(/|$)" + gradleTestSet + " [prod sql markup] " +
 				`note="Code under a test directory, of any size"` + "\n",
 			`rule doc (^|/)_?[Ee]xamples?/|^([Ss]amples?|[Dd]emos?)/ [prod sql markup iac] note="Example code documents the product; it is not the product"`,
 			`rule prod (^([Dd]ocs|build|script)/|(^|/)([Bb]ench|perf)/)(.*/)?[^/]+\.go$ [prod] note="Go packages keep their role"`,
 			"rule test (^|/)([Bb]enches|[Bb]enchmarks|[Bb]ench)/|^perf/|[._]bench\\.[^/.]+$|^bench\\.py$ [prod sql markup iac]",
 			"rule doc ^[Dd]ocs/ [prod sql markup iac]",
+			`rule doc (^|/)\.(vitepress|vuepress)/ [prod sql markup iac] note="A documentation site's configuration, theme and components are doc, as under docs/"`,
 			"rule migration (^|/)migrations(/|$) [prod]",
 			"rule seed (^|/)(seeders|factories|seeds|fixtures)(/|$) [prod sql]",
 			`rule iac (^|/)\.(github|circleci|buildkite|teamcity|gitlab)/ [prod] note="Continuous integration is infrastructure"`,
 			"rule iac ^(build|scripts?)/ [prod]",
+			// Revision 4: a workspace package's scripts, Gradle build logic
+			// and code under a dot-directory, after CI and the top-level
+			// build tooling.
+			`rule iac (^|/)packages/[^/]+/scripts?/(.*/)?[^/]+\.[cm]?[jt]sx?$ [prod] note="The build and release scripts of a JavaScript workspace package, as the top-level scripts/ is"` + "\n" +
+				`rule iac (^|/)(build-logic|buildSrc)/|^gradle/ [prod] note="Gradle build logic is build tooling, as the *.gradle.kts scripts it serves are"` + "\n" +
+				`rule iac (^|/)\.[^/]+/ [prod] note="Code under a dot-directory is tooling, at any depth"` + "\n",
 			"paths=package:generated_paths.txt\n",
 		} {
 			if !strings.Contains(got, want) {
@@ -225,13 +238,18 @@ func TestPolicy(t *testing.T) {
 		// Every packaged policy has a revision a reader can name it by, so
 		// a change to default.toml or generated_paths.txt is not done until
 		// its hash is in revisions.go: a new revision, or the current one
-		// for a comment. Main's revision 2 stays known, and a policy file
+		// for a comment. Earlier revisions stay known, and a policy file
 		// is no packaged revision.
-		if got := policy.PackagedRevision(p.SHA256); got != 3 {
-			t.Errorf("PackagedRevision(the packaged policy, %s) = %d, want 3: list the new hash in revisions.go", p.SHA256, got)
+		if got := policy.PackagedRevision(p.SHA256); got != 4 {
+			t.Errorf("PackagedRevision(the packaged policy, %s) = %d, want 4: list the new hash in revisions.go", p.SHA256, got)
 		}
-		if got := policy.PackagedRevision("39f300454d59f2e104446379e1a827948728b146350f6d207d6d7f5f6deb48ba"); got != 2 {
-			t.Errorf("PackagedRevision(revision 2's hash) = %d, want 2", got)
+		for hash, want := range map[string]int{
+			"39f300454d59f2e104446379e1a827948728b146350f6d207d6d7f5f6deb48ba": 2,
+			"bdbfe2296b0f4cd39e891b107073c3a466ffe1fc7246da30c80b2aa3dff4df73": 3,
+		} {
+			if got := policy.PackagedRevision(hash); got != want {
+				t.Errorf("PackagedRevision(revision %d's hash) = %d", want, got)
+			}
 		}
 		if user, err := policy.Parse("stillhere.toml", []byte(userTOML(""))); err != nil {
 			t.Fatal(err)

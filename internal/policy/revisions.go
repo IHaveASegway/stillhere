@@ -29,6 +29,10 @@ var packagedRevisions = map[string]int{
 	"39f300454d59f2e104446379e1a827948728b146350f6d207d6d7f5f6deb48ba": 2,
 	// Revision 3, 2026-10-16: what counts as product code.
 	"bdbfe2296b0f4cd39e891b107073c3a466ffe1fc7246da30c80b2aa3dff4df73": 3,
+	// Revision 4, 2026-10-19: Gradle's test source sets are test; Gradle
+	// build logic, code under a dot-directory and a JavaScript workspace
+	// package's scripts are iac; a VitePress or VuePress site is doc.
+	"86bd8e7f838dda8f1882f38488306b3a792ed95d1d80e35e6e32da9053ec2ea6": 4,
 }
 
 // PackagedRevision returns the revision of the packaged policy whose hash

@@ -157,7 +157,7 @@ func TestClassify(t *testing.T) {
 			{"scripts/unasync.py", domain.RoleIaC},
 			{"scripts/release.go", domain.RoleIaC},
 			{"script/build.ts", domain.RoleIaC},
-			{"packages/vite/scripts/x.ts", domain.RoleProd}, // the top only
+			{"src/scripts/x.ts", domain.RoleProd}, // the top only, or a workspace package's (revision 4, below)
 			{"vite.config.ts", domain.RoleIaC},
 			{"adapters/bun/vite.config.ts", domain.RoleIaC},
 			{"packages/vite/rolldown.dts.config.ts", domain.RoleIaC},
@@ -182,6 +182,51 @@ func TestClassify(t *testing.T) {
 			// Jinja templates are markup.
 			{"templates/layout.jinja", domain.RoleMarkup},
 			{"semconv/templates/metric.go.j2", domain.RoleMarkup},
+
+			// Revision 4, on the paths its census checked. Gradle's test
+			// source sets are test directories, src/<a test's name>/ with
+			// a language or resources directory in it, as Gradle, Kotlin
+			// Multiplatform and Android lay them out (okhttp's jvmTest held
+			// 57,407 of its 110,704 prod lines); main source sets stay prod.
+			{"okhttp/src/jvmTest/kotlin/okhttp3/AddressTest.kt", domain.RoleTest},
+			{"okhttp/src/jvmTest/java/okhttp3/CallJavaTest.java", domain.RoleTest},
+			{"okhttp/src/commonTest/kotlin/okhttp3/CompressionInterceptorTest.kt", domain.RoleTest},
+			{"okhttp/src/androidHostTest/kotlin/okhttp3/android/AndroidDnsRobolectricTest.kt", domain.RoleTest},
+			{"regression-test/src/androidTest/java/okhttp/regression/IssueReproductionTest.java", domain.RoleTest},
+			{"lib/src/androidTestDebug/kotlin/x/DebugTest.kt", domain.RoleTest},
+			{"app/src/testDemo/kotlin/x/ScreenshotTest.kt", domain.RoleTest}, // a build variant's unit tests
+			{"detekt-gradle-plugin/src/functionalTest/kotlin/dev/detekt/gradle/ConfigurationCacheSpec.kt", domain.RoleTest},
+			{"detekt-api/src/testFixtures/kotlin/dev/detekt/api/testfixtures/TestFactory.kt", domain.RoleTest},
+			{"okhttp/src/jvmTest/resources/web-platform-test-toascii.json", domain.RoleTest}, // data, by the bounded rule
+			{"samples/android/src/androidTest/kotlin/x/EchClientTest.kt", domain.RoleTest},   // test first, as for examples
+			{"okhttp/src/jvmMain/kotlin/okhttp3/OkHttpClient.kt", domain.RoleProd},
+			{"okhttp/src/commonJvmAndroid/kotlin/okhttp3/Call.kt", domain.RoleProd},
+			{"src/abTest/index.ts", domain.RoleProd}, // a feature named like a test, with no language directory
+			// Gradle build logic is iac: build-logic/ and buildSrc/ at any
+			// depth, gradle/ at the top only, since below it a gradle/
+			// package is often a Gradle plugin's own source.
+			{"build-logic/convention/src/main/kotlin/AndroidApplicationConventionPlugin.kt", domain.RoleIaC},
+			{"buildSrc/src/main/kotlin/AuxBuildConfiguration.kt", domain.RoleIaC},
+			{"gradle/plugins/src/main/kotlin/Publishing.kt", domain.RoleIaC},
+			{"detekt-gradle-plugin/src/main/kotlin/dev/detekt/gradle/Detekt.kt", domain.RoleProd},
+			// A JavaScript workspace package's scripts are iac, as the
+			// top-level scripts/ is; other languages there keep their role.
+			{"packages/kit/scripts/generate-dts.js", domain.RoleIaC},
+			{"packages/babel-types/scripts/generators/asserts.ts", domain.RoleIaC},
+			{"packages/vite/scripts/x.ts", domain.RoleIaC},
+			{"packages/kit/src/runtime/server/index.js", domain.RoleProd},
+			{"packages/tool/scripts/gen.py", domain.RoleProd},
+			// Code under a dot-directory is tooling, at any depth; the go
+			// tool ignores such directories, so no Go package is in one.
+			// Documentation there stays doc, and a documentation site's
+			// directory is doc.
+			{".eslint/no-exports-to-runtime-imports.js", domain.RoleIaC},
+			{".changeset/changelog.js", domain.RoleIaC},
+			{".changeset/brave-dogs.md", domain.RoleDoc},
+			{"web/.storybook/main.ts", domain.RoleIaC},
+			{".tool/genheader.go", domain.RoleIaC},
+			{"site/.vitepress/config.ts", domain.RoleDoc},
+			{"site/.vitepress/theme/custom.css", domain.RoleDoc},
 		} {
 			if got := classify.Role(p, c.path); got != c.want {
 				t.Errorf("Role(%q) = %q, want %q", c.path, got, c.want)
@@ -357,8 +402,11 @@ func TestClassify(t *testing.T) {
 			// reason says what it does with both.
 			{"a rule's max_bytes", in("tests/models/whatwg.json", 208844), classify.RuleSize, "max_bytes = 100000",
 				"[[roles.path]] rule 1", classify.SourcePackaged, "test up to 100 KB"},
-			{"small test data", in("tests/small.json", 9), classify.RulePath, "(^|/)(tests|test|__tests__|spec|testing)/",
+			{"small test data", in("tests/small.json", 9), classify.RulePath, "(^|/)(tests|test|__tests__|spec|testing)/|" +
+				"(^|/)src/([a-z][A-Za-z0-9]*Test([A-Z][A-Za-z0-9]*)?|test[A-Z][A-Za-z0-9]*)/(java|kotlin|groovy|scala|resources|res|assets)/",
 				"[[roles.path]] rule 1", classify.SourcePackaged, "test up to 100 KB"},
+			{"code under a dot-directory", in(".eslint/rule.js", 9), classify.RulePath, `(^|/)\.[^/]+/`,
+				"[[roles.path]] rule ", classify.SourcePackaged, "Code under a dot-directory is tooling"},
 			{"a generated header", classify.Input{Path: "gen_out.py", AtHead: true, Size: 10, HeaderHit: true}, classify.RuleHeader,
 				"a generated-file header in the first 40 lines", "", classify.SourceHeader, ""},
 			{"a link", classify.Input{Path: "link.py", AtHead: true, Size: 7, NotFile: true}, classify.RuleNotFile,

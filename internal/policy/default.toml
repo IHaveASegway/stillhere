@@ -26,6 +26,11 @@
 #                  and packaging configuration and CI are iac, directory
 #                  rules of the deny list match directories only, and
 #                  Jinja templates are markup.
+#   4  2026-10-19  Gradle's test source sets (src/jvmTest/, src/androidTest/,
+#                  src/testFixtures/, ...) are test; Gradle build logic,
+#                  code under a dot-directory and a JavaScript workspace
+#                  package's scripts/ are iac; a VitePress or VuePress site
+#                  is doc.
 
 # The policy schema version this file is written for: the shape of the
 # file, not the revision of its rules.
@@ -156,6 +161,14 @@ iac = [
 # examples/app/migrations/x.py is doc. The deny list comes before every
 # rule, though: Linguist's test-fixture pattern denies tests/fixtures/,
 # whatever role a rule here would give it.
+#
+# A test directory is a directory named tests, test, __tests__, spec or
+# testing, or, since revision 4, one of Gradle's test source sets: a
+# directory under src/ named for a test (jvmTest, commonTest, androidTest,
+# androidHostTest, iosTest, integrationTest, androidTestDebug, testDebug,
+# testFixtures, ...) that holds a java/, kotlin/, groovy/, scala/,
+# resources/, res/ or assets/ directory, as Gradle, Kotlin Multiplatform
+# and Android lay a source set out.
 
 [[roles.path]]
 role = "test"
@@ -163,7 +176,7 @@ role = "test"
 # larger file there is test data, not test code, and is skipped as too big:
 # test vectors, recorded responses and other files a tool wrote or someone
 # copied in, such as a 200 KB JSON of URL-parsing cases.
-pattern = '(^|/)(tests|test|__tests__|spec|testing)/'
+pattern = '(^|/)(tests|test|__tests__|spec|testing)/|(^|/)src/([a-z][A-Za-z0-9]*Test([A-Z][A-Za-z0-9]*)?|test[A-Z][A-Za-z0-9]*)/(java|kotlin|groovy|scala|resources|res|assets)/'
 when = ["iac"]
 max_bytes = 100000
 
@@ -173,7 +186,7 @@ role = "test"
 # golden files, Jest snapshots) has no role, configuration is the rule
 # above's, and documentation stays doc, so docs/spec/, a specification, is
 # no test suite.
-pattern = '(^|/)(tests|test|__tests__|spec|testing)(/|$)'
+pattern = '(^|/)(tests|test|__tests__|spec|testing)(/|$)|(^|/)src/([a-z][A-Za-z0-9]*Test([A-Z][A-Za-z0-9]*)?|test[A-Z][A-Za-z0-9]*)/(java|kotlin|groovy|scala|resources|res|assets)/'
 when = ["prod", "sql", "markup"]
 
 [[roles.path]]
@@ -226,6 +239,14 @@ when = ["prod", "sql", "markup", "iac"]
 
 [[roles.path]]
 role = "doc"
+# A documentation site's configuration, theme and components are doc, as
+# under docs/: VitePress's .vitepress/ and VuePress's .vuepress/, at any
+# depth (site/.vitepress/config.ts), since revision 4.
+pattern = '(^|/)\.(vitepress|vuepress)/'
+when = ["prod", "sql", "markup", "iac"]
+
+[[roles.path]]
+role = "doc"
 # Contribution templates run nothing: GitHub's issue, discussion and pull
 # request templates, and FUNDING.yml, which draws the sponsor button,
 # describe how to take part.
@@ -257,6 +278,39 @@ role = "iac"
 # Build and release tooling at the top of a repository: build/ (packaging
 # and CI, in the Go project layout's words), script/ and scripts/.
 pattern = '^(build|scripts?)/'
+when = ["prod"]
+
+[[roles.path]]
+role = "iac"
+# The build and release scripts of a JavaScript workspace package, as the
+# top-level scripts/ is: JavaScript and TypeScript under packages/NAME/script/
+# or packages/NAME/scripts/, such as a package's code generators and copy
+# steps that its package.json runs (revision 4). Code in other languages
+# there keeps its role.
+pattern = '(^|/)packages/[^/]+/scripts?/(.*/)?[^/]+\.[cm]?[jt]sx?$'
+when = ["prod"]
+
+[[roles.path]]
+role = "iac"
+# Gradle build logic is build tooling, as the *.gradle.kts scripts it
+# serves are: convention plugins in build-logic/ or buildSrc/, and code
+# under the top-level gradle/, which holds the wrapper and the version
+# catalog (revision 4). Below the top, a gradle/ directory is often a
+# product's package, such as a Gradle plugin's own source, so it keeps its
+# role.
+pattern = '(^|/)(build-logic|buildSrc)/|^gradle/'
+when = ["prod"]
+
+[[roles.path]]
+role = "iac"
+# Code under a dot-directory is tooling, at any depth: a linter's own
+# rules (.eslint/), a release tool's formatter (.changeset/), Git hooks
+# (.husky/), a development container (.devcontainer/), Storybook's and
+# Pulumi's configuration, an agent's skills (revision 4). Hidden
+# directories hold a tool's configuration by convention, and the go tool
+# ignores them, so no Go package lives in one. The rules above decide
+# first: CI, a documentation site, and tests under a dot-directory.
+pattern = '(^|/)\.[^/]+/'
 when = ["prod"]
 
 [[roles.path]]

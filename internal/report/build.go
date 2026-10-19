@@ -313,7 +313,7 @@ func (b *builder) card(rf *domain.RepoFacts, still *StillHere) RepoCard {
 	// A card is read on its own (the MCP server hands one to an agent), so
 	// it carries the standing caveats too; the text and Markdown renderers
 	// print those once, at the top of the report.
-	c.Caveats = append([]Caveat{notFetched()}, stripRepos(repoCaveats(rf))...)
+	c.Caveats = append([]Caveat{notFetched()}, stripRepos(repoCaveats(rf, b.in.Who))...)
 	c.Caveats = append(c.Caveats, b.forgeSectionCaveats([]*domain.RepoFacts{rf}, used)...)
 	if cv, ok := candidatesCaveat(c.KnowledgeLoss, c.Concentration, 0, b.in.Commands); ok {
 		c.Caveats = withCaveat(c.Caveats, cv)
@@ -960,12 +960,7 @@ func headSize(rf *domain.RepoFacts) Size {
 // caveat and who-knows' no-values check; the published number is
 // surviving@1's.
 func blamedProdLines(rf *domain.RepoFacts, keep func(path string) bool) int {
-	prod := map[string]bool{}
-	for _, pc := range rf.Paths {
-		if pc.AtHead && pc.Role == domain.RoleProd {
-			prod[pc.Path] = true
-		}
-	}
+	prod := prodAtHead(rf)
 	n := 0
 	for _, o := range rf.Owners {
 		if prod[o.Path] && (keep == nil || keep(o.Path)) {
@@ -973,6 +968,19 @@ func blamedProdLines(rf *domain.RepoFacts, keep func(path string) bool) int {
 		}
 	}
 	return n
+}
+
+// prodAtHead is the set of rf's prod paths at HEAD, the paths whose blamed
+// lines blamedProdLines counts and the no-ignore-revs caveat's formatting
+// candidates are judged over (formattingCommits).
+func prodAtHead(rf *domain.RepoFacts) map[string]bool {
+	prod := map[string]bool{}
+	for _, pc := range rf.Paths {
+		if pc.AtHead && pc.Role == domain.RoleProd {
+			prod[pc.Path] = true
+		}
+	}
+	return prod
 }
 
 // SurvivingProdLines is blamedProdLines over a whole repository: the lines
