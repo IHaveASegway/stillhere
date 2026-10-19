@@ -294,9 +294,10 @@ func (b *builder) runCaveats(m *Model) []Caveat {
 	if aiShown(m) {
 		out = append(out, aiLowerBound())
 	}
-	// The rank tables' validity, once for the report, which text and
-	// Markdown print instead of a note under each table (three
-	// metrics' tables in four scopes printed twelve).
+	// The rank tables' validity, once for the report, so the report's
+	// caveats in JSON list what qualifies every table. Text and Markdown
+	// leave it out of the top (Model.topCaveats), since each table prints
+	// its own under its question (RankValidity, wave 12).
 	var ranked []MetricInfo
 	for _, rs := range b.in.Ranks {
 		ranked = append(ranked, rs.Metric)

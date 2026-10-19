@@ -223,6 +223,14 @@ func TestMCPTools(t *testing.T) {
 		if lena.Name != "Lena Lead" || lena.RankLo == nil || *lena.RankLo != 1 || *lena.RankHi != 1 || lena.N != 10 || !near(lena.Estimate, 26.0/30) {
 			t.Errorf("platform durable@1 rank %+v, want Lena Lead 1-1, 26/30, n 10", lena)
 		}
+		// The table carries durable@1's verdict beside its order (wave 12),
+		// as its definition states it.
+		if tb := ranks.Ranks[0]; !strings.HasPrefix(tb.Validity, "Beta: not yet checked against a lead's labels") ||
+			tb.Reference == nil || tb.Reference.Verdict != "does not separate meaningful from routine changes" ||
+			!strings.HasPrefix(tb.Reference.Result, tb.Reference.Verdict+": AUC 0.42") {
+			t.Errorf("platform durable@1 rank table's validity %q and reference %+v, want its beta mark and the model panel's verdict",
+				tb.Validity, tb.Reference)
+		}
 		if lena.Email != pseudonym("lena@example.com") {
 			t.Errorf("Lena's key %q, want her id in place of her email", lena.Email)
 		}

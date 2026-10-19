@@ -742,12 +742,27 @@ func NewMe(in *MeInput) *Me {
 // "Beta: not yet checked against a lead's labels", and its reference
 // result, "Reference (model panel, …): VERDICT: …", with what the source is
 // in plain words.
-func ValidityNote(m MetricInfo) string {
-	r := m.Reference
-	if r == nil {
-		return m.Validity
+func ValidityNote(m MetricInfo) string { return validityNote(m.Validity, m.Reference) }
+
+// RankValidity is the validity line of rank table t: "Validity: " and its
+// metric's note (ValidityNote), the beta mark with the reference result
+// beside it, never in its place (ADR 0014). The table's validity caveat
+// says it, and text and Markdown print it under the table's question
+// (wave 12), so the verdict stands beside the rows it qualifies wherever
+// they are shown. It is "" for a metric with no note.
+func RankValidity(t *RankTable) string {
+	if note := validityNote(t.Validity, t.Reference); note != "" {
+		return "Validity: " + note
 	}
-	return strings.TrimSpace(m.Validity + " Reference (" + r.Source + "): " + r.Result + ". " + r.About)
+	return ""
+}
+
+// validityNote is ValidityNote over a metric's note and reference.
+func validityNote(validity string, r *Reference) string {
+	if r == nil {
+		return validity
+	}
+	return strings.TrimSpace(validity + " Reference (" + r.Source + "): " + r.Result + ". " + r.About)
 }
 
 // ValidityCaveats says how far the ranked metrics among ms are validated,

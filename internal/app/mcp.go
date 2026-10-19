@@ -508,8 +508,8 @@ type ChangePerson struct {
 	// days old) or when the landing added no such line.
 	Durable *Contribution `json:"durable"`
 	// Simplifying is simplifying@1's cluster: Num non-blank prod lines
-	// their commits removed. Nil outside its 90-day window, and for a
-	// reverted landing or a revert.
+	// their commits removed. Nil outside its 90-day window, and when every
+	// commit of theirs in it is a revert or a commit a revert names.
 	Simplifying *Contribution `json:"simplifying"`
 	// AIAssisted says whether one of their own commits in the landing is
 	// AI-assisted; nil unless the person is the one asking (ADR 0007).
@@ -684,11 +684,17 @@ func mcpRepoChanges(s *stored, rf *domain.RepoFacts, opt mcpChangeOptions) []Cha
 			landingOf[sha] = l.SHA
 		}
 	}
+	// A revert link names the revert commit (#43), whose landing reverts the
+	// landing of the commit it names; a branch that reverted its own commit
+	// before it landed reverts nothing that landed, so that pair is left out,
+	// as the change metrics cancel it.
 	reverts, revertedBy := map[string][]string{}, map[string][]string{}
 	for _, rv := range rf.Reverts {
-		if target, ok := landingOf[rv.Reverted]; ok {
-			reverts[rv.SHA] = append(reverts[rv.SHA], target)
-			revertedBy[target] = append(revertedBy[target], rv.SHA)
+		from, ok := landingOf[rv.SHA]
+		target, found := landingOf[rv.Reverted]
+		if ok && found && from != target {
+			reverts[from] = append(reverts[from], target)
+			revertedBy[target] = append(revertedBy[target], from)
 		}
 	}
 	var out []Change

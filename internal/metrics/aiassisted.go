@@ -24,7 +24,8 @@ func (aiAssistedV1) Definition() Definition {
 		Unit: "Landings in [now - 365d, now). Per AI-assisted landing (subject change, scope repo): Value 1. Per repository and " +
 			"group (subject repo or group): the AI-assisted share of the landings, with the cohort comparisons durable_ai and " +
 			"durable_other (durable@1's Σ surviving / Σ added over the clusters of tagged and untagged landings), their cluster " +
-			"counts durable_ai_n and durable_other_n, and reverted_ai and reverted_other (reverted landings among each). Per " +
+			"counts durable_ai_n and durable_other_n, and reverted_ai and reverted_other (the landings among each holding a " +
+			"commit a later landing's revert names). Per " +
 			"person (repository, group and all), on request only (metrics.PersonalAIShare, for that person's own page; never " +
 			"computed by a scan): the share of their clusters, over non-merge commits, in which one of their own commits is " +
 			"AI-assisted.",

@@ -33,7 +33,7 @@ type durableRow struct {
 	Name             string
 	Surviving, Added float64 // Σ surviving / Σ added
 	N                int     // clusters
-	Reverted         int     // Detail reverted_landings: clusters in reverted landings
+	Reverted         int     // Detail reverted_landings: clusters holding a commit a later landing's revert names
 	Ranked           bool    // eligible: at least 10 clusters
 }
 
@@ -767,37 +767,53 @@ func backdatedGuard(t *testing.T) {
 
 // mergedRevertGuard checks SPEC's merged-revert guard: each revert sits on
 // a side branch that a --no-ff merge lands, under a message that names no
-// revert; the revert is linked to the merge landing, which neither change
-// metric counts, and the reverted landing leaves simplifying@1; the lines a
-// revert restored still count in surviving@1, for whoever reverted.
+// revert; the revert is linked by its own commit, which neither change
+// metric counts, and the reverted commit leaves simplifying@1; the lines a
+// revert restored still count in surviving@1, for whoever reverted. And
+// #43's reverts at commit grain: a branch that took back one of its own
+// commits before it merged keeps the work it kept in durable@1, and a merge
+// that brings a revert beside new work keeps the new work in
+// simplifying@1.
 func mergedRevertGuard(t *testing.T) {
 	s := scan(t, "", nil, scanRanked(fixture.MergedRevert(t)))
 	r := onlyRepo(t, s.model)
-	if got := r.Card.Landings.History; got != 6 {
-		t.Errorf("SPEC regression guards, merged revert: %d landings in the history window, want 6 (D1, M1, N1, X2, M2 and N2)", got)
+	if got := r.Card.Landings.History; got != 9 {
+		t.Errorf("SPEC regression guards, merged revert: %d landings in the history window, want 9 (D1, M1, N1, MB, X2, M2, N2, X3 and M3)", got)
 	}
 	sameRows(t, "SPEC regression guards, merged revert, revert landing → reverted landing", revertLinks(t, onlyFacts(t, s)), map[string]string{
 		"2026-01-26T12:00:00Z": "2026-01-12T12:00:00Z", // M1 lands R1, which reverts D1
+		"2026-03-23T12:00:00Z": "2026-03-23T12:00:00Z", // MB lands RP, which reverts P1, in its own map
 		"2026-08-17T12:00:00Z": "2026-08-03T12:00:00Z", // M2 lands R2, which reverts X2
+		"2026-09-21T12:00:00Z": "2026-08-31T12:00:00Z", // M3 lands R3, which reverts X3, beside W3
 	})
-	// Rex, who reverted, and Wes, whose landings were reverted, have no
-	// value: Nia's control landings are the only clusters.
+	// Rex's reverts and Wes's reverted landings count for no one, and P1,
+	// which its branch took back, counts with its revert for nothing: Ola
+	// keeps Q1's 2 of 2, where the landing as a whole gave her no value
+	// and P1 kept in would give her 2 of 7.
 	checkDurable(t, s, r.Key, "SPEC regression guards, merged revert, durable@1", map[string]durableRow{
 		"nia@example.com": {"Nia Normal", 3, 3, 1, 0, false},
+		"ola@example.com": {"Ola Onbranch", 2, 2, 1, 0, false},
 	}, map[string]map[string]cluster{
 		"nia@example.com": {"2026-02-09T12:00:00Z": {3, 3}}, // N1
+		"ola@example.com": {"2026-03-23T12:00:00Z": {2, 2}}, // Q1, landed by MB
 	})
+	// M3 brought Rex's revert of X3, which removes 4 lines, and W3, which
+	// removes none: Rex has a cluster of 0 removed, where the landing as a
+	// whole gave him none and his revert counted would give him 4.
 	checkSimplifying(t, s, r.Key, "SPEC regression guards, merged revert, simplifying@1", map[string]simplifyingRow{
 		"nia@example.com": {"Nia Normal", 0, 0, 1, false, false},
+		"rex@example.com": {"Rex Revert", 0, 0, 1, false, false},
 	}, map[string]map[string]cluster{
 		"nia@example.com": {"2026-08-24T12:00:00Z": {}}, // N2
+		"rex@example.com": {"2026-09-21T12:00:00Z": {}}, // W3, landed by M3
 	})
-	// surviving@1 excludes no commit: blame gives R1's 4 restored lines to
-	// Rex, and Nia holds legacy_5 and legacy_6 from U0, nia.py's 3 and
-	// nia_w.py's 1.
+	// surviving@1 excludes no commit: blame gives R1's 4 restored lines and
+	// rex.py's 3 to Rex, ola.py's 2 to Ola, and Nia holds legacy_5 and
+	// legacy_6 from U0, nia.py's 3 and nia_w.py's 1.
 	checkSurviving(t, "SPEC regression guards, merged revert, surviving@1", r, map[string]int{
-		"rex@example.com": 4,
+		"rex@example.com": 7,
 		"nia@example.com": 6,
+		"ola@example.com": 2,
 	})
 }
 
@@ -1104,22 +1120,43 @@ func checkRankTable(t *testing.T, table string, m *report.Model, metric domain.M
 	}
 	sameRows(t, table+", rank table", got, want)
 
-	// The table's validity note is in its JSON, so the table reads on its
-	// own, and in the report's caveats, which text says once for every
-	// table rather than under each.
+	// The table carries its metric's validity as the definition says it
+	// (wave 12): in its JSON as validity and reference, and as a caveat, so
+	// the table reads on its own; the report's caveats list it too. Text
+	// and Markdown print it under each table's question, and no longer at
+	// the report's top, away from the tables.
+	i := slices.IndexFunc(app.Metrics().Metrics, func(mi report.MetricInfo) bool { return mi.ID == metric.String() })
+	if i < 0 {
+		t.Fatalf("%s: the registry has no %s", table, metric)
+	}
+	def := app.Metrics().Metrics[i]
+	if rt.Validity != def.Validity || rt.Reference == nil || def.Reference == nil || *rt.Reference != *def.Reference {
+		t.Errorf("%s: the rank table's validity is %q with reference %+v, want its definition's, %q with %+v", table,
+			rt.Validity, rt.Reference, def.Validity, def.Reference)
+	}
+	line := "Validity: " + report.ValidityNote(def)
 	if !slices.ContainsFunc(rt.Caveats, func(c report.Caveat) bool {
-		return c.Code == "validity" && strings.Contains(c.Message, "Reference (model panel")
+		return c.Code == "validity" && c.Message == line
 	}) || !slices.ContainsFunc(m.Caveats, func(c report.Caveat) bool {
 		return c.Code == "validity" && strings.Contains(c.Message, metric.String())
 	}) {
 		t.Errorf("%s: the rank table carries %v and the report %v, want %s's validity note in both", table, rt.Caveats, m.Caveats, metric)
 	}
-	var text bytes.Buffer
+	var text, md bytes.Buffer
 	if err := report.Text(&text, m); err != nil {
 		t.Fatal(err)
 	}
-	if n := strings.Count(text.String(), "- Validity"); n != 1 {
-		t.Errorf("%s: the report's text says the ranked metrics' validity %d times, want once, at its top", table, n)
+	if err := report.Markdown(&md, m); err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(text.String(), "\n  Validity: Beta: "); n != len(m.Ranks) || strings.Contains(text.String(), "- Validity") {
+		t.Errorf("%s: the report's text labels %d of its %d rank tables with their validity, or says it at its top too", table, n, len(m.Ranks))
+	}
+	if n := strings.Count(md.String(), "\n**Validity:** Beta: "); n != len(m.Ranks) || strings.Contains(md.String(), "- Validity") {
+		t.Errorf("%s: the report's Markdown labels %d of its %d rank tables with their validity, or says it at its top too", table, n, len(m.Ranks))
+	}
+	if section := sectionAfter(text.String(), "Ranks · "+metric.String()+" · "); !strings.Contains(strings.Join(strings.Fields(section), " "), line) {
+		t.Errorf("%s: the text of the %s rank table does not say %q", table, metric, line)
 	}
 }
 
@@ -1300,22 +1337,34 @@ func landingAt(t *testing.T, rf *domain.RepoFacts, at string) string {
 	return ""
 }
 
-// revertLinks returns rf's revert links as landing times: the revert
-// landing's, then the reverted commit's landing's.
+// revertLinks returns rf's revert links as landing times: the time of the
+// landing whose map holds the revert commit, then the reverted commit's
+// landing's. A link names the revert commit itself (#43: commit grain), so
+// a link that names a merge, which none of the fixtures' messages carry,
+// is an error.
 func revertLinks(t *testing.T, rf *domain.RepoFacts) map[string]string {
 	t.Helper()
 	when := map[string]string{}
 	for _, l := range rf.Landings {
-		when[l.SHA] = rfc3339(l.Time)
+		for _, sha := range append([]string{l.SHA}, l.Commits...) {
+			when[sha] = rfc3339(l.Time)
+		}
 	}
 	name := func(sha string) string {
 		if at, ok := when[sha]; ok {
 			return at
 		}
-		return "commit " + sha // not a landing of the run
+		return "commit " + sha // in no landing of the run
+	}
+	merges := map[string]bool{}
+	for _, c := range rf.Commits {
+		merges[c.SHA] = len(c.Parents) > 1
 	}
 	out := map[string]string{}
 	for _, rv := range rf.Reverts {
+		if merges[rv.SHA] {
+			t.Errorf("the revert link of the landing at %s names its merge %s, not the commit that reverts", name(rv.SHA), rv.SHA)
+		}
 		if _, dup := out[name(rv.SHA)]; dup {
 			t.Errorf("the landing at %s reverts more than one commit", name(rv.SHA))
 		}

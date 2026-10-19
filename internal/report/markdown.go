@@ -62,7 +62,7 @@ func (m *Model) writeMarkdown(p *printer) {
 		}
 		p.line("- Metrics " + strings.Join(ids, ", "))
 	}
-	mdCaveats(p, "##", m.Caveats, false)
+	mdCaveats(p, "##", m.topCaveats(), false)
 	for i := range m.Overviews {
 		if !m.repeats(&m.Overviews[i]) {
 			mdOverview(p, m, &m.Overviews[i])
@@ -273,6 +273,10 @@ func mdRanks(p *printer, level string, t *RankTable) {
 	p.blank()
 	if t.Question != "" {
 		p.line(mdText(t.Question))
+		p.blank()
+	}
+	if note := validityNote(t.Validity, t.Reference); note != "" { // RankValidity, its label in bold
+		p.line("**Validity:** " + mdText(note))
 		p.blank()
 	}
 	if len(t.Ranked) == 0 && len(t.BelowMin) == 0 && len(t.Bots) == 0 {

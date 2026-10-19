@@ -6,8 +6,9 @@ import (
 )
 
 // simplifyingV1 is simplifying@1: the non-blank prod lines a person's
-// counted commits removed in the last 90 days, leaving out every commit of a
-// reverted landing. It is a Sum metric: resampling a person's own clusters
+// counted commits removed in the last 90 days, leaving out every commit a
+// revert names (#43: the commit, not its whole landing). It is a Sum
+// metric: resampling a person's own clusters
 // would always return the same sum, so the bootstrap resamples week blocks
 // shared by everyone (#10), and Clusters tags each cluster with its block.
 type simplifyingV1 struct{}
@@ -22,8 +23,8 @@ func (simplifyingV1) Definition() Definition {
 		Unit: "Σ removed per person over their clusters in [now - 90d, now), per repository, group and all: non-blank prod " +
 			"lines removed by each counted commit's own -U0 -w patch. Every cluster counts, including one that removed nothing. " +
 			"Merge commits, ignore-revs commits, copies (a commit a merge brought whose patch id a commit of an earlier landing " +
-			"has, which is not its ancestor) and revert " +
-			"landings are excluded, and so is every commit of a reverted landing. " +
+			"has, which is not its ancestor), revert commits and every commit a revert names are excluded, so the rest of a " +
+			"landing that brings a revert, or holds a reverted commit, counts. " +
 			"Detail: simplifying_landings, the person's landings whose counted commits net Σ added - Σ removed <= -20.",
 		Ranked:      true,
 		Subjects:    []string{domain.SubjectPerson},
@@ -31,7 +32,7 @@ func (simplifyingV1) Definition() Definition {
 		BlindSpots: "Deleting a feature looks like simplifying (deleting its tests does not: only prod lines count). A move counts " +
 			"its lines as removed, though its net is 0, so it is never a simplifying landing by itself. Removed code that comes " +
 			"back later is not detected in v1.",
-		Gaming:    "Deleting then re-adding. Revert detection catches the plain case: neither the reverted landing nor the revert counts.",
+		Gaming:    "Deleting then re-adding. Revert detection catches the plain case: neither the reverted commit nor the revert counts.",
 		Oracle:    "testdata/fixture/SPEC.md#change-oracles-m1-testchangeoracles (main fixture and sibling)",
 		Validity:  betaValidity,
 		Reference: panel(simplifyingPanel),
@@ -87,8 +88,8 @@ func (simplifyingV1) Clusters(in *Input, scope domain.Scope) (RankInput, error) 
 // scores names the changes simplifying@1's clusters measure
 // (Scorer.Scores).
 func (simplifyingV1) scores() string {
-	return "a change with a person's commit that is no merge, revert or reverted change, in a repository whose patches " +
-		"the scan read"
+	return "a change with a person's commit that is no merge, copy, revert or commit a revert names, in a repository whose " +
+		"patches the scan read"
 }
 
 // simplifyingClusters returns the window's clusters and the landings among

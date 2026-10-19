@@ -27,6 +27,9 @@ type cluster struct {
 	// blame attributes to those commits at HEAD, the untraced lines left
 	// out of both alike (untracedLines).
 	added, removed, traced, surviving int
+	// reverted is true when one of the commits holds a change a revert in
+	// a later landing took off the branch (commitView.reverted).
+	reverted bool
 }
 
 // counts reports whether a commit counts in the change metrics: neither a
@@ -34,22 +37,27 @@ type cluster struct {
 // repository's ignore-revs file lists, nor a copy of a change an earlier
 // landing brought (markCopies), which its original already counts: blame
 // gives the copy's lines to the original, so durable@1 would score it 0,
-// and simplifying@1 would count its removal twice. So a landing made only
-// of copies forms no cluster. Revert landings are excluded a level up,
-// landing by landing.
+// and simplifying@1 would count its removal twice. Nor does a revert
+// commit, nor a commit a revert in its own landing took back (markReverts,
+// #43): an undo is not new work, and a change its branch withdrew before
+// landing never reached the default branch, so the pair cancels and the
+// rest of the landing counts. A reverted commit, one a later landing's
+// revert names, counts unless the metric drops it (changeClusters). So a
+// landing made only of copies, or of reverts, forms no cluster.
 func (c *commitView) counts() bool {
-	return !c.merge && !c.ignored && !c.copy
+	return !c.merge && !c.ignored && !c.copy && !c.revert && !c.withdrawn
 }
 
 // changeClusters returns the clusters of the landings in w, in repository,
-// landing and person order. Revert landings never form clusters; reverted
-// landings form them unless dropReverted, which is how simplifying@1 leaves
-// out every commit of a reverted landing while durable@1 keeps it (its lines
-// are gone, so it already scores nothing). needLines also skips repositories
-// without blame, whose surviving lines are unknown; within a repository with
-// blame, the lines whose survival blame cannot tell (on a file whose blame
-// failed, or of a change git took for binary) are left out of traced and
-// surviving alike.
+// landing and person order, of the commits that count (commitView.counts).
+// A reverted commit counts unless dropReverted, which is how simplifying@1
+// leaves out every commit a later landing's revert names while durable@1
+// keeps it (its lines are gone, so it scores what blame still gives it, 0
+// for a plain revert, and its cluster is flagged reverted). needLines also
+// skips repositories without blame, whose surviving lines are unknown;
+// within a repository with blame, the lines whose survival blame cannot
+// tell (on a file whose blame failed, or of a change git took for binary)
+// are left out of traced and surviving alike.
 func changeClusters(v *view, w domain.Window, needLines, dropReverted bool) []*cluster {
 	var out []*cluster
 	for _, r := range v.repos {
@@ -57,12 +65,12 @@ func changeClusters(v *view, w domain.Window, needLines, dropReverted bool) []*c
 			continue
 		}
 		for _, l := range r.landings {
-			if !w.Contains(l.time) || l.revert || (dropReverted && l.reverted) {
+			if !w.Contains(l.time) {
 				continue
 			}
 			var mine []*cluster // this landing's clusters, one per person
 			for _, c := range l.commits {
-				if !c.counts() {
+				if !c.counts() || (dropReverted && c.reverted) {
 					continue
 				}
 				i := slices.IndexFunc(mine, func(k *cluster) bool { return k.person == c.credit })
@@ -75,6 +83,7 @@ func changeClusters(v *view, w domain.Window, needLines, dropReverted bool) []*c
 				k.removed += c.removed
 				k.traced += c.traced
 				k.surviving += c.surviving
+				k.reverted = k.reverted || c.reverted
 			}
 			slices.SortFunc(mine, func(a, b *cluster) int { return cmp.Compare(a.person, b.person) })
 			out = append(out, mine...)

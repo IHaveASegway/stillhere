@@ -39,8 +39,9 @@ func (durableV1) Definition() Definition {
 			"file whose blame failed, or of a path the history renamed into one. A cluster is one person's counted commits in " +
 			"one landing and needs at least one added line in the ratio. Merge commits, ignore-revs commits, copies (a commit " +
 			"a merge brought whose patch id a commit of an earlier landing has, which is not its ancestor, as git cherry " +
-			"compares: its original is scored) and revert landings are excluded; a " +
-			"reverted landing stays and scores what blame gives it. Detail: reverted_landings.",
+			"compares: its original is scored), revert commits and the commits a revert in their own landing takes back are " +
+			"excluded, so the rest of a landing that brings a revert counts; a commit a later landing's revert names stays " +
+			"and scores what blame gives it. Detail: reverted_landings, the person's clusters holding such a commit.",
 		Ratio:       true,
 		Ranked:      true,
 		Subjects:    []string{domain.SubjectPerson},
@@ -76,7 +77,7 @@ func (durableV1) compute(v *view) ([]domain.MetricValue, error) {
 			a.surviving += k.surviving
 			a.added += k.traced
 			a.n++
-			if k.landing.reverted {
+			if k.reverted {
 				a.reverted++
 			}
 		}
