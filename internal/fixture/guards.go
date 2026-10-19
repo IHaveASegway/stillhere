@@ -63,9 +63,11 @@ func BuildBackdated(ctx context.Context, dir string) error {
 
 // MergedRevert builds the merged-revert guard of testdata/fixture/SPEC.md in
 // a new temporary directory and returns its absolute path: a work tree named
-// "merged-revert", on branch main, where two reverts sit on side branches
-// that --no-ff merges land, and neither merge's message names a revert. It
-// stops the test with t.Fatal if the build fails.
+// "merged-revert", on branch main, where four reverts sit on side branches
+// that --no-ff merges land: one of a commit of its own branch, beside work
+// the branch kept, and one beside new work (#43); and a git revert -m 1 of
+// a merged branch beside new work, landed by the one merge whose message
+// names a revert. It stops the test with t.Fatal if the build fails.
 func MergedRevert(t testing.TB) string {
 	t.Helper()
 	dir := filepath.Join(t.TempDir(), mergedRevertName)
@@ -305,21 +307,41 @@ func backdatedHistory(b *builder) {
 // where R1's restored lines would earn durable lines if the revert went
 // unseen; M2 lands an add-then-revert in the 90-day window, where R2's
 // removed lines would earn simplifying@1 lines and a simplifying landing.
+//
+// MB and M3 are #43's two cases of reverts at commit grain. MB lands a
+// branch that reverted one of its own commits before it merged, beside
+// work it kept, in the cohort: the pair cancels and the kept work counts.
+// M3 lands, in the 90-day window, a revert of an earlier landing beside new
+// work by the same person: the revert does not count and the new work does.
+// MT and MR guard the merge's side of the rule, in the window: MT lands a
+// branch of two people's commits, which RT reverts with git revert -m 1,
+// as GitHub's revert of a merged pull request does, so both commits are
+// reverted; and MR lands RT beside new work under a message that carries
+// RT's revert line as well, as GitHub's "pull request title and
+// description" setting writes a revert pull request's merge, so only RT's
+// link stands and the new work counts.
 func mergedRevertHistory(b *builder) {
 	nia := person{"Nia Normal", "nia@example.com"}
 	wes := person{"Wes Reverted", "wes@example.com"}
 	rex := person{"Rex Revert", "rex@example.com"}
 	mia := person{"Mia Merge", "mia@example.com"}
+	ola := person{"Ola Onbranch", "ola@example.com"}
+	tia := person{"Tia Taken", "tia@example.com"}
+	uri := person{"Uri Undone", "uri@example.com"}
 
+	// merge records mia's --no-ff merge of branch into main at when.
+	merge := func(branch string, when time.Time) {
+		b.row(when, mia)
+		b.git("switch", "--quiet", "main")
+		b.git("merge", "--quiet", "--no-ff", "--no-edit", "--message", "Merge branch '"+branch+"'", branch)
+	}
 	// revertOn records a revert of sha, by who at when, on a new branch
 	// named branch, and its --no-ff merge into main by mia at merged.
 	revertOn := func(branch, sha string, when, merged time.Time, who person) {
 		b.git("switch", "--quiet", "--create", branch)
 		b.row(when, who)
 		b.git("revert", "--no-edit", sha)
-		b.row(merged, mia)
-		b.git("switch", "--quiet", "main")
-		b.git("merge", "--quiet", "--no-ff", "--no-edit", "--message", "Merge branch '"+branch+"'", branch)
+		merge(branch, merged)
 	}
 
 	b.initRepo()
@@ -339,6 +361,18 @@ func mergedRevertHistory(b *builder) {
 	b.write("nia.py", numbered("nia", 3))
 	b.commit("feat: add nia.py")
 
+	b.git("switch", "--quiet", "--create", "try-ola")
+	b.row(noon(2026, time.March, 2), ola) // P1: on try-ola, which RP takes back
+	b.write("ola_try.py", numbered("ola_try", 5))
+	b.commit("feat: add ola_try.py")
+	p1 := b.head()
+	b.row(noon(2026, time.March, 9), ola) // Q1: on try-ola, kept
+	b.write("ola.py", numbered("ola", 2))
+	b.commit("feat: add ola.py")
+	b.row(noon(2026, time.March, 16), ola) // RP: on try-ola, git revert of P1
+	b.git("revert", "--no-edit", p1)
+	merge("try-ola", noon(2026, time.March, 23)) // MB
+
 	b.row(noon(2026, time.August, 3), wes) // X2: R2 reverts it
 	b.write("wes.py", numbered("wes", 20))
 	b.commit("feat: add wes.py")
@@ -348,6 +382,38 @@ func mergedRevertHistory(b *builder) {
 	b.row(noon(2026, time.August, 24), nia) // N2
 	b.write("nia_w.py", numbered("nia_w", 1))
 	b.commit("feat: add nia_w.py")
+
+	b.row(noon(2026, time.August, 31), wes) // X3: R3 reverts it
+	b.write("wes_b.py", numbered("wes_b", 4))
+	b.commit("feat: add wes_b.py")
+	x3 := b.head()
+	b.git("switch", "--quiet", "--create", "undo-x3")
+	b.row(noon(2026, time.September, 7), rex) // R3: on undo-x3, git revert of X3
+	b.git("revert", "--no-edit", x3)
+	b.row(noon(2026, time.September, 14), rex) // W3: on undo-x3, new work beside the revert
+	b.write("rex.py", numbered("rex", 3))
+	b.commit("feat: add rex.py")
+	merge("undo-x3", noon(2026, time.September, 21)) // M3
+
+	b.git("switch", "--quiet", "--create", "tia-uri")
+	b.row(noon(2026, time.September, 22), tia) // T1: on tia-uri, which RT reverts with MT
+	b.write("tia.py", numbered("tia", 4))
+	b.commit("feat: add tia.py")
+	b.row(noon(2026, time.September, 23), uri) // T2: on tia-uri
+	b.write("uri.py", numbered("uri", 3))
+	b.commit("feat: add uri.py")
+	merge("tia-uri", noon(2026, time.September, 24)) // MT
+	mt := b.head()
+	b.git("switch", "--quiet", "--create", "undo-mt")
+	b.row(noon(2026, time.September, 28), rex) // RT: on undo-mt, git revert -m 1 of MT
+	b.git("revert", "--no-edit", "-m", "1", mt)
+	b.row(noon(2026, time.September, 29), rex) // W5: on undo-mt, removes rex_2 and rex_3
+	b.write("rex.py", span("rex", 1, 1))
+	b.commit("refactor: drop rex_2 and rex_3")
+	b.row(noon(2026, time.October, 1), mia) // MR: its message carries RT's revert line too
+	b.git("switch", "--quiet", "main")
+	b.git("merge", "--quiet", "--no-ff", "--no-edit", "--message", "Merge branch 'undo-mt'",
+		"--message", "This reverts commit "+mt+".", "undo-mt")
 }
 
 // binaryHistory writes the Binary history table of SPEC: one row per commit,

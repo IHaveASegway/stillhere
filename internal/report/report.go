@@ -686,7 +686,15 @@ type RankTable struct {
 	// shows beside the estimate, a counterweight the metric's definition
 	// promises next to it (PF-5: reviews_given@1's no_comment_share); ""
 	// for none.
-	Beside     string     `json:"beside"`
+	Beside string `json:"beside"`
+	// Validity and Reference are how far the metric is validated, as its
+	// definition says it (MetricInfo's, which explain gives too): its beta
+	// mark and its reference result, whose verdict ("does not separate
+	// meaningful from routine changes") a table carries wherever it is
+	// shown (wave 12): text and Markdown print them under its question
+	// (RankValidity), and its validity caveat says them in words.
+	Validity   string     `json:"validity"`
+	Reference  *Reference `json:"reference"` // null for a metric with no reference result
 	Provenance Provenance `json:"provenance"`
 	Ranked     []RankRow  `json:"ranked"`    // by rank interval
 	BelowMin   []RankRow  `json:"below_min"` // listed, not ranked

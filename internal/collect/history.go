@@ -66,13 +66,15 @@ type HistoryFacts struct {
 	// patch in scan runs, which is empty for a merge, and are -1 in week
 	// runs. A partial clone has no rows: its blobs are not local.
 	Changes []domain.FileChange
-	// Reverts links each revert landing in the window to the commit its
-	// revert names (scan runs only), sorted by SHA, then Reverted. A revert
-	// landing is a landing whose map holds a commit whose message carries
-	// "This reverts commit <sha>.": the landing itself, or, for a revert
-	// merged with a merge commit, the side-branch commit the merge brought
-	// in. So SHA is always a landing, and a landing that brought in both a
-	// commit and its revert names a commit of its own map.
+	// Reverts links each commit of a window landing's map whose message
+	// carries "This reverts commit <sha>." to the commit it names (scan
+	// runs only), sorted by SHA, then Reverted: the landing itself for a
+	// squash, rebase or direct revert, or, for a revert merged with a merge
+	// commit, the side-branch commit the merge brought in (#43: commit
+	// grain). A landing that brought in a commit and its revert holds both
+	// ends of the link. A merge whose own message carries the line is
+	// linked only when no non-merge commit of its landing names the same
+	// commit: a commit's link is the finer one (readReverts).
 	Reverts []domain.Revert
 	// Warnings holds shallow-window when a shallow clone's history ends
 	// inside what the window needs, and other-refs-unread (WarnOtherRefs)

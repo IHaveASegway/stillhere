@@ -1,6 +1,6 @@
 # Fixture repository and oracles
 
-Status: carried over from the 2026-10-07 plan, change oracles and the sibling fixture added 2026-10-14, regression guards added 2026-10-14 (#13), the binary-file guard 2026-10-14 (#54), with a rename History does not collect, a vendored file and a later text change added by its review 2026-10-15, its text twins and the main fixture as it stood at an earlier `--now` added 2026-10-15 (#70), `landed@2`, knowledge under any path, `review_coverage@1` with a seventh pull request, the binary-changes caveat and the partial and shallow clones added 2026-10-15 (#108, #107, #64, #74), the week oracle moved to `landed@2` and explain traces and roleless paths added 2026-10-15 (#108, #109, PF-8), an agent's pull request, a replica's hole and a stale sync in the merge-methods guard and a week a shallow clone does not cover added 2026-10-15 by the review of #116 (#107, #101, #74), validate's per-change scores, size alone and verdicts and `label`'s whole rebase merge added 2026-10-16 by the review of #119, and the merge-back guard added 2026-10-16 (wave 10: copies, pull requests merged into another branch, `landings_365d` by `landed@2`'s credit), with changes made again on top of their twins, which are no copies, added by its review, test and doc paths in who-knows, the deny advice, an alias's id, Hank's #8, a shared mailbox high and activity off the default branch added 2026-10-16 (wave 10) · the week, still-here and change oracles run as `go test` in `internal/app` (`TestWeekOracle`, `TestStillHereOracle`, `TestChangeOracles`, `TestDeterminism`, #13), web escaping in M3
+Status: carried over from the 2026-10-07 plan, change oracles and the sibling fixture added 2026-10-14, regression guards added 2026-10-14 (#13), the binary-file guard 2026-10-14 (#54), with a rename History does not collect, a vendored file and a later text change added by its review 2026-10-15, its text twins and the main fixture as it stood at an earlier `--now` added 2026-10-15 (#70), `landed@2`, knowledge under any path, `review_coverage@1` with a seventh pull request, the binary-changes caveat and the partial and shallow clones added 2026-10-15 (#108, #107, #64, #74), the week oracle moved to `landed@2` and explain traces and roleless paths added 2026-10-15 (#108, #109, PF-8), an agent's pull request, a replica's hole and a stale sync in the merge-methods guard and a week a shallow clone does not cover added 2026-10-15 by the review of #116 (#107, #101, #74), validate's per-change scores, size alone and verdicts and `label`'s whole rebase merge added 2026-10-16 by the review of #119, and the merge-back guard added 2026-10-16 (wave 10: copies, pull requests merged into another branch, `landings_365d` by `landed@2`'s credit), with changes made again on top of their twins, which are no copies, added by its review, test and doc paths in who-knows, the deny advice, an alias's id, Hank's #8, a shared mailbox high and activity off the default branch added 2026-10-16 (wave 10), and reverts at commit grain in the merged-revert guard added 2026-10-19 (#43), with a `git revert -m 1` of a merged branch, a merge whose own message carries its revert commit's line, and a run stored before, added by its review · the week, still-here and change oracles run as `go test` in `internal/app` (`TestWeekOracle`, `TestStillHereOracle`, `TestChangeOracles`, `TestDeterminism`, #13), web escaping in M3
 
 `internal/fixture` builds this repository (`fixture.Main`), the [sibling fixture](#sibling-fixture) (`fixture.Sibling`), the [regression guards](#regression-guards-testchangeoracles)' three repositories (`fixture.Backdated`, `fixture.MergedRevert`, `fixture.Binary`), the [merge-methods guard](#merge-methods-fixturemergemethods) (`fixture.MergeMethods`), the [merge-back guard](#merge-back-fixturemergeback) (`fixture.MergeBack`) and the [discovery fixture](#discovery-fixture-testdiscover)'s repositories in temporary directories for `go test`. Every number below is an oracle: a change that moves one fails CI. Each oracle exists so that one specific wrong implementation fails, and that implementation is named next to it.
 
@@ -741,7 +741,7 @@ Wrong implementations this catches:
 
 ### Revert merged with `--no-ff` (`fixture.MergedRevert`)
 
-Each revert is made on a side branch and landed by a `--no-ff` merge whose message names no revert, as a pull request merged with GitHub's default merge method lands: only the commit the merge brought in says `This reverts commit <sha>.` ([week-collector.md](../../docs/spec/week-collector.md#subjects-and-reverts)). M1 lands a delete-then-revert in the `durable@1` cohort and M2 an add-then-revert in the 90-day window: the two ways an unseen revert earns credit ([metrics.md](../../docs/metrics.md#change-facts-shared-by-durable1-and-simplifying1)).
+Each revert is made on a side branch and landed by a `--no-ff` merge, as a pull request merged with GitHub's default merge method lands: the commit the merge brought in says `This reverts commit <sha>.` ([week-collector.md](../../docs/spec/week-collector.md#subjects-and-reverts)), and only MR's message names a revert as well. M1 lands a delete-then-revert in the `durable@1` cohort and M2 an add-then-revert in the 90-day window: the two ways an unseen revert earns credit ([metrics.md](../../docs/metrics.md#change-facts-shared-by-durable1-and-simplifying1)). MB and M3 are [#43](https://github.com/IHaveASegway/stillhere/issues/43)'s two cases of reverts at commit grain, added 2026-10-19: MB lands, in the cohort, a branch that took back one of its own commits before it merged, beside a commit it kept; M3 lands, in the window, a revert of an earlier landing beside new work by the same person. MT and MR, added by #43's review, guard the merge's side of the rule, in the window: RT is a `git revert -m 1` of MT, as GitHub's revert of a merged pull request makes, which reverts both people's commits MT brought in; and MR lands RT beside new work under a message that carries RT's line too, as GitHub's "pull request title and description" setting writes a revert pull request's merge, so only RT's link stands and the new work counts.
 
 | Row | When | Author | What | Commit |
 | --- | --- | --- | --- | --- |
@@ -750,37 +750,68 @@ Each revert is made on a side branch and landed by a `--no-ff` merge whose messa
 | R1 | 2026-01-19 | Rex Revert `<rex@example.com>` | On `undo-d1`, branched from D1: `git revert --no-edit` of D1, which restores the 4 lines | `2f389e3` |
 | M1 | 2026-01-26 | Mia Merge `<mia@example.com>` | `--no-ff` merge of `undo-d1`, `Merge branch 'undo-d1'` | `575bf23` |
 | N1 | 2026-02-09 | Nia | `nia.py` (3 lines) | `5e0bae3` |
-| X2 | 2026-08-03 | Wes | `wes.py` (20 lines) | `eee85d8` |
-| R2 | 2026-08-10 | Rex | On `undo-x2`, branched from X2: `git revert --no-edit` of X2, which deletes `wes.py` | `6965c0f` |
-| M2 | 2026-08-17 | Mia | `--no-ff` merge of `undo-x2`, `Merge branch 'undo-x2'` | `e38d376` |
-| N2 | 2026-08-24 | Nia | `nia_w.py` (1 line) | `82ed0c1` |
+| P1 | 2026-03-02 | Ola Onbranch `<ola@example.com>` | On `try-ola`, branched from N1: `ola_try.py` (5 lines) | `cb90f24` |
+| Q1 | 2026-03-09 | Ola | On `try-ola`: `ola.py` (2 lines) | `4a5ab25` |
+| RP | 2026-03-16 | Ola | On `try-ola`: `git revert --no-edit` of P1, which deletes `ola_try.py` | `f408eb5` |
+| MB | 2026-03-23 | Mia | `--no-ff` merge of `try-ola`, `Merge branch 'try-ola'` | `6aa86dc` |
+| X2 | 2026-08-03 | Wes | `wes.py` (20 lines) | `a48090d` |
+| R2 | 2026-08-10 | Rex | On `undo-x2`, branched from X2: `git revert --no-edit` of X2, which deletes `wes.py` | `3835214` |
+| M2 | 2026-08-17 | Mia | `--no-ff` merge of `undo-x2`, `Merge branch 'undo-x2'` | `83ec19d` |
+| N2 | 2026-08-24 | Nia | `nia_w.py` (1 line) | `87b8768` |
+| X3 | 2026-08-31 | Wes | `wes_b.py` (4 lines) | `f4fba7e` |
+| R3 | 2026-09-07 | Rex | On `undo-x3`, branched from X3: `git revert --no-edit` of X3, which deletes `wes_b.py` | `12aaf05` |
+| W3 | 2026-09-14 | Rex | On `undo-x3`: `rex.py` (3 lines) | `0bd2b50` |
+| M3 | 2026-09-21 | Mia | `--no-ff` merge of `undo-x3`, `Merge branch 'undo-x3'` | `0722700` |
+| T1 | 2026-09-22 | Tia Taken `<tia@example.com>` | On `tia-uri`, branched from M3: `tia.py` (4 lines) | `18c0df4` |
+| T2 | 2026-09-23 | Uri Undone `<uri@example.com>` | On `tia-uri`: `uri.py` (3 lines) | `e30b504` |
+| MT | 2026-09-24 | Mia | `--no-ff` merge of `tia-uri`, `Merge branch 'tia-uri'` | `ab7b554` |
+| RT | 2026-09-28 | Rex | On `undo-mt`, branched from MT: `git revert -m 1 --no-edit` of MT, which deletes `tia.py` and `uri.py`; its message names MT, `This reverts commit ab7b554…, reversing changes made to 0722700…` | `ac45095` |
+| W5 | 2026-09-29 | Rex | On `undo-mt`: removes `rex_2` and `rex_3` from `rex.py` | `a1bcf6e` |
+| MR | 2026-10-01 | Mia | `--no-ff` merge of `undo-mt`, `Merge branch 'undo-mt'`, whose message carries `This reverts commit ab7b554….` too | `07c3c77` |
 
-The landings in `[2025-10-07, 2026-10-07)` are D1, M1, N1, X2, M2 and N2. M1's map is {M1, R1}, and M2's is {M2, R2}. The revert query over the mapped commits returns two links:
+The landings in `[2025-10-07, 2026-10-07)` are D1, M1, N1, MB, X2, M2, N2, X3, M3, MT and MR. M1's map is {M1, R1}, MB's {MB, P1, Q1, RP}, M2's {M2, R2}, M3's {M3, R3, W3}, MT's {MT, T1, T2} and MR's {MR, RT, W5}. The revert query over the mapped commits returns five links, each by its revert commit, never by the merge (#43): MR's own line names what RT, a commit of its landing, names, so it gives way to RT's.
 
-| Revert landing | Its revert commit names | Reverted landing |
+| Revert commit (its landing) | Names | Reverted commit's landing |
 | --- | --- | --- |
-| M1 (2026-01-26) | `87539038da7cc3c8233f467504a1a7ea30ad5c3b` (R1) | D1 |
-| M2 (2026-08-17) | `eee85d8e100c39f254183866fa0b19632e5c16c0` (R2) | X2 |
+| R1 (M1, 2026-01-26) | `87539038da7cc3c8233f467504a1a7ea30ad5c3b` (D1) | D1 |
+| RP (MB, 2026-03-23) | `cb90f2467e65dbd270630a9459b1c59109925a33` (P1) | MB: its own map, so P1 is taken back, not reverted |
+| R2 (M2, 2026-08-17) | `a48090d2eb3fe251caa4b7e37b91614cd87d9113` (X2) | X2 |
+| R3 (M3, 2026-09-21) | `f4fba7ea5e91a6bfa9aab89e681cab3fdc8d11ae` (X3) | X3 |
+| RT (MR, 2026-10-01) | `ab7b554290afd20d68e41f19fd981e8276b2ffeb` (MT) | MT: a merge, so T1 and T2, which it brought in, are reverted |
 
 | Metric | Who | Value | N | Why |
 | --- | --- | --- | --- | --- |
-| `durable@1` | Nia Normal | 3 / 3 | 1 | N1. D1 only deletes, so it is no cluster; M1 is a revert landing |
-| `simplifying@1` | Nia Normal | 0 removed, 0 simplifying landings | 1 | N2. X2 is reverted, so every commit of it leaves; M2 is a revert landing |
+| `durable@1` | Nia Normal | 3 / 3 | 1 | N1. D1 only deletes, so it is no cluster; R1 is a revert commit |
+| `durable@1` | Ola Onbranch | 2 / 2 | 1 | Q1, landed by MB. P1 and RP cancel: neither counts |
+| `simplifying@1` | Nia Normal | 0 removed, 0 simplifying landings | 1 | N2. X2 and X3 are reverted, so they leave; R2 is a revert commit |
+| `simplifying@1` | Rex Revert | 2 removed, 0 simplifying landings | 2 | W3, landed by M3, 0, and W5, landed by MR, 2. R3 and RT, beside them, are revert commits |
 
-Rex, Wes and Mia have no value in either metric. `surviving@1` excludes no commit, so it holds what blame `-w -M` gives each person at HEAD, 10 `prod` lines in all:
+Wes, Mia, Tia and Uri have no value in either metric, nor Rex in `durable@1`: T1 and T2 are reverted, so they leave `simplifying@1`. Every value carries `reverts_left_out`: Ola's `durable@1` 2 (P1 and RP, which cancel), Rex's `simplifying@1` 3 (R2, R3 and RT), Nia's 0 in both.
+
+MCP's `changes` lists the links at landing grain, as the metrics read them (`metrics.Reverts`): M1 reverts D1, M2 X2, M3 X3 and MR MT, and each of those is `reverted_by` its revert's landing; MB, whose branch took back its own commit, is in neither list.
+
+A run stored before #43 named each link by the landing whose map holds the revert commit (M1, MB, M2, M3 and MR), and its change values carry no `reverts_left_out`. Its readers compute the change metrics again from those facts and rank them again, where a merge as a link's revert end stands for all it brought in, so MB, M3 and MR read whole, as they were scored: `durable@1` holds Nia's 3 / 3 alone, `simplifying@1` Nia's cluster of 0 removed (N2) alone, and the log says to scan again.
+
+`surviving@1` excludes no commit, so it holds what blame `-w -M` gives each person at HEAD, 13 `prod` lines in all:
 
 | Who | `surviving@1` | Blamed lines at HEAD |
 | --- | --- | --- |
 | Nia Normal | 6 | `legacy_5` and `legacy_6` from U0, `nia.py` 3 (N1), `nia_w.py` 1 (N2) |
-| Rex Revert | 4 | `legacy_1` to `legacy_4`, which R1 restored: blame credits restored lines to the revert, the blind spot `durable@1` names |
+| Rex Revert | 5 | `legacy_1` to `legacy_4`, which R1 restored: blame credits restored lines to the revert, the blind spot `durable@1` names; and `rex_1` (W3), which W5 left of `rex.py` |
+| Ola Onbranch | 2 | `ola.py` 2 (Q1) |
 
-Wes holds no line, because D1 only deleted and R2 deleted `wes.py`; neither merge commit holds one, and no bot does.
+Wes holds no line, because D1 only deleted, and R2 and R3 deleted `wes.py` and `wes_b.py`; `ola_try.py` is gone too, and RT deleted `tia.py` and `uri.py`, so Tia and Uri hold none; no merge commit holds one, and no bot does.
 
 Wrong implementations this catches:
 
-- **Revert detection on the first-parent walk** (`git log --first-parent --grep`, which reads only the landings' own messages). It finds no revert here. M1 then credits Rex with R1's 4 restored lines, which blame gives to R1: `durable@1` 4/4, N 1. X2 stays in, so Wes has a `simplifying@1` cluster, 0 removed, N 1; and M2 credits Rex with R2's 20 removed lines: `simplifying@1` 20, N 1, with a simplifying landing (net −20).
-- **Revert links at commit grain** (`Revert.SHA` set to the revert commit, not to the landing whose map holds it). R1 and R2 are no landings, so M1 and M2 are not revert landings: Rex has `durable@1` 4/4 and `simplifying@1` 20. D1 and X2 are still reverted, so Wes has no value.
-- **Leaving a revert landing's commits out of `surviving@1`**, as the change metrics leave revert landings out. Rex then holds nothing, and the people's lines at HEAD sum to 6, not 10.
+- **Revert detection on the first-parent walk** (`git log --first-parent --grep`, which reads only the landings' own messages). It finds only MR's own line here. M1 then credits Rex with R1's 4 restored lines, which blame gives to R1: `durable@1` 4/4, N 1. X2 and X3 stay in, so Wes has a `simplifying@1` value, 0 removed, N 2; M2 and M3 credit Rex with R2's 20 and R3's 4 removed lines: `simplifying@1` 24, N 2, with a simplifying landing (M2, net −20); and P1 stays in, so Ola has `durable@1` 2/7.
+- **Reverts at landing grain** (the rule before #43: a landing that brings a revert leaves whole, and so does one whose own revert names a commit of its map). A link that names the landing whose map holds the revert commit, as a run stored before holds, reads this way, as it was scored. Ola and Rex then have no value: MB is a revert landing and a reverted one, and M3 and MR revert landings, so Q1, W3 and W5 count for nothing.
+- **Taking a merge's own revert line for a revert of all it brought in, beside its commit's.** The revert query then returns MR's link beside RT's, and MR's line takes W5 out with RT: Rex has `simplifying@1` 0, N 1.
+- **Reverting a merge as its merge commit alone** (no commit it brought in reverted). T1 and T2 then count: Tia and Uri have `simplifying@1` clusters, 0 removed, N 1 each.
+- **Reading a stored link that names a merge as the merge commit alone.** In a run stored before #43, R1, RP, R2, R3 and RT are then no revert commits, and RP's P1 still cancels: Ola has `durable@1` 2 / 2 and Rex 4 / 4, and Rex `simplifying@1` 33 over three clusters, where MB, M3 and MR read whole.
+- **Taking back only the revert, not the commit it reverts in its own landing.** P1 then counts with its 5 lines gone: Ola has `durable@1` 2/7.
+- **Counting the revert commit as new work beside the rest of its landing.** Rex then has `simplifying@1` 33 over M2, M3 and MR (20, 4 and 9), N 3, with a simplifying landing, and `durable@1` 4/4 (R1).
+- **Leaving revert commits out of `surviving@1`**, as the change metrics leave them out. Rex then holds 1, and the people's lines at HEAD sum to 9, not 13.
 
 ### Binary files (`fixture.Binary`)
 
@@ -1451,7 +1482,7 @@ The token check runs `Discover` over every path above with git's debug log on: t
 
 - **Oracles.** Any week or still-here oracle above changes. That includes Frank's 3 versus 2, Ivy's `prod_lines_added` 0, Jules's 0-line commit, Erin's rename insertion of 1, Ada's single mailmapped week row, and both Gina and Hank at `majority_files` 1.
 - **Change oracles.** Any value in the change-oracle tables of either fixture changes. That includes Bob's move keeping 0 of 2, Ada's `durable@1` N of 2, Cara's absence from `durable@1`, `knowledge_loss@1` at 4/34, Lena eligible at exactly 10 clusters in both metrics, Omar not eligible at 9, S1 simplifying at exactly −20, S2 not simplifying at −16, Q1 untagged, M tagged through P2, and C1's 4 surviving lines credited to Pia (`surviving@1` 9), not to Copilot; and the main fixture at `--now 2026-03-15`, which must read `3cc4421`, say so, and render as the same repository cut back to it does.
-- **Regression guards.** A landing below a backdated first-parent commit goes missing, or that commit's own change counts for a landing; a rebased landing is chosen or dated by its author time, or credited to its committer; a revert that a `--no-ff` merge landed is not linked to the merge, or the merge's commits count in `durable@1` or `simplifying@1`, or the lines the revert restored leave `surviving@1`; a change git took for binary keeps, in `durable@1` or its `ai_assisted@1` cohort, any line blamed to its commit, through a rename History saw or not and whatever the role of its path, or another change loses its lines with it, a later text change to the same file included; a text line counts in one of `durable@1`'s sums and not the other because its path changed role on the way to HEAD.
+- **Regression guards.** A landing below a backdated first-parent commit goes missing, or that commit's own change counts for a landing; a rebased landing is chosen or dated by its author time, or credited to its committer; a revert that a `--no-ff` merge landed is not linked by its own commit, or it counts in `durable@1` or `simplifying@1`, or the commit it takes back in its own landing does, or the other commits of its landing do not (#43), or the lines the revert restored leave `surviving@1`; a change git took for binary keeps, in `durable@1` or its `ai_assisted@1` cohort, any line blamed to its commit, through a rename History saw or not and whatever the role of its path, or another change loses its lines with it, a later text change to the same file included; a text line counts in one of `durable@1`'s sums and not the other because its path changed role on the way to HEAD.
 - **Classification.** `tests/test_service.py` is classified `prod`, or `bootstrap/cache/config.php` is blamed.
 - **Discovery.** A duplicate remote is not skipped, a scrubbed URL contains userinfo, a bare repo is skipped, the SSH and HTTPS forms of one path are collapsed, or a work tree is measured at a local branch although its clone has upstream's.
 - **Isolation.** A repo whose git directory was removed makes a sibling repo disappear, or the run exits 1 when the sibling succeeded.

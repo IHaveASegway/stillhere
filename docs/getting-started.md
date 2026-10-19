@@ -169,6 +169,11 @@ stillhere report --rank durable --rank simplifying
 ```text
 Ranks · durable@1 · repository cli · 2025-10-15 → 2026-07-17 UTC
   Did the code a person wrote last?
+  Validity: Beta: not yet checked against a lead's labels (stillhere label, then stillhere validate:
+  AUC >= 0.7 on at least 50 scored labels; docs/validation.md). Reference (model panel, 4 public
+  repositories, 2026-10-15): does not separate meaningful from routine changes: AUC 0.42 (0.30–0.55)
+  on 76, while change size alone gives 0.82. The model panel is three AI models that labelled public
+  changes without seeing any metric value: evidence, not a lead's judgment.
   #    person      durable  95% interval   n
   1–3  Person P        77%        70–82%  27
   1–3  Person Q        72%        67–88%  20
@@ -184,7 +189,7 @@ How to read it:
 - A rank is an interval, from a bootstrap over each person's changes. `1–3` three times means the three cannot be told apart: no one here is first.
 - Only people with at least 10 changes in the metric's window are ranked; everyone else is listed and counted, not ranked. On most repositories that is a handful of people, which is the honest answer: fewer changes than that give intervals too wide to mean anything.
 - `durable@1` is the share of a person's added lines, in changes 90 to 365 days old, that blame still attributes to them. `simplifying@1` is lines removed that stayed removed, in the last 90 days.
-- Every ranked metric is **beta** until it is checked against a lead's labels (`stillhere validate`), and the caveat says so. It also gives a reference result from a model panel, three AI models that labelled public changes without seeing any metric value, which is evidence, not a lead's judgment: a verdict, such as "does not separate meaningful from routine changes", with the numbers it follows from ([validation.md](validation.md#reference-results)). Read a rank with its metric's verdict.
+- Every ranked metric is **beta** until it is checked against a lead's labels (`stillhere validate`), and the `Validity` line under each table's question says so. It also gives a reference result from a model panel, three AI models that labelled public changes without seeing any metric value, which is evidence, not a lead's judgment: a verdict, such as "does not separate meaningful from routine changes", with the numbers it follows from ([validation.md](validation.md#reference-results)). Read a rank with its metric's verdict.
 
 ## 7. Trace any number to its changes
 

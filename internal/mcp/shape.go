@@ -571,28 +571,33 @@ func (s *shaper) repoDetail(r report.Repo) report.Repo {
 
 // rankTableOut is one rank table: everyone eligible with their 95% rank
 // interval, the people below the minimum sample, and bots apart, each list
-// cut to the answer's rows.
+// cut to the answer's rows, with its metric's validity and reference result
+// (report.RankTable's), so the verdict travels with the order it qualifies
+// (wave 12). Those fields say what the report's validity caveat says, so
+// its caveats leave that one out (RankTable.CaveatsButValidity).
 type rankTableOut struct {
-	Metric        string           `json:"metric"`
-	Question      string           `json:"question"`
-	Scope         report.Scope     `json:"scope"`
-	Window        report.Interval  `json:"window"`
-	Percent       bool             `json:"percent"`
-	MinN          int              `json:"min_n"`
-	Provenance    *provenanceOut   `json:"provenance,omitzero"` // detailed only
-	Ranked        []report.RankRow `json:"ranked"`
-	RankedTotal   int              `json:"ranked_total"`
-	BelowMin      []report.RankRow `json:"below_min"`
-	BelowMinTotal int              `json:"below_min_total"`
-	Bots          []report.RankRow `json:"bots"`
-	BotsTotal     int              `json:"bots_total"`
-	Caveats       []report.Caveat  `json:"caveats"`
+	Metric        string            `json:"metric"`
+	Question      string            `json:"question"`
+	Scope         report.Scope      `json:"scope"`
+	Window        report.Interval   `json:"window"`
+	Percent       bool              `json:"percent"`
+	MinN          int               `json:"min_n"`
+	Validity      string            `json:"validity"`
+	Reference     *report.Reference `json:"reference"`
+	Provenance    *provenanceOut    `json:"provenance,omitzero"` // detailed only
+	Ranked        []report.RankRow  `json:"ranked"`
+	RankedTotal   int               `json:"ranked_total"`
+	BelowMin      []report.RankRow  `json:"below_min"`
+	BelowMinTotal int               `json:"below_min_total"`
+	Bots          []report.RankRow  `json:"bots"`
+	BotsTotal     int               `json:"bots_total"`
+	Caveats       []report.Caveat   `json:"caveats"`
 }
 
 func (s *shaper) rankTable(t report.RankTable, n named) rankTableOut {
 	out := rankTableOut{
 		Metric: t.Metric, Question: t.Question, Scope: t.Scope, Window: t.Window, Percent: t.Percent, MinN: t.MinN,
-		Caveats: t.Caveats,
+		Validity: t.Validity, Reference: t.Reference, Caveats: t.CaveatsButValidity(),
 	}
 	if s.f.detailed {
 		pv := s.f.provenance(t.Provenance, n)
@@ -1026,8 +1031,8 @@ type personBrief struct {
 	// to 365 days old).
 	Durable *kept `json:"durable,omitzero"`
 	// Removed is simplifying@1's cluster: the prod lines they removed.
-	// Absent outside its 90-day window, and for a revert or a reverted
-	// landing.
+	// Absent outside its 90-day window, and when every commit of theirs in
+	// the change is a revert or a commit a revert names.
 	Removed    *float64 `json:"removed,omitzero"`
 	AIAssisted *bool    `json:"ai_assisted,omitzero"` // only on the entry of the user the server runs for
 }

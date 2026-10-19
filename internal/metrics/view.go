@@ -92,6 +92,10 @@ type repoView struct {
 	landings []*landingView       // in FactSet order
 	files    map[string]*fileView // prod paths with surviving lines at HEAD
 	owners   []ownerRow           // blamed lines on paths with a role at HEAD, credited
+	// reverts are the revert links at landing grain (markReverts): each
+	// landing a revert commit is in, with the other landing whose commits
+	// it reverts. A pair that cancels inside one landing is none.
+	reverts [][2]*landingView
 }
 
 // commitView is one commit of the history, with its credit and counts.
@@ -108,8 +112,15 @@ type commitView struct {
 	// its patch id that is not its ancestor (markCopies): a cherry-pick or
 	// a backport that a merge brought onto the branch again, which no
 	// metric credits a second time.
-	copy    bool
-	changes []*domain.FileChange
+	copy bool
+	// The revert rule (markReverts, #43), at commit grain: revert is true
+	// for a revert commit, whose message names the commit it reverts;
+	// withdrawn for a commit a revert in its own landing names, a change
+	// its branch took back before it landed; and reverted for one a revert
+	// in another landing names, a change taken off the default branch
+	// after it landed.
+	revert, withdrawn, reverted bool
+	changes                     []*domain.FileChange
 	// added and removed count non-blank lines on prod paths in the commit's
 	// own patch. traced is the part of added whose fate blame can tell, and
 	// surviving the non-blank lines blame attributes to the commit at HEAD
@@ -126,8 +137,7 @@ type landingView struct {
 	time     time.Time
 	commit   *commitView   // the landing commit; nil when the history lacks it
 	commits  []*commitView // the commit map, in Landing.Commits order, the landing included
-	revert   bool          // a revert landing: its message names the commit it reverts
-	reverted bool          // a revert landing names a commit in its map
+	reverted bool          // a commit of its map is reverted (commitView.reverted): a revert of another landing names it
 	ai       bool          // a commit in its map is AI-assisted
 	cut      bool          // its map holds a shallow clone's boundary, behind which its commits are missing
 }
@@ -245,23 +255,14 @@ func newRepoView(f *domain.RepoFacts, who *identity.Directory) *repoView {
 		}
 	}
 
-	revertLandings := make(map[string]bool, len(f.Reverts))
-	revertedCommits := make(map[string]bool, len(f.Reverts))
-	for _, rv := range f.Reverts {
-		revertLandings[rv.SHA] = true
-		revertedCommits[rv.Reverted] = true
-	}
 	for i := range f.Landings {
 		l := &f.Landings[i]
-		lv := &landingView{sha: l.SHA, time: l.Time, commit: r.commits[l.SHA], revert: revertLandings[l.SHA]}
+		lv := &landingView{sha: l.SHA, time: l.Time, commit: r.commits[l.SHA]}
 		shas := l.Commits
 		if len(shas) == 0 {
 			shas = []string{l.SHA} // a week run may leave the map empty: a landing always owns itself
 		}
 		for _, sha := range shas {
-			if revertedCommits[sha] {
-				lv.reverted = true
-			}
 			c := r.commits[sha]
 			if c == nil {
 				continue
@@ -272,12 +273,142 @@ func newRepoView(f *domain.RepoFacts, who *identity.Directory) *repoView {
 		}
 		r.landings = append(r.landings, lv)
 	}
+	r.markReverts(f.Reverts)
 	r.markCopies()
 
 	if r.lines {
 		r.indexLines(f, who, untraced)
 	}
 	return r
+}
+
+// markReverts applies the run's revert links at commit grain
+// (docs/metrics.md#change-facts-shared-by-durable1-and-simplifying1, #43):
+// it marks each revert commit, and each commit a revert names, withdrawn
+// when the revert is in the same landing and reverted when it is in
+// another. A landing that brings a revert beside new work, or a branch
+// that reverted one of its own commits before it merged, so loses only
+// the revert and what it took back, and the change metrics score the rest.
+//
+// A merge stands for the commits it brought in (brought). A revert of a
+// merge, which git revert -m 1 makes, takes out every commit the merge
+// brought in, so a reverted merge landing's whole map is reverted. A merge
+// whose own message carries the line is the revert of all it brought in,
+// which is also how a run stored before 2026-10-19 reads: it named the
+// landing whose map holds the revert commit, so a revert a merge landing
+// brought in names the merge, and that landing reads whole, at the grain
+// it was scored at. A link to a commit the history does not hold, one
+// older than its window, leaves only the revert out.
+func (r *repoView) markReverts(reverts []domain.Revert) {
+	if len(reverts) == 0 {
+		return
+	}
+	landingOf := make(map[string]*landingView) // a commit → the landing whose map holds it
+	for _, l := range r.landings {
+		for _, c := range l.commits {
+			landingOf[c.sha] = l
+		}
+	}
+	for _, rv := range reverts {
+		c, l := r.commits[rv.SHA], landingOf[rv.SHA]
+		if c == nil || l == nil {
+			continue
+		}
+		for _, b := range r.brought(c, l) {
+			b.revert = true
+		}
+		x, xl := r.commits[rv.Reverted], landingOf[rv.Reverted]
+		if x == nil || xl == nil {
+			continue
+		}
+		for _, b := range r.brought(x, xl) {
+			if xl == l {
+				b.withdrawn = true
+				continue
+			}
+			b.reverted, xl.reverted = true, true
+		}
+		if xl != l {
+			r.reverts = append(r.reverts, [2]*landingView{l, xl})
+		}
+	}
+}
+
+// LandingReverts is one repository's revert links at landing grain, as the
+// change metrics read them (markReverts, #43), each list sorted and
+// holding a landing once.
+type LandingReverts struct {
+	// Reverts maps a landing to the other landings whose commits a revert
+	// commit it brought names.
+	Reverts map[string][]string
+	// RevertedBy maps a landing to the landings whose revert commits name
+	// one of its commits. A branch that took back its own commit before it
+	// landed reverts nothing that landed, so it is in neither map.
+	RevertedBy map[string][]string
+}
+
+// Reverts returns the revert links at landing grain of the repository
+// with key among in's facts; none for one whose collection failed or that
+// in lacks. It is the one reading of the run's links (domain.Revert) at
+// that grain, which MCP's changes renders as reverts and reverted_by.
+func Reverts(in *Input, key string) (LandingReverts, error) {
+	v, err := newView(in, func(f *domain.RepoFacts) bool { return f.Repo.Key == key })
+	if err != nil {
+		return LandingReverts{}, err
+	}
+	out := LandingReverts{Reverts: map[string][]string{}, RevertedBy: map[string][]string{}}
+	for _, r := range v.repos {
+		for _, link := range r.reverts {
+			from, to := link[0].sha, link[1].sha
+			out.Reverts[from] = append(out.Reverts[from], to)
+			out.RevertedBy[to] = append(out.RevertedBy[to], from)
+		}
+	}
+	for _, m := range []map[string][]string{out.Reverts, out.RevertedBy} {
+		for sha, shas := range m {
+			slices.Sort(shas)
+			m[sha] = slices.Compact(shas)
+		}
+	}
+	return out, nil
+}
+
+// brought returns what commit c stands for in landing l, whose map holds
+// it: c itself, or, for a merge, every commit of l's map that it brought in
+// (git rev-list c^1..c within the map), c included, in map order. For a
+// merge landing that is its whole map. The walk stays inside the map: a
+// path out of it reaches only commits of earlier landings, l^1's
+// ancestors, and never comes back in, and those commits are their own
+// landings' even when a branch merged them in again.
+func (r *repoView) brought(c *commitView, l *landingView) []*commitView {
+	if !c.merge {
+		return []*commitView{c}
+	}
+	inMap := make(map[string]bool, len(l.commits))
+	for _, m := range l.commits {
+		inMap[m.sha] = true
+	}
+	reach := func(from ...string) map[string]bool {
+		seen := make(map[string]bool)
+		for len(from) > 0 {
+			sha := from[len(from)-1]
+			from = from[:len(from)-1]
+			if seen[sha] || !inMap[sha] {
+				continue
+			}
+			seen[sha] = true
+			from = append(from, r.commits[sha].parents...)
+		}
+		return seen
+	}
+	all, base := reach(c.sha), reach(c.parents[0])
+	var out []*commitView
+	for _, m := range l.commits {
+		if all[m.sha] && !base[m.sha] {
+			out = append(out, m)
+		}
+	}
+	return out
 }
 
 // markCopies marks each copy among the repository's commits
@@ -297,12 +428,13 @@ func newRepoView(f *domain.RepoFacts, who *identity.Directory) *repoView {
 // squash, a rebase merge's commit) descends from every earlier landing, so
 // it is never a copy, and only the commits a merge brought are walked
 // (descends). Two landings of one second are not earlier than each other,
-// so neither holds a copy of the other. A reverted landing (a revert names
-// a commit of its map, which scan runs read) is no original: the revert
-// took its change off the branch, so landing it again lands it anew, and
-// durable@1 scores that landing. Only the history the run collected is
-// compared: a copy whose original landed before it is credited as the
-// original would be.
+// so neither holds a copy of the other. A reverted commit (a revert names
+// it, which scan runs read, markReverts) is no original, nor is one its own
+// landing withdrew: the revert took its change off the branch, or kept it
+// from ever reaching it, so landing it again lands it anew, and durable@1
+// scores that landing. Only the history the run collected is compared: a
+// copy whose original landed before it is credited as the original would
+// be.
 func (r *repoView) markCopies() {
 	type original struct {
 		at  time.Time // its landing's time
@@ -310,17 +442,14 @@ func (r *repoView) markCopies() {
 		pos int // its landing's place on the first-parent chain (firstParentOrder), -1 when unknown
 	}
 	pos := r.firstParentOrder()
-	originals := make(map[string][]original) // patch id → the commits holding it, of landings no revert names
+	originals := make(map[string][]original) // patch id → the commits holding it that no revert names
 	for _, l := range r.landings {
-		if l.reverted {
-			continue
-		}
 		at, ok := pos[l.sha]
 		if !ok {
 			at = -1
 		}
 		for _, c := range l.commits {
-			if c.patchID != "" && !c.merge {
+			if c.patchID != "" && !c.merge && !c.reverted && !c.withdrawn {
 				originals[c.patchID] = append(originals[c.patchID], original{at: l.time, sha: c.sha, pos: at})
 			}
 		}

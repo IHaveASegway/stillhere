@@ -213,7 +213,8 @@ func TestMCPTools(t *testing.T) {
 			t.Errorf("sibling bot share %+v, want 0 of 120", b)
 		}
 		var ranks struct {
-			Ranks []rankTableOut `json:"ranks"`
+			Ranks   []rankTableOut  `json:"ranks"`
+			Caveats []report.Caveat `json:"caveats"`
 		}
 		decode(t, ask(t, "overview", map[string]any{"scope": "platform", "rank": "durable"}), &ranks)
 		if len(ranks.Ranks) != 1 || len(ranks.Ranks[0].Ranked) != 1 {
@@ -222,6 +223,22 @@ func TestMCPTools(t *testing.T) {
 		lena := ranks.Ranks[0].Ranked[0]
 		if lena.Name != "Lena Lead" || lena.RankLo == nil || *lena.RankLo != 1 || *lena.RankHi != 1 || lena.N != 10 || !near(lena.Estimate, 26.0/30) {
 			t.Errorf("platform durable@1 rank %+v, want Lena Lead 1-1, 26/30, n 10", lena)
+		}
+		// The table carries durable@1's verdict beside its order (wave 12),
+		// as its definition states it.
+		if tb := ranks.Ranks[0]; !strings.HasPrefix(tb.Validity, "Beta: not yet checked against a lead's labels") ||
+			tb.Reference == nil || tb.Reference.Verdict != "does not separate meaningful from routine changes" ||
+			!strings.HasPrefix(tb.Reference.Result, tb.Reference.Verdict+": AUC 0.42") {
+			t.Errorf("platform durable@1 rank table's validity %q and reference %+v, want its beta mark and the model panel's verdict",
+				tb.Validity, tb.Reference)
+		}
+		// The fields say what the report's validity caveat says, so the
+		// table states its verdict once.
+		if n := countCode(ranks.Ranks[0].Caveats, "validity"); n != 0 {
+			t.Errorf("platform durable@1 rank table holds %d validity caveats beside its validity and reference, want none", n)
+		}
+		if !hasCaveat(ranks.Caveats, "validity", "Validity of durable@1: Beta") || countCode(ranks.Caveats, "validity") != 1 {
+			t.Errorf("platform overview's caveats %v, want one validity caveat for the ranked metric of its table", ranks.Caveats)
 		}
 		if lena.Email != pseudonym("lena@example.com") {
 			t.Errorf("Lena's key %q, want her id in place of her email", lena.Email)
@@ -590,6 +607,12 @@ func TestMCPTools(t *testing.T) {
 		tiers := map[string]string{}
 		for _, tt := range h.TopTier {
 			tiers[tt.Metric] = strconv.Itoa(tt.PeopleTotal) + " of " + strconv.Itoa(tt.Of) + ", " + strconv.Itoa(len(tt.People)) + " listed"
+			// A tier carries its table's verdict, as the table does (wave 12).
+			if !strings.HasPrefix(tt.Validity, "Beta: not yet checked against a lead's labels") || tt.Reference == nil ||
+				(tt.Metric == "durable@1" && tt.Reference.Verdict != "does not separate meaningful from routine changes") {
+				t.Errorf("highlights' %s tier's validity %q and reference %+v, want its beta mark and the model panel's verdict",
+					tt.Metric, tt.Validity, tt.Reference)
+			}
 		}
 		if want := map[string]string{"durable@1": "1 of 1, 0 listed", "simplifying@1": "1 of 1, 0 listed"}; !maps.Equal(tiers, want) {
 			t.Errorf("top tiers %v, want %v", tiers, want)

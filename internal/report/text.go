@@ -19,7 +19,7 @@ import (
 
 func (m *Model) writeText(p *printer) {
 	textHeader(p, m)
-	textCaveats(p, "", "What could make this wrong", m.Caveats, false)
+	textCaveats(p, "", "What could make this wrong", m.topCaveats(), false)
 	for i := range m.Overviews {
 		if m.repeats(&m.Overviews[i]) {
 			continue
@@ -164,14 +164,29 @@ func repoSummary(m *Model, esc func(string) string) string {
 	return s
 }
 
-// Standing reports whether a caveat is one the top of a report already
-// states for every section: nested sections leave it out of text and
-// Markdown, and MCP's repository summaries out of their codes, while JSON
-// keeps it so each section reads on its own. A rank table's validity note
-// is one: the report's caveats hold every rank table's (runCaveats), and
-// no other nested section carries one.
+// Standing reports whether a caveat is one a nested section of text and
+// Markdown leaves out of its list, and MCP's repository summaries out of
+// their codes, while JSON keeps it so each section reads on its own: one
+// the top of a report already states for every section (not-fetched,
+// ai-lower-bound), or a rank table's validity note, which the table prints
+// under its question instead (RankValidity) and no other nested section
+// carries.
 func (c Caveat) Standing() bool {
 	return c.Code == codeNotFetched || c.Code == codeAILowerBound || c.Code == codeValidity
+}
+
+// topCaveats are the caveats text and Markdown print at the top of a
+// report: all of the report's but the rank tables' validity, which each
+// table prints under its question (RankValidity), next to the rows it
+// qualifies, rather than once for all of them away from them (wave 12).
+func (m *Model) topCaveats() []Caveat {
+	var out []Caveat
+	for _, c := range m.Caveats {
+		if c.Code != codeValidity {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 func textCaveats(p *printer, indent, title string, cs []Caveat, nested bool) {
@@ -733,6 +748,9 @@ func textRanks(p *printer, t *RankTable) {
 		rankForgeAsOf(t))
 	if t.Question != "" {
 		p.wrapped("  ", "  ", clean(t.Question))
+	}
+	if line := RankValidity(t); line != "" {
+		p.wrapped("  ", "  ", clean(line))
 	}
 	if len(t.Ranked) == 0 && len(t.BelowMin) == 0 && len(t.Bots) == 0 {
 		p.line("  nobody has a value")

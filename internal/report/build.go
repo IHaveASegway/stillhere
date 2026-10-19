@@ -792,6 +792,7 @@ func (b *builder) rankTable(rs RankSet) RankTable {
 		Metric: rs.Metric.ID, Question: rs.Metric.Question,
 		Scope: scopeOf(rs.Scope), Window: intervalOf(rs.Window),
 		Percent: rs.Percent, MinN: rs.MinN, Beside: rankBeside[rs.Metric.ID],
+		Validity: rs.Metric.Validity, Reference: rs.Metric.Reference,
 	}
 	// beside is the person's value of the table's Beside key, from their
 	// value in the table's scope and window (PF-5).
@@ -865,11 +866,13 @@ func (b *builder) rankTable(rs RankSet) RankTable {
 		t.Caveats = append(t.Caveats, Caveat{Code: codeNoValues,
 			Message: rs.Metric.ID + " counted no change in this scope, so nobody is ranked or listed."})
 	}
-	// JSON keeps the validity note in every table, so a table handed to an
-	// agent reads on its own; text and Markdown say it once, at the top of
-	// the report (runCaveats, Caveat.Standing).
-	if note := ValidityNote(rs.Metric); note != "" {
-		t.Caveats = append(t.Caveats, Caveat{Code: codeValidity, Message: "Validity: " + note})
+	// Every table carries its metric's validity, so a table handed to an
+	// agent reads on its own: in JSON as its validity and reference and as
+	// this caveat, and in text and Markdown as the line under its question
+	// (RankValidity), which they print instead of the caveat
+	// (Caveat.Standing).
+	if line := RankValidity(&t); line != "" {
+		t.Caveats = append(t.Caveats, Caveat{Code: codeValidity, Message: line})
 	}
 	return t
 }
