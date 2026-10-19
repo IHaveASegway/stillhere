@@ -78,7 +78,7 @@ Ranked metrics: durable, simplifying, reviews given, load-bearing. Activity (cha
 ## How people use it
 
 ```
-brew install --cask ihaveasegway/tap/stillhere             # from the first release; until then, see the README
+brew install --cask ihaveasegway/tap/stillhere
 
 stillhere week ~/src/acme                                  # what landed, offline
 stillhere sync github --org acme                           # the only command that uses the network
