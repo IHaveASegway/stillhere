@@ -23,6 +23,7 @@ flowchart LR
   subgraph store [Local store]
     mirrors[(bare mirrors)]
     facts[(facts.db: SQLite)]
+    egress[(egress.db: what left)]
   end
   subgraph read [Read side]
     cli[CLI: week, me, explain, --rank]
@@ -42,6 +43,7 @@ flowchart LR
   facts --> cli
   facts --> web
   facts --> mcp
+  mcp --> egress
   facts --> nar
 ```
 
@@ -76,8 +78,9 @@ A context's facts are written by its own collector only. The Forge context trans
 | Noise rules, bot and AI patterns, thresholds | `stillhere.toml` (or the packaged default) | The user | Collectors and metrics | File; SHA-256 recorded per run | Same run |
 | Metric definitions | stillhere source, versioned | Contributors, through review | Metrics | Code | Cited per value |
 | Facts, metric values, narrations | facts.db (derived, disposable) | stillhere jobs | All read-side adapters | Local file | Readers see published runs only: complete or partial, never one still being written |
+| Which AI-assisted shares left the machine, per run | egress.db (append-only, never derived again: [ADR 0015](adr/0015-shares-are-decided-against-a-record-of-what-left.md)) | `mcp`, before a share leaves | `mcp`, `egress`; `serve` (M3) must use the same record | Local file, one per home; people as salted hashes, no email | Each decision committed before the answer that holds its first share is returned; one decision per run, under the record's write lock |
 
-stillhere creates no second owner of any fact. Identity in particular stays with `.mailmap` (aliases) and GitHub (logins, verified emails). There is no hand-maintained people table that would drift from either.
+stillhere creates no second owner of any fact. Identity in particular stays with `.mailmap` (aliases) and GitHub (logins, verified emails). There is no hand-maintained people table that would drift from either. egress.db is no copy of facts.db: it owns the one fact facts.db cannot hold, what was sent, and it outlives the runs it names, since an answer that left cannot be recalled.
 
 ## Commands
 
@@ -90,7 +93,8 @@ stillhere creates no second owner of any fact. Identity in particular stays with
 | Read | `report`, `me`, `explain`, `who-knows`, `paths`, `identities`, `validate`, `label` | None | Nothing, except migrating a facts.db an older stillhere wrote; they never create one, so a mistyped `--db` is a usage error that names the path. `label` appends the user's labels to the labels file (beside facts.db unless `--labels` names another, 0600), user-owned input that `validate` reads ([validation.md](validation.md)) |
 | Read | `metrics` | None | Nothing |
 | Read | `serve` | GitHub at sign-in | Sessions, audit log |
-| Read | `mcp` | None (stdio) | Nothing: it opens facts.db read-only |
+| Read | `mcp` | None (stdio) | Nothing in facts.db, which it opens read-only. It appends to egress.db each run's decision about the AI-assisted shares it lets leave, before the first of them does ([ADR 0015](adr/0015-shares-are-decided-against-a-record-of-what-left.md)) |
+| Read | `egress` | None | Nothing: it reads egress.db read-only and never creates it |
 | Read | `narrate` | Anthropic API | narrations |
 
 ## Ports and adapters
@@ -137,7 +141,7 @@ The core (classification, metrics, ranking) imports no adapter package: no `os/e
 | Script injection through author names | Names are treated as untrusted; the fixture includes `Frank & Sons`. Text output shows control and format characters escaped, so a name carries no terminal escape or bidirectional override, and Markdown output escapes every character that Markdown or inline HTML reads as syntax. In M3, `html/template` escapes the web UI by context (text, attribute, URL, JavaScript). |
 | Session theft or forged sign-in (M3) | GitHub App sign-in with a state parameter; signed `HttpOnly`, `Secure`, `SameSite=Lax` cookies with a short lifetime; TLS required in front of the server. |
 | Someone sees ranks they should not | Until M3, the file is the boundary: facts.db is created 0600 in a 0700 directory, and only local commands read it, so whoever can read it sees every rank and every person's page, AI-assisted share included (`me --email` takes anyone's address). In M3, `serve` denies by default: leads (a named GitHub team) see ranks; each person sees their own page; org members see highlights and code-area views. An audit log records who opened ranked views (M3, not built). |
-| Personal data exposure | Emails are never rendered. `facts.db` and mirrors are created with mode 0600/0700 and documented as sensitive. Retention limits apply. |
+| Personal data exposure | Emails are never rendered. `facts.db` and mirrors are created with mode 0600/0700 and documented as sensitive. Retention limits apply. `egress.db` (0600) holds no email: the people behind each share sent are HMAC-SHA-256 hashes under a salt of its own. |
 | The narrator leaks identities or code (M4) | Placeholders replace people (names restored locally); no emails, source, commit subjects or absolute paths are sent; every number in the reply must appear in the payload. |
 | An agent reads source it should not | MCP is local stdio; diffs are exposed only with `--allow-source`. |
 

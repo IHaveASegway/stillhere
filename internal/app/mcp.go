@@ -67,8 +67,13 @@ type Names struct {
 	Repos  []NamedRepo   // by group, name and key, as reports list them
 	People []NamedPerson // by name, then key
 	// AIShares is the run's one decision about which AI-assisted shares may
-	// leave the machine (aishare.go), which every answer about the run reads.
+	// leave the machine (aishare.go), which every answer about the run reads:
+	// the run's own, until an adapter replaces it with the one the egress
+	// record holds (ShareDecision, ADR 0015) before a share leaves.
 	AIShares AIShares
+	// aiInputs is what that decision was made from, which ShareDecision
+	// decides from again; unexported, as no adapter needs it.
+	aiInputs *aiShareInputs
 }
 
 // NamedGroup is one group of a run.
@@ -199,7 +204,8 @@ func runNames(s *stored) (*Names, error) {
 	}
 	slices.SortFunc(n.People, func(a, b NamedPerson) int { return cmp.Or(cmp.Compare(a.Name, b.Name), cmp.Compare(a.Key, b.Key)) })
 
-	n.AIShares = aiShares(s)
+	n.aiInputs = aiShareInputsOf(s)
+	n.AIShares = n.aiInputs.decide(nil)
 	return n, nil
 }
 

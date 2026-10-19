@@ -28,13 +28,16 @@ import (
 // decision is made once per run, from the run's facts alone, so every
 // answer about the run under one version of these rules reads the same
 // one: no two calls disagree, and no pair of answers about the run can be
-// subtracted to give what one of them withholds. Two decisions can be:
-// those of two runs, since each run is decided on its own (a rescan of
-// fewer repositories at the same as-of time gives a share the first run
-// withheld exactly), and those one run gets from two versions whose count
-// of people, threshold or order of suppression differ, since the decision
-// is not stored but made again by whichever binary reads the run (known
-// limits, ADR 0007's amendment, with what would close them).
+// subtracted to give what one of them withholds. Two decisions made here
+// alone can be: those of two runs, since each run is decided on its own (a
+// rescan of fewer repositories at the same as-of time gives a share the
+// first run withheld exactly), and those one run gets from two versions
+// whose count of people, threshold or order of suppression differ. What
+// leaves the machine is therefore decided once more, against the egress
+// record (egress.go, ADR 0015): a run's decision is recorded before its
+// first share leaves, every later call by any version reads that record,
+// and a new run's decision is checked against the shares recorded for its
+// window.
 //
 // The rules, bottom-up over the tree of scopes: the whole run, its groups,
 // their repositories, and the repositories named on their own, which hang
@@ -140,16 +143,41 @@ type aiShareNode struct {
 	shown    bool
 }
 
-// aiShares decides a stored run's AI-assisted shares (aiShareDecide) from
-// the run's facts alone: its repositories with their groups, the people
-// behind each repository's share (aiSharePeople), and whether the whole
-// run's share reaches an answer (report.WholeRun).
-func aiShares(s *stored) AIShares {
-	repos := make([]domain.Repo, 0, len(s.facts.Repos))
+// aiShareInputs is what a run's decision about its AI-assisted shares is
+// made from, read once from the stored run: its repositories with their
+// groups, the people behind each repository's share (aiSharePeople), each
+// repository's ai_assisted@1 value, whose counts add up to a group's and
+// the whole run's share as report.Build adds them, and whether the whole
+// run's share reaches an answer (report.WholeRun). The run's own decision
+// (decide) and the one the egress record holds (egress.go) are made from
+// the same inputs.
+type aiShareInputs struct {
+	repos  []domain.Repo
+	people map[string]map[string]bool    // by Repo.Key, for a repository with a share
+	values map[string]domain.MetricValue // by Repo.Key: its ai_assisted@1 value
+	whole  bool
+}
+
+// aiShareInputsOf reads a stored run's inputs.
+func aiShareInputsOf(s *stored) *aiShareInputs {
+	in := &aiShareInputs{people: aiSharePeople(s), values: map[string]domain.MetricValue{},
+		whole: report.WholeRun(s.scope(), len(s.facts.Groups))}
 	for _, rf := range s.facts.Repos {
-		repos = append(repos, rf.Repo)
+		in.repos = append(in.repos, rf.Repo)
 	}
-	return aiShareDecide(repos, aiSharePeople(s), report.WholeRun(s.scope(), len(s.facts.Groups)))
+	for _, v := range s.values {
+		if v.Metric.String() == report.MetricAIAssisted && v.Subject.Kind == domain.SubjectRepo {
+			in.values[v.Subject.Key] = v
+		}
+	}
+	return in
+}
+
+// decide is the run's own decision (aiShareDecide), with the scopes forced
+// holds withheld whatever their people: what the egress record's check
+// (egress.go) asks of the run after the shares already sent.
+func (in *aiShareInputs) decide(forced map[domain.Scope]bool) AIShares {
+	return aiShareDecide(in.repos, in.people, in.whole, forced)
 }
 
 // aiSharePeople returns, per repository with an AI-assisted share, the
@@ -219,9 +247,10 @@ func aiShareCount(people map[string]bool) int {
 // repositories with their groups (Repo.Group), people those behind each
 // repository's share as the threshold counts them (aiSharePeople), and
 // whole says whether the whole run's share reaches any answer
-// (report.WholeRun). It is a pure function of the run's facts, so every
-// call about one run gets the same decision.
-func aiShareDecide(repos []domain.Repo, people map[string]map[string]bool, whole bool) AIShares {
+// (report.WholeRun); a scope in forced is withheld whatever its people,
+// and the rules decide the rest around it. It is a pure function of its
+// arguments, so every call about one run gets the same decision.
+func aiShareDecide(repos []domain.Repo, people map[string]map[string]bool, whole bool, forced map[domain.Scope]bool) AIShares {
 	run := &aiShareNode{scope: domain.Scope{Kind: domain.ScopeAll}}
 	groups := map[string]*aiShareNode{}
 	for _, r := range repos {
@@ -236,7 +265,7 @@ func aiShareDecide(repos []domain.Repo, people map[string]map[string]bool, whole
 		parent.children = append(parent.children, &aiShareNode{
 			scope: domain.Scope{Kind: domain.ScopeRepo, Key: r.Key}, people: people[r.Key]})
 	}
-	run.decide(whole)
+	run.decide(whole, forced)
 	var shown []domain.Scope
 	var collect func(n *aiShareNode)
 	collect = func(n *aiShareNode) {
@@ -253,14 +282,18 @@ func aiShareDecide(repos []domain.Repo, people map[string]map[string]bool, whole
 }
 
 // decide decides n's share and every share below it; reaches says whether
-// n's share can reach an answer at all.
-func (n *aiShareNode) decide(reaches bool) {
+// n's share can reach an answer at all, and forced holds the scopes
+// withheld whatever their people.
+func (n *aiShareNode) decide(reaches bool, forced map[domain.Scope]bool) {
 	if n.scope.Kind != domain.ScopeRepo {
 		n.people = map[string]bool{}
 		for _, c := range n.children {
-			c.decide(true)
+			c.decide(true, forced)
 			maps.Copy(n.people, c.people)
 		}
+	}
+	if forced[n.scope] {
+		return // withheld for the shares already sent (egress.go): the scope above counts its people as uncovered
 	}
 	if !reaches || aiShareCount(n.people) < AIShareMinPeople {
 		return // the primary rule; such a scope's children are all withheld too

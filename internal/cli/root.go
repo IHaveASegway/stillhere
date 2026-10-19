@@ -164,6 +164,7 @@ person's value, and it must not be the basis for performance or pay decisions.`,
 		e.validateCommand(),
 		e.syncCommand(),
 		e.mcpCommand(),
+		e.egressCommand(),
 		e.policyCommand(),
 		e.versionCommand(),
 	)

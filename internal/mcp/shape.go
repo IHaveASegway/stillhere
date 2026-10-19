@@ -5,6 +5,7 @@ import (
 	"cmp"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -286,15 +287,26 @@ func scopeOf(sc domain.Scope, name string) scopeOut {
 // without pointing at a share it could be worked out from.
 func withheldWhy() string {
 	return fmt.Sprintf("fewer than %d people landed in its window, or it would let a share that is withheld be "+
-		"worked out from those shown. A share of one or two people is close to one person's own, which only that "+
+		"worked out from those shown, in this run or beside the shares this server's record holds for another run "+
+		"of the same as-of time. A share of one or two people is close to one person's own, which only that "+
 		"person sees (ADR 0007)", app.AIShareMinPeople)
 }
 
-// aiCaveat says that an answer withheld the AI-assisted share of scopes.
-func aiCaveat(scopes []string) report.Caveat {
+// aiCaveat says that an answer withheld the AI-assisted share of scopes:
+// by the decision (ai-few-people), or, when the call could not settle the
+// decision that may leave (unsent), every share, and why.
+func aiCaveat(scopes []string, unsent error) report.Caveat {
 	scopes = slices.Compact(slices.Sorted(slices.Values(scopes)))
 	if len(scopes) > maxCandidates {
 		scopes = append(scopes[:maxCandidates], fmt.Sprintf("%d more", len(scopes)-maxCandidates))
+	}
+	switch {
+	case errors.Is(unsent, app.ErrEgressInputs):
+		return report.Caveat{Code: "ai-record-differs", Message: fmt.Sprintf("The AI-assisted share of %s is withheld, as "+
+			"every share of this run is: %s.", strings.Join(scopes, ", "), unsentWhy(unsent))}
+	case unsent != nil:
+		return report.Caveat{Code: "ai-not-recorded", Message: fmt.Sprintf("The AI-assisted share of %s is withheld, as "+
+			"every share is: %s.", strings.Join(scopes, ", "), unsentWhy(unsent))}
 	}
 	return report.Caveat{Code: "ai-few-people", Message: fmt.Sprintf("The AI-assisted share of %s is withheld: %s.",
 		strings.Join(scopes, ", "), withheldWhy())}
@@ -415,13 +427,23 @@ type shaper struct {
 	// aiDetailWithheld: a shown AI-assisted share left without its detail
 	// (withholdAI)
 	aiDetailWithheld bool
+	// aiShown: the answer holds a scope's AI-assisted share, which the
+	// server leaves out until the decision that may leave is settled
+	// (call.settle); unsent: why every share is withheld, when it could not
+	// be.
+	aiShown bool
+	unsent  error
 }
 
 // share returns a scope's AI-assisted share as it may leave: nil, its num
 // and den with it, noted for the caveat, when the run's decision withholds
 // it.
 func (s *shaper) share(sh *report.Share, sc report.Scope, name string) *report.Share {
-	if sh == nil || showsAI(s.names, sc) {
+	if sh == nil {
+		return nil
+	}
+	if showsAI(s.names, sc) {
+		s.aiShown = true
 		return sh
 	}
 	s.aiWithheld = append(s.aiWithheld, name)
@@ -807,6 +829,7 @@ func (s *shaper) withholdAI(vs []report.Value) []report.Value {
 			if len(v.Detail) > 0 {
 				v.Detail, s.aiDetailWithheld = map[string]float64{}, true
 			}
+			s.aiShown = s.aiShown || shown
 		case whole:
 			s.aiWithheld = append(s.aiWithheld, scopeName(v.Scope, s.repoName(v.Scope.Key)))
 			continue
@@ -814,6 +837,8 @@ func (s *shaper) withholdAI(vs []report.Value) []report.Value {
 			v.Detail = maps.Clone(v.Detail)
 			delete(v.Detail, key)
 			s.aiWithheld = append(s.aiWithheld, scopeName(v.Scope, s.repoName(v.Scope.Key)))
+		case key != "" && copied:
+			s.aiShown = true
 		}
 		out = append(out, v)
 	}
@@ -839,7 +864,7 @@ func (s *shaper) repoName(key string) string {
 // back rather than as no data.
 func (s *shaper) withheldAI(caveats []report.Caveat) []report.Caveat {
 	if len(s.aiWithheld) > 0 {
-		caveats = append(slices.Clip(caveats), aiCaveat(s.aiWithheld))
+		caveats = append(slices.Clip(caveats), aiCaveat(s.aiWithheld, s.unsent))
 	}
 	if s.aiDetailWithheld {
 		caveats = append(slices.Clip(caveats), report.Caveat{Code: "ai-detail-withheld", Message: "An AI-assisted share " +

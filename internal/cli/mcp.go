@@ -3,9 +3,11 @@ package cli
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
 	"github.com/IHaveASegway/stillhere/internal/mcp"
@@ -19,6 +21,7 @@ func (e *env) mcpCommand() *cobra.Command {
 		allowSource bool
 		allowEmails bool
 		me          string
+		egress      string
 	)
 	cmd := &cobra.Command{
 		Use:   "mcp",
@@ -35,7 +38,11 @@ Every answer goes on to the agent's model provider, so the server withholds
 by default what the provider does not need: emails become stable ids unless
 --allow-emails, commit subjects and diffs stay local unless --allow-source,
 and a person's AI-assisted share is shown only to that person, the one --me
-names (ADR 0007).
+names (ADR 0007). A repository's or a group's AI-assisted share leaves only
+once the server has recorded it in its egress record, --egress (ADR 0015),
+and only when it cannot be subtracted from shares sent before; while the
+record cannot be written, every such share is withheld. 'stillhere egress'
+prints what the record holds.
 
 To use it from Claude Code, register stillhere's absolute path: Claude Code
 starts the server with its own PATH, which need not hold stillhere. command -v
@@ -59,6 +66,10 @@ PATH, and the line below would register an empty command.
 			if err != nil {
 				return err
 			}
+			record, err := egressPath(egress)
+			if err != nil {
+				return err
+			}
 			cfg := mcp.Config{
 				// Opened on the first call that needs it, and read-only:
 				// the server never creates, migrates or cleans up facts.db.
@@ -68,6 +79,15 @@ PATH, and the line below would register an empty command.
 						return nil, err
 					}
 					return st, nil
+				},
+				// The egress record: the one file this server writes,
+				// opened the first time an answer would hold a share.
+				Egress: func(ctx context.Context) (domain.EgressLedger, error) {
+					ledger, err := sqlite.OpenEgress(ctx, record)
+					if err != nil {
+						return nil, err
+					}
+					return ledger, nil
 				},
 				RunID:       run,
 				AllowSource: allowSource,
@@ -87,8 +107,8 @@ PATH, and the line below would register an empty command.
 			}
 			// --db is typed by the user and may be anything, a URL with a
 			// token included (#71).
-			e.log.Info("serving MCP on stdio", "db", redact.Scrub(path), "run", run, "allow_source", allowSource,
-				"allow_emails", allowEmails, "me", email != "")
+			e.log.Info("serving MCP on stdio", "db", redact.Scrub(path), "egress", redact.Scrub(record), "run", run,
+				"allow_source", allowSource, "allow_emails", allowEmails, "me", email != "")
 			return mcp.Serve(cmd.Context(), cfg, os.Stdin, e.stdout)
 		},
 	}
@@ -97,5 +117,31 @@ PATH, and the line below would register an empty command.
 	f.BoolVar(&allowSource, "allow-source", false, "let the agent read commit subjects and diffs (source leaves the machine)")
 	f.BoolVar(&allowEmails, "allow-emails", false, "include people's emails in answers (default: stable ids in their place)")
 	f.StringVar(&me, "me", "", "your canonical `EMAIL`: your own answers include your own AI-assisted share")
+	addEgressFlag(f, &egress)
 	return cmd
+}
+
+// addEgressFlag defines --egress, the egress record's file, on mcp and on
+// egress.
+func addEgressFlag(f *pflag.FlagSet, egress *string) {
+	f.StringVar(egress, "egress", "",
+		"egress record `FILE`: the AI-assisted shares the MCP server lets leave (default $STILLHERE_HOME/egress.db)")
+}
+
+// egressPath resolves --egress, else $STILLHERE_HOME/egress.db: one record
+// per home, whichever facts.db --db names, since a record keys each run by
+// its id and start time and checks a new run against every run of its
+// window that any server of the home answered about.
+func egressPath(flag string) (string, error) {
+	if flag != "" {
+		if err := localPath("--egress", flag); err != nil {
+			return "", err
+		}
+		return flag, nil
+	}
+	home, err := stillhereHome()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, "egress.db"), nil
 }

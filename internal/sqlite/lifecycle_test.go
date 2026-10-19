@@ -73,6 +73,104 @@ func TestStoreLifecycle(t *testing.T) {
 	t.Run("first opens racing in separate processes all succeed", testRacingOpens)
 	t.Run("a run left running is deleted once the store that began it has been silent for a day", testLease)
 	t.Run("retention and LatestRun follow the rule", testRetention)
+	t.Run("the egress record decides a run once, is append-only, and is no facts database", testEgress)
+}
+
+// testEgress covers the egress record (ADR 0015): a reader creates nothing;
+// the writer makes the file 0600 with a salt; Decide records a run's
+// decision once, durably, hands a later run of the window every earlier
+// decision and one of another window none, and round-trips what it
+// recorded; SQL that updates or deletes a row is refused; and the record
+// and facts.db refuse each other.
+func testEgress(t *testing.T) {
+	ctx := t.Context()
+	dir := filepath.Join(t.TempDir(), "home")
+	path := filepath.Join(dir, "egress.db")
+	var usage *domain.UsageError
+	if _, err := sqlite.OpenEgressReadOnly(ctx, path); !errors.As(err, &usage) || !strings.Contains(err.Error(), path) {
+		t.Errorf("OpenEgressReadOnly(a missing record) = %v, want a *domain.UsageError that names it", err)
+	}
+	if _, err := os.Stat(dir); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("OpenEgressReadOnly created %s (%v)", dir, err)
+	}
+	e, err := sqlite.OpenEgress(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = e.Close() }()
+	now := time.Date(2026, time.October, 7, 0, 0, 0, 0, time.UTC)
+	window := domain.Window{Since: now.AddDate(0, 0, -365), Until: now}
+	first := domain.EgressRun{ID: 1, Started: now.Add(time.Hour), Window: window}
+	ai := domain.MetricID{Name: "ai_assisted", Version: 1}
+	want := domain.EgressDecision{Run: first, Inputs: "digest-1", Metric: ai, Version: "test",
+		Shares: []domain.EgressShare{{Scope: domain.Scope{Kind: domain.ScopeGroup, Key: "ai"}, Repos: []string{"local:solo", "local:team"}, Num: 4, Den: 16}},
+		Repos: []domain.EgressRepo{{Key: "local:solo", Num: 3, Den: 4, People: []string{"aa"}},
+			{Key: "local:team", Num: 1, Den: 12, People: []string{"", "bb", "cc"}}}}
+	got, made, err := e.Decide(ctx, first, func(salt []byte, sent []domain.EgressDecision) (domain.EgressDecision, error) {
+		if len(salt) != 32 || len(sent) != 0 {
+			t.Errorf("the first decision got a salt of %d bytes and %d earlier decisions, want 32 and none", len(salt), len(sent))
+		}
+		return want, nil
+	})
+	if err != nil || !made || got.Decided.IsZero() {
+		t.Fatalf("Decide(run 1) = %+v, %v, %v, want it recorded now", got, made, err)
+	}
+	want.Decided = got.Decided
+	again, made, err := e.Decide(ctx, first, func([]byte, []domain.EgressDecision) (domain.EgressDecision, error) {
+		t.Error("Decide decided run 1 again")
+		return domain.EgressDecision{}, nil
+	})
+	if err != nil || made {
+		t.Fatalf("Decide(run 1 again) = %v, %v, want the recorded decision", made, err)
+	}
+	wantEqual(t, "the recorded decision", want, again)
+	// A rescan of the same window sees run 1's decision; another window's sees none.
+	second := domain.EgressRun{ID: 2, Started: now.Add(2 * time.Hour), Window: window}
+	if _, _, err := e.Decide(ctx, second, func(_ []byte, sent []domain.EgressDecision) (domain.EgressDecision, error) {
+		wantEqual(t, "the decisions of run 2's window", []domain.EgressDecision{want}, sent)
+		return domain.EgressDecision{Inputs: "digest-2", Metric: ai, Version: "test"}, nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	later := domain.EgressRun{ID: 3, Started: now.Add(3 * time.Hour), Window: domain.Window{Since: window.Since.Add(time.Hour), Until: now.Add(time.Hour)}}
+	if _, _, err := e.Decide(ctx, later, func(_ []byte, sent []domain.EgressDecision) (domain.EgressDecision, error) {
+		if len(sent) != 0 {
+			t.Errorf("a run of another window got %d decisions, want none", len(sent))
+		}
+		return domain.EgressDecision{}, errors.New("decided nothing")
+	}); err == nil {
+		t.Error("Decide recorded a decision whose decide failed")
+	}
+	raw := openRaw(t, path)
+	for _, q := range []string{`UPDATE decision_shares SET num = 3`, `DELETE FROM decisions`, `DELETE FROM decision_people`,
+		`UPDATE egress_meta SET value = x'00'`} {
+		if _, err := raw.ExecContext(ctx, q); err == nil || !strings.Contains(err.Error(), "append-only") {
+			t.Errorf("%s: %v, want it refused as append-only", q, err)
+		}
+	}
+	ro, err := sqlite.OpenEgressReadOnly(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = ro.Close() }()
+	if ds, err := ro.Decisions(ctx); err != nil || len(ds) != 2 || ds[0].Run != first || ds[1].Run != second {
+		t.Errorf("Decisions = %+v, %v, want runs 1 and 2, oldest first", ds, err)
+	}
+	if runtime.GOOS != "windows" {
+		if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0o600 {
+			t.Errorf("%s: %v, %v, want mode 0600", path, fi, err)
+		}
+	}
+	facts := filepath.Join(dir, "facts.db")
+	if err := openStore(t, facts).Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sqlite.OpenEgress(ctx, facts); !errors.As(err, &usage) || !strings.Contains(err.Error(), "not a stillhere egress record") {
+		t.Errorf("OpenEgress(facts.db) = %v, want it refused", err)
+	}
+	if _, err := sqlite.Open(ctx, path); !errors.As(err, &usage) || !strings.Contains(err.Error(), "not a stillhere facts database") {
+		t.Errorf("Open(egress.db) = %v, want it refused", err)
+	}
 }
 
 func testOpenCreates(t *testing.T) {

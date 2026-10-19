@@ -119,7 +119,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sqlite.Open %s: %w", path, err)
 	}
-	if err := createFile(abs); err != nil {
+	if err := createFile(abs, factsSchema); err != nil {
 		var usage *domain.UsageError
 		if errors.As(err, &usage) {
 			return nil, err // it names the path, and says what to do
@@ -225,7 +225,7 @@ func (s *Store) open(ctx context.Context, writer bool) error {
 	// so a transaction never fails halfway because another connection
 	// wrote after it first read (https://sqlite.org/lang_transaction.html).
 	s.writer.SetMaxOpenConns(1)
-	if err := migrate(ctx, s.writer); err != nil {
+	if err := factsSchema.migrate(ctx, s.writer); err != nil {
 		return err
 	}
 	if writer {
@@ -253,52 +253,50 @@ func (s *Store) open(ctx context.Context, writer bool) error {
 // and when it already existed a file is created and removed in its
 // directory, where SQLite keeps the -wal and -shm files. A failure is a
 // *domain.UsageError that names the path, before any work that would need
-// the write.
-func createFile(path string) error {
+// the write. sc says what kind of file it is, for the messages.
+func createFile(path string, sc schema) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return unwritable("create", dir, err)
+		return unwritable("create", dir, err, sc)
 	}
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
 	if err == nil {
 		return f.Close()
 	}
 	if !errors.Is(err, fs.ErrExist) {
-		return unwritable("write", dir, err)
+		return unwritable("write", dir, err, sc)
 	}
 	fi, err := os.Stat(path)
 	switch {
 	case err != nil:
 		return err
 	case fi.IsDir():
-		return &domain.UsageError{Msg: path + ": a directory, not a facts database file"}
+		return &domain.UsageError{Msg: path + ": a directory, not a " + sc.name + " file"}
 	case !fi.Mode().IsRegular():
-		return &domain.UsageError{Msg: path + ": not a regular file, so not a facts database"}
+		return &domain.UsageError{Msg: path + ": not a regular file, so not a " + sc.name}
 	}
 	if f, err = os.OpenFile(path, os.O_RDWR, 0); err != nil {
-		return unwritable("write", path, err)
+		return unwritable("write", path, err, sc)
 	}
 	if err := f.Close(); err != nil {
 		return err
 	}
 	probe, err := os.CreateTemp(dir, ".stillhere-write-check-*")
 	if err != nil {
-		return unwritable("write", dir, err)
+		return unwritable("write", dir, err, sc)
 	}
 	return errors.Join(probe.Close(), os.Remove(probe.Name()))
 }
 
-// unwritable is the refusal of a facts database, or its directory, that
-// this process cannot create or write (verb).
-func unwritable(verb, path string, err error) error {
+// unwritable is the refusal of a file of sc, or its directory, that this
+// process cannot create or write (verb).
+func unwritable(verb, path string, err error, sc schema) error {
 	why := err.Error()
 	var pathErr *fs.PathError
 	if errors.As(err, &pathErr) {
 		why = pathErr.Err.Error() // the path is in the message already
 	}
-	return &domain.UsageError{Msg: fmt.Sprintf(
-		"cannot %s %s (%s): scan and sync write the facts database there; make it writable, or pass --db or set STILLHERE_HOME to a place that is",
-		verb, path, why)}
+	return &domain.UsageError{Msg: fmt.Sprintf("cannot %s %s (%s): %s", verb, path, why, sc.writers)}
 }
 
 // dsn returns the modernc.org/sqlite data source name for path: a file:
@@ -317,6 +315,13 @@ func unwritable(verb, path string, err error) error {
 // and SQLite would answer a conflicting switch with SQLITE_BUSY at once.
 // migrate turns it on instead (walMode).
 func dsn(path string, readOnly bool, mode string) string {
+	return dsnSynced(path, readOnly, mode, "NORMAL")
+}
+
+// dsnSynced is dsn with the writer's synchronous level: NORMAL for facts.db,
+// FULL for the egress record, whose every commit must survive a power cut
+// (egress.go).
+func dsnSynced(path string, readOnly bool, mode, synchronous string) string {
 	q := url.Values{}
 	q.Set("_busy_timeout", strconv.FormatInt(busyTimeout.Milliseconds(), 10))
 	q.Set("_foreign_keys", "1")
@@ -324,7 +329,7 @@ func dsn(path string, readOnly bool, mode string) string {
 	if readOnly {
 		q.Set("_query_only", "1")
 	} else {
-		q.Set("_synchronous", "NORMAL")
+		q.Set("_synchronous", synchronous)
 		q.Set("_txlock", "immediate")
 	}
 	if mode != "" {

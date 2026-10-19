@@ -572,7 +572,7 @@ func (s *server) explain(ctx context.Context, in explainIn) *sdk.CallToolResult 
 						"path as one directory name, such as src, not %q; who_knows answers any path", in.Path)}
 				}
 				subject = domain.Subject{Kind: domain.SubjectArea, Key: rp.Key + ":" + dir + "/"}
-			} else if err := fewPeople(id, showsAI(c.names, report.Scope{Kind: domain.ScopeRepo, Key: rp.Key}),
+			} else if err := fewPeople(ctx, c, id, domain.Scope{Kind: domain.ScopeRepo, Key: rp.Key},
 				fmt.Sprintf("repository %q", rp.Name)); err != nil {
 				return nil, err
 			}
@@ -583,8 +583,7 @@ func (s *server) explain(ctx context.Context, in explainIn) *sdk.CallToolResult 
 				return nil, err
 			}
 			subject = domain.Subject{Kind: domain.SubjectGroup, Key: sc.Key}
-			if err := fewPeople(id, showsAI(c.names, report.Scope{Kind: sc.Kind, Key: sc.Key}),
-				fmt.Sprintf("group %q", sc.Key)); err != nil {
+			if err := fewPeople(ctx, c, id, sc, fmt.Sprintf("group %q", sc.Key)); err != nil {
 				return nil, err
 			}
 		case domain.SubjectAll:
@@ -617,11 +616,22 @@ func (s *server) explain(ctx context.Context, in explainIn) *sdk.CallToolResult 
 }
 
 // fewPeople refuses the AI-assisted share of a repository or a group that
-// the run's decision withholds (app.AIShares). It says why, and points at
-// no other share: a group's, or the whole run's, less the shares shown
-// beside it is what the decision keeps from being worked out.
-func fewPeople(id domain.MetricID, shown bool, scope string) error {
-	if !report.OwnPageOnly(id) || shown {
+// the decision that may leave withholds: the call settles it first, since
+// the answer is about to hold the share (call.settle). It says why, and
+// points at no other share: a group's, or the whole run's, less the shares
+// shown beside it is what the decision keeps from being worked out.
+func fewPeople(ctx context.Context, c *call, id domain.MetricID, sc domain.Scope, scope string) error {
+	if !report.OwnPageOnly(id) {
+		return nil
+	}
+	if showsAI(c.names, report.Scope{Kind: sc.Kind, Key: sc.Key}) {
+		c.settle(ctx)
+	}
+	switch {
+	case c.unsent != nil:
+		return &domain.UsageError{Msg: fmt.Sprintf("the %s share of %s is withheld, as every share is: %s.", id.Name, scope,
+			unsentWhy(c.unsent))}
+	case showsAI(c.names, report.Scope{Kind: sc.Kind, Key: sc.Key}):
 		return nil
 	}
 	return &domain.UsageError{Msg: fmt.Sprintf("the %s share of %s is withheld: %s.", id.Name, scope, withheldWhy())}

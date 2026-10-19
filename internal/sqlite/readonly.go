@@ -202,20 +202,20 @@ func (s *Store) readOnlyOpen(ctx context.Context, immutable bool) error {
 		return err
 	}
 	s.writer.SetMaxOpenConns(1)
-	ms, err := migrations()
+	ms, err := factsSchema.migrations()
 	if err != nil {
 		return err
 	}
 	var h fileHeader
 	err = retryBusy(ctx, func() error {
 		var err error
-		h, err = readHeader(ctx, s.ro)
+		h, err = factsSchema.readHeader(ctx, s.ro)
 		return err
 	})
 	if err != nil {
 		return err
 	}
-	if err := h.check(len(ms)); err != nil {
+	if err := h.check(factsSchema, len(ms)); err != nil {
 		return err
 	}
 	switch {

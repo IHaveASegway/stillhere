@@ -113,7 +113,12 @@ days: 365)` lists them.
   links, counting as one person: with fewer, it would be
   close to one person's own. A share is also withheld when it would let a
   withheld share be worked out from the shares shown beside it, such as a
-  group's less its repositories' (`ai-few-people` names the scopes withheld).
+  group's less its repositories' (`ai-few-people` names the scopes withheld),
+  or from a share the server sent before about another scan of the same as-of
+  time. The server records what it sends first; while it cannot,
+  `ai-not-recorded` says every share is withheld, and only the user can fix
+  that (`ai-record-differs`: the scan's numbers changed since its shares were
+  recorded).
   How AI-assisted changes held up against the rest is never sent over MCP
   (`ai-detail-withheld`): those comparisons can be one or two people's. Say
   that the share is all you have, not that there is no comparison.
