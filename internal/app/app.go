@@ -53,9 +53,14 @@ type Deps struct {
 	// replica they were not given, and so a stored run renders as its scan
 	// did.
 	ForgeStore domain.ForgeStore
-	Policy     *policy.Policy // week and scan only; a read use case rebuilds the run's own (policy.FromSource on Run.PolicySource)
-	Log        *slog.Logger   // progress and warnings, on stderr; nil discards them
-	Version    string         // the tool version recorded on every run
+	// Egress is the egress record (ADR 0015): what the MCP server let leave
+	// the machine of each run's AI-assisted shares, which ShareDecision
+	// reads and records before a share leaves, and Egress prints. nil for
+	// every other use case.
+	Egress  domain.EgressLedger
+	Policy  *policy.Policy // week and scan only; a read use case rebuilds the run's own (policy.FromSource on Run.PolicySource)
+	Log     *slog.Logger   // progress and warnings, on stderr; nil discards them
+	Version string         // the tool version recorded on every run
 	// Commands is how the answers and errors of the use cases name the
 	// commands they send their reader to: the inbound adapter's own
 	// vocabulary, as the MCP server names its tools (#69). nil: the

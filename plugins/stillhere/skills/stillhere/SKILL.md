@@ -121,7 +121,17 @@ days: 365)` lists them.
   links, counting as one person: with fewer, it would be
   close to one person's own. A share is also withheld when it would let a
   withheld share be worked out from the shares shown beside it, such as a
-  group's less its repositories' (`ai-few-people` names the scopes withheld).
+  group's less its repositories' (`ai-few-people` names the scopes withheld),
+  or from a share the server sent before about another scan whose window
+  overlaps this one's (a rescan minutes or a day later). The server records
+  what it sends first. While it cannot, `ai-not-recorded` says every share is
+  withheld, and only the user can fix that: by making the record writable
+  again, or by moving it with its `-wal` file and restarting the server with
+  `--egress` naming the new path. Never suggest a new or empty record: it
+  forgets what already left, and its first answers could be subtracted from
+  those. `ai-record-differs` is not a fault: a later stillhere computed the
+  scan's numbers again, so its shares stay withheld, and a new scan is
+  decided afresh.
   How AI-assisted changes held up against the rest is never sent over MCP
   (`ai-detail-withheld`): those comparisons can be one or two people's. Say
   that the share is all you have, not that there is no comparison.

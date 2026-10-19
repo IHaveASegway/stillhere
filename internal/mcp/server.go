@@ -7,8 +7,10 @@
 //
 // The server reads facts.db only, through a store that cannot write, and
 // serves on stdio: nothing but protocol messages goes to its output, and
-// its log goes to stderr. Its nine tools are shaped around an agent's
-// questions rather than the store's tables (Anthropic, "Writing effective
+// its log goes to stderr. The one file it writes is the egress record
+// (ADR 0015), in which it records which AI-assisted shares of a run may
+// leave before the first of them does. Its nine tools are shaped around an
+// agent's questions rather than the store's tables (Anthropic, "Writing effective
 // tools for agents", 2025): overview, person, who_knows, changes, explain,
 // highlights, identity_candidates, metrics and diff. docs/spec/mcp.md is
 // their contract.
@@ -51,6 +53,13 @@ type Config struct {
 	// domain.ForgeStore too, as *sqlite.Store is, is also the use cases'
 	// forge replica.
 	Open func(ctx context.Context) (domain.FactStore, error)
+	// Egress opens the egress record (sqlite.OpenEgress, ADR 0015), in
+	// which the server records each run's decision about the AI-assisted
+	// shares that may leave before the first of them does. Called the first
+	// time an answer would hold a share, and again after a failure. nil, or
+	// a record that cannot be opened or written, withholds every share
+	// (fail-safe), and the answers say so.
+	Egress func(ctx context.Context) (domain.EgressLedger, error)
 	// Git runs the diff tool's git commands; nil unless AllowSource.
 	Git domain.GitRunner
 	// RunID pins every answer to one run; 0 reads the latest complete or
@@ -107,7 +116,12 @@ type server struct {
 	slot    chan struct{}
 	store   *cachedStore // nil until Open succeeds
 	lastRun int64        // the run the previous answer read, for the run-changed caveat
-	budget  int          // answerBudget; a test lowers it
+	// egress is the egress record, nil until Config.Egress succeeds, and
+	// decided the decisions it returned, by run: a recorded decision never
+	// changes, so a run's later calls need not read the record again.
+	egress  domain.EgressLedger
+	decided map[egressKey]app.AIShares
+	budget  int // answerBudget; a test lowers it
 	// schemas holds each tool's input schema, as the argument check reads
 	// it (args.go); filled when the tools are registered.
 	schemas map[string]argSchema
@@ -119,7 +133,15 @@ func newServer(cfg Config) *server {
 	if log == nil {
 		log = slog.New(slog.DiscardHandler)
 	}
-	return &server{cfg: cfg, log: log, slot: make(chan struct{}, 1), budget: answerBudget, schemas: map[string]argSchema{}}
+	return &server{cfg: cfg, log: log, slot: make(chan struct{}, 1), budget: answerBudget, schemas: map[string]argSchema{},
+		decided: map[egressKey]app.AIShares{}}
+}
+
+// egressKey names a run as the egress record does: two facts.db files, or
+// one deleted and scanned again, reuse ids.
+type egressKey struct {
+	id      int64
+	started time.Time
 }
 
 // close closes the store, if it was opened, once the call that holds the
@@ -132,6 +154,18 @@ func (s *server) close() {
 			s.log.Warn("closing facts.db", "error", err)
 		}
 		s.store = nil
+	}
+	s.closeEgress()
+}
+
+// closeEgress closes the egress record, if it is open, so the next share
+// opens it again.
+func (s *server) closeEgress() {
+	if s.egress != nil {
+		if err := s.egress.Close(); err != nil {
+			s.log.Warn("closing the egress record", "error", err)
+		}
+		s.egress = nil
 	}
 }
 
@@ -199,6 +233,11 @@ func (s *server) withheld() []string {
 type call struct {
 	s     *server
 	names *app.Names
+	// settled: names.AIShares is the decision that may leave (settle), not
+	// the run's own; unsent, when settling failed, why every share is
+	// withheld.
+	settled bool
+	unsent  error
 }
 
 // run is the run every use case of the call reads: the pinned one, or the
@@ -248,8 +287,97 @@ func (c *call) resolver(ctx context.Context) (*resolver, error) {
 			return nil, c.s.pinned(ctx, d, err)
 		}
 		c.names = n
+		if shares, ok := c.s.decided[egressKey{n.Run.ID, n.Run.Started}]; ok {
+			// Settled by an earlier call: every answer about the run reads
+			// the decision that may leave from the start.
+			c.names.AIShares, c.settled = shares, true
+		}
 	}
 	return &resolver{names: c.names, emails: c.s.cfg.AllowEmails}, nil
+}
+
+// settle makes the call's decision about AI-assisted shares the one that
+// may leave the machine, before any share does (ADR 0015): the decision
+// the egress record holds for the run, or one decided against the shares
+// it holds for the run's window and recorded first (app.ShareDecision).
+// The answer renders again with it. When the record cannot be opened or
+// written, or holds a decision about the run made over other numbers,
+// every share is withheld and unsent says why (fail-safe: Saltzer and
+// Schroeder's fail-safe defaults), and the next call tries again. It is
+// called when an answer would hold a share by the run's own decision, so
+// a call that sends none records nothing.
+func (c *call) settle(ctx context.Context) {
+	if c.settled || c.names == nil {
+		return
+	}
+	c.settled = true
+	s := c.s
+	key := egressKey{c.names.Run.ID, c.names.Run.Started}
+	if shares, ok := s.decided[key]; ok {
+		c.names.AIShares = shares
+		return
+	}
+	shares, err := s.recorded(ctx, c.names)
+	if err != nil {
+		c.names.AIShares, c.unsent = app.AIShares{}, err
+		s.log.Warn("withholding every AI-assisted share", "run", c.names.Run.ID,
+			"error", newWithholder(c.names).text(redact.Scrub(err.Error()), false))
+		return
+	}
+	s.decided[key] = shares
+	c.names.AIShares = shares
+}
+
+// recorded is app.ShareDecision over the egress record, opened if it is
+// not open yet; a failure of the record closes it, to open again.
+func (s *server) recorded(ctx context.Context, names *app.Names) (app.AIShares, error) {
+	if s.egress == nil {
+		if s.cfg.Egress == nil {
+			return app.AIShares{}, errNoEgress
+		}
+		e, err := s.cfg.Egress(ctx)
+		if err != nil {
+			return app.AIShares{}, fmt.Errorf("%w: %w", errEgressFailed, err)
+		}
+		s.egress = e
+	}
+	shares, err := app.ShareDecision(ctx, app.Deps{Egress: s.egress, Log: s.log, Version: s.cfg.Version}, names)
+	switch {
+	case errors.Is(err, app.ErrEgressInputs):
+		return app.AIShares{}, err
+	case err != nil:
+		s.closeEgress()
+		return app.AIShares{}, fmt.Errorf("%w: %w", errEgressFailed, err)
+	}
+	return shares, nil
+}
+
+// errNoEgress and errEgressFailed are why a call withholds every share
+// when it could not record what it sends.
+var (
+	errNoEgress     = errors.New("this server runs without an egress record")
+	errEgressFailed = errors.New("this server could not read or write its egress record")
+)
+
+// unsentWhy is why every AI-assisted share is withheld when the call could
+// not settle its decision, as a caveat and a refusal say it: the reason, in
+// words that name no path, since the log on stderr has the error, and what
+// the user can do. It never suggests a new record: one forgets what the old
+// one let leave, and its first answers could be subtracted from those.
+func unsentWhy(err error) string {
+	switch {
+	case errors.Is(err, app.ErrEgressInputs):
+		return "the egress record holds a decision about this scan made over other numbers than the scan holds now " +
+			"(a later stillhere computed them again), and the new numbers could be subtracted from those already sent; " +
+			"a new scan is decided afresh against the record"
+	case errors.Is(err, errNoEgress):
+		return "this server lets a share leave only once it has recorded it (its egress record, ADR 0015), and it " +
+			"runs without one: the user can restart stillhere mcp with --egress naming the record it kept before"
+	}
+	return "this server lets a share leave only once it has recorded it (its egress record, ADR 0015), and it could " +
+		"not read or write the record: the server's log on stderr says why. The user can make the record writable " +
+		"again, or move it with its -wal file to a place that is and restart stillhere mcp with --egress naming it; " +
+		"a new, empty record is no fix, since it would forget what this one let leave"
 }
 
 // scope resolves a scope argument against the call's run; a miss says
@@ -403,9 +531,17 @@ func (s *server) build(ctx context.Context, c *call, f format, narrow string,
 		w = newWithholder(c.names)
 	}
 	for {
-		v, err := r(&shaper{f: f, names: c.names, w: w})
+		sh := &shaper{f: f, names: c.names, w: w, unsent: c.unsent}
+		v, err := r(sh)
 		if err != nil {
 			return nil, 0, err
+		}
+		if sh.aiShown && !c.settled {
+			// The answer would hold an AI-assisted share: the decision
+			// that may leave is settled, recorded first when it is new,
+			// and the answer renders again with it (write before send).
+			c.settle(ctx)
+			continue
 		}
 		run := s.finish(v)
 		body, err := encode(v, w)

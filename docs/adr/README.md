@@ -18,6 +18,7 @@ One file per decision that is hard to reverse. Format after Michael Nygard, "Doc
 | [0012](0012-a-run-reads-each-repository-as-it-stood-at-now.md) | A run reads each repository as it stood at `--now` | Proposed |
 | [0013](0013-sync-reads-bounded-passes-and-checks-the-replica.md) | A sync reads bounded passes and checks the replica against GitHub's count | Proposed |
 | [0014](0014-labels-are-evidence-not-the-gate.md) | A lead's labels are the gate; a model panel's are reference evidence | Proposed |
+| [0015](0015-shares-are-decided-against-a-record-of-what-left.md) | AI-assisted shares are decided against a record of what left the machine | Proposed |
 
 Open decisions that have not reached an ADR yet are listed in [product.md](../product.md#open-decisions).
 

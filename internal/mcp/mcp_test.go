@@ -1440,6 +1440,204 @@ func TestMCPTools(t *testing.T) {
 		}
 		copied(t, cs, "ai", "group", nil)
 		copied(t, cs, "lone", "repo", nil)
+
+		// The egress record (#85, ADR 0015). recorded reads what a record
+		// holds, as stillhere egress does; record writes a decision into a
+		// new one as a version whose rules decide otherwise would have.
+		recorded := func(t *testing.T, path string) []domain.EgressDecision {
+			t.Helper()
+			e, err := sqlite.OpenEgressReadOnly(ctx, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = e.Close() }()
+			ds, err := e.Decisions(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return ds
+		}
+		record := func(t *testing.T, path string, d domain.EgressDecision) {
+			t.Helper()
+			e, err := sqlite.OpenEgress(ctx, path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = e.Close() }()
+			if _, _, err := e.Decide(ctx, d.Run, func([]domain.EgressDecision) (domain.EgressDecision, error) { return d, nil }); err != nil {
+				t.Fatal(err)
+			}
+		}
+		groupAI := domain.Scope{Kind: domain.ScopeGroup, Key: "ai"}
+
+		// Two runs of one as-of time: a rescan of team alone shows team at 1
+		// of 12 in the local report, and the group's 4 of 16, sent before,
+		// less that is solo's own 3 of 4. In group mixed, Sam lands in band
+		// beside three others and alone in side: band's share less mixed's
+		// is side's, Sam's own, although no one of mixed is missing from
+		// band (a check of people(mixed) less people(band) would count no
+		// one). The groups' shares are in the record before their answer is
+		// returned (write before send); the rescan's, team's and band's and
+		// the whole run's, which overlaps both groups without nesting, are
+		// decided against them, in the session that sent them and in a
+		// later server over the same record; a server pinned to the groups'
+		// run still sends what it sent.
+		mixed := filepath.Join(root, "mixed")
+		var band []testCommit
+		for i, who := range []string{"Ann", "Ben", "Cat"} {
+			band = append(band, commit(who+" Band", strings.ToLower(who)+"@band.example", 1+2*i, i == 0),
+				commit(who+" Band", strings.ToLower(who)+"@band.example", 2+2*i, false))
+		}
+		buildRepo(t, filepath.Join(mixed, "band"), append(band, commit("Sam Solo", "sam@solo.example", 10, false)))
+		buildRepo(t, filepath.Join(mixed, "side"), []testCommit{commit("Sam Solo", "sam@solo.example", 11, true),
+			commit("Sam Solo", "sam@solo.example", 12, true)})
+		ledger := filepath.Join(root, "egress.db")
+		db = filepath.Join(root, "rescan.db")
+		scan(t, db, mailmap, domain.ScopeGroup, group, mixed)
+		truth = local(t, db)
+		cs = connect(t, Config{Open: openDB(db), Egress: openEgress(ledger), Version: "test"}, 0)
+		got, _ = overview(t, cs, "ai")
+		shown(t, "overview(ai) before the rescan", got, truth, "group:ai")
+		if ds := recorded(t, ledger); len(ds) != 1 || len(ds[0].Shares) != 2 || ds[0].Shares[0].Scope != groupAI || ds[0].Shares[0].Num != 4 {
+			t.Errorf("the record holds %+v once overview(ai) answered, want group ai's 4 of 16 and group mixed's", ds)
+		}
+		got, _ = overview(t, cs, "mixed")
+		shown(t, "overview(mixed) before the rescan", got, truth, "group:mixed")
+		scan(t, db, mailmap, domain.ScopeGroup, filepath.Join(group, "team"), filepath.Join(mixed, "band"))
+		rescan := local(t, db)
+		for _, c := range [][3]string{{"group:ai", "repo:team", "repo:solo"}, {"group:mixed", "repo:band", "repo:side"}} {
+			if sh := rescan[c[1]]; sh == nil || residual(truth[c[0]], sh) != residual(truth[c[2]]) {
+				t.Fatalf("the rescan's local share %s, %+v, less %s's is not %s's %+v: the case this checks is gone", c[1], sh, c[0], c[2], truth[c[2]])
+			}
+		}
+		for i, server := range []*sdk.ClientSession{cs, connect(t, Config{Open: openDB(db), Egress: openEgress(ledger), Version: "test"}, 0)} {
+			got, a = overview(t, server, "")
+			shown(t, fmt.Sprintf("overview() of the rescan, server %d", i+1), got, rescan)
+			if !hasCaveat(a.Caveats, "ai-few-people", `repository "band", repository "team", the whole run`) {
+				t.Errorf("overview() of the rescan, server %d: caveats %v, want ai-few-people naming band, team and the run", i+1, a.Caveats)
+			}
+			withheld(t, server, "team", "repo")
+			withheld(t, server, "band", "repo")
+		}
+		got, _ = overview(t, connect(t, Config{Open: openDB(db), Egress: openEgress(ledger), RunID: 1, Version: "test"}, 0), "ai")
+		shown(t, "overview(ai) of run 1, pinned, after the rescan", got, truth, "group:ai")
+
+		// The rescan need not share the first scan's --now. One a second
+		// later, as the default --now, the clock, gives two scans seconds
+		// apart, and one a day later, in which no landing entered or left
+		// the window, sum team's same 1 of 12, so they subtract exactly too;
+		// so does a copy of team under another key (another directory, or a
+		// clone whose origin is spelt otherwise) at the same --now, which
+		// holds the same landings. Each is withheld beside the group's share
+		// sent before.
+		teamCopy := filepath.Join(root, "copies", "team-copy")
+		if err := os.CopyFS(teamCopy, os.DirFS(filepath.Join(group, "team"))); err != nil {
+			t.Fatal(err)
+		}
+		for i, c := range []struct {
+			what       string
+			now        time.Time
+			path, repo string
+		}{
+			{"a second later", fixture.Now.Add(time.Second), filepath.Join(group, "team"), "team"},
+			{"a day later", fixture.Now.AddDate(0, 0, 1), filepath.Join(group, "team"), "team"},
+			{"of a copy under another key", fixture.Now, teamCopy, "team-copy"},
+		} {
+			ledger, db := filepath.Join(root, fmt.Sprintf("later-%d-egress.db", i)), filepath.Join(root, fmt.Sprintf("later-%d.db", i))
+			scan(t, db, mailmap, domain.ScopeGroup, group)
+			first := local(t, db)
+			cs = connect(t, Config{Open: openDB(db), Egress: openEgress(ledger), Version: "test"}, 0)
+			got, _ = overview(t, cs, "ai")
+			shown(t, "overview(ai) before a rescan "+c.what, got, first, "group:ai")
+			scanAt(t, c.now, db, mailmap, domain.ScopeGroup, c.path)
+			rescan := local(t, db)
+			if sh := rescan["repo:"+c.repo]; sh == nil || residual(first["group:ai"], sh) != residual(first["repo:solo"]) {
+				t.Fatalf("a rescan %s: its local share of %s, %+v, less group ai's is not solo's %+v: the case this checks is gone",
+					c.what, c.repo, sh, first["repo:solo"])
+			}
+			got, _ = overview(t, cs, "")
+			shown(t, "overview() of a rescan "+c.what, got, rescan)
+		}
+
+		// One run, two versions: a version whose rules show crew and withhold
+		// group nomail, as this one decides the other way round, recorded
+		// its decision about the run first. This version sends that
+		// decision, not its own, so no answer about the run from either holds
+		// both the group's share and crew's, whose difference is ghost's own.
+		db = filepath.Join(root, "group.db")
+		truth = local(t, db)
+		mine, theirs, tampered := filepath.Join(root, "mine.db"), filepath.Join(root, "theirs.db"), filepath.Join(root, "tampered.db")
+		cs = connect(t, Config{Open: openDB(db), Egress: openEgress(mine), Version: "test"}, 0)
+		got, _ = overview(t, cs, "nomail")
+		shown(t, "overview(nomail) by this version", got, truth, "group:nomail")
+		ours := recorded(t, mine)[0]
+		nomailShare := ours.Shares[slices.IndexFunc(ours.Shares, func(s domain.EgressShare) bool { return s.Scope.Key == "nomail" })]
+		crew := nomailShare.Repos[slices.IndexFunc(nomailShare.Repos, func(k string) bool { return strings.HasSuffix(k, "crew") })]
+		other := ours
+		other.Version, other.Shares = "another", nil
+		for _, sh := range ours.Shares {
+			if sh.Scope == nomailShare.Scope {
+				sh = domain.EgressShare{Scope: domain.Scope{Kind: domain.ScopeRepo, Key: crew}, Repos: []string{crew},
+					Num: truth["repo:crew"].Num, Den: truth["repo:crew"].Den}
+			}
+			other.Shares = append(other.Shares, sh)
+		}
+		record(t, theirs, other)
+		cs = connect(t, Config{Open: openDB(db), Egress: openEgress(theirs), Version: "test"}, 0)
+		got, _ = overview(t, cs, "nomail")
+		shown(t, "overview(nomail) under another version's decision", got, truth, "repo:crew")
+		withheld(t, cs, "nomail", "group")
+		// A record whose decision about the run was made over other numbers
+		// than the run holds now withholds every share of it, and says so.
+		ours.Inputs = strings.Repeat("0", 64)
+		record(t, tampered, ours)
+		cs = connect(t, Config{Open: openDB(db), Egress: openEgress(tampered), Version: "test"}, 0)
+		got, a = overview(t, cs, "solos")
+		shown(t, "overview(solos) under a record of other numbers", got, truth)
+		if !hasCaveat(a.Caveats, "ai-record-differs", `group "solos"`) {
+			t.Errorf("overview(solos) under a record of other numbers: caveats %v, want ai-record-differs naming solos", a.Caveats)
+		}
+		// A run of the window whose team held one more AI-assisted landing
+		// (a policy changed between the scans) was sent first: group ai's
+		// share less that run's would be the change, so it stays local,
+		// while group solos, the same in both, leaves.
+		changed := filepath.Join(root, "changed.db")
+		ours.Run.ID, ours.Run.Started = ours.Run.ID+100, ours.Run.Started.Add(time.Hour)
+		for i, r := range ours.Repos {
+			if strings.HasSuffix(r.Key, "team") {
+				ours.Repos[i].Num++
+			}
+		}
+		record(t, changed, ours)
+		cs = connect(t, Config{Open: openDB(db), Egress: openEgress(changed), Version: "test"}, 0)
+		got, _ = overview(t, cs, "ai")
+		shown(t, "overview(ai) beside a run whose team changed", got, truth)
+		got, _ = overview(t, cs, "solos")
+		shown(t, "overview(solos) beside a run whose team changed", got, truth, "group:solos")
+
+		// Fail safe: a server that cannot write its record withholds every
+		// share, says why, refuses explain of one, and answers the rest;
+		// once the record can be written, the next call sends the share.
+		blocked := filepath.Join(root, "blocked")
+		if err := os.WriteFile(blocked, []byte("a file where the record's directory should be\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cs = connect(t, Config{Open: openDB(db), Egress: openEgress(filepath.Join(blocked, "egress.db")), Version: "test"}, 0)
+		got, a = overview(t, cs, "solos")
+		shown(t, "overview(solos) without a record it can write", got, truth)
+		if !hasCaveat(a.Caveats, "ai-not-recorded", `group "solos"`) || len(a.Overviews) == 0 {
+			t.Errorf("overview(solos) without a record it can write: %d overviews and caveats %v, want the overview with ai-not-recorded",
+				len(a.Overviews), a.Caveats)
+		}
+		text, isErr = callTool(t, cs, "explain", map[string]any{"metric": "ai_assisted", "subject": "solos", "subject_kind": "group"})
+		if !isErr || !strings.Contains(text, "as every share is") {
+			t.Errorf("explain(ai_assisted, group solos) without a record it can write answered %q, want it refused with why", text)
+		}
+		if err := os.Remove(blocked); err != nil {
+			t.Fatal(err)
+		}
+		got, _ = overview(t, cs, "solos")
+		shown(t, "overview(solos) once the record can be written", got, truth, "group:solos")
 	})
 
 	// A third scan, of one repository of two people in a group of its name
@@ -1576,9 +1774,15 @@ func scanPlatform(t *testing.T) (db string, git *gitcli.Runner, platform, mailma
 
 // scan records one scan of paths in db through app.Scan, with the adapters
 // internal/cli builds: a gitcli.Runner with the mailmap, the packaged
-// policy and a sqlite.Store, and the rank scope given (--scope). It returns
-// the runner.
+// policy and a sqlite.Store, and the rank scope given (--scope), as of
+// fixture.Now. It returns the runner.
 func scan(t *testing.T, db, mailmap, scope string, paths ...string) *gitcli.Runner {
+	t.Helper()
+	return scanAt(t, fixture.Now, db, mailmap, scope, paths...)
+}
+
+// scanAt is scan as of now (--now).
+func scanAt(t *testing.T, now time.Time, db, mailmap, scope string, paths ...string) *gitcli.Runner {
 	t.Helper()
 	ctx := t.Context()
 	git, err := gitcli.New(ctx, gitcli.Config{MailmapFile: mailmap})
@@ -1597,7 +1801,7 @@ func scan(t *testing.T, db, mailmap, scope string, paths ...string) *gitcli.Runn
 	// The store is both ports, as internal/cli hands it over: the scan reads
 	// the GitHub data a sync left in the replica (seedSolo).
 	_, err = app.Scan(ctx, app.Deps{Git: git, Store: store, ForgeStore: store, Policy: p, Version: "test"},
-		app.ScanRequest{Paths: paths, Now: fixture.Now, Rank: ranks, Scope: scope})
+		app.ScanRequest{Paths: paths, Now: now, Rank: ranks, Scope: scope})
 	if cerr := store.Close(); err == nil {
 		err = cerr
 	}
@@ -1756,12 +1960,27 @@ func openDB(db string) func(context.Context) (domain.FactStore, error) {
 	}
 }
 
+// openEgress opens the egress record at path, as internal/cli does.
+func openEgress(path string) func(context.Context) (domain.EgressLedger, error) {
+	return func(ctx context.Context) (domain.EgressLedger, error) {
+		e, err := sqlite.OpenEgress(ctx, path)
+		if err != nil {
+			return nil, err
+		}
+		return e, nil
+	}
+}
+
 // connect serves cfg on one end of an in-memory transport and returns an
 // SDK client session on the other. A budget other than 0 replaces the
-// server's answer budget.
+// server's answer budget. A cfg without an egress record gets one of its
+// own, as the command line gives every server one.
 func connect(t *testing.T, cfg Config, budget int) *sdk.ClientSession {
 	t.Helper()
 	ctx := t.Context()
+	if cfg.Egress == nil {
+		cfg.Egress = openEgress(filepath.Join(t.TempDir(), "egress.db"))
+	}
 	s := newServer(cfg)
 	if budget != 0 {
 		s.budget = budget
