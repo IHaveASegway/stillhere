@@ -30,7 +30,7 @@ go install github.com/IHaveASegway/stillhere/cmd/stillhere@main     # the newest
 GOPROXY=direct go install github.com/IHaveASegway/stillhere/cmd/stillhere@main
 ```
 
-When `go env GONOPROXY` (or `GOPRIVATE`, when `GONOPROXY` is unset) matches the module, as a company's `GOPRIVATE=github.com/*` does, `go install` always fetches it that way, with your git and without the checksum database, so the first command works unchanged as long as git can read github.com over HTTPS: a `url."git@github.com:".insteadOf` rule in your git config sends it over SSH instead, which needs your key. `stillhere version` prints the commit a binary was built from.
+When `go env GONOPROXY` (or `GOPRIVATE`, when `GONOPROXY` is unset) matches the module, as a company's `GOPRIVATE=github.com/*` does, `go install` always fetches it that way, with your git (and, under `GOPRIVATE`, without the checksum database), so the first command works unchanged as long as git can read github.com over HTTPS: a `url."git@github.com:".insteadOf` rule in your git config sends it over SSH instead, which needs your key. `stillhere version` prints the commit a binary was built from.
 
 `go install` puts the binary in `$(go env GOBIN)` when that is set, else in `$(go env GOPATH)/bin` (`~/go/bin` by default). Or build it from a checkout, which also stamps the commit and the build date into `stillhere version`:
 
