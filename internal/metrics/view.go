@@ -92,6 +92,10 @@ type repoView struct {
 	landings []*landingView       // in FactSet order
 	files    map[string]*fileView // prod paths with surviving lines at HEAD
 	owners   []ownerRow           // blamed lines on paths with a role at HEAD, credited
+	// reverts are the revert links at landing grain (markReverts): each
+	// landing a revert commit is in, with the other landing whose commits
+	// it reverts. A pair that cancels inside one landing is none.
+	reverts [][2]*landingView
 }
 
 // commitView is one commit of the history, with its credit and counts.
@@ -324,7 +328,49 @@ func (r *repoView) markReverts(reverts []domain.Revert) {
 			}
 			b.reverted, xl.reverted = true, true
 		}
+		if xl != l {
+			r.reverts = append(r.reverts, [2]*landingView{l, xl})
+		}
 	}
+}
+
+// LandingReverts is one repository's revert links at landing grain, as the
+// change metrics read them (markReverts, #43), each list sorted and
+// holding a landing once.
+type LandingReverts struct {
+	// Reverts maps a landing to the other landings whose commits a revert
+	// commit it brought names.
+	Reverts map[string][]string
+	// RevertedBy maps a landing to the landings whose revert commits name
+	// one of its commits. A branch that took back its own commit before it
+	// landed reverts nothing that landed, so it is in neither map.
+	RevertedBy map[string][]string
+}
+
+// Reverts returns the revert links at landing grain of the repository
+// with key among in's facts; none for one whose collection failed or that
+// in lacks. It is the one reading of the run's links (domain.Revert) at
+// that grain, which MCP's changes renders as reverts and reverted_by.
+func Reverts(in *Input, key string) (LandingReverts, error) {
+	v, err := newView(in, func(f *domain.RepoFacts) bool { return f.Repo.Key == key })
+	if err != nil {
+		return LandingReverts{}, err
+	}
+	out := LandingReverts{Reverts: map[string][]string{}, RevertedBy: map[string][]string{}}
+	for _, r := range v.repos {
+		for _, link := range r.reverts {
+			from, to := link[0].sha, link[1].sha
+			out.Reverts[from] = append(out.Reverts[from], to)
+			out.RevertedBy[to] = append(out.RevertedBy[to], from)
+		}
+	}
+	for _, m := range []map[string][]string{out.Reverts, out.RevertedBy} {
+		for sha, shas := range m {
+			slices.Sort(shas)
+			m[sha] = slices.Compact(shas)
+		}
+	}
+	return out, nil
 }
 
 // brought returns what commit c stands for in landing l, whose map holds

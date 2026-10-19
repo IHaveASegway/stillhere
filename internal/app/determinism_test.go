@@ -121,6 +121,41 @@ func TestDeterminism(t *testing.T) {
 	sameBytes(t, "report's JSON of a run whose review_coverage@1 and surviving@1 values lack via_other_branch and "+
 		"merged_365d, and the scan's", render(t, withoutTimings(m)).json, a.json)
 
+	// A run a stillhere before reverts at commit grain (#43) stored holds
+	// the three change metrics' values without reverts_left_out, scored at
+	// landing grain, and rank intervals drawn from those clusters. Its
+	// readers compute the three again from its facts, with landed@2 and
+	// review_coverage@1, whose copy rule reads reverts, and rank both
+	// ranked metrics again: its report is the scan's, so MCP's changes
+	// cannot credit a cluster to someone its person answer says holds no
+	// value. explain prints each value's detail, which the report does not.
+	aiAssisted := domain.MetricID{Name: "ai_assisted", Version: 1}
+	explained := func() []byte {
+		var out []byte
+		for _, q := range []struct {
+			id  domain.MetricID
+			sub domain.Subject
+		}{
+			{durable, person("ada@example.com")}, {simplifying, person("ada@example.com")},
+			{aiAssisted, domain.Subject{Kind: domain.SubjectRepo, Key: first.model.Repos[0].Key}},
+		} {
+			out = append(out, render(t, first.explain(t, q.id, q.sub)).json...)
+		}
+		return out
+	}
+	asScanned := explained()
+	for _, id := range []domain.MetricID{durable, simplifying, aiAssisted} {
+		forgetDetail(t, first.db, first.run, id, "reverts_left_out")
+	}
+	if m, err = app.Report(t.Context(), first.read, app.ReportRequest{RunID: first.run}); err != nil {
+		t.Fatalf("app.Report of a run stored before reverts at commit grain: %v", err)
+	}
+	old := render(t, withoutTimings(m))
+	sameBytes(t, "report's JSON of a run whose change metrics' values lack reverts_left_out, and the scan's", old.json, a.json)
+	sameBytes(t, "report's text of a run whose change metrics' values lack reverts_left_out, and the scan's", old.text, a.text)
+	sameBytes(t, "explain's JSON of durable@1, simplifying@1 and ai_assisted@1 in a run whose values lack "+
+		"reverts_left_out, and in the scan's", explained(), asScanned)
+
 	// A run a stillhere older than landed@2 and review_coverage@1 stored
 	// holds no value of either. Its readers compute them from its facts,
 	// so its report is the scan's, what landed and review coverage
@@ -131,7 +166,7 @@ func TestDeterminism(t *testing.T) {
 	if m, err = app.Report(t.Context(), first.read, app.ReportRequest{RunID: first.run}); err != nil {
 		t.Fatalf("app.Report of a run without landed@2: %v", err)
 	}
-	old := render(t, withoutTimings(m))
+	old = render(t, withoutTimings(m))
 	sameBytes(t, "report's JSON of a run that holds no landed@2 or review_coverage@1 value, and the scan's", old.json, a.json)
 	sameBytes(t, "report's text of a run that holds no landed@2 or review_coverage@1 value, and the scan's", old.text, a.text)
 
@@ -619,5 +654,60 @@ func forgetMetric(t *testing.T, db string, run int64, id domain.MetricID) {
 	exec(`DROP TABLE remap`)
 	if err := tx.Commit(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// landingGrainReverts makes run's revert links in the facts.db at db what a
+// stillhere before #43 stored: each names, as its revert end, the landing
+// whose map holds the revert commit, the merge for one a merge brought in,
+// and two links of one landing to one commit are one. It fails the test
+// when no link names a commit a merge brought in, which would leave the
+// case checking nothing.
+func landingGrainReverts(t *testing.T, s *scanned) {
+	t.Helper()
+	ctx := t.Context()
+	fs := s.facts(t)
+	raw, err := sql.Open("sqlite", s.db+"?_busy_timeout=10000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = raw.Close() }()
+	moved := 0
+	for _, rf := range fs.Repos {
+		landingOf := map[string]string{}
+		for _, l := range rf.Landings {
+			for _, sha := range l.Commits {
+				landingOf[sha] = l.SHA
+			}
+		}
+		seen := map[domain.Revert]bool{}
+		var links []domain.Revert
+		for _, rv := range rf.Reverts {
+			if l, ok := landingOf[rv.SHA]; ok && l != rv.SHA {
+				rv.SHA = l
+				moved++
+			}
+			if !seen[rv] {
+				seen[rv] = true
+				links = append(links, rv)
+			}
+		}
+		var repo int64
+		if err := raw.QueryRowContext(ctx, `SELECT id FROM run_repos WHERE run_id = ? AND repo_key = ?`,
+			s.run, rf.Repo.Key).Scan(&repo); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := raw.ExecContext(ctx, `DELETE FROM reverts WHERE repo_id = ?`, repo); err != nil {
+			t.Fatal(err)
+		}
+		for i, rv := range links {
+			if _, err := raw.ExecContext(ctx, `INSERT INTO reverts (repo_id, seq, sha, reverted) VALUES (?, ?, ?, ?)`,
+				repo, i, rv.SHA, rv.Reverted); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if moved == 0 {
+		t.Fatalf("run %d holds no revert link by a commit a merge brought in, so this case checks nothing", s.run)
 	}
 }

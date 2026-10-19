@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"reflect"
 	"slices"
@@ -773,18 +774,57 @@ func backdatedGuard(t *testing.T) {
 // #43's reverts at commit grain: a branch that took back one of its own
 // commits before it merged keeps the work it kept in durable@1, and a merge
 // that brings a revert beside new work keeps the new work in
-// simplifying@1.
+// simplifying@1. A git revert -m 1 of a merged branch reverts every commit
+// the merge brought in, and a merge whose own message carries its revert
+// commit's line is no revert of the new work beside it. A run stored before
+// #43, whose links name the landing, reads every landing that brought a
+// revert whole, as it was scored, and its values are computed again.
 func mergedRevertGuard(t *testing.T) {
 	s := scan(t, "", nil, scanRanked(fixture.MergedRevert(t)))
 	r := onlyRepo(t, s.model)
-	if got := r.Card.Landings.History; got != 9 {
-		t.Errorf("SPEC regression guards, merged revert: %d landings in the history window, want 9 (D1, M1, N1, MB, X2, M2, N2, X3 and M3)", got)
+	if got := r.Card.Landings.History; got != 11 {
+		t.Errorf("SPEC regression guards, merged revert: %d landings in the history window, want 11 (D1, M1, N1, MB, X2, M2, "+
+			"N2, X3, M3, MT and MR)", got)
 	}
 	sameRows(t, "SPEC regression guards, merged revert, revert landing → reverted landing", revertLinks(t, onlyFacts(t, s)), map[string]string{
 		"2026-01-26T12:00:00Z": "2026-01-12T12:00:00Z", // M1 lands R1, which reverts D1
 		"2026-03-23T12:00:00Z": "2026-03-23T12:00:00Z", // MB lands RP, which reverts P1, in its own map
 		"2026-08-17T12:00:00Z": "2026-08-03T12:00:00Z", // M2 lands R2, which reverts X2
 		"2026-09-21T12:00:00Z": "2026-08-31T12:00:00Z", // M3 lands R3, which reverts X3, beside W3
+		"2026-10-01T12:00:00Z": "2026-09-24T12:00:00Z", // MR lands RT, which reverts MT, beside W5; MR's own line gives way
+	})
+	// MCP's changes renders the same links at landing grain, as the change
+	// metrics read them (metrics.Reverts): MB, whose branch took back its
+	// own commit, reverts nothing that landed and is reverted by nothing.
+	ch, err := app.Changes(t.Context(), s.read, app.ChangesRequest{RunID: s.run, Since: scanWindow.Since})
+	if err != nil {
+		t.Fatalf("app.Changes: %v", err)
+	}
+	when := map[string]string{}
+	for _, c := range ch.Changes {
+		when[c.Landing] = rfc3339(c.Time)
+	}
+	links := map[string]string{}
+	for _, c := range ch.Changes {
+		for name, shas := range map[string][]string{"reverts": c.Reverts, "reverted_by": c.RevertedBy} {
+			if len(shas) > 0 {
+				var at []string
+				for _, sha := range shas {
+					at = append(at, when[sha])
+				}
+				links[rfc3339(c.Time)+" "+name] = strings.Join(at, ", ")
+			}
+		}
+	}
+	sameRows(t, "SPEC regression guards, merged revert, MCP changes' reverts and reverted_by", links, map[string]string{
+		"2026-01-26T12:00:00Z reverts":     "2026-01-12T12:00:00Z", // M1 → D1
+		"2026-01-12T12:00:00Z reverted_by": "2026-01-26T12:00:00Z",
+		"2026-08-17T12:00:00Z reverts":     "2026-08-03T12:00:00Z", // M2 → X2
+		"2026-08-03T12:00:00Z reverted_by": "2026-08-17T12:00:00Z",
+		"2026-09-21T12:00:00Z reverts":     "2026-08-31T12:00:00Z", // M3 → X3
+		"2026-08-31T12:00:00Z reverted_by": "2026-09-21T12:00:00Z",
+		"2026-10-01T12:00:00Z reverts":     "2026-09-24T12:00:00Z", // MR → MT
+		"2026-09-24T12:00:00Z reverted_by": "2026-10-01T12:00:00Z",
 	})
 	// Rex's reverts and Wes's reverted landings count for no one, and P1,
 	// which its branch took back, counts with its revert for nothing: Ola
@@ -799,22 +839,88 @@ func mergedRevertGuard(t *testing.T) {
 	})
 	// M3 brought Rex's revert of X3, which removes 4 lines, and W3, which
 	// removes none: Rex has a cluster of 0 removed, where the landing as a
-	// whole gave him none and his revert counted would give him 4.
+	// whole gave him none and his revert counted would give him 4. MR
+	// brought RT, his revert of MT, which removes 7, and W5, which removes
+	// 2: a cluster of 2, where MR's own line taken for a revert of all it
+	// brought would give him none. RT reverts MT, a merge: T1 and T2, which
+	// it brought, are reverted, so Tia and Uri have no value.
 	checkSimplifying(t, s, r.Key, "SPEC regression guards, merged revert, simplifying@1", map[string]simplifyingRow{
 		"nia@example.com": {"Nia Normal", 0, 0, 1, false, false},
-		"rex@example.com": {"Rex Revert", 0, 0, 1, false, false},
+		"rex@example.com": {"Rex Revert", 2, 0, 2, false, false},
 	}, map[string]map[string]cluster{
-		"nia@example.com": {"2026-08-24T12:00:00Z": {}}, // N2
-		"rex@example.com": {"2026-09-21T12:00:00Z": {}}, // W3, landed by M3
+		"nia@example.com": {"2026-08-24T12:00:00Z": {}},                                 // N2
+		"rex@example.com": {"2026-09-21T12:00:00Z": {}, "2026-10-01T12:00:00Z": {2, 0}}, // W3 by M3, W5 by MR
+	})
+	// reverts_left_out: Ola's RP and P1, which cancel in the cohort, and
+	// Rex's R2, R3 and RT in the window. Every value carries it, 0 too.
+	sameRows(t, "SPEC regression guards, merged revert, reverts_left_out", revertsLeftOut(t, s, r.Key), map[string]int{
+		"durable@1 nia@example.com":     0,
+		"durable@1 ola@example.com":     2,
+		"simplifying@1 nia@example.com": 0,
+		"simplifying@1 rex@example.com": 3,
 	})
 	// surviving@1 excludes no commit: blame gives R1's 4 restored lines and
-	// rex.py's 3 to Rex, ola.py's 2 to Ola, and Nia holds legacy_5 and
-	// legacy_6 from U0, nia.py's 3 and nia_w.py's 1.
+	// rex_1, which W5 left of rex.py, to Rex, ola.py's 2 to Ola, and Nia
+	// holds legacy_5 and legacy_6 from U0, nia.py's 3 and nia_w.py's 1.
 	checkSurviving(t, "SPEC regression guards, merged revert, surviving@1", r, map[string]int{
-		"rex@example.com": 7,
+		"rex@example.com": 5,
 		"nia@example.com": 6,
 		"ola@example.com": 2,
 	})
+
+	// A run stored before #43 linked each revert by the landing whose map
+	// holds the revert commit, and its change values carry no
+	// reverts_left_out. A merge as a link's revert end stands for all it
+	// brought in, so MB, M3 and MR read whole, as they were scored: Ola and
+	// Rex have no value. Its readers compute the change metrics again from
+	// those facts and rank them again, so no page shows the new scan's
+	// values beside what explain lists, and the log says to scan again.
+	landingGrainReverts(t, s)
+	for _, id := range []domain.MetricID{durable, simplifying, {Name: "ai_assisted", Version: 1}} {
+		forgetDetail(t, s.db, s.run, id, "reverts_left_out")
+	}
+	var logs bytes.Buffer
+	old := *s
+	old.read = readDeps(s.store, slog.New(slog.NewTextHandler(&logs, nil)))
+	m, err := app.Report(t.Context(), old.read, app.ReportRequest{RunID: s.run})
+	if err != nil {
+		t.Fatalf("app.Report of the run with its reverts at landing grain: %v", err)
+	}
+	old.model = m
+	checkDurable(t, &old, r.Key, "SPEC regression guards, merged revert, a run stored before #43, durable@1", map[string]durableRow{
+		"nia@example.com": {"Nia Normal", 3, 3, 1, 0, false},
+	}, map[string]map[string]cluster{
+		"nia@example.com": {"2026-02-09T12:00:00Z": {3, 3}}, // N1
+	})
+	checkSimplifying(t, &old, r.Key, "SPEC regression guards, merged revert, a run stored before #43, simplifying@1", map[string]simplifyingRow{
+		"nia@example.com": {"Nia Normal", 0, 0, 1, false, false},
+	}, map[string]map[string]cluster{
+		"nia@example.com": {"2026-08-24T12:00:00Z": {}}, // N2
+	})
+	for _, want := range []string{"computed again", "which commit a merge brought in was the revert", "scan again"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("SPEC regression guards, merged revert: reading a run stored before #43 logged %q, want it to say %q",
+				logs.String(), want)
+		}
+	}
+}
+
+// revertsLeftOut returns durable@1's and simplifying@1's Detail
+// reverts_left_out in repository key, by "metric email", as the run stored
+// them; a value without the key fails the test.
+func revertsLeftOut(t *testing.T, s *scanned, key string) map[string]int {
+	t.Helper()
+	out := map[string]int{}
+	for _, id := range []domain.MetricID{durable, simplifying} {
+		for email, v := range s.stored(t, id, domain.Scope{Kind: domain.ScopeRepo, Key: key}) {
+			n, ok := v.Detail["reverts_left_out"]
+			if !ok {
+				t.Errorf("%s's %s value has no reverts_left_out", email, id)
+			}
+			out[id.String()+" "+email] = int(n)
+		}
+	}
+	return out
 }
 
 // The two versions of what landed, whose values the landed oracles read as

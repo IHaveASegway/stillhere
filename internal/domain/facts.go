@@ -157,12 +157,16 @@ type FileChange struct {
 
 // Revert links a revert commit to the commit it reverts, both by full SHA.
 // SHA is the commit whose message carries "This reverts commit <sha>.", a
-// commit of a window landing's map, and Reverted the commit it names. A
-// merge as SHA stands for the commits it brought in (metrics: the revert
-// rule). A run stored before 2026-10-19 (#43) names the landing whose map
-// holds the revert commit instead: that is the revert commit itself for a
-// squash, rebase or direct revert, and the merge for a revert a merge
-// brought in, so such a run reads at landing grain, as it was scored.
+// commit of a window landing's map, and Reverted the commit it names; a
+// merge's own line is linked only when no non-merge commit of its landing
+// repeats it (collect.History). A merge as SHA stands for the commits it
+// brought in (metrics: the revert rule). A run stored before 2026-10-19 (#43) names
+// the landing whose map holds the revert commit instead: that is the
+// revert commit itself for a squash, rebase or direct revert, and the
+// merge for a revert a merge brought in. Its change metrics' values carry
+// no reverts_left_out, so its readers compute them again from these links
+// (metrics.Corrected), where such a merge reads whole: its facts do not
+// say which commit the merge brought was the revert.
 type Revert struct{ SHA, Reverted string }
 
 // LineOwner is how many non-blank lines blame attributes to one commit in

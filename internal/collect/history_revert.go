@@ -45,11 +45,11 @@ var historyRevertLine = regexp.MustCompile(`(?m)^This reverts commit ([0-9a-f]{7
 // commit it names with git cat-file --batch-check, and dropped when it
 // names none or several.
 func (h *historyRun) readReverts(ctx context.Context) error {
-	mapped := make(map[string]bool) // the commits of the window landings' maps
+	landingOf := make(map[string]string) // a commit of a window landing's map → that landing
 	var want []string
 	for _, landing := range h.landings {
 		for _, sha := range h.maps[landing] {
-			mapped[sha] = true
+			landingOf[sha] = landing
 			want = append(want, sha)
 		}
 	}
@@ -74,7 +74,7 @@ func (h *historyRun) readReverts(ctx context.Context) error {
 			if !ok || !historySHA(sha) {
 				return errors.New("malformed revert record")
 			}
-			if !mapped[sha] {
+			if _, ok := landingOf[sha]; !ok {
 				return fmt.Errorf("git log --no-walk printed commit %s, which it was not given", sha)
 			}
 			for _, m := range historyRevertLine.FindAllStringSubmatch(message, -1) {
@@ -106,6 +106,24 @@ func (h *historyRun) readReverts(ctx context.Context) error {
 		}
 		h.reverts = append(h.reverts, domain.Revert{SHA: l.commit, Reverted: name})
 	}
+	// A merge whose own message carries the line names what a commit of its
+	// landing already reverts: GitHub writes a pull request's description
+	// into its merge commit under the "pull request title and description"
+	// setting, and fills a one-commit pull request's description from that
+	// commit's message. The commit's link is the finer one, so the merge's
+	// gives way, and a revert pull request that gained other commits keeps
+	// them (#43). A merge is the revert of all it brought in only when no
+	// non-merge commit of its landing names the commit it names.
+	type named struct{ landing, reverted string }
+	byCommit := make(map[named]bool) // a landing whose map holds a non-merge commit naming reverted
+	for _, rv := range h.reverts {
+		if !h.merge(rv.SHA) {
+			byCommit[named{landingOf[rv.SHA], rv.Reverted}] = true
+		}
+	}
+	h.reverts = slices.DeleteFunc(h.reverts, func(rv domain.Revert) bool {
+		return h.merge(rv.SHA) && byCommit[named{landingOf[rv.SHA], rv.Reverted}]
+	})
 	slices.SortFunc(h.reverts, func(a, b domain.Revert) int {
 		return cmp.Or(strings.Compare(a.SHA, b.SHA), strings.Compare(a.Reverted, b.Reverted))
 	})
@@ -146,4 +164,10 @@ func (h *historyRun) resolveCommits(ctx context.Context, names []string) (map[st
 		}
 	}
 	return full, nil
+}
+
+// merge reports whether sha is a merge commit of the history collected.
+func (h *historyRun) merge(sha string) bool {
+	c := h.commits[sha]
+	return c != nil && len(c.commit.Parents) > 1
 }

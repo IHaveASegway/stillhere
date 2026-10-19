@@ -413,6 +413,22 @@ func Overview(ctx context.Context, d Deps, r OverviewRequest) (*OverviewAnswer, 
 			a.Ranks = append(a.Ranks, t)
 		}
 	}
+	// The answer says how far its rank tables' metrics are validated, once,
+	// as the whole run's does through its report's caveats: each table
+	// carries its verdict as fields (validity, reference), and the MCP
+	// server leaves the table's own validity caveat out.
+	var ranked []string
+	for _, t := range a.Ranks {
+		ranked = append(ranked, t.Metric)
+	}
+	if len(ranked) > 0 {
+		slices.Sort(ranked)
+		validity, err := mcpValidity(slices.Compact(ranked)...)
+		if err != nil {
+			return nil, err
+		}
+		a.Caveats = append(slices.Clip(a.Caveats), validity...)
+	}
 	// metrics lists every number's (docs/spec/mcp.md), as the whole run's
 	// above does by listing every metric of its report. The scope's own provenance names only its overview's or
 	// its card's, so add those of the repositories the answer holds, each
@@ -563,8 +579,13 @@ func Changes(ctx context.Context, d Deps, r ChangesRequest) (*ChangesAnswer, err
 	}
 	person := strings.ToLower(strings.TrimSpace(r.Person))
 	a := &ChangesAnswer{Scope: mcpReportScope(r.Scope), Window: report.Interval{Since: window.Since, Until: window.Until}}
+	in := s.input()
 	for _, rf := range repos {
-		for _, ch := range mcpRepoChanges(s, rf, opt) {
+		links, err := metrics.Reverts(in, rf.Repo.Key)
+		if err != nil {
+			return nil, fmt.Errorf("reading the reverts of %q: %w", rf.Repo.Name, err)
+		}
+		for _, ch := range mcpRepoChanges(s, rf, links, opt) {
 			if person == "" || ch.credits(person) {
 				a.Changes = append(a.Changes, ch)
 			}
@@ -672,30 +693,14 @@ type mcpChangeOptions struct {
 	me       string // ChangesRequest.Me: whose own entries carry the AI-assisted tag
 }
 
-// mcpRepoChanges returns one repository's landings in the window as changes.
-func mcpRepoChanges(s *stored, rf *domain.RepoFacts, opt mcpChangeOptions) []Change {
+// mcpRepoChanges returns one repository's landings in the window as changes,
+// with its revert links at landing grain as the change metrics read them
+// (metrics.Reverts): a branch that reverted its own commit before it landed
+// reverts nothing that landed (#43).
+func mcpRepoChanges(s *stored, rf *domain.RepoFacts, links metrics.LandingReverts, opt mcpChangeOptions) []Change {
 	commits := make(map[string]*domain.Commit, len(rf.Commits))
 	for i := range rf.Commits {
 		commits[rf.Commits[i].SHA] = &rf.Commits[i]
-	}
-	landingOf := map[string]string{} // commit SHA → the landing that brought it in
-	for _, l := range rf.Landings {
-		for _, sha := range mcpLandingCommits(l) {
-			landingOf[sha] = l.SHA
-		}
-	}
-	// A revert link names the revert commit (#43), whose landing reverts the
-	// landing of the commit it names; a branch that reverted its own commit
-	// before it landed reverts nothing that landed, so that pair is left out,
-	// as the change metrics cancel it.
-	reverts, revertedBy := map[string][]string{}, map[string][]string{}
-	for _, rv := range rf.Reverts {
-		from, ok := landingOf[rv.SHA]
-		target, found := landingOf[rv.Reverted]
-		if ok && found && from != target {
-			reverts[from] = append(reverts[from], target)
-			revertedBy[target] = append(revertedBy[target], from)
-		}
 	}
 	var out []Change
 	for _, l := range rf.Landings {
@@ -705,8 +710,8 @@ func mcpRepoChanges(s *stored, rf *domain.RepoFacts, opt mcpChangeOptions) []Cha
 		shas := mcpLandingCommits(l)
 		ch := Change{
 			Repo: rf.Repo.Name, RepoKey: rf.Repo.Key, Landing: l.SHA, Time: l.Time, Merge: l.Merge, Commits: len(shas),
-			Reverts:    mcpSortedUnique(reverts[l.SHA]),
-			RevertedBy: mcpSortedUnique(revertedBy[l.SHA]),
+			Reverts:    links.Reverts[l.SHA],
+			RevertedBy: links.RevertedBy[l.SHA],
 		}
 		if c := commits[l.SHA]; c != nil {
 			if opt.titles {
@@ -762,15 +767,6 @@ func mcpLandingCommits(l domain.Landing) []string {
 		return []string{l.SHA}
 	}
 	return l.Commits
-}
-
-func mcpSortedUnique(ss []string) []string {
-	if len(ss) == 0 {
-		return nil
-	}
-	out := slices.Clone(ss)
-	slices.Sort(out)
-	return slices.Compact(out)
 }
 
 // mcpScopeRepos returns the repositories of a stored run in scope, in key
@@ -866,7 +862,12 @@ type TopTier struct {
 	Window   report.Interval `json:"window"`
 	Percent  bool            `json:"percent"` // a ratio: estimates are shares
 	MinN     int             `json:"min_n"`   // the eligibility threshold
-	Of       int             `json:"of"`      // eligible people in the table
+	// Validity and Reference are its metric's, as its rank table carries
+	// them (report.RankTable): the beta mark and the reference verdict
+	// stand beside the people the tier names (wave 12).
+	Validity  string            `json:"validity"`
+	Reference *report.Reference `json:"reference"`
+	Of        int               `json:"of"` // eligible people in the table
 	// PeopleTotal counts the eligible people whose 95% rank interval
 	// reaches first place.
 	PeopleTotal int `json:"people_total"`
@@ -943,6 +944,7 @@ func Highlights(ctx context.Context, d Deps, r HighlightsRequest) (*HighlightsAn
 		t := TopTier{
 			Metric: set.Metric.ID, Question: set.Metric.Question, Scope: report.Scope{Kind: set.Scope.Kind, Key: set.Scope.Key},
 			Window: report.Interval{Since: set.Window.Since, Until: set.Window.Until}, Percent: set.Percent, MinN: set.MinN,
+			Validity: set.Metric.Validity, Reference: set.Metric.Reference,
 		}
 		tierHi, restLo := 0, 0 // the tier's lowest place, and the best place anyone else could take; 0: none
 		for _, ri := range set.Intervals {

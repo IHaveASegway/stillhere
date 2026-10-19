@@ -72,7 +72,9 @@ type HistoryFacts struct {
 	// squash, rebase or direct revert, or, for a revert merged with a merge
 	// commit, the side-branch commit the merge brought in (#43: commit
 	// grain). A landing that brought in a commit and its revert holds both
-	// ends of the link.
+	// ends of the link. A merge whose own message carries the line is
+	// linked only when no non-merge commit of its landing names the same
+	// commit: a commit's link is the finer one (readReverts).
 	Reverts []domain.Revert
 	// Warnings holds shallow-window when a shallow clone's history ends
 	// inside what the window needs, and other-refs-unread (WarnOtherRefs)

@@ -757,6 +757,20 @@ func RankValidity(t *RankTable) string {
 	return ""
 }
 
+// CaveatsButValidity are rank table t's caveats without its validity line
+// (RankValidity), whose words its Validity and Reference fields carry: what
+// a reader that sends those fields lists beside them, as the MCP server's
+// rank tables do, so the verdict is stated once per table.
+func (t *RankTable) CaveatsButValidity() []Caveat {
+	out := make([]Caveat, 0, len(t.Caveats)) // a list, never null, in JSON
+	for _, c := range t.Caveats {
+		if c.Code != codeValidity {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
 // validityNote is ValidityNote over a metric's note and reference.
 func validityNote(validity string, r *Reference) string {
 	if r == nil {

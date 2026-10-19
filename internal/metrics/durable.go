@@ -41,7 +41,8 @@ func (durableV1) Definition() Definition {
 			"a merge brought whose patch id a commit of an earlier landing has, which is not its ancestor, as git cherry " +
 			"compares: its original is scored), revert commits and the commits a revert in their own landing takes back are " +
 			"excluded, so the rest of a landing that brings a revert counts; a commit a later landing's revert names stays " +
-			"and scores what blame gives it. Detail: reverted_landings, the person's clusters holding such a commit.",
+			"and scores what blame gives it. Detail: reverted_landings, the person's clusters holding such a commit, and " +
+			"reverts_left_out, their revert commits and commits their own landing took back in the cohort.",
 		Ratio:       true,
 		Ranked:      true,
 		Subjects:    []string{domain.SubjectPerson},
@@ -83,10 +84,12 @@ func (durableV1) compute(v *view) ([]domain.MetricValue, error) {
 		}
 	}
 	w := v.window(cohortFrom, cohortTo)
+	left := revertsLeftOut(v, w, true, false)
 	out := make([]domain.MetricValue, 0, len(accs))
 	for k, a := range accs {
 		out = append(out, ratio(durableID, k.scope, personSubject(k.email), w, a.surviving, a.added, a.n, map[string]float64{
-			"reverted_landings": float64(a.reverted),
+			"reverted_landings":  float64(a.reverted),
+			detailRevertsLeftOut: float64(left[k]),
 		}))
 	}
 	return sorted(out), nil

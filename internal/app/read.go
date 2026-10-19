@@ -176,13 +176,18 @@ func withForge(ctx context.Context, d Deps, run domain.Run, fs *domain.FactSet) 
 // before #108 and #107, whose report would otherwise print "nothing landed"
 // over a run full of landings. It does the same for a metric whose stored
 // values a correction in place made old (metrics.Corrected, the one list):
-// it drops them, computes the metric again, and returns its id in
-// corrected, and in lacks what the run never kept that the corrected
-// definition counts (a run stored before activity off the default branch
-// kept no commit of another ref), so the log says to scan again. Without
-// it a page would show the old value beside what the new rule lists:
-// explain's review_coverage@1 share above its changes, or a knowledge loss
-// of 100% beside each holder's last activity and who-knows' 29.8%. The old
+// it drops them, and the rank intervals the run stored of a ranked one,
+// computes the metric again (rankAll draws its intervals again from the
+// clusters as they are read), and returns its id in corrected, and in
+// lacks what the run never kept that the corrected definition counts (a
+// run stored before activity off the default branch kept no commit of
+// another ref; one stored before reverts moved to commit grain, #43, which
+// commit a merge brought in was the revert), so the log says to scan
+// again. Without it a page would show the old value beside what the new
+// rule lists: explain's review_coverage@1 share above its changes, a
+// knowledge loss of 100% beside each holder's last activity and who-knows'
+// 29.8%, or a simplifying@1 cluster MCP's changes credits to someone its
+// person answer says holds no value. The old
 // run is told by its data, not by a version: a metric's function over the
 // same inputs gives what a scan by this binary stores, as rankAll
 // bootstraps a rank table the run did not store
@@ -197,10 +202,19 @@ func (s *stored) computeUnstored() (computed, corrected, lacks []string, err err
 	for _, v := range s.values {
 		held[v.Metric] = true
 	}
-	stale := map[domain.MetricID]string{} // what the run lacks for the correction, "" for nothing
-	for _, c := range metrics.Corrected(s.values) {
-		for _, id := range append([]domain.MetricID{c.Metric}, c.With...) {
-			stale[id] = c.Lacks
+	// What the run lacks for each correction, "" for nothing: a metric's
+	// own row says it, and one of With the run holds values of is computed
+	// again with it.
+	stale := map[domain.MetricID]string{}
+	corrections := metrics.Corrected(s.values)
+	for _, c := range corrections {
+		stale[c.Metric] = c.Lacks
+	}
+	for _, c := range corrections {
+		for _, id := range c.With {
+			if _, own := stale[id]; !own && held[id] {
+				stale[id] = ""
+			}
 		}
 	}
 	var added []domain.MetricValue
@@ -235,6 +249,11 @@ func (s *stored) computeUnstored() (computed, corrected, lacks []string, err err
 		slices.SortStableFunc(s.values, func(a, b domain.MetricValue) int {
 			return cmp.Or(cmp.Compare(a.Metric.Name, b.Metric.Name), cmp.Compare(a.Metric.Version, b.Metric.Version))
 		})
+		// A ranked metric computed again is ranked again: its stored
+		// intervals bootstrapped the old clusters, and rankAll draws the
+		// ones a run does not hold from the clusters as they are read, as
+		// a scan by this binary would store them.
+		s.ranks = slices.DeleteFunc(slices.Clone(s.ranks), func(ri domain.RankInterval) bool { _, old := stale[ri.Metric]; return old })
 	}
 	return computed, corrected, lacks, nil
 }

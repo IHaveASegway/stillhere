@@ -573,7 +573,8 @@ func (s *shaper) repoDetail(r report.Repo) report.Repo {
 // interval, the people below the minimum sample, and bots apart, each list
 // cut to the answer's rows, with its metric's validity and reference result
 // (report.RankTable's), so the verdict travels with the order it qualifies
-// (wave 12).
+// (wave 12). Those fields say what the report's validity caveat says, so
+// its caveats leave that one out (RankTable.CaveatsButValidity).
 type rankTableOut struct {
 	Metric        string            `json:"metric"`
 	Question      string            `json:"question"`
@@ -596,7 +597,7 @@ type rankTableOut struct {
 func (s *shaper) rankTable(t report.RankTable, n named) rankTableOut {
 	out := rankTableOut{
 		Metric: t.Metric, Question: t.Question, Scope: t.Scope, Window: t.Window, Percent: t.Percent, MinN: t.MinN,
-		Validity: t.Validity, Reference: t.Reference, Caveats: t.Caveats,
+		Validity: t.Validity, Reference: t.Reference, Caveats: t.CaveatsButValidity(),
 	}
 	if s.f.detailed {
 		pv := s.f.provenance(t.Provenance, n)

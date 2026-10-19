@@ -146,8 +146,10 @@ days: 365)` lists them.
   metric's reference result, a model panel's (three AI models that labelled
   public changes without seeing any metric value: evidence, not a lead's
   judgment), as a verdict such as "does not separate meaningful from routine
-  changes" with its numbers. A rank table carries the same as fields,
-  `validity` and `reference.verdict`. Quote the verdict word for word with any
+  changes" with its numbers. A rank table carries the same in two fields,
+  `validity` and `reference` (its `verdict` is the words to quote), and so
+  does each `highlights` top tier; a `person` answer's ranks carry it only
+  as its `validity` caveat. Quote the verdict word for word with any
   rank you report from that metric, rather than from memory: it changes when
   the panel runs again. You cannot label for the user: labels are
   a person's judgment of colleagues' work, and only a lead's count.

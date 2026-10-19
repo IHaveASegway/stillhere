@@ -48,6 +48,58 @@ func (c *commitView) counts() bool {
 	return !c.merge && !c.ignored && !c.copy && !c.revert && !c.withdrawn
 }
 
+// leftOut reports whether the revert rule alone keeps c out of a change
+// metric (markReverts, #43): a commit that is no merge, ignore-revs commit
+// or copy, but is a revert commit, or one a revert in its own landing took
+// back, or, with dropReverted (simplifying@1's rule), one a later landing's
+// revert names.
+func (c *commitView) leftOut(dropReverted bool) bool {
+	return !c.merge && !c.ignored && !c.copy && (c.revert || c.withdrawn || (dropReverted && c.reverted))
+}
+
+// detailRevertsLeftOut is the Detail key of every value of the change
+// metrics, durable@1's and simplifying@1's per person and ai_assisted@1's
+// per repository and group: the commits the revert rule left out
+// (revertsLeftOut, aiCohorts). Every value carries it, 0 included, so a run
+// stored before reverts moved to commit grain, whose values lack it, is
+// told by its data (corrections).
+const detailRevertsLeftOut = "reverts_left_out"
+
+// changeRepo reports whether the change metrics read repository r's
+// commits in w: its history holds their patches and covers w, and, with
+// needLines, blame ran in it, so its surviving lines are known.
+func (r *repoView) changeRepo(w domain.Window, needLines bool) bool {
+	return r.patches && (!needLines || r.lines) && r.covers(w)
+}
+
+// revertsLeftOut counts, per scope and person, their commits in the
+// landings of w that the revert rule leaves out (commitView.leftOut), in
+// the repositories changeClusters reads: durable@1's and simplifying@1's
+// Detail reverts_left_out. A person whose commits are all left out has no
+// value to carry it.
+func revertsLeftOut(v *view, w domain.Window, needLines, dropReverted bool) map[personKey]int {
+	out := make(map[personKey]int)
+	for _, r := range v.repos {
+		if !r.changeRepo(w, needLines) {
+			continue
+		}
+		for _, l := range r.landings {
+			if !w.Contains(l.time) {
+				continue
+			}
+			for _, c := range l.commits {
+				if !c.leftOut(dropReverted) {
+					continue
+				}
+				for _, s := range r.scopes {
+					out[personKey{s, c.credit}]++
+				}
+			}
+		}
+	}
+	return out
+}
+
 // changeClusters returns the clusters of the landings in w, in repository,
 // landing and person order, of the commits that count (commitView.counts).
 // A reverted commit counts unless dropReverted, which is how simplifying@1
@@ -61,7 +113,7 @@ func (c *commitView) counts() bool {
 func changeClusters(v *view, w domain.Window, needLines, dropReverted bool) []*cluster {
 	var out []*cluster
 	for _, r := range v.repos {
-		if !r.patches || (needLines && !r.lines) || !r.covers(w) {
+		if !r.changeRepo(w, needLines) {
 			continue
 		}
 		for _, l := range r.landings {

@@ -24,8 +24,9 @@ func (aiAssistedV1) Definition() Definition {
 		Unit: "Landings in [now - 365d, now). Per AI-assisted landing (subject change, scope repo): Value 1. Per repository and " +
 			"group (subject repo or group): the AI-assisted share of the landings, with the cohort comparisons durable_ai and " +
 			"durable_other (durable@1's Σ surviving / Σ added over the clusters of tagged and untagged landings), their cluster " +
-			"counts durable_ai_n and durable_other_n, and reverted_ai and reverted_other (the landings among each holding a " +
-			"commit a later landing's revert names). Per " +
+			"counts durable_ai_n and durable_other_n, reverted_ai and reverted_other (the landings among each holding a " +
+			"commit a later landing's revert names), and reverts_left_out (the revert commits of the landings and the commits " +
+			"their own landing took back, which no cohort counts). Per " +
 			"person (repository, group and all), on request only (metrics.PersonalAIShare, for that person's own page; never " +
 			"computed by a scan): the share of their clusters, over non-merge commits, in which one of their own commits is " +
 			"AI-assisted.",
@@ -172,15 +173,22 @@ func aiPersonShare(v *view, w domain.Window, email string) []domain.MetricValue 
 }
 
 // aiCohorts compares AI-assisted landings with the rest in one population.
+// leftOut counts the commits of its landings the revert rule leaves out of
+// durable@1's clusters (commitView.leftOut), its Detail reverts_left_out.
 type aiCohorts struct {
 	landings, ai                       int
-	revertedAI, revertedOther          int
+	revertedAI, revertedOther, leftOut int
 	aiSurviving, aiAdded, aiN          int
 	otherSurviving, otherAdded, otherN int
 }
 
 func (c *aiCohorts) addLanding(l *landingView) {
 	c.landings++
+	for _, k := range l.commits {
+		if k.leftOut(false) {
+			c.leftOut++
+		}
+	}
 	switch {
 	case l.ai:
 		c.ai++
@@ -211,10 +219,11 @@ func (c *aiCohorts) addDurable(k *cluster) {
 // has no cluster.
 func (c *aiCohorts) value(s domain.Scope, sub domain.Subject, w domain.Window) domain.MetricValue {
 	detail := map[string]float64{
-		"reverted_ai":     float64(c.revertedAI),
-		"reverted_other":  float64(c.revertedOther),
-		"durable_ai_n":    float64(c.aiN),
-		"durable_other_n": float64(c.otherN),
+		"reverted_ai":        float64(c.revertedAI),
+		"reverted_other":     float64(c.revertedOther),
+		"durable_ai_n":       float64(c.aiN),
+		"durable_other_n":    float64(c.otherN),
+		detailRevertsLeftOut: float64(c.leftOut),
 	}
 	if c.aiAdded > 0 {
 		detail["durable_ai"] = float64(c.aiSurviving) / float64(c.aiAdded)
