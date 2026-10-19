@@ -65,10 +65,17 @@ func Week(ctx context.Context, d Deps, r WeekRequest) (*report.Model, error) {
 		}
 		timings.MetricsMS = time.Since(start).Milliseconds()
 	}
+	// The week's identity candidates, over its own facts: its caveat names a
+	// shared display name only when they link two of its emails, as a
+	// scan's does (wave 11).
+	var candidates []identity.Candidate
+	if produced(fs) {
+		candidates = identity.Candidates(fs, who).Candidates
+	}
 	finish(timings, started)
 	model := report.Build(&report.Input{
 		Kind: report.KindWeek, Tool: d.Version, Facts: fs, Policy: d.Policy, Who: who,
-		Values: values, Landed: landed, History: window, Timings: timings,
+		Values: values, Landed: landed, History: window, Timings: timings, Candidates: candidates,
 	})
 	if !produced(fs) {
 		return model, domain.ErrNoFacts

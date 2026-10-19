@@ -47,6 +47,14 @@ func Paths(ctx context.Context, d Deps, r PathsRequest) (*report.Paths, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading run %d's facts: %w", run.ID, err)
 	}
+	if d.ForgeStore != nil && r.Repo != "" {
+		// The names the run's GitHub data gives a repository, which --repo
+		// matches as who-knows' does (MatchRepos, wave 11): no number here
+		// reads it.
+		if fs, _, _, err = withForge(ctx, d, run, fs); err != nil {
+			return nil, err
+		}
+	}
 	repo, err := repoArg(fs, run.ID, r.Repo)
 	if err != nil {
 		return nil, err

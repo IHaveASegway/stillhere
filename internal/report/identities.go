@@ -336,8 +336,9 @@ const identIntro = "addresses that may belong to one person, with the evidence, 
 	"applies none. This page names no address and no part of one, as no text or Markdown page does: an address " +
 	"is shown by its number and the kind of its domain (the main domain, which most of the scope's addresses " +
 	"use; GitHub noreply; a machine's; or another, lettered when a candidate has several), and a display name " +
-	"that gives an address away is withheld. --format mailmap prints the .mailmap lines, and --format json the " +
-	"addresses."
+	"that gives an address away is withheld. Commits are those in this run: its history and the older commits " +
+	"blame credits lines to, not every commit of the address. --format mailmap prints the .mailmap lines, and " +
+	"--format json the addresses."
 
 // identSummary is "11 addresses of people in 1 repository, 1 bot or agent
 // left out · 2 candidates", and the hand-off guesses apart: "· 7
@@ -463,11 +464,13 @@ func identAddressName(a IdentityAddress, esc func(string) string) string {
 	return identPerson(a.Name, esc)
 }
 
-// identAddressText is "main domain · Ada Example · 2 commits · 2026-01-01 →
-// 2026-01-05 · fixture · canonical", or, for Mailmap, the same with the
-// email itself first.
+// identAddressText is "main domain · Ada Example · 2 commits in this run ·
+// 2026-01-01 → 2026-01-05 · fixture · canonical", or, for Mailmap, the same
+// with the email itself first. The commits are the run's (round 3's KT-5:
+// a bare "390 commits" beside a range back to 2012 read as the address's
+// whole history, where git log counted 1,577), which identIntro says.
 func identAddressText(a IdentityAddress, label string, pv Provenance, esc func(string) string) string {
-	parts := []string{label, identAddressName(a, esc), plural(a.Commits, "commit", "commits")}
+	parts := []string{label, identAddressName(a, esc), plural(a.Commits, "commit", "commits") + " in this run"}
 	if a.CoAuthored > 0 {
 		parts[2] += ", co-author of " + plural(a.CoAuthored, "commit", "commits")
 	}
@@ -826,7 +829,7 @@ func (id *Identities) writeMarkdown(p *printer) {
 		p.blank()
 		p.line(fmt.Sprintf("## %d. %s", i+1, identTitle(c, mdText, false)))
 		p.blank()
-		cols := []column{{head: "#", right: true}, {head: "Domain"}, {head: "Name"}, {head: "Commits", right: true},
+		cols := []column{{head: "#", right: true}, {head: "Domain"}, {head: "Name"}, {head: "Commits in this run", right: true},
 			{head: "Co-authored", right: true}, {head: "First"}, {head: "Last"}, {head: "Repositories"}, {head: "Canonical"}}
 		labels := identLabels(c)
 		var rows [][]string

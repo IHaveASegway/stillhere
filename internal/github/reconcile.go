@@ -236,7 +236,8 @@ func planMoves(found []mirrorAt, want map[string]string, owners map[string]bool)
 			case i == keep && m.stale:
 				moves = append(moves, domain.MirrorMove{Repo: id, From: m.path, To: target, Reason: domain.MirrorRestored})
 			case i == keep:
-				moves = append(moves, domain.MirrorMove{Repo: id, From: m.path, To: target, Reason: domain.MirrorRenamed})
+				was := m.owner + "/" + strings.TrimSuffix(filepath.Base(m.path), ".git")
+				moves = append(moves, domain.MirrorMove{Repo: id, From: m.path, To: target, Reason: domain.MirrorRenamed, Was: was})
 			case !m.stale:
 				moves = append(moves, domain.MirrorMove{Repo: id, From: m.path, Reason: domain.MirrorDuplicate})
 			}

@@ -302,7 +302,7 @@ func mdRepo(p *printer, m *Model, r *Repo) {
 		where = append(where, "group "+mdText(r.Group))
 	}
 	if r.Head != "" {
-		where = append(where, mdCode(r.Branch)+" @ "+mdCode(short(r.Head)))
+		where = append(where, mdCode(r.Branch)+" @ "+mdCode(short(r.Head))+" "+branchNote(r, mdCode))
 	}
 	where = append(where, "status "+mdText(r.Status))
 	if r.Remote != "" {

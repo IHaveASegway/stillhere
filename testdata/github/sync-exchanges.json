@@ -184,9 +184,9 @@
     "body": "sync-links.json"
   },
   {
-    "name": "S21 run 6, a first sync into a fresh facts.db D: look the repository up",
+    "name": "S21 run 6, a first sync into a fresh facts.db D, asked for by an old name: GitHub answers with the repository under its current one, acme/widget",
     "operation": "Repo",
-    "variables": {"owner": "acme", "name": "widget"},
+    "variables": {"owner": "old-acme", "name": "widget"},
     "status": 200,
     "headers": {"Date": "Fri, 09 Oct 2026 05:00:00 GMT"},
     "body": "sync-repo.json"

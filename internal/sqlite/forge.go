@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/IHaveASegway/stillhere/internal/domain"
@@ -28,7 +29,12 @@ import (
 var _ domain.ForgeStore = (*Store)(nil)
 
 // PutForgeRepos upserts the repositories a sync is about to bring up to
-// date, by ID.
+// date, by ID, with the aliases this sync learned of them
+// (ForgeRepo.Aliases, migration 11): each name resolves to one repository,
+// the one that last answered to it, and a repository's own name is no
+// alias of any, so storing a repository deletes the alias row of its name.
+// Aliases a sync did not learn this time are kept: GitHub's redirect does
+// not end until another repository takes the name.
 func (s *Store) PutForgeRepos(ctx context.Context, repos []domain.ForgeRepo) error {
 	return s.forgeTx(ctx, "storing forge repositories", func(tx *sql.Tx) error {
 		stmt, err := tx.PrepareContext(ctx, `
@@ -45,6 +51,21 @@ ON CONFLICT (id) DO UPDATE SET
 			if _, err := stmt.ExecContext(ctx, r.ID, r.Key, r.Owner, r.Name, r.DefaultBranch,
 				forgeFlag(r.Archived), forgeFlag(r.Fork)); err != nil {
 				return fmt.Errorf("repository %s/%s: %w", r.Owner, r.Name, err)
+			}
+		}
+		for _, r := range repos {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM forge_repo_aliases WHERE name = ?`,
+				strings.ToLower(r.Owner+"/"+r.Name)); err != nil {
+				return fmt.Errorf("repository %s/%s: %w", r.Owner, r.Name, err)
+			}
+		}
+		for _, r := range repos {
+			for _, a := range r.Aliases {
+				if _, err := tx.ExecContext(ctx, `
+INSERT INTO forge_repo_aliases (name, repo) VALUES (?, ?)
+ON CONFLICT (name) DO UPDATE SET repo = excluded.repo`, strings.ToLower(a), r.ID); err != nil {
+					return fmt.Errorf("repository %s/%s, alias %s: %w", r.Owner, r.Name, a, err)
+				}
 			}
 		}
 		return nil
@@ -419,6 +440,27 @@ SELECT id, key, owner, name, default_branch, archived, fork FROM forge_repos ORD
 	}
 	if len(f.Repos) == 0 {
 		return nil, nil
+	}
+	// Each repository's aliases (migration 11), sorted, a name some
+	// repository holds now left out: GitHub resolves it to that one.
+	byID := make(map[string]int, len(f.Repos))
+	own := make(map[string]bool, len(f.Repos))
+	for i, r := range f.Repos {
+		byID[r.ID] = i
+		own[strings.ToLower(r.Owner+"/"+r.Name)] = true
+	}
+	if err := forgeRows(ctx, tx, `SELECT repo, name FROM forge_repo_aliases ORDER BY repo, name`,
+		nil, func(rows *sql.Rows) error {
+			var repo, name string
+			if err := rows.Scan(&repo, &name); err != nil {
+				return err
+			}
+			if i, ok := byID[repo]; ok && !own[name] {
+				f.Repos[i].Aliases = append(f.Repos[i].Aliases, name)
+			}
+			return nil
+		}); err != nil {
+		return nil, err
 	}
 	if err := forgeRows(ctx, tx, `SELECT repo, `+forgeMarkSelect+` FROM forge_watermarks ORDER BY repo`,
 		nil, func(rows *sql.Rows) error {

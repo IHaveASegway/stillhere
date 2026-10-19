@@ -103,17 +103,19 @@ func Scan(ctx context.Context, d Deps, r ScanRequest) (*report.Model, error) {
 	if d.ForgeStore != nil {
 		fs.Forge, watermarks = runForge(fs.Repos, replica)
 		forge = forgeRead(watermarks)
+		forgeNameWarnings(fs.Repos, fs.Forge, replica)
 	}
 	// After the run's GitHub data: it links forge logins to the run's people.
 	who := identity.New(fs, d.Policy)
 	landed := report.Landed{Days: d.Policy.Week.Days, Sort: d.Policy.Week.Sort}
 	var activity map[string]domain.Activity // each person's last activity, once the metrics are computed
+	var candidates []identity.Candidate     // the run's identity candidates, once they are found
 	build := func(run *domain.Run, values []domain.MetricValue, sets []report.RankSet) *report.Model {
 		finish(timings, started)
 		return report.Build(&report.Input{
 			Kind: report.KindScan, Tool: d.Version, Run: run, Facts: fs, Policy: d.Policy, Who: who,
 			Values: values, Ranks: sets, Landed: landed, History: window, Timings: timings, Scope: scope,
-			Forge: forge, Activity: activity,
+			Forge: forge, Activity: activity, Candidates: candidates,
 		})
 	}
 	if !produced(fs) {
@@ -125,6 +127,7 @@ func Scan(ctx context.Context, d Deps, r ScanRequest) (*report.Model, error) {
 	// people holding lines merge in their Detail, so every page that shows
 	// them can say how far an unmerged identity moves them (#104).
 	survey := identity.Candidates(fs, who)
+	candidates = survey.Candidates
 	d.Log.Debug("identity candidates", "addresses", survey.Addresses, "candidates", len(survey.Candidates))
 	in := &metrics.Input{Facts: fs, Policy: d.Policy, Who: who, Days: d.Policy.Week.Days, Candidates: survey.Candidates}
 	values, err := metrics.Compute(in)
@@ -354,6 +357,100 @@ func runForge(repos []domain.RepoFacts, replica *domain.ForgeFacts) (*domain.For
 	slices.SortFunc(own.Watermarks, func(a, b domain.ForgeWatermark) int { return cmp.Compare(a.Repo, b.Repo) })
 	slices.SortFunc(watermarks, func(a, b domain.RunWatermark) int { return cmp.Compare(a.Repo, b.Repo) })
 	return own, watermarks
+}
+
+// The warnings a scan gives a repository whose origin names a GitHub
+// repository by a name GitHub moved it from (round 3's KT-2).
+const (
+	// warnForgeMoved: the origin names an old name of the forge repository
+	// its GitHub data was joined by (domain.ForgeRepo.Aliases).
+	warnForgeMoved = "forge-moved"
+	// warnForgeUnmatched: no forge repository is the repository's, while
+	// the replica holds one of its name under another owner.
+	warnForgeUnmatched = "forge-unmatched"
+)
+
+// forgeNameWarnings gives each collected repository whose origin names a
+// GitHub repository by another name than the replica's a warning, which
+// the run keeps and every section with its numbers says (its card's
+// caveats): forge-moved when the run's join (own, runForge's) took its
+// GitHub data by a name GitHub moved the repository from, with the command
+// that names it as GitHub does now; and
+// forge-unmatched when no forge repository joined it while the replica
+// holds one of the same name under another owner, which no other
+// repository of the run is a clone of, as a sync that copied
+// the repository under its new name before GitHub's move was recorded
+// leaves it, with the sync that records the move. Round 3's KT-2: a clone
+// of a moved repository, scanned with 535 pull requests synced under its
+// new owner's name, showed no review coverage and said nothing.
+func forgeNameWarnings(repos []domain.RepoFacts, own, replica *domain.ForgeFacts) {
+	if replica == nil {
+		return
+	}
+	joined := map[string]domain.ForgeRepo{} // Repo.Key → the forge repository joined to it
+	if own != nil {
+		for _, r := range own.Repos {
+			for _, key := range own.Join[r.ID] {
+				joined[key] = r
+			}
+		}
+	}
+	for i := range repos {
+		rf := &repos[i]
+		origin, ok := domain.RemoteRepo(rf.Repo.Remote)
+		if rf.Status == domain.RepoStatusError || !ok {
+			continue
+		}
+		host, path, _ := strings.Cut(origin, "/")
+		var w domain.Warning
+		if r, ok := joined[rf.Repo.Key]; ok {
+			now, _ := domain.RemoteRepo(r.Key)
+			if now == origin {
+				continue
+			}
+			w = domain.Warning{Code: warnForgeMoved, Message: fmt.Sprintf("Its origin names %s, which GitHub now calls "+
+				"%s/%s: the GitHub data synced under that name is this repository's, joined by the old name, which GitHub "+
+				"resolves to it. 'git remote set-url origin %s' names it as GitHub does, before another repository can take "+
+				"the old name and end GitHub's redirect.", path, r.Owner, r.Name, r.Key)}
+		} else {
+			_, name, _ := strings.Cut(path, "/")
+			var same, keys []string
+			for _, r := range replica.Repos {
+				// One the run joined to another of its repositories is that
+				// repository's, whose own clone the run holds: this one is
+				// then a fork, not the clone of a moved repository.
+				if own != nil && len(own.Join[r.ID]) > 0 {
+					continue
+				}
+				if have, ok := domain.RemoteRepo(r.Key); ok && strings.HasPrefix(have, host+"/") &&
+					strings.EqualFold(r.Name, name) {
+					same = append(same, r.Owner+"/"+r.Name)
+					keys = append(keys, r.Key)
+				}
+			}
+			if len(same) == 0 {
+				continue
+			}
+			slices.Sort(same)
+			remote := ""
+			if len(keys) == 1 {
+				remote = fmt.Sprintf(" (or 'git remote set-url origin %s' names it as GitHub does)", keys[0])
+			}
+			w = domain.Warning{Code: warnForgeUnmatched, Message: fmt.Sprintf("No GitHub data in facts.db is this "+
+				"repository's: its origin names %s, while facts.db holds %s. If GitHub moved the repository there, "+
+				"'stillhere sync github --repo %s' records the move and the next scan joins it%s; a fork is another "+
+				"repository, whose own name a sync copies.", path, joinNames(same), path, remote)}
+		}
+		rf.Warnings = repoWarnings(rf.Repo, rf.Warnings, []domain.Warning{w})
+	}
+}
+
+// joinNames is "a", "a and b", "a, b and c": names in a sentence.
+func joinNames(names []string) string {
+	if len(names) < 2 {
+		return strings.Join(names, "")
+	}
+	return strings.Join(names[:len(names)-1], ", ") + " and " + names[len(names)-1]
 }
 
 // forgeRead dates a run's GitHub data for the report: one ForgeSync for

@@ -52,6 +52,23 @@ var namesHistory = []struct {
 	{namesDay(time.March, 15), "Root Builder <root@buildbox>", "root.py", 2, ""},
 	{namesDay(time.March, 13), "Your Name <you@corp.example>", "yours.py", 2, ""},
 	{namesDay(time.March, 14), "Your Name <you@mail.example>", "yours2.py", 2, ""},
+	// Wave 11: a person who changed user.name from a handle to their full
+	// name, whose newest name is theirs though the handle has more commits
+	// (round 3's org F11: week, which reads a week, showed the new name and
+	// scan, which reads a year, the old one); and a person a later
+	// Co-authored-by trailer spells otherwise, whose own name stays (Ruby
+	// F11). A name counts by its commits, not its lines, so they hold one
+	// line each, below every row the text table's first 10 must show.
+	{namesDay(time.March, 16), "klane42 <kit@corp.example>", "kit1.py", 0, ""},
+	{namesDay(time.March, 17), "klane42 <kit@corp.example>", "kit2.py", 0, ""},
+	{namesDay(time.March, 18), "Kit Lane <kit@corp.example>", "kit3.py", 1, ""},
+	{namesDay(time.March, 19), "Pat Doe <pat@corp.example>", "pat.py", 1, ""},
+	{namesDay(time.March, 20), "Sam Same <sam@corp.example>", "pair.py", 0,
+		"feat: add pair.py\n\nCo-authored-by: pd <pat@corp.example>"},
+	// A name a person and a team's info mailbox share, which no identity
+	// rule links, so the caveat counts it apart (round 3's TS F10).
+	{namesDay(time.March, 21), "Lee Role <lee@corp.example>", "lee.py", 1, ""},
+	{namesDay(time.March, 22), "Lee Role <info@corp.example>", "info.py", 1, ""},
 	// A bot whose name is an address, and one whose name is its own
 	// noreply login, which is shown.
 	{namesDay(time.October, 2), "renovate@corp.example <renovate@corp.example>", "renovate.py", 1, ""},
@@ -181,6 +198,10 @@ func displayNames(t *testing.T) {
 		"you@corp.example":        {"Your Name", false},
 		"you@mail.example":        {"Your Name", false},
 		"root@buildbox":           {"Root Builder", false},
+		"kit@corp.example":        {"Kit Lane", false},
+		"pat@corp.example":        {"Pat Doe", false},
+		"lee@corp.example":        {"Lee Role", false},
+		"info@corp.example":       {"Lee Role", false},
 		"renovate@corp.example":   {"", true},
 		"49699333+dependabot[bot]@users.noreply.github.com": {"dependabot[bot]", false},
 	})
@@ -191,10 +212,15 @@ func displayNames(t *testing.T) {
 	// is counted. who-knows, which lists both Sams as owners, says so too,
 	// and of the whole repository it gives the card's knowledge numbers, so
 	// it says, in the same caveat, what the card's says of the identity
-	// candidates who hold lines there (#104).
+	// candidates who hold lines there (#104). Lee's name, which a team's
+	// info mailbox shares, is counted apart: identities compares no role
+	// address, so it suggests no line (wave 11, round 3's TS F10).
 	const unmerged = `2 display names belong to more than one email and were not merged: "SAM SAME." and 1 name withheld ` +
 		`because it gives an address away. If the emails of a name are one person, a .mailmap line merges them: ` +
-		`'stillhere identities' suggests the lines, with the evidence for each.`
+		`'stillhere identities' suggests the lines, with the evidence for each. 1 more display name belongs to more ` +
+		`than one email, but no identity rule links their emails (an address several people use, such as a team or ` +
+		`info mailbox, two GitHub accounts, or a name more than 10 addresses carry), so 'stillhere identities' ` +
+		`suggests no line for them: their numbers stay apart, as two people's would.`
 	messages := func(caveats []report.Caveat) []string {
 		var got []string
 		for _, c := range caveats {

@@ -142,42 +142,63 @@ func appAccount(key string) bool {
 // commits the forge attributes to it, as forgeLinkReader reads a link, over
 // every link the run holds (the pull requests' own commits and merge
 // commits, and the links of older pull requests and of the history's
-// author emails, ForgeFacts.Links), counting each commit once, the most
-// commits winning, then the smallest email. #117: one reading of a link
-// for every use, so a login the same-forge-account rule ties to an address
-// is that address's person here too, and a maintainer whose only commits
-// are older than the synced pull requests, or reached the branch outside
-// any, is not "@login" while they review. It returns nil without GitHub
-// data.
+// author emails, ForgeFacts.Links), counting each commit once. The address
+// that authored the most of those commits the run holds wins, then the one
+// GitHub read from the most commits the run does not hold, then the
+// smallest email. #117: one reading of a link for every use, so a login the
+// same-forge-account rule ties to an address is that address's person here
+// too, and a maintainer whose only commits are older than the synced pull
+// requests, or reached the branch outside any, is not "@login" while they
+// review.
+//
+// Wave 11 (round 3's Ruby F11): a squashed pull request's own commits are
+// not the run's, and GitHub's squash names their author in a
+// Co-authored-by trailer when that address is not the one the squash
+// commit is authored with. Counted alike, the two addresses tied at one
+// commit each, and the smaller email, the co-author's, named the pull
+// request's author by the trailer's name, which no other page showed: the
+// person every landing of theirs is credited to is the author of the
+// commits the run holds. It returns nil without GitHub data.
 func reviewerLogins(fs *domain.FactSet) map[string]string {
 	if fs == nil || fs.Forge == nil {
 		return nil
 	}
-	read := forgeLinkReader(fs)
+	read := newLinkReader(fs)
 	type vote struct{ login, sha string }
+	type count struct{ held, read int } // commits the run holds, and others GitHub read the email of
 	seen := map[vote]bool{}
-	votes := map[string]map[string]int{} // folded login → email → distinct commits
+	votes := map[string]map[string]*count{} // folded login → email → distinct commits
 	forgeCommits(fs, true, func(c domain.ForgeCommit) {
-		email, login, ok := read(c)
+		email, login, held, ok := read.link(c)
 		v := vote{login, c.SHA}
 		if !ok || seen[v] {
 			return
 		}
 		seen[v] = true
 		if votes[login] == nil {
-			votes[login] = map[string]int{}
+			votes[login] = map[string]*count{}
 		}
-		votes[login][email]++
+		n := votes[login][email]
+		if n == nil {
+			n = &count{}
+			votes[login][email] = n
+		}
+		if held {
+			n.held++
+		} else {
+			n.read++
+		}
 	})
 	if len(votes) == 0 {
 		return nil
 	}
 	out := make(map[string]string, len(votes))
 	for login, emails := range votes {
-		best, n := "", 0
-		for email, k := range emails {
-			if k > n || k == n && email < best {
-				best, n = email, k
+		best, top := "", count{}
+		for email, n := range emails {
+			if c := cmp.Or(cmp.Compare(n.held, top.held), cmp.Compare(n.read, top.read)); best == "" || c > 0 ||
+				c == 0 && email < best {
+				best, top = email, *n
 			}
 		}
 		out[login] = best
@@ -259,18 +280,32 @@ func forgeAccounts(fs *domain.FactSet) map[string][]string {
 // ("name[bot]") and a link to an address the facts never show count for
 // nothing.
 func forgeLinkReader(fs *domain.FactSet) func(c domain.ForgeCommit) (email, login string, ok bool) {
-	author := map[string]string{} // SHA → the run's canonical author email
-	known := map[string]bool{}    // every address the facts show, as author or co-author
+	r := newLinkReader(fs)
+	return func(c domain.ForgeCommit) (string, string, bool) {
+		email, login, _, ok := r.link(c)
+		return email, login, ok
+	}
+}
+
+// linkReader is forgeLinkReader's state: the run's author of each commit
+// it holds, and every address its facts show.
+type linkReader struct {
+	author map[string]string // SHA → the run's canonical author email
+	known  map[string]bool   // every address the facts show, as author or co-author
+}
+
+func newLinkReader(fs *domain.FactSet) *linkReader {
+	r := &linkReader{author: map[string]string{}, known: map[string]bool{}}
 	see := func(sha string, p domain.Person, co []domain.Person) {
 		if e := canonical(p.Email); e != "" {
-			known[e] = true
-			if _, ok := author[sha]; !ok {
-				author[sha] = e
+			r.known[e] = true
+			if _, ok := r.author[sha]; !ok {
+				r.author[sha] = e
 			}
 		}
 		for _, c := range co {
 			if e := canonical(c.Email); e != "" {
-				known[e] = true
+				r.known[e] = true
 			}
 		}
 	}
@@ -285,19 +320,23 @@ func forgeLinkReader(fs *domain.FactSet) func(c domain.ForgeCommit) (email, logi
 			see(o.Commit, o.Author, o.CoAuthors)
 		}
 	}
-	return func(c domain.ForgeCommit) (string, string, bool) {
-		login := foldLogin(c.AuthorLogin)
-		if login == "" || strings.HasSuffix(login, appSuffix) {
-			return "", "", false
-		}
-		email, ok := author[c.SHA]
-		if !ok {
-			if email = canonical(c.AuthorEmail); !known[email] {
-				return "", "", false
-			}
-		}
-		return email, login, true
+	return r
+}
+
+// link is forgeLinkReader's reading of c, and whether the address is the
+// run's own author of a commit it holds (held), rather than the email
+// GitHub read from one it does not.
+func (r *linkReader) link(c domain.ForgeCommit) (email, login string, held, ok bool) {
+	login = foldLogin(c.AuthorLogin)
+	if login == "" || strings.HasSuffix(login, appSuffix) {
+		return "", "", false, false
 	}
+	if email, held = r.author[c.SHA]; !held {
+		if email = canonical(c.AuthorEmail); !r.known[email] {
+			return "", "", false, false
+		}
+	}
+	return email, login, held, true
 }
 
 // KeptLinks returns, of links (the commit-to-account links of the pull

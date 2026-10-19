@@ -1242,7 +1242,7 @@ A pull request lands as its merge commit, and a rebase merge as the first-parent
 | B0 | 09-01 | Ann Base `<ann@example.com>` | `base.py` (2 lines), the root commit, pushed to `main` with no pull request |
 | R1 | 10-01, authored 09-28 | Rob Rebase `<rob@example.com>`, committed by GitHub | `one.py` (2 lines): the first of #1's two commits, rebased onto `main` |
 | R2 | 10-01, authored 09-29 | Rob, committed by GitHub | `two.py` (2 lines): #1's last commit, its merge commit, in the same second as R1 |
-| S1 | 10-02 | Ali Squash `<ali@example.com>`, committed by GitHub | `a.py` (2 lines): #2's squash commit |
+| S1 | 10-02 | Ali Squash `<ali@example.com>`, committed by GitHub, trailer `Co-authored-by: A. Squash <ali.squash@home.example>` (wave 11) | `a.py` (2 lines): #2's squash commit, which names #2's own commit's author, Ali under another address, as GitHub's squash does |
 | S2 | 10-02 | Bo Squash `<bo@example.com>`, committed by GitHub | `b.py` (2 lines): #3's squash commit, in the same second as S1, as a merge queue or a bot lands two pull requests |
 | A1 | 10-03 | Copilot `<198982749+Copilot@users.noreply.github.com>`, committed by GitHub, trailer `Co-authored-by: Rob Rebase <rob@example.com>` | `c.py` (2 lines): #4's squash commit, which the agent wrote for Rob, so `identity.Credit` gives it to him |
 
@@ -1251,11 +1251,11 @@ The replica is forge repository `R_merges` (`acme/merge-methods`), one page with
 | # | Author | Merged | Merge commit | Its commits | Reviews: login, state, submitted |
 | --- | --- | --- | --- | --- | --- |
 | 1 | rob | 10-01 12:00, rebase | R2, login rob | 2, as written before the rebase: not in the run | sam approved 10-01 09:00 |
-| 2 | ali | 10-02 12:00, squash | S1, login ali | 1, not in the run | rita approved 10-02 09:00 |
+| 2 | ali | 10-02 12:00, squash | S1, login ali | 1, not in the run, authored `ali.squash@home.example`, login ali | rita approved 10-02 09:00 |
 | 3 | bo | 10-02 12:00, squash | S2, login bo | 2, not in the run | tess approved 10-02 10:00 |
 | 4 | copilot-swe-agent, an app account (Bot) | 10-03 12:00, squash | A1, login Copilot | 1, not in the run | rob approved 10-03 09:00 |
 
-No commit of the replica is sam's, rita's or tess's, so they are `@sam`, `@rita` and `@tess`. #1 lands as R2 and R1: R1 is R2's first parent, shares its committer second and is no merge, and #1 has 2 commits. #3 has 2 commits too, and S1, its first parent, shares its committer second, but S1 is #2's merge commit: a landing that another pull request lands is not this one's, so #3 lands as S2 alone. #2 has 1 commit, so it lands as S1 alone.
+No commit of the replica is sam's, rita's or tess's, so they are `@sam`, `@rita` and `@tess`. GitHub links two addresses to ali, one commit each: `ali@example.com`, S1's author, a commit the run holds, and `ali.squash@home.example`, #2's own commit, which the run does not hold and whose address only S1's trailer shows. ali is `ali@example.com`, the author of the commits the run holds, named Ali Squash, as every page names the person S1 credits; the smaller email, the co-author's, named A. Squash only by the trailer, was the tie-break before wave 11 (round 3's Ruby F11). #1 lands as R2 and R1: R1 is R2's first parent, shares its committer second and is no merge, and #1 has 2 commits. #3 has 2 commits too, and S1, its first parent, shares its committer second, but S1 is #2's merge commit: a landing that another pull request lands is not this one's, so #3 lands as S2 alone. #2 has 1 commit, so it lands as S1 alone.
 
 | Path | Recent reviewers (pull requests) | Not listed |
 | --- | --- | --- |

@@ -84,7 +84,10 @@ func mergeMethodsHistory(b *builder) {
 	squashed := noon(2026, time.October, 2)
 	b.rowAs(squashed, ali, squashed, github) // S1: #2's merge commit
 	b.write("a.py", numbered("a", 2))
-	b.commit("feat: add a.py (#2)")
+	// Wave 11 (round 3's Ruby F11): #2's own commit was Ali's under another
+	// address, which GitHub's squash names in a trailer beside the address
+	// the squash is authored with, both Ali's account's.
+	b.commit("feat: add a.py (#2)\n\nCo-authored-by: A. Squash <ali.squash@home.example>")
 
 	b.rowAs(squashed, bo, squashed, github) // S2: #3's merge commit
 	b.write("b.py", numbered("b", 2))

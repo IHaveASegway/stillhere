@@ -1479,10 +1479,13 @@ func candPreferred(domains map[string]int, newest bool) func(a, b *candAddress) 
 // candName is the display name suggested for a candidate: the canonical
 // address's when it has two words or more, else the name of more words
 // another address carries (an address whose name is a login or a default
-// gets the person's full name), else the canonical address's own. A default
-// name, a shared address's, or one that gives away an address of the
-// candidate (RevealsAddress), is never suggested: with no other name, it is
-// "", and the line keeps each commit's own name.
+// gets the person's full name), else, when the canonical address authored
+// no commit and another address of as many words did, that one's (wave 11:
+// a name only Co-authored-by trailers carry is someone else's spelling, the
+// display-name rule's own preference), else the canonical address's own. A
+// default name, a shared address's, or one that gives away an address of
+// the candidate (RevealsAddress), is never suggested: with no other name,
+// it is "", and the line keeps each commit's own name.
 func candName(canon *candAddress, members []*candAddress) string {
 	// A shared address's name is one of several people's, so it names no one.
 	usable := func(a *candAddress) bool {
@@ -1509,7 +1512,8 @@ func candName(canon *candAddress, members []*candAddress) string {
 		}
 	}
 	if len(named) > 0 {
-		if best := slices.MinFunc(named, fuller); best.words > own {
+		best := slices.MinFunc(named, fuller)
+		if best.words > own || best.words == own && own > 0 && canon.Commits == 0 && best.Commits > 0 {
 			return best.Name
 		}
 	}

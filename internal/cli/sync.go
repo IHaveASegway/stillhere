@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -158,6 +159,16 @@ func printSyncSummary(w io.Writer, s *app.SyncSummary, interrupted bool) {
 		fmt.Fprintf(&b, ", %d not checked against GitHub's count", s.Unchecked)
 	}
 	fmt.Fprintf(&b, "; %s read in %s", plural(s.Pulls, "pull request", "pull requests"), s.Took.Round(time.Second))
+	// Round 3's KT-2: a sync of a moved repository read it under its new owner and
+	// said nothing, so a clone of the old name looked unsynced.
+	if n := len(s.Moved); n > 0 {
+		shown := s.Moved
+		if n > 3 {
+			shown = append(slices.Clone(s.Moved[:3]), fmt.Sprintf("%d more in the log", n-3))
+		}
+		fmt.Fprintf(&b, "; GitHub moved %s, whose clones of the old name get its data: %s",
+			plural(n, "repository", "repositories"), strings.Join(shown, ", "))
+	}
 	_, _ = fmt.Fprintln(w, b.String())
 }
 

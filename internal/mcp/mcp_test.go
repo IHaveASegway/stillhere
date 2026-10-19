@@ -440,6 +440,26 @@ func TestMCPTools(t *testing.T) {
 		if len(e.Values) != 1 || e.Values[0].Num != 4 || e.Values[0].Den != 34 {
 			t.Errorf("explain(knowledge_loss, fixture) %+v, want 4 of 34", e.Values)
 		}
+		// Round 3's KT-8: with no subject_kind, a scope_arg names its kind, as
+		// the tool's description says, and a metric never about a person reads
+		// a bare subject as the repository or group it names; one about people
+		// still reads it as a person, and one never about a person refuses a
+		// subject that names no scope with the kinds it answers about.
+		for _, subject := range []string{"repo:fixture", "fixture"} {
+			e = explainOut{}
+			decode(t, ask(t, "explain", map[string]any{"metric": "knowledge_loss", "subject": subject}), &e)
+			if len(e.Values) != 1 || e.Values[0].Num != 4 || e.Values[0].Den != 34 {
+				t.Errorf("explain(knowledge_loss, %q) with no subject_kind %+v, want the repository's 4 of 34", subject, e.Values)
+			}
+		}
+		if text := refused(t, "explain", map[string]any{"metric": "durable", "subject": "repo:fixture"}); !strings.Contains(text,
+			"durable@1 holds no value about a repository") {
+			t.Errorf("explain(durable, repo:fixture) was refused with %q, want durable@1 about a repository refused", text)
+		}
+		if text := refused(t, "explain", map[string]any{"metric": "knowledge_loss", "subject": "Lena Lead"}); !strings.Contains(text,
+			"knowledge_loss@1 holds no value about a person") || !strings.Contains(text, "subject_kind: repo") {
+			t.Errorf("explain(knowledge_loss, Lena Lead) was refused with %q, want the kinds it is about", text)
+		}
 		// A repository of many people shows its AI-assisted share, a lower
 		// bound.
 		decode(t, ask(t, "explain", map[string]any{"metric": "ai_assisted", "subject": "sibling", "subject_kind": "repo"}), &e)

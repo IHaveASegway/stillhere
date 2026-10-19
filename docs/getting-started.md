@@ -240,6 +240,8 @@ stillhere report --rank reviews_given
 
 Run step 4 again after the first sync: GitHub's own links from commits to accounts arrive with it, and they make most of the high-confidence merges (on honojs/hono, 4 lines before the sync and 18 after). Keep passing the same `--mailmap`, or the scan loses step 4's merges.
 
+Scanning your own clone instead of the mirrors works the same: its origin names the repository. If GitHub renamed the repository or moved it to another owner since you cloned it, sync it by the name your clone's origin holds (`stillhere sync github --repo old-owner/name`): GitHub answers with the repository under its new name, the sync records the move, and your clone's card says its GitHub data was joined by the old name, with the `git remote set-url` that names it as GitHub does. A card with a `forge-unmatched` caveat is one whose origin no synced repository matches while another owner's of the same name is in facts.db.
+
 The `reviews_given@1` table shows each reviewer's share of approvals with no comment beside the count, because rubber stamps count as reviews.
 
 ## 9. Ask from your agent

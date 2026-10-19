@@ -398,6 +398,21 @@ func knownCount(n *int) string {
 	return grouped(*n)
 }
 
+// branchNote says whose default branch a repository's branch is
+// (Repo.ForgeBranch, wave 11): GitHub's, as the run's GitHub data records
+// it, or the clone's own, with GitHub's beside it when the two differ, as a
+// clone whose origin/HEAD predates a change of default branch leaves them;
+// code prints a branch name in the page's way.
+func branchNote(r *Repo, code func(string) string) string {
+	switch r.ForgeBranch {
+	case "":
+		return "(the clone's default branch)"
+	case r.Branch:
+		return "(GitHub's default branch)"
+	}
+	return "(the clone's default branch; GitHub's is " + code(r.ForgeBranch) + ")"
+}
+
 // short abbreviates a full SHA for reading; JSON keeps the full one.
 func short(sha string) string {
 	if len(sha) > 7 {

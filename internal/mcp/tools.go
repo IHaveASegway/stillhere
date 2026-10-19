@@ -160,7 +160,8 @@ func (s *server) addTools(srv *sdk.Server) {
 			"person (default), repo, group, area or all; for an area, subject is the repository and path its top-level "+
 			"directory; all is the whole run's own numbers, over every repository, with no subject (landed and "+
 			"review_coverage). "+
-			"A repository or a group may be passed as overview's scope_arg gives it (repo:NAME, group:NAME). "+
+			"A repository or a group may be passed as overview's scope_arg gives it (repo:NAME, group:NAME), with no subject_kind; "+
+			"a metric never about a person (review_coverage, ai_assisted) reads a bare subject as a repository or a group. "+
 			"A metric about a kind of subject it has no values about is refused with the calls that answer instead: the "+
 			"ranked metrics (durable, simplifying, reviews_given) are about people, and overview with rank gives a "+
 			"repository's or a group's table of them; who_knows is computed per path by the who_knows tool, never stored. "+
@@ -545,8 +546,12 @@ func (s *server) explain(ctx context.Context, in explainIn) *sdk.CallToolResult 
 			return nil, &domain.UsageError{Msg: fmt.Sprintf(
 				"subject_kind %s needs subject: a repository's name for repo and area, a group's for group", in.SubjectKind)}
 		}
-		switch in.SubjectKind {
-		case "", domain.SubjectPerson:
+		kind, err := explainKind(id, in, r)
+		if err != nil {
+			return nil, err
+		}
+		switch kind {
+		case domain.SubjectPerson:
 			if report.OwnPageOnly(id) {
 				// A person's own AI-assisted share is shown only to them
 				// (ADR 0007), and explain is what anyone may read.
@@ -559,6 +564,11 @@ func (s *server) explain(ctx context.Context, in explainIn) *sdk.CallToolResult 
 				return nil, err
 			}
 			subject, who = domain.Subject{Kind: domain.SubjectPerson, Key: p.Key}, r.named(p)
+		case explainRefused:
+			// A metric with no person values, whose subject names no scope:
+			// app.Explain refuses the kind before it reads a run, naming
+			// the kinds its values are about and the calls that answer.
+			subject = domain.Subject{Kind: domain.SubjectPerson}
 		case domain.SubjectRepo, domain.SubjectArea:
 			rp, err := c.repo(ctx, in.Subject)
 			if err != nil {
@@ -614,6 +624,60 @@ func (s *server) explain(ctx context.Context, in explainIn) *sdk.CallToolResult 
 		}
 		return func(sh *shaper) (any, error) { return sh.explainAnswer(e, s.cfg.AllowSource), nil }, nil
 	})
+}
+
+// explainRefused is explainKind's kind for a subject it lets app.Explain
+// refuse: the metric holds no value about a person, and the subject names
+// no repository or group either.
+const explainRefused = "refused"
+
+// explainKind is the kind of subject an explain call is about: subject_kind
+// when it is given; else, when the subject is a scope_arg as overview gives
+// it (repo:NAME, group:NAME), that kind, as the tool's description says;
+// else, for a metric no scan stores a person's values of
+// (app.AboutPeople: review_coverage@1, ai_assisted@1), the repository or
+// group the subject names (the finder every scope argument goes through,
+// app.FindScopes), or explainRefused when it names none; else a person.
+// Round 3's KT-8: explain(review_coverage, "repo:NAME") answered that no
+// one was named "repo:NAME", and the person lookup's miss hid the refusal
+// that says to pass subject_kind repo.
+func explainKind(id domain.MetricID, in explainIn, r *resolver) (string, error) {
+	if in.SubjectKind != "" {
+		return in.SubjectKind, nil
+	}
+	subject := strings.TrimSpace(in.Subject)
+	if prefix, _, ok := strings.Cut(subject, ":"); ok {
+		switch strings.ToLower(prefix) {
+		case domain.ScopeRepo:
+			return domain.SubjectRepo, nil
+		case domain.ScopeGroup:
+			return domain.SubjectGroup, nil
+		}
+	}
+	people, err := app.AboutPeople(id, toolCommands{})
+	if err != nil || people {
+		return domain.SubjectPerson, err
+	}
+	// ai_assisted@1 about a person is refused for everyone, in words that
+	// say where the user's own share is (the person branch).
+	refused := explainRefused
+	if report.OwnPageOnly(id) {
+		refused = domain.SubjectPerson
+	}
+	if subject == "" {
+		return refused, nil
+	}
+	found := r.scopes(subject)
+	switch {
+	case len(found) == 0:
+		return refused, nil
+	case len(found) > 1:
+		_, err := r.scope(subject) // the choices, each with its scope_arg
+		return "", err
+	case found[0].Kind == domain.ScopeGroup:
+		return domain.SubjectGroup, nil
+	}
+	return domain.SubjectRepo, nil
 }
 
 // fewPeople refuses the AI-assisted share of a repository or a group that

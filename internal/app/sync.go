@@ -48,6 +48,12 @@ type SyncSummary struct {
 	Unchecked  int // synced, but the completeness check could not run
 	Pulls      int // pull requests read and stored, pages read twice included
 	Took       time.Duration
+	// Moved (wave 11, round 3's KT-2) names each move GitHub reported this
+	// sync, "old/name → new/name", sorted: a name --repo asked for that
+	// GitHub answered under another, or a mirror found under the name it
+	// had. A clone whose origin names the old one is joined by it
+	// (ForgeRepo.Aliases), and its scan says so.
+	Moved []string
 }
 
 // syncJobs bounds how many repositories sync at once: their mirrors fetch
@@ -158,12 +164,13 @@ func syncRepos(ctx context.Context, d Deps, r SyncRequest, listed []domain.Forge
 	// The mirrors follow the repositories this sync mirrors, before any
 	// fetch, so an archived repository's mirror leaves scan's way even when
 	// nothing else is left to sync (#110).
-	unmirrored := reconcileMirrors(ctx, d, r, owner, repos, left, log)
+	unmirrored, renamed := reconcileMirrors(ctx, d, r, owner, repos, left, log)
 	if len(repos) == 0 {
 		return domain.RunStatusFailed, fmt.Errorf(
 			"%s has no repository to sync (%d archived, %d forks, %d empty; see --include-archived and --include-forks): %w",
 			what, left.count(leftArchived), left.count(leftFork), left.count(leftEmpty), domain.ErrNoFacts)
 	}
+	sum.Moved = syncMoves(repos, renamed, log)
 	sum.Repos = len(repos)
 	if err := d.ForgeStore.PutForgeRepos(ctx, repos); err != nil {
 		return domain.RunStatusFailed, fmt.Errorf("storing the repositories of %s: %w", what, err)
@@ -237,7 +244,11 @@ func syncListing(ctx context.Context, d Deps, r SyncRequest) ([]domain.ForgeRepo
 		if err != nil {
 			return nil, "", fmt.Errorf("looking up %s: %w", redact.Scrub(name), err)
 		}
-		if !slices.ContainsFunc(listed, func(x domain.ForgeRepo) bool { return x.ID == fr.ID }) {
+		// Named twice, as its old name and its new one, it is synced once,
+		// with every name GitHub resolved to it.
+		if i := slices.IndexFunc(listed, func(x domain.ForgeRepo) bool { return x.ID == fr.ID }); i >= 0 {
+			listed[i].Aliases = mergeAliases(listed[i].Aliases, fr.Aliases)
+		} else {
 			listed = append(listed, fr)
 		}
 	}
@@ -302,8 +313,13 @@ func selectRepos(listed []domain.ForgeRepo, r SyncRequest, named bool) ([]domain
 // not be moved from, and a clone at its path would be a second copy, which
 // scan would count twice. When the mirrors cannot be taken stock of at all,
 // no repository is mirrored, for the same reason; pull requests still sync.
+//
+// It also returns, by ForgeRepo.ID, the name each renamed repository's
+// mirror was found under (MirrorMove.Was), whether or not it could move:
+// the node id says GitHub listed the repository under that name, and
+// resolves it to the repository now (ForgeRepo.Aliases).
 func reconcileMirrors(ctx context.Context, d Deps, r SyncRequest, owner string, mirrored []domain.ForgeRepo,
-	left leftOut, log *slog.Logger) map[string]error {
+	left leftOut, log *slog.Logger) (map[string]error, map[string][]string) {
 	moves, err := d.Forge.ReconcileMirrors(ctx, owner, mirrored, r.Mirrors)
 	if err != nil {
 		err = fmt.Errorf("taking stock of the mirrors: %w", err)
@@ -311,10 +327,17 @@ func reconcileMirrors(ctx context.Context, d Deps, r SyncRequest, owner string, 
 		for _, repo := range mirrored {
 			unmirrored[repo.ID] = err
 		}
-		return unmirrored
+		return unmirrored, nil
 	}
 	var unmirrored map[string]error
+	var renamed map[string][]string
 	for _, m := range moves {
+		if m.Reason == domain.MirrorRenamed && m.Was != "" {
+			if renamed == nil {
+				renamed = map[string][]string{}
+			}
+			renamed[m.Repo] = append(renamed[m.Repo], strings.ToLower(m.Was))
+		}
 		from, to := redact.Scrub(m.From), redact.Scrub(m.To)
 		attrs := []any{"reason", m.Reason, "from", from, "to", to}
 		if why, ok := left[m.Repo]; ok && m.Reason == domain.MirrorStale {
@@ -335,7 +358,45 @@ func reconcileMirrors(ctx context.Context, d Deps, r SyncRequest, owner string, 
 			}
 		}
 	}
-	return unmirrored
+	return unmirrored, renamed
+}
+
+// syncMoves adds to each repository the names GitHub resolved to it that
+// its mirror's old path held (renamed, by ForgeRepo.ID), beside those a
+// --repo lookup found (ForgeRepo.Aliases), so PutForgeRepos records them
+// all; logs each move; and returns them as the summary names them,
+// "old → new", sorted. A name that is the repository's own is no alias.
+func syncMoves(repos []domain.ForgeRepo, renamed map[string][]string, log *slog.Logger) []string {
+	var moved []string
+	for i := range repos {
+		r := &repos[i]
+		own := strings.ToLower(repoName(*r))
+		var names []string
+		for _, a := range mergeAliases(r.Aliases, renamed[r.ID]) {
+			if a != own {
+				names = append(names, a)
+			}
+		}
+		r.Aliases = names
+		for _, a := range names {
+			log.Info("GitHub moved the repository: a clone whose origin names the old name gets its GitHub data",
+				"was", a, "now", repoName(*r))
+			moved = append(moved, a+" → "+repoName(*r))
+		}
+	}
+	slices.Sort(moved)
+	return moved
+}
+
+// mergeAliases is a and b as one ForgeRepo.Aliases list: lowercased,
+// sorted, each once; nil for none.
+func mergeAliases(a, b []string) []string {
+	var out []string
+	for _, s := range slices.Concat(a, b) {
+		out = append(out, strings.ToLower(s))
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 // repoSync is how one repository's sync went.

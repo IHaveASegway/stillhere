@@ -143,10 +143,10 @@ func runAddresses(fs *domain.FactSet) []string {
 //
 // git has already applied the mailmap to every name in the facts, so a name
 // the mailmap supplies is the name every sighting carries. Otherwise the
-// rule of docs/spec/git-invocation.md applies: the name seen most often with
-// that email, counting each commit once as its author and once as a
-// co-author; ties go to the newest committer time among the commits that
-// used the name, then to the name's UTF-8 bytes, ascending.
+// rule of docs/spec/git-invocation.md applies (displayNames): the name the
+// email last authored a commit with, a person's own user.name as it stands
+// now, rather than a name someone else wrote into a Co-authored-by trailer
+// or a default a machine filled in.
 //
 // A GitHub login's key (LoginKey) has no display name of its own: its name
 // is the login as GitHub last reported it ("@Zoe" for the key "@zoe",
@@ -276,21 +276,36 @@ func containsAny(frags []string, ss ...string) bool {
 
 // nameTally counts one name's sightings for one email.
 type nameTally struct {
-	count  int
-	newest time.Time // the newest committer time among the commits that used the name
+	person   bool      // the name has words a person's name has: not a default one (candNameKey)
+	authored bool      // the email authored a commit with it, not only a Co-authored-by trailer
+	newest   time.Time // the newest time among the commits that used it, in the strongest role above
+	count    int       // the commits that used it, in that role
 }
 
-// displayNames applies the display-name rule to every email the fact set
-// shows: commit authors and co-authors, and the authors and co-authors of
-// blamed commits the history does not hold (blame can attribute lines to
-// commits older than any history window, which carry only an author time).
-// Each commit counts once per (email, name).
+// displayNames applies the display-name rule (docs/spec/git-invocation.md
+// #identity-mailmap-and-bots) to every email the fact set shows: commit
+// authors and co-authors, and the authors and co-authors of blamed commits
+// the history does not hold (blame can attribute lines to commits older
+// than any history window, which carry only an author time). Each commit
+// counts once per (email, name).
+//
+// Wave 11 (round 3's org F11): the rule was the name seen most often, which
+// depends on how many commits a command reads. week reads a week of
+// landings and scan a year and every blamed commit, so a person who changed
+// user.name from a handle to their full name was the full name in week and
+// the handle in scan, the old name winning on its count of older commits.
+// The newest name is what both see for anyone active in the week, and it is
+// the person's current one, as GitHub shows an account's profile name now;
+// most sightings only breaks a tie. A name the email authored beats one
+// only Co-authored-by trailers carry, which someone else wrote (round 3's
+// Ruby F11), and a person's name beats a default one (candNameKey), so a
+// stray commit from a machine's "root" renames no one.
 func displayNames(fs *domain.FactSet) map[string]string {
 	if fs == nil {
 		return nil
 	}
 	tallies := make(map[string]map[string]*nameTally)
-	see := func(p domain.Person, at time.Time) {
+	see := func(p domain.Person, at time.Time, authored bool) {
 		if p.Name == "" {
 			return
 		}
@@ -302,12 +317,20 @@ func displayNames(fs *domain.FactSet) map[string]string {
 		}
 		t := byName[p.Name]
 		if t == nil {
-			t = &nameTally{}
+			key, _ := candNameKey(p.Name)
+			t = &nameTally{person: key != ""}
 			byName[p.Name] = t
 		}
-		t.count++
-		if at.After(t.newest) {
-			t.newest = at
+		switch {
+		case authored && !t.authored:
+			// The first authored sighting outranks every trailer one: the
+			// count and the time start again from it.
+			t.authored, t.count, t.newest = true, 1, at
+		case authored == t.authored:
+			t.count++
+			if at.After(t.newest) {
+				t.newest = at
+			}
 		}
 	}
 	same := func(a, b domain.Person) bool {
@@ -317,11 +340,11 @@ func displayNames(fs *domain.FactSet) map[string]string {
 	// (email, name) once. Co-author lists are short, so the quadratic
 	// duplicate check allocates nothing.
 	seeCommit := func(author domain.Person, coAuthors []domain.Person, at time.Time) {
-		see(author, at)
+		see(author, at, true)
 		for i, co := range coAuthors {
 			dup := func(p domain.Person) bool { return same(p, co) }
 			if !same(co, author) && !slices.ContainsFunc(coAuthors[:i], dup) {
-				see(co, at)
+				see(co, at, false)
 			}
 		}
 	}
@@ -361,15 +384,20 @@ func displayNames(fs *domain.FactSet) map[string]string {
 }
 
 // better reports whether name a, with tally ta, beats name b with tally tb:
-// more sightings, then the newer committer time, then the smaller UTF-8
-// bytes. The order is total, so map iteration order cannot change the
-// winner.
+// a person's name over a default one, then a name the email authored with
+// over one only trailers carry, then the newer commit, then more sightings,
+// then the smaller UTF-8 bytes. The order is total, so map iteration order
+// cannot change the winner.
 func better(a string, ta *nameTally, b string, tb *nameTally) bool {
-	if ta.count != tb.count {
-		return ta.count > tb.count
-	}
-	if !ta.newest.Equal(tb.newest) {
+	switch {
+	case ta.person != tb.person:
+		return ta.person
+	case ta.authored != tb.authored:
+		return ta.authored
+	case !ta.newest.Equal(tb.newest):
 		return ta.newest.After(tb.newest)
+	case ta.count != tb.count:
+		return ta.count > tb.count
 	}
 	return a < b
 }
