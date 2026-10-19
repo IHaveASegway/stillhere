@@ -1279,7 +1279,7 @@ type ExplainRequest struct { RunID int64; Metric domain.MetricID; Subject domain
 	// read (historyOf: 365 days for a scan), whose answer is unknown, not empty. A subject with no value is domain.ErrNotFound worded
 	// for its kind (explainMissing): an area's names the repository as the report does and points to Commands.WhoKnows
 type WhoKnowsRequest struct { RunID int64; Path, Repo string; Days int } // wave 11: Days, the window of recent landers and reviewers, 0: metrics.WhoKnowsDays;
-	// 1 to policy.MaxWeekDays and at most the history the run read (inHistory, explain's check), else a *domain.UsageError
+	// 1 to policy.MaxWeekDays and at most the history the run read (windowDays, explain's check), else a *domain.UsageError
 type PathsRequest struct { RunID int64; Prefixes []string; Repo, Role string; Skipped bool } // stillhere paths
 type MeRequest struct { RunID int64; Email string }                                // Email required: the CLI resolves no default (me needs --email); PF-7: any form
                                                                                   // a reader names a person by, which Me resolves (FindPerson)
