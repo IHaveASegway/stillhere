@@ -40,6 +40,19 @@ func (p *printer) mdTable(cols []column, rows [][]string) {
 func mdID(s string) string { return mdCode(s) }
 
 func (m *Model) writeMarkdown(p *printer) {
+	m.mdHead(p)
+	for i := range m.Ranks {
+		mdRanks(p, "##", &m.Ranks[i])
+	}
+	for i := range m.Repos {
+		mdRepo(p, m, &m.Repos[i])
+	}
+	m.mdWarnings(p)
+}
+
+// mdHead prints what a report says before its rank tables: its title, what
+// it read, its caveats and its overviews.
+func (m *Model) mdHead(p *printer) {
 	title := "# stillhere " + m.Kind
 	if m.Run != nil {
 		title += fmt.Sprintf(" · run %d (%s)", m.Run.ID, mdText(m.Run.Status))
@@ -68,12 +81,10 @@ func (m *Model) writeMarkdown(p *printer) {
 			mdOverview(p, m, &m.Overviews[i])
 		}
 	}
-	for i := range m.Ranks {
-		mdRanks(p, "##", &m.Ranks[i])
-	}
-	for i := range m.Repos {
-		mdRepo(p, m, &m.Repos[i])
-	}
+}
+
+// mdWarnings prints the run's warnings, the last section of a report.
+func (m *Model) mdWarnings(p *printer) {
 	if len(m.Warnings) > 0 {
 		p.blank()
 		p.line("## Warnings")
@@ -139,6 +150,9 @@ func mdOverview(p *printer, m *Model, o *Overview) {
 		cols, rows := repoTable(m, o.Repos, mdText)
 		for i := range cols {
 			cols[i].head = strings.ToUpper(cols[i].head[:1]) + cols[i].head[1:]
+		}
+		for i := range rows { // a row per repository, its name first
+			rows[i][0] = p.mdLink(rows[i][0], Target{Kind: TargetRepo, Key: o.Repos[i].Key})
 		}
 		p.mdTable(cols, rows)
 	}
@@ -375,6 +389,9 @@ func mdCard(p *printer, m *Model, r *Repo) {
 		cols, rows, more := areaTable(p, c.Areas, mdCode)
 		for i := range cols {
 			cols[i].head = strings.ToUpper(cols[i].head[:1]) + cols[i].head[1:]
+		}
+		for i := range rows { // the first areas, in order, each's path first
+			rows[i][0] = p.mdLink(rows[i][0], Target{Kind: TargetArea, Repo: r.Key, Path: c.Areas[i].Path})
 		}
 		p.mdTable(cols, rows)
 		if more != "" {

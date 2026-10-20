@@ -76,6 +76,17 @@ func allRanked() []rankedMetric {
 	return out
 }
 
+// RankedMetrics are the ids of every ranked metric, in registry order: the
+// ones a person's own page ranks them on (Me), which the web server's
+// ranks page ranks everyone on too, so the two never rank different sets.
+func RankedMetrics() []domain.MetricID {
+	var ids []domain.MetricID
+	for _, m := range allRanked() {
+		ids = append(ids, m.def.ID)
+	}
+	return ids
+}
+
 func rankedNames() string {
 	var names []string
 	for _, m := range allRanked() {

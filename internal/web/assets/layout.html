@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>{{.Title}} · stillhere</title>
+<link rel="stylesheet" href="{{.Base}}static/style.css">
+<script src="{{.Base}}static/table.js" defer></script>
+</head>
+<body>
+<header>
+<nav>
+<a class="brand" href="{{.Base}}">stillhere</a>
+{{- with .Run}}
+<a href="{{$.Base}}run/{{.ID}}/"{{if eq $.Nav "run"}} aria-current="page"{{end}}>Run {{.ID}}</a>
+<a href="{{$.Base}}run/{{.ID}}/ranks"{{if eq $.Nav "ranks"}} aria-current="page"{{end}}>Ranks</a>
+<a href="{{$.Base}}run/{{.ID}}/who-knows"{{if eq $.Nav "who-knows"}} aria-current="page"{{end}}>Who knows</a>
+{{- end}}
+<a href="{{.Base}}metrics"{{if eq .Nav "metrics"}} aria-current="page"{{end}}>Metrics</a>
+<a href="{{.Base}}runs"{{if eq .Nav "runs"}} aria-current="page"{{end}}>Runs</a>
+</nav>
+{{- with .Run}}
+<p class="run">Run {{.ID}} · {{.Status}} · as of {{date .Now}}</p>
+{{- end}}
+<p class="purpose">stillhere measures specific properties of code changes: how long they lasted, how much they simplified, how much review they got. It does not measure a person's value, and it must not be the basis for performance or pay decisions.</p>
+</header>
+<main>
+{{- with .Note}}
+<p class="note">{{.}}</p>
+{{- end}}
+{{- with .Ask}}
+<form class="ask" method="get" action="{{.Action}}">
+<label>Who knows <input name="path" value="{{.Path}}" placeholder="src/payments" required></label>
+<label>in <select name="repo">
+<option value="">every repository</option>
+{{- range .Repos}}
+<option value="{{.Key}}"{{if eq .Key $.Ask.Repo}} selected{{end}}>{{.Label}}</option>
+{{- end}}
+</select></label>
+<label>active within <input name="days" value="{{.Days}}" inputmode="numeric" size="4" placeholder="90"> days</label>
+<button>Ask</button>
+</form>
+{{- end}}
+{{- range .Traces}}
+<p class="trace">Trace {{.Label}}'s numbers to the changes behind them:
+{{- range .Links}} <a href="{{.URL}}">{{.Metric}}</a>{{end}}</p>
+{{- end}}
+{{.HTML}}
+{{- with .Repos}}
+<h2>Repositories</h2>
+<ul class="repos">
+{{- range .}}
+<li><a href="{{.URL}}">{{.Metric}}</a></li>
+{{- end}}
+</ul>
+{{- end}}
+{{- with .Runs}}
+<div class="table"><table>
+<thead><tr><th>Run</th><th>As of</th><th>Status</th><th>Repositories</th><th>Groups</th></tr></thead>
+<tbody>
+{{- range .}}
+<tr><td><a href="{{.URL}}">{{.ID}}</a></td><td>{{date .Now}}</td><td>{{.Status}}</td><td class="num">{{.Repos}}</td><td>{{range $i, $g := .Groups}}{{if $i}}, {{end}}{{$g}}{{end}}</td></tr>
+{{- end}}
+</tbody>
+</table></div>
+{{- end}}
+</main>
+<footer>stillhere {{.Version}} · reading facts.db read-only, served to this machine only · every number links to, or is traced by, the changes behind it</footer>
+</body>
+</html>

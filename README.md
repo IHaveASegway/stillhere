@@ -75,6 +75,7 @@ stillhere --mailmap ~/your.mailmap scan .          #    then scan with them
 stillhere who-knows src/payments                   # 5. who holds a path, and who works on it now
 stillhere report --rank durable --rank simplifying # 6. ranks, as 95% intervals: only people with 10 or more changes are ranked
 stillhere explain durable --person "Your Name"     # 7. the changes behind any number
+stillhere serve                                    # 8. all of it in your browser: open the address it prints
 ```
 
 Then, optionally, `stillhere sync github --org your-org` for reviews (review coverage, reviewers, `reviews_given@1`), and `claude mcp add` to [ask from your agent](#use-it-from-an-agent-mcp). [docs/getting-started.md](docs/getting-started.md) walks through every step on a public repository, with its real output and how to read it.
@@ -138,6 +139,17 @@ Until the first release, build the image from a checkout with `go run github.com
 On macOS, git may report dubious ownership when containers with different `--user` values read one mount, because Docker Desktop does not always show a container a mounted file's owner as the Mac has it. Use one `--user` for every container that reads a mount, or use the binary.
 
 The commands that store facts (`scan` and `sync github`) keep them under `STILLHERE_HOME`, which is `/data` in the image, a directory only the image's own user may enter. When you pass `--user`, mount a directory that user owns there, such as `-v "$HOME/.stillhere:/data"`.
+
+## Browse it in a web browser
+
+```sh
+stillhere scan ~/src/acme      # the pages read the latest scan
+stillhere serve                # prints http://127.0.0.1:PORT/TOKEN/: open it; Ctrl-C stops the server
+```
+
+`serve` shows facts.db as pages: each run's report, a page per repository, the rank tables, every person's own page, who knows a path, and the changes behind any number. Each person, repository, area and ranked estimate links to its page, and each run's, repository's and person's page links each of the numbers it holds to the changes behind it. Every table of a report sorts by a click on its header and downloads as CSV, each cell as the page shows it, and a table of more than 10 rows filters as you type. The pages say what the command line says, from the same code: a number on a page is the number `report`, `explain`, `who-knows` and `me` print.
+
+It is for the person who scanned, on their own machine: it listens on a loopback address only (`--addr`, default a free port on 127.0.0.1), every page's address starts with a random token that only the printed address holds, and it opens facts.db so that it cannot write to it. So it shows what the command line already shows you, AI-assisted shares included, and nobody else on the machine or the network can open it without that address. The address is the key until you stop the server: don't paste it anywhere. Your browser's history keeps the pages' addresses, which name repositories and paths, as it keeps any page's. A scan published while it runs is the one the printed address shows next. The team server, with Sign in with GitHub, leads who see ranks and pages for everyone else, is not built yet ([ADR 0005](docs/adr/0005-web-server-github-app-login.md)).
 
 ## Check the ranks on your own code
 

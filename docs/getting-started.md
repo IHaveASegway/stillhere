@@ -260,6 +260,14 @@ claude mcp add --scope user stillhere -- "$(command -v stillhere)" mcp --me you@
 
 The MCP server reads the latest scan read-only and withholds emails and commit subjects unless you allow them ([Use it from an agent](../README.md#use-it-from-an-agent-mcp)). Ask it the same questions: "who should review changes to pkg/cmd/pr?", "where has knowledge gone quiet?", "what landed this week, and who merged it?".
 
+## 10. Browse it
+
+```sh
+stillhere serve
+```
+
+It prints an address, `http://127.0.0.1:PORT/TOKEN/`: open it. The first page is the latest scan's report; each repository, person and area links to its page, each rank to the changes behind it, and each table sorts by a click on its header and downloads as CSV. The pages are the command line's answers, read from the same facts.db, so they print the same numbers. The server listens on this machine only, and every page's address starts with the token, so only that address opens it ([Browse it in a web browser](../README.md#browse-it-in-a-web-browser)). Ctrl-C stops it.
+
 ## Where the numbers can be wrong
 
 - A stale clone gives a stale report: stillhere never fetches.

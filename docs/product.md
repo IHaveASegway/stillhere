@@ -86,7 +86,8 @@ stillhere scan ~/.stillhere/mirrors/acme --rank durable@1  # blame, durability, 
 stillhere me --email you@example.com                       # your own page
 stillhere explain durable@1 --person ada@example.com       # the commits behind a number
 stillhere mcp --me you@example.com                         # the same facts for your agent
-stillhere serve                                            # M3, not built yet: team web UI, Sign in with GitHub
+stillhere serve                                            # M3's local mode: every page above in your browser, this machine only
+                                                           # (the team server, with Sign in with GitHub, is not built yet)
 stillhere narrate                                          # M4, not built yet: highlights narrated by Anthropic, pseudonymized
 ```
 
@@ -125,7 +126,7 @@ Each milestone ships and gets used before the next starts. Numbers come before U
 | **M0** Walking skeleton | Go module; discovery; classification; `stillhere week`; CI on git 2.45 (the version floor) and latest; GoReleaser publishing to a Homebrew tap and a Docker image | `brew install` works; the fixture's week oracle passes |
 | **M1** What lasted | Blame collector; ownership, knowledge concentration and loss; `durable@1`, `simplifying@1`; revert detection; AI-assisted tag; facts store (SQLite) and metric registry; `explain`; snapshots with cheap backfill | Fixture oracles for every metric; a real 80-repo scan inside the budget |
 | **M2** Reviews and ranks | GitHub App; `sync github` (pull requests, reviews, comments, labels, managed mirrors); `reviews_given@1`; per-metric ranks with intervals (`--rank`); `stillhere me`; validity check against hand labels (`stillhere label`, `stillhere validate`) | Contract tests on recorded API responses; rank intervals verified on the fixture; the labelled-sample check run once |
-| **M3** Team web | `stillhere serve` with Sign in with GitHub; leads team sees ranks; own pages; highlights; code-area views | Auth tests (state, sessions, escaping); one real deployment |
+| **M3** Team web | `stillhere serve` with Sign in with GitHub; leads team sees ranks; own pages; highlights; code-area views. Built first, its local mode (2026-10-19, #17, [ADR 0005's amendment](adr/0005-web-server-github-app-login.md#amendment-local-mode-first)): the pages for the person who scanned, on a loopback address behind a token | Auth tests (state, sessions, escaping); one real deployment |
 | **M4** Agents | `stillhere mcp`; narrated highlights (Anthropic, pseudonymized) | MCP tools tested with the official SDK client; redaction and numbers-check tests |
 | **M5** Load-bearing and typed | Hotspots and coupling; `load_bearing@1`; `change_type@1` | Hotspot engine decided (open decision 1); oracles pass |
 
