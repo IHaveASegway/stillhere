@@ -26,6 +26,9 @@ type printer struct {
 	err   error
 	names pageNames
 	all   bool // print every row of every table (AllRows), not the first pageRows
+	// markdown says the page is Markdown, the one format that links (link).
+	markdown bool
+	link     Link // where a Markdown page links what it names (Links); nil for no links
 }
 
 // pageRows is how many rows of a list of people, a rank table's ranked
@@ -45,6 +48,56 @@ type Option func(*printer)
 // AllRows prints every row of every table, where a page otherwise prints
 // the first pageRows and counts the rest (the command line's --all).
 func AllRows() Option { return func(p *printer) { p.all = true } }
+
+// Link is where a Markdown page links a thing it names (Links): a URL the
+// reader can open, such as the web server's page for it, or "" for no
+// link. It is handed the thing's keys, which the page never prints, so a
+// person's email can name their page without appearing on this one.
+type Link func(Target) string
+
+// Target is a thing a Markdown page names that a reader can open: a person
+// (Key, their email or @login), a repository (Key, its key), an area (Repo,
+// its repository's key, and Path, the directory), or one person's value of
+// a metric, to explain (Metric and Key, the person's).
+type Target struct {
+	Kind   TargetKind
+	Key    string
+	Repo   string
+	Path   string
+	Metric string
+}
+
+// TargetKind is the kind of thing a Target names.
+type TargetKind int
+
+// The kinds of Target.
+const (
+	TargetPerson TargetKind = iota + 1
+	TargetRepo
+	TargetArea
+	TargetExplain
+)
+
+// Links makes a Markdown page link the people, repositories and areas it
+// names, and each ranked person's estimate, to the URLs link gives: the web
+// server's pages (internal/web). Text and JSON never link, and without it
+// Markdown does not either, so what the command line prints stays the same.
+func Links(link Link) Option { return func(p *printer) { p.link = link } }
+
+// mdLink is label, Markdown already, as a link to t when the page links
+// (Links) and link has a URL for it, else label. A URL that would end the
+// link's destination or break out of it (an angle bracket, a backslash, a
+// line break) gets no link.
+func (p *printer) mdLink(label string, t Target) string {
+	if !p.markdown || p.link == nil {
+		return label
+	}
+	u := p.link(t)
+	if u == "" || strings.ContainsAny(u, "<>\\\r\n") {
+		return label
+	}
+	return "[" + label + "](<" + u + ">)"
+}
 
 // newPrinter is a page on w with opts.
 func newPrinter(w io.Writer, opts []Option) *printer {

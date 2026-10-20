@@ -82,7 +82,69 @@ func Markdown(w io.Writer, d Document, opts ...Option) error {
 		return err
 	}
 	p := newPrinter(w, opts)
+	p.markdown = true
 	d.writeMarkdown(p)
+	if p.err != nil {
+		return fmt.Errorf("report: write Markdown: %w", p.err)
+	}
+	return nil
+}
+
+// ErrNoRepo is MarkdownRepo's error for a key the report holds no
+// repository of.
+var ErrNoRepo = errors.New("report: no such repository in the run")
+
+// MarkdownRun renders m, a scan report, as Markdown without its rank
+// tables and its repositories' sections: the run as a page of its own, the
+// web server's (internal/web), whose rank tables and repositories are
+// pages of their own too (MarkdownRanks, MarkdownRepo). Each is a page, so
+// each labels the people it cannot name in its own order, as every
+// command's answer does.
+func MarkdownRun(w io.Writer, m *Model, opts ...Option) error {
+	return markdownPart(w, m, opts, func(p *printer, m *Model) error {
+		m.mdHead(p)
+		m.mdWarnings(p)
+		return nil
+	})
+}
+
+// MarkdownRanks renders m's rank tables as Markdown, a page of their own
+// (MarkdownRun).
+func MarkdownRanks(w io.Writer, m *Model, opts ...Option) error {
+	return markdownPart(w, m, opts, func(p *printer, m *Model) error {
+		for i := range m.Ranks {
+			mdRanks(p, "##", &m.Ranks[i])
+		}
+		return nil
+	})
+}
+
+// MarkdownRepo renders the section of m about the repository keyed key as
+// Markdown, a page of its own (MarkdownRun), or returns ErrNoRepo.
+func MarkdownRepo(w io.Writer, m *Model, key string, opts ...Option) error {
+	return markdownPart(w, m, opts, func(p *printer, m *Model) error {
+		for i := range m.Repos {
+			if m.Repos[i].Key == key {
+				mdRepo(p, m, &m.Repos[i])
+				return nil
+			}
+		}
+		return ErrNoRepo
+	})
+}
+
+// markdownPart renders a part of m as Markdown, as Markdown renders the
+// whole: from m with every address withheld (page).
+func markdownPart(w io.Writer, m *Model, opts []Option, part func(*printer, *Model) error) error {
+	d, err := page(m)
+	if err != nil {
+		return err
+	}
+	p := newPrinter(w, opts)
+	p.markdown = true
+	if err := part(p, d.(*Model)); err != nil {
+		return err
+	}
 	if p.err != nil {
 		return fmt.Errorf("report: write Markdown: %w", p.err)
 	}

@@ -810,7 +810,8 @@ func rankRows(p *printer, t *RankTable, esc func(string) string, md bool) ([]col
 			// would read as first of a field.
 			rank = "1 of 1"
 		}
-		rows = append(rows, append([]string{rank, name(r), estimateText(r.Estimate, t.Percent),
+		estimate := p.mdLink(estimateText(r.Estimate, t.Percent), Target{Kind: TargetExplain, Metric: t.Metric, Key: r.Email})
+		rows = append(rows, append([]string{rank, name(r), estimate,
 			intervalText(*r.Lo, *r.Hi, t.Percent), grouped(r.N)}, beside(r)...))
 	}
 	if hidden > 0 {

@@ -113,9 +113,13 @@ type server struct {
 	// serialising them costs little and rules out a data race on facts a
 	// use case should never write. A call waits for the slot, or for its
 	// own context: one the client cancelled stops waiting.
-	slot    chan struct{}
-	store   *cachedStore // nil until Open succeeds
-	lastRun int64        // the run the previous answer read, for the run-changed caveat
+	slot chan struct{}
+	// store and forge are the opened facts.db behind the run cache
+	// (app.CacheRuns), nil until Open succeeds; forge is nil for a store
+	// that holds no forge replica.
+	store   domain.FactStore
+	forge   domain.ForgeStore
+	lastRun int64 // the run the previous answer read, for the run-changed caveat
 	// egress is the egress record, nil until Config.Egress succeeds, and
 	// decided the decisions it returned, by run: a recorded decision never
 	// changes, so a run's later calls need not read the record again.
@@ -153,7 +157,7 @@ func (s *server) close() {
 		if err := s.store.Close(); err != nil {
 			s.log.Warn("closing facts.db", "error", err)
 		}
-		s.store = nil
+		s.store, s.forge = nil, nil
 	}
 	s.closeEgress()
 }
@@ -261,17 +265,12 @@ func (c *call) deps(ctx context.Context) (app.Deps, error) {
 		if err != nil {
 			return app.Deps{}, err
 		}
-		s.store = newCachedStore(st)
-	}
-	d := app.Deps{Store: s.store, Git: s.cfg.Git, Log: s.log, Version: s.cfg.Version, Commands: toolCommands{}}
-	if fs, ok := s.store.FactStore.(domain.ForgeStore); ok {
 		// The forge replica in the same facts.db, as the command line
-		// hands it over: readers date a run's GitHub data by the
-		// watermarks it read (ADR 0004) and compute over the pull requests
-		// it kept (ADR 0011), both cached with the run.
-		d.ForgeStore = &cachedForge{ForgeStore: fs, c: s.store}
+		// hands it over, cached with the run.
+		s.store, s.forge = app.CacheRuns(st)
 	}
-	return d, nil
+	return app.Deps{Store: s.store, ForgeStore: s.forge, Git: s.cfg.Git, Log: s.log, Version: s.cfg.Version,
+		Commands: toolCommands{}}, nil
 }
 
 // resolver returns the resolver over the run's vocabulary, read once per

@@ -92,7 +92,15 @@ type pageNames struct {
 // a name, "(name withheld 1)" for one whose name gives an address away,
 // numbered in the order the page first names them. A label is plain text
 // that needs no escaping.
+//
+// A Markdown page that links (Links) links the name, or the label, to the
+// person's page.
 func (p *printer) person(key, name string, withheld bool, esc func(string) string) string {
+	return p.mdLink(p.personLabel(key, name, withheld, esc), Target{Kind: TargetPerson, Key: key})
+}
+
+// personLabel is person without the link.
+func (p *printer) personLabel(key, name string, withheld bool, esc func(string) string) string {
 	if name != "" {
 		return nameText(name, esc)
 	}

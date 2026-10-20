@@ -1,0 +1,58 @@
+/* stillhere's pages: the report's Markdown as HTML (internal/web). */
+:root {
+  --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --line: #d1d9e0; --stripe: #f6f8fa;
+  --accent: #0969da; --note-bg: #fff8c5; --note-line: #d4a72c;
+  color-scheme: light dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --line: #3d444d; --stripe: #151b23;
+    --accent: #4493f8; --note-bg: #272115; --note-line: #9e6a03;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--fg);
+  font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+}
+header, main, footer { max-width: 1200px; margin: 0 auto; padding: 0 16px; }
+header { border-bottom: 1px solid var(--line); padding-top: 12px; }
+nav { display: flex; flex-wrap: wrap; gap: 4px 18px; align-items: baseline; }
+nav a { color: var(--fg); text-decoration: none; padding: 2px 0; border-bottom: 2px solid transparent; }
+nav a[aria-current="page"] { border-bottom-color: var(--accent); }
+nav a:hover { color: var(--accent); }
+nav .brand { font-weight: 700; margin-right: 8px; }
+.run, .purpose { color: var(--muted); font-size: 13px; margin: 6px 0; }
+.purpose { margin-bottom: 10px; }
+main { padding-top: 8px; padding-bottom: 32px; }
+a { color: var(--accent); }
+h1 { font-size: 24px; margin: 16px 0 8px; }
+h2 { font-size: 20px; margin: 28px 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--line); }
+h3 { font-size: 16px; margin: 20px 0 6px; }
+ul { padding-left: 22px; }
+li { margin: 2px 0; }
+code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--stripe); padding: 1px 4px; border-radius: 4px; }
+.note { background: var(--note-bg); border-left: 3px solid var(--note-line); padding: 8px 12px; margin: 12px 0; }
+.trace { font-size: 14px; color: var(--muted); }
+.trace a { margin-left: 6px; }
+form.ask { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin: 12px 0;
+  padding: 10px 12px; border: 1px solid var(--line); border-radius: 6px; }
+form.ask input, form.ask select, form.ask button { font: inherit; padding: 3px 6px; color: var(--fg);
+  background: var(--bg); border: 1px solid var(--line); border-radius: 4px; }
+form.ask button { cursor: pointer; }
+/* As wide as its table, so its tools sit at the table's edge. */
+.table { width: fit-content; max-width: 100%; overflow-x: auto; margin: 8px 0 16px; }
+.table .tools { margin: 0 0 4px; font-size: 13px; text-align: right; }
+table { border-collapse: collapse; font-size: 14px; min-width: 50%; }
+th, td { border: 1px solid var(--line); padding: 4px 8px; vertical-align: top; }
+th { background: var(--stripe); text-align: left; white-space: nowrap; position: sticky; top: 0; }
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable::after { content: " \2195"; color: var(--muted); }
+th[aria-sort="ascending"]::after { content: " \2191"; color: var(--fg); }
+th[aria-sort="descending"]::after { content: " \2193"; color: var(--fg); }
+tbody tr:nth-child(even) { background: var(--stripe); }
+td[align="right"], th[align="right"], td.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+td[align="center"], th[align="center"] { text-align: center; }
+.filter { font: inherit; font-size: 13px; padding: 2px 6px; margin-right: 8px; color: var(--fg); background: var(--bg);
+  border: 1px solid var(--line); border-radius: 4px; }
+footer { color: var(--muted); font-size: 12px; border-top: 1px solid var(--line); padding-top: 8px; padding-bottom: 24px; }

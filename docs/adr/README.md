@@ -8,7 +8,7 @@ One file per decision that is hard to reverse. Format after Michael Nygard, "Doc
 | [0002](0002-go-single-binary.md) | Go, one static binary, released with GoReleaser | Accepted |
 | [0003](0003-facts-metrics-views-sqlite.md) | Facts, then versioned metrics, then views, on SQLite | Accepted |
 | [0004](0004-github-behind-sync-boundary.md) | GitHub in v1, behind an explicit sync boundary | Accepted |
-| [0005](0005-web-server-github-app-login.md) | Team web server with GitHub App sign-in | Accepted |
+| [0005](0005-web-server-github-app-login.md) | Team web server with GitHub App sign-in; local mode first (amendment) | Accepted; amendment Proposed |
 | [0006](0006-ai-mcp-and-narrated-highlights.md) | AI through MCP and narrated highlights, never in the ranking path | Accepted |
 | [0007](0007-ai-assisted-attribution.md) | AI-assisted work: human credited, AI tagged; the shares that leave the machine (amendment) | Accepted; amendment Proposed |
 | [0008](0008-apache-2-public.md) | Apache-2.0, public on a personal account | Accepted |

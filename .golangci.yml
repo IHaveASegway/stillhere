@@ -86,10 +86,10 @@ linters:
               desc: "raw system calls, such as fork and exec, belong to the adapters (codebase.md#the-dependency-rule)"
             - &no-net
               pkg: net$
-              desc: "only the GitHub adapter uses the network; analysis never does (codebase.md#the-dependency-rule)"
+              desc: "only the GitHub adapter and the web server use the network; analysis never does (codebase.md#the-dependency-rule)"
             - &no-http
               pkg: net/http
-              desc: "only the GitHub adapter uses the network; analysis never does (codebase.md#the-dependency-rule)"
+              desc: "only the GitHub adapter and the web server use the network; analysis never does (codebase.md#the-dependency-rule)"
             - &no-rpc
               pkg: net/rpc
               desc: "only the GitHub adapter uses the network; analysis never does (codebase.md#the-dependency-rule)"
@@ -107,7 +107,7 @@ linters:
               desc: "test support never reaches production code (codebase.md#layout)"
             - &no-app
               pkg: github.com/IHaveASegway/stillhere/internal/app
-              desc: "only the inbound adapters, internal/cli and internal/mcp, call the use cases (codebase.md#the-dependency-rule)"
+              desc: "only the inbound adapters, internal/cli, internal/mcp and internal/web, call the use cases (codebase.md#the-dependency-rule)"
             - &no-cli
               pkg: github.com/IHaveASegway/stillhere/internal/cli
               desc: "nothing imports the composition root (codebase.md#the-dependency-rule)"
@@ -126,6 +126,9 @@ linters:
             - &no-sqlite
               pkg: github.com/IHaveASegway/stillhere/internal/sqlite
               desc: "only internal/cli builds adapters: reach facts.db through domain.FactStore (codebase.md#the-dependency-rule)"
+            - &no-web
+              pkg: github.com/IHaveASegway/stillhere/internal/web
+              desc: "only internal/cli builds the web server (codebase.md#the-dependency-rule)"
         # Only internal/policy parses TOML.
         core-toml:
           list-mode: lax
@@ -178,6 +181,7 @@ linters:
             - *no-gitcli
             - *no-github
             - *no-mcp
+            - *no-web
             - *no-sqlite
         # The use cases: core and collect, and git, facts.db and GitHub only
         # through the ports in app.Deps. The files a run touches outside git
@@ -221,6 +225,7 @@ linters:
             - *no-gitcli
             - *no-github
             - *no-mcp
+            - *no-web
             - *no-sqlite
         # Outbound adapters import core and their own module, never the use
         # cases, the command line, collect or one another.
@@ -242,6 +247,7 @@ linters:
             - *no-collect
             - *no-github
             - *no-mcp
+            - *no-web
             - *no-sqlite
         sqlite:
           list-mode: strict
@@ -262,6 +268,7 @@ linters:
             - *no-gitcli
             - *no-github
             - *no-mcp
+            - *no-web
         github:
           list-mode: strict
           files:
@@ -282,6 +289,7 @@ linters:
             - *no-collect
             - *no-gitcli
             - *no-mcp
+            - *no-web
             - *no-sqlite
         # The MCP server is an inbound adapter, like the command line: it
         # calls the use cases. Only internal/cli builds adapters, and MCP
@@ -320,6 +328,50 @@ linters:
             - *no-gitcli
             - *no-github
             - *no-sqlite
+            - *no-web
+        # The web server is an inbound adapter, like the MCP server: it calls
+        # the use cases and renders their answers with internal/report. It
+        # listens on the network (net, net/http), the GitHub adapter's other
+        # exception, and owns goldmark, which turns the report's Markdown
+        # into HTML. It reads no file (its assets are embedded) and starts no
+        # process, and only internal/cli builds it.
+        web:
+          list-mode: strict
+          files:
+            - "**/internal/web/**"
+            - "!$test"
+          allow:
+            - $gostd
+            - github.com/IHaveASegway/stillhere/internal/domain
+            - github.com/IHaveASegway/stillhere/internal/policy
+            - github.com/IHaveASegway/stillhere/internal/classify
+            - github.com/IHaveASegway/stillhere/internal/identity
+            - github.com/IHaveASegway/stillhere/internal/metrics
+            - github.com/IHaveASegway/stillhere/internal/rank
+            - github.com/IHaveASegway/stillhere/internal/redact
+            - github.com/IHaveASegway/stillhere/internal/report
+            - github.com/IHaveASegway/stillhere/internal/app
+            - github.com/IHaveASegway/stillhere/internal/web
+            - github.com/yuin/goldmark # #17: Markdown to HTML (codebase.md#third-party-modules)
+          deny:
+            - pkg: os
+              desc: "the web server reads no file: its assets are embedded, and facts.db is reached through domain.FactStore (codebase.md#the-dependency-rule)"
+            - *no-filepath
+            - *no-ioutil
+            - *no-exec
+            - *no-syscall
+            - *no-xsys
+            - *no-rpc
+            - *no-smtp
+            - *no-sql
+            - *no-cobra
+            - *no-fixture
+            - *no-cli
+            - *no-collect
+            - *no-gitcli
+            - *no-github
+            - *no-mcp
+            - *no-sqlite
         # The composition root may import everything above, but never test
         # support, and it runs git only through gitcli.
         cli:
@@ -351,6 +403,7 @@ linters:
             - "!**/internal/sqlite/**"
             - "!**/internal/github/**"
             - "!**/internal/mcp/**"
+            - "!**/internal/web/**"
             - "!**/internal/cli/**"
             - "!**/internal/fixture/**"
             - "!$test"
@@ -384,6 +437,7 @@ linters:
             - *no-gitcli
             - *no-github
             - *no-mcp
+            - *no-web
             - *no-sqlite
     nolintlint:
       require-explanation: true
