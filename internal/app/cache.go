@@ -1,4 +1,4 @@
-package mcp
+package app
 
 import (
 	"context"
@@ -8,23 +8,39 @@ import (
 	"github.com/IHaveASegway/stillhere/internal/domain"
 )
 
-// cachedRuns is how many runs the cache keeps: the one the agent is asking
+// cachedRuns is how many runs the cache keeps: the one the reader is asking
 // about, and the one before it, in case answers from both are in flight
 // when a scan publishes a new run.
 const cachedRuns = 2
 
+// CacheRuns puts s, a store the read use cases read, behind a cache of the
+// published runs it reads: the long-lived readers' store, the MCP server's
+// and the web server's, whose tenth question about a run reads it once
+// instead of ten times. It returns the cached store and, when s is the
+// forge replica's store too (facts.db holds both), the forge port over the
+// same cache, else nil: readers date a run's GitHub data by the watermarks
+// it read (ADR 0004) and compute over the pull requests it kept (ADR 0011),
+// and both are cached with the run. Close, the writes and the replica
+// itself pass through.
+func CacheRuns(s domain.FactStore) (domain.FactStore, domain.ForgeStore) {
+	c := &cachedStore{FactStore: s, runs: map[int64]*cachedRun{}}
+	if fs, ok := s.(domain.ForgeStore); ok {
+		return c, &cachedForge{ForgeStore: fs, c: c}
+	}
+	return c, nil
+}
+
 // cachedStore is a domain.FactStore that keeps what it read of a published
 // run. A published run never changes (docs/spec/codebase.md#run-model:
 // readers see complete and partial runs only, written once), so caching its
-// facts is safe for as long as the process lives, and an agent's tenth
-// question about a run reads it once instead of ten times. LatestRun is
-// never cached, so a run a scan publishes is seen on the next call. It is
-// the Decorator pattern (Gamma et al., Design Patterns) over the port: the
-// use cases neither know nor care.
+// facts is safe for as long as the process lives. LatestRun is never
+// cached, so a run a scan publishes is seen on the next call. It is the
+// Decorator pattern (Gamma et al., Design Patterns) over the port: the use
+// cases neither know nor care.
 //
 // Callers share the cached values, so they must treat them as read-only, as
 // every read use case does (the read side computes nothing that changes a
-// run). The server also runs one tool call at a time.
+// run). Each server that holds one also runs one use case at a time.
 type cachedStore struct {
 	domain.FactStore // writes, LatestRun and Close pass through
 
@@ -46,10 +62,6 @@ type cachedRun struct {
 	marked     bool // the watermarks were read
 	github     *domain.ForgeFacts
 	kept       bool // the GitHub data the run kept was read
-}
-
-func newCachedStore(s domain.FactStore) *cachedStore {
-	return &cachedStore{FactStore: s, runs: map[int64]*cachedRun{}}
 }
 
 // entry returns the cache entry for a run, making it the most recently
@@ -150,7 +162,7 @@ func (c *cachedStore) LoadMetrics(ctx context.Context, id int64) ([]domain.Metri
 // agent's who_knows calls on a large organization read the pull requests
 // once, not on every call and twice in each (the run's names, then the
 // answer). The replica itself, which a sync moves on, and every write pass
-// through; no use case of the server reads or writes them.
+// through; no read use case reads or writes them.
 type cachedForge struct {
 	domain.ForgeStore
 	c *cachedStore
