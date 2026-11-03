@@ -16,7 +16,7 @@ A tech lead responsible for dozens of repositories cannot cheaply answer:
 - Who knows this code, and where has that knowledge left?
 - Who is doing the reviewing, and how is AI-assisted code holding up?
 
-Commit counts answer these badly. In a proof run over one 80-repo organization (2026-10-06), a dependency bot had 7,137 commits and 137 surviving production lines, and two AI bot accounts held 7.66% of 2.73 million surviving production lines. Activity is easy to count and is mostly the wrong thing to count.
+Commit counts answer these badly. In an early proof run, a dependency bot had thousands of commits and almost no surviving production lines. Activity is easy to count and is mostly the wrong thing to count.
 
 Without this tool the options are a one-off script, a paid seat (CodeScene, LinearB, Swarmia), or a stack to operate (Apache DevLake on MySQL and Grafana; GrimoireLab on OpenSearch with 8 GB of RAM).
 
@@ -138,7 +138,7 @@ Recommendations that were not approved stay open. The baseline is what happens i
 |---|---|---|---|---|---|
 | 1 | Hotspot engine | code-maat 1.0.4 jar plus a Java runtime | Compute in Go; run code-maat once as a test oracle | Before M5 | Whether a Java dependency keeps Homebrew users from hotspots; code-maat has had no release since Feb 2023 |
 | 2 | Function-point weighting ("gearing") | **Decided 2026-10-15: cut** ([Decided](#decided), [#21](https://github.com/IHaveASegway/stillhere/issues/21)) | | | |
-| 3 | Blame cache | Built alongside blame (M1) | Defer until measured | During M1 | Cold scan of a real org against the 15-minute budget; the proof run took 93 s for 80 repos |
+| 3 | Blame cache | Built alongside blame (M1) | Defer until measured | During M1 | Cold scan of a real org against the 15-minute budget; an early proof run finished well inside it |
 | 4 | Server refresh | Unspecified | The server only reads; a refresh builds a new run that readers see only once complete; refresh is scheduled inside the same container | Before M3 | Whether refresh should run in-process, as a separate job, or on demand from the UI |
 | 5 | Minimum sample and cohort window | None | At least 10 landings; durability cohort is changes 90–365 days old | M2, on real data | Interval widths on a real org |
 | 6 | Moved lines in "substantive" counts | Rename detection only | `durable@2` using blame at the landing commit | After M1 data | How often moved code inflates added lines |

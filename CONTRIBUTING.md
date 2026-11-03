@@ -14,7 +14,7 @@ Security problems go to a private advisory, never an issue: see [SECURITY.md](SE
 
 You need:
 
-- **Go 1.27.** go.mod pins the toolchain (`toolchain go1.27.2`); any Go from 1.21 on downloads it by itself.
+- **Go 1.27.** go.mod pins the toolchain (`toolchain go1.27.3`); any Go from 1.21 on downloads it by itself.
 - **git 2.45 or newer**, stillhere's version floor ([why](docs/spec/git-invocation.md#version-floors)). Tests run the git on your `PATH`.
 - **make**.
 - **Docker**, only to dry-run a release.
