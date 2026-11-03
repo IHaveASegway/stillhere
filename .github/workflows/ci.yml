@@ -65,7 +65,7 @@ jobs:
       # finishes first saving one that lacks the others' tools.
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version-file: go.mod # the toolchain line: go1.27.2
+          go-version-file: go.mod # the toolchain line: go1.27.3
           cache-dependency-path: |
             go.sum
             Makefile
