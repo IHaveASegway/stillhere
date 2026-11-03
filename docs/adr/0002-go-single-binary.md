@@ -6,7 +6,7 @@ Status: Accepted · 2026-10-14 · Deciders: Joseph Peterson
 
 The language must be Rust or Go. Users install with `brew install` from a tap; teams deploy one container; a web UI must be easy to run locally and to deploy.
 
-The work is mostly orchestrating git subprocesses and parsing their output. In the 2026-10-06 proof run, 12 threads blamed 24,188 files in 93 seconds: about 46 ms per file per thread. Starting a git process costs a few milliseconds, so git's history walk dominates, and no language makes git faster. The binary also needs SQLite, an HTTP server with HTML templates, an MCP server, and an Anthropic API client.
+The work is mostly orchestrating git subprocesses and parsing their output. In an early proof run, blame took about 46 ms per file per thread, with 12 threads. Starting a git process costs a few milliseconds, so git's history walk dominates, and no language makes git faster. The binary also needs SQLite, an HTTP server with HTML templates, an MCP server, and an Anthropic API client.
 
 ## Decision
 

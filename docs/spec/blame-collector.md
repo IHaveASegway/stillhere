@@ -95,7 +95,7 @@ The metric definitions belong to [../metrics.md](../metrics.md). Until they move
 ## Parallelism, errors, budget
 
 - **Concurrency.** A goroutine worker pool, default `min(12, runtime.NumCPU())`, overridable with `--jobs`. Each blame is its own process, so more workers than that thrash a large machine. Every repo shares one `collect.BlameSlots` of that capacity (a `golang.org/x/sync` semaphore, which serves waiters in arrival order), and a repo takes a slot before it starts each file's goroutine, so the slots bound the goroutines as well as the git processes.
-- **Calibration.** A proof run over one 80-repo organization blamed 24,188 files in 93 s, with 12 workers on 16 cores.
+- **Calibration.** An early proof run took about 46 ms per file per worker, with 12 workers on 16 cores.
 - **Budget.** A cold scan should finish in under 15 minutes for 100 repos and 50,000 surviving files on 8 cores. It is checked by hand on a large tree, with the `timings` object pasted into the PR. CI never asserts wall-clock time.
 - **File failures.** A non-zero exit, a timeout or unreadable porcelain appends `{path, message}` to the repo's `errors.blame`, with the message scrubbed and truncated per [git-invocation.md](git-invocation.md#url-scrubbing). The repo continues, and up to eight messages are echoed to stderr.
 - **Repo failures.** A whole-repo failure sets `status = error`.
