@@ -117,6 +117,9 @@ release:
   # or the tag already has an immutable release.
   preflight:
     fail_on_error: true
+  # No docker pull line: the ghcr.io package is private until the owner
+  # makes it public (CONTRIBUTING.md), and a pull of it fails for everyone
+  # else. Add the line back then.
   footer: |
     ## Install
 
@@ -124,7 +127,6 @@ release:
     {{- if not .Prerelease }}
     brew install --cask ihaveasegway/tap/stillhere
     {{- end }}
-    docker pull ghcr.io/ihaveasegway/stillhere:{{ .Version }}
     go install github.com/IHaveASegway/stillhere/cmd/stillhere@{{ .Tag }}
     ```
 
